@@ -7,7 +7,7 @@
     "build": "node scripts/build.mjs",
     "pack": "node scripts/pack.mjs"
   },
-  "dependencies": {
+  "peerDependencies": {
     "@deepseek-ai/dsh": "0.1.0-rc.6"
   },
   "allowScripts": {

@@ -62,6 +62,8 @@ dsh 运行需要 `@deepseek-ai/dsh` 依赖树（含原生模块 node-pty/koffi�
 
 **dev 依赖不装（`--omit=dev`）**：构建工具（@rspack/core）声明在插件 package.json 的 devDependencies，仅为开发者本地构建契约（`npm run build`/`npm run pack` 用），Agent 部署只需 dsh 运行时树，命令显式加 `--omit=dev` 剔除 dev 树——避免把 rspack 构建链（约 40MB）装进 dsh-pkg。
 
+**dsh 声明在 peerDependencies**：npm 7+ 在部署 `--omit=dev` 下仍自动安装 peer（实测 528 包，dsh 0.1.0-rc.6 可运行、rspack 不装），与 dependencies 声明行为等价；CI 构建侧用 `--omit=peer` 只装 dev 树（rspack，11 包 2s）。**部署命令必须保留 peer 自动装（`--omit=dev`，不可用 `--omit=peer`）**：dsh 树内部含 peer 依赖（cordis 生态，如 @deepseek-ai/cordis-plugin-group），`--omit=peer` 会一并跳过导致 dsh 不可运行（实测 ERR_MODULE_NOT_FOUND）。不用 optionalDependencies：rspack 的 native binding 自身是 optional 依赖，`--omit=optional` 会误伤它（npm/cli#4828 同源）。peer 自动装默认开启且可靠：npm 11（Node 24 自带）已移除 auto-install-peers 配置项（CLI/env 均报 Unknown），不可关闭，实测 528 包必装 dsh；部署后验证 `dsh lib/bin.js --version` 为最终兜底。
+
 ```powershell
 # 1. 定位 node 与 npm-cli（node 不在 PATH 时用绝对路径）
 $node = <nodePath 或探测到的 node.exe 绝对路径>

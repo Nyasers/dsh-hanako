@@ -1,0 +1,160 @@
+# Release — Linux 单平台构建 + 直传 release 资产
+# 骨架对齐 hana-remote-dev .github/workflows/release.yml（三段式：create-release → build → verify），
+# 按 dsh-hanako 交付物本质裁剪，差异见下。
+#
+# 触发: push tag v*（发版打 tag 后自动触发）或手动 workflow_dispatch
+#
+# 三段式设计（继承 hana-remote-dev 骨架）:
+#   - create-release（仅 tag 场景）: 先建 pre-release（已存在则跳过，--generate-notes）
+#   - build（needs create-release）: ubuntu 单平台 npm ci + pack，tag 场景直传 zip + sha256
+#     （--clobber 幂等）；dispatch 手动场景无 tag 无 release，
+#     产物走 upload-artifact 3 天窗口给人下载
+#   - verify（仅 tag 场景, needs build）: 单点收尾查 release 资产 zip + sha256 齐全，
+#     缺则删 release 并 fail（公开 release 不留残缺）
+#
+# 与 hana-remote-dev 的差异（裁剪依据）:
+#   - hana-remote-dev 交付物带平台 .node 二进制（node-gyp 本机编译、copy-native 打包），
+#     必须三平台各产各的，资产名带平台后缀并发上传（防同名覆盖竞态）。
+#   - dsh-hanako 交付物是纯 JS bundle + 静态资源，pack.mjs 不打包 node_modules
+#     （安装方 npm ci 时本机编译 dsh 的 native 子依赖），zip 内容平台无关 →
+#     单平台（ubuntu）构建即可：无平台矩阵、无平台后缀资产（与本地 releases/ 命名一致），
+#     省 CI 用量；安装方的 native 依赖由 Agent 侧 npm ci 本机编译，不归发布 CI 管
+#   - 无 native 交付物 → 无 verify-native 环节（pack 失败即无 zip，构建天然 fail-closed）
+#   - 依赖类型划分（dsh → peerDependencies）：构建仅需 @rspack/core（devDependencies），
+#     dsh 是安装方运行时依赖、构建不引用 → CI 用 npm ci --omit=peer 只装 dev 树
+#     （实测 11 包 2s vs 全量 538 包 38s，产物字节一致）；安装方 npm ci 默认自动装 peer，
+#     dsh 行为不变。不用 optionalDependencies：rspack 的 native binding 自身是 optional
+#     依赖，--omit=optional 会误伤它（npm/cli#4828 同源）
+#   - 资产名版本段带 v 前缀（pack.mjs 产 dsh-hanako-v<ver>.zip），与 tag 名格式一致 →
+#     verify 用 tag 精确匹配资产名，顺带焊死版本单一事实源（package.json 版本与 tag
+#     不一致即 fail；hana-remote-dev 资产名版本段无 v 前缀拼不了 tag，只能通配）
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  # 先建 release（仅 tag 场景）: build needs 它，保证上传时 release 必已存在。
+  # dispatch 手动场景无 tag，本 job 被 if 跳过，build 照常跑（只产 artifact）。
+  create-release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      # 自动发布为 pre-release（不占 latest 标记，稳定版本手动标记）；已存在则跳过
+      - name: Create pre-release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "${{ github.ref_name }}" >/dev/null 2>&1; then
+            echo "Release ${{ github.ref_name }} already exists, skipping create"
+          else
+            gh release create "${{ github.ref_name }}" \
+              --prerelease \
+              --title "${{ github.ref_name }}" \
+              --generate-notes
+          fi
+
+  build:
+    needs: create-release
+    # create-release 仅在 tag 场景运行，dispatch 场景会被 skip；被 needs 的 job skip 会让
+    # 下游默认 if(success()) 一起 skip → 这里显式放行「非 failure」结果：
+    # success（tag）/ skipped（dispatch）都继续构建，create-release 真失败则不浪费构建
+    if: ${{ needs.create-release.result != 'failure' }}
+    runs-on: ubuntu-latest
+    # tag 场景 gh release upload 需要写权限
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      # 依赖安装（只装 dev 树）：dsh 声明为 peerDependencies（安装方 npm ci 自动装；
+      # 构建期用 --omit=peer 跳过，仅装 @rspack/core + binding，实测 11 包 2s vs
+      # 全量 538 包 38s，产物字节一致）。不用 optionalDependencies：rspack 的 native
+      # binding 本身就是 optional 依赖，--omit=optional 会误伤它（npm/cli#4828 同源）
+      - name: Install dev dependencies
+        run: npm ci --omit=peer
+
+      # pack 内部自动 build（rspack）+ 复制交付清单 + zip + sha256
+      - name: Package
+        run: npm run pack
+
+      # tag 场景直传 zip + sha256 到 release（--clobber 幂等，重复推送/补传不报错）。
+      # dispatch 手动场景无 tag 无 release，本步跳过，产物仍走下方 artifact 3 天窗口
+      - name: Upload release assets (tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          cd releases
+          ZIP=$(ls dsh-hanako-*.zip | head -1)
+          [ -n "$ZIP" ] || { echo "::error::no package zip found in releases/"; exit 1; }
+          gh release upload "${{ github.ref_name }}" "$ZIP" "$ZIP.sha256" --clobber
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: dsh-linux
+          retention-days: 3
+          path: releases/dsh-hanako-*.zip*
+          if-no-files-found: error
+
+  # 单点收尾（仅 tag 场景）: 查 release 资产 zip + sha256 齐全，缺则删 release 并 fail
+  # （build 失败也进 verify → 资产不全即删 release，公开 release 不留残缺；
+  #   create-release 失败时跳过，失败已由它自己报出，避免二次误报）
+  verify:
+    needs: [create-release, build]
+    if: ${{ startsWith(github.ref, 'refs/tags/v') && needs.create-release.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # 硬约束：zip + sha256 必须齐全，缺一个 CI fail（draft 留给人手动检查）。
+      # 直接查 release 资产（gh release view --json assets），无需 download-artifact。
+      # 资产名精确匹配 tag 名（-x 全行 + -F 固定字符串）：dsh-hanako 的 zip 名带 v 前缀
+      # （pack.mjs 产 dsh-hanako-v<ver>.zip，ver=package.json version），与 tag 名格式一致，
+      # 可直接比对 → 顺带焊死版本单一事实源：package.json 版本与 tag 不一致（漏改版本就
+      # 发版）时资产名对不上，verify fail（hana-remote-dev 资产名版本段无 v 前缀拼不了 tag，
+      # 只能通配；dsh-hanako 无此限制）
+      - name: Verify release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          TAG="${{ github.ref_name }}"
+          ASSETS=$(gh release view "${{ github.ref_name }}" --json assets --jq '.assets[].name')
+          echo "=== Release assets ==="
+          echo "$ASSETS"
+          echo ""
+          MISSING=()
+          echo "$ASSETS" | grep -qxF "dsh-hanako-${TAG}.zip" || MISSING+=("dsh-hanako-${TAG}.zip")
+          echo "$ASSETS" | grep -qxF "dsh-hanako-${TAG}.zip.sha256" || MISSING+=("dsh-hanako-${TAG}.zip.sha256")
+          if [ ${#MISSING[@]} -gt 0 ]; then
+            echo "::error::Missing required release assets:"
+            printf '  %s\n' "${MISSING[@]}"
+            # 公开 release 不留残缺：verify 失败即删除，下次重跑时重建
+            gh release delete "${{ github.ref_name }}" --yes
+            exit 1
+          fi
+          echo "All required assets present ✓"
