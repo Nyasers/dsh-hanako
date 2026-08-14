@@ -104,6 +104,32 @@ npm 默认 registry（registry.npmjs.org）不通或超时时，切镜像重跑�
 
 依赖就位后**重启 Hana**（宿主按插件 id 缓存 tools 模块，加载期才读依赖），再跑最小 `dsh_run` 试任务验证。
 
+## 主题跟随（dsh WebUI ↔ Hana 主题，v0.8.1）
+
+DSHana 标签内 dsh 主题与宿主 Hana 联动，语义一句话：
+
+| dsh 偏好 | 标签页效果 |
+| --- | --- |
+| `system`（默认） | 完整跟随 Hana 主题：11 个 Hana 主题的明暗 + 配色 |
+| `light` / `dark` | 保持 dsh 内置原生配色，不受影响 |
+
+**部署要点**（部署方 Agent 需要知道的）：
+
+- **文件随包分发**：`assets/dsh-cordis/dsh-hana-theme/`（index.js + package.json）随插件包分发，升级自动更新；缺失时主题不跟随，但不影响其他功能
+- **patch 自动渲染**：dsh-run.js 启动前把 `config/hana-theme.patch.yml.tpl` 渲染成本机路径写到数据目录 `hana-theme.patch.generated.yml`，与 session-query.patch.yml 一起作为 `--patch` 传给 dsh 启动器；模板缺失时优雅降级（跳过该 patch）
+- **生效时机**：用户切 dsh 偏好后需**重开 DSHana 标签页**生效（加载时判定一次，不轮询）；宿主切 Hana 主题（跨明暗）即时跟随，同明暗主题间切换需刷新标签页（配色相近，影响小）
+- **dsh 偏好需为 system 才跟随明暗**：settings.yaml `ui-theme.preference` 非 system 时不注入
+
+**排错**（按顺序查）：
+
+| 现象 | 检查点 | 处置 |
+| --- | --- | --- |
+| iframe 内 dsh 不跟随明暗 | dsh 偏好 + 壳页面 color-scheme | 确认 settings.yaml `ui-theme.preference` 为 system；确认 `/webui` 响应 html 有 `color-scheme:dark\|light` |
+| 配色不注入（dsh 原生色） | 生成 patch 是否存在 | 查数据目录 `hana-theme.patch.generated.yml`（dsh-run.js 启动时生成）；确认安装目录 `assets/dsh-cordis/dsh-hana-theme/` 存在（index.js） |
+| 配色不注入（patch 在） | dsh 启动日志 | 重启后查 stderr 有无 `dsh-hana-theme` 加载错误（webServer inject 失败/模块解析失败） |
+| 主题切换不实时 | 壳桥是否工作 | 壳页面（webui.js）需有 message 监听回传 `dshHanaTheme`；dsh 页面需能 postMessage（跨源 OK） |
+| 同明暗主题切换不跟随 | 已知限制 | 配色相近可接受；刷新标签页即更新 |
+
 ## 构建与打包（开发者）
 
 插件本体 rspack 打包，构建工具声明在 devDependencies（构建契约，Agent 部署 `--omit=dev` 剔除，见上）。开发者本地构建：
@@ -120,6 +146,7 @@ npm run pack -- 0.7.1  # 指定版本；缺省用 package.json 的 version（版
 
 ### 构建环境与依赖
 
+- **主题来源（宿主声明，v0.8.1 重构）**：无静态主题表。壳页面 html 带 `data-theme`（=hana-theme query），宿主的 `/api/plugins/theme.css?theme=` 变量选择器匹配生效，壳桥 getComputedStyle 读 16 个主题变量回传注入脚本；宿主切主题 → iframe URL 重建重载 → 新值；宿主新增/修改主题零适配
 - **构建实际只用 `@rspack/core`**（build.mjs 编程 API `rspack({...})`，不用 cli）；devDependencies 声明 `@rspack/core`，版本与独立构建环境（`_tmp/build-env`，1.7.12）一致，声明与实际构建用同一事实
 - **RSPACK_ENV 优先**：设置时从该目录解析 @rspack/core，否则回退本地 node_modules（本机 `npm install` 后可用）
 - **改 devDependencies 必须同步 lockfile**：`npm install --package-lock-only` 更新 root 声明 + 包树（rspack 树），dsh 运行时树不动；不同步则 Agent 端 npm ci 撞 lockfile 严格校验（EUSAGE，`package.json and package-lock.json are not in sync`）
@@ -169,7 +196,7 @@ dsh agent 请求越界权限（如提权写沙箱外文件）时任务挂起，�
 
 ## 已知限制
 
-- **插件页（DSHana 标签）主题不随 Hana 联动**：dsh Web UI 是独立 SPA，不读 Hana 的 hana-theme；深夜主题下 iframe 内仍为 dsh 自身主题（可在 dsh UI 内切换，dsh-client-ui-theme）。壳的 `data-hana-theme` 只作用于未就绪提示样式
+- **主题跟随语义（v0.8.1）**：dsh 主题偏好 `system`（默认）→ DSHana 标签内完整跟随 Hana 宿主主题（11 个主题）：明暗经壳页面 `color-scheme` 传导，配色由注入的 `dsh-hana-theme` cordis 插件感知——宿主声明：壳页面 html\[data-theme\] 使 theme.css 变量生效，壳桥 getComputedStyle 回传 16 个主题变量渲染值（随宿主更新，新增主题零适配），body 层 `!important` 覆盖 70 个 `--dsw-alias-\*` + `--dsw-specific-\*` token（视觉主表面），mask/scrollbar/toast/tooltip/warn 特殊层保留原生。**preference = light/dark → 完全不覆盖，dsh 内置原生配色**（注入脚本加载时读一次 settings.describe 判定，不轮询；用户切 preference 后重开标签页生效）。宿主切主题（跨明暗）即时跟随；同明暗主题切换需刷新标签页（配色相近）。覆盖必须写 body 层（dsh presenter 把 token 以 inline 写 body，html 继承值压不过）
 - **bash 工具在 Windows 可能 `E_ACCESSDENIED`**（dsh 沙箱环境限制，非插件问题）；文件系统工具（write/read/edit）在 workspace-write 沙箱下正常，Windows 优先用文件工具
 - **同步模式（wait=true）无审批通知**：审批挂起只能靠 Web UI 人工处理或超时；长任务建议异步
 - 越界权限请求默认走审批：插件捕获 approval/requested → deferred 通知 Agent → dsh_approve 应答；无人应答 30s 超时自动拒绝

@@ -1,0 +1,169 @@
+// dsh-hana-theme — 把 Hana 宿主主题「全量配色」注入 dsh Web UI（v0.8.1）。
+//
+// 语义：嵌入场景（DSHana 标签页）下 dsh 始终使用 Hana 配色——
+//   明暗：经壳页面 color-scheme 传导（dsh preference=system 时解析宿主明暗）
+//   配色：注入脚本接收壳桥回传的「宿主声明」——壳页面 html[data-theme] 使
+//     theme.css 变量生效，getComputedStyle 读到当前主题 16 个变量的渲染值。
+//     随宿主更新：宿主切主题 → dataset.theme 变 → 插件 iframe 重载 → 壳桥
+//     回传新值；宿主新增/修改主题无需插件更新（无静态主题表）。
+// 边界：dsh preference 加载时读一次 settings.describe（不轮询）——
+//   system → 覆盖 Hana 配色；light/dark → 完全原生。重开标签页生效。
+//
+// 机制：经 dsh-host-webserver 的 tapIndex 扩展点，向每个 index 响应注入：
+//   1) 静态 <style>：无脚本/桥失败时的默认主题 fallback
+//   2) 动态脚本：postMessage 向壳页面索取 { themeId, vars }，preference 为
+//      system 时写 body 层 !important 覆盖（压 dsh presenter 的 body inline）
+//
+// 覆盖范围：dsh --dsw-alias-* + --dsw-specific-* 中「视觉主表面」全映射
+// （bg 层次/遮罩/文字三阶/brand/button/border/interactive/markdown/state/
+// specific 组件/滚动条），功能性颜色保留原生（mask-photo 黑底、danger/warn
+// 语义色、toast/tooltip 深色浮层、工具栏半透明、反白文字/边框、骨架屏）。
+//
+// 依赖注入：webServer 服务（host 半部），与 dsh-client-ui-theme 同姿势。
+
+export const name = "dsh-hana-theme";
+
+// 默认主题 fallback（Hana 默认 new-warm-paper；仅桥不可用时兜底）
+const DEFAULT_THEME = {
+  bg: "#F5EFE4", bgCard: "#FBF7EE", sidebarBg: "#EFE8DB",
+  text: "#2A2622", textLight: "#4A433C", textMuted: "#6B6158",
+  accent: "#537D96", accentHover: "#3F6179", accentLight: "rgba(83,125,150,0.08)",
+  border: "#D8CFBE", green: "#4A6B4A", danger: "#8B2C1F",
+  userBg: "rgba(83,125,150,0.08)", overlayStrong: "rgba(42,38,34,0.15)",
+  overlayMedium: "rgba(42,38,34,0.08)", dropOverlayBg: "rgba(245,239,228,0.85)",
+};
+
+// alias/specific token ← 主题字段映射（~ 前缀 = 静态值，不走主题字段）
+const TOKEN_MAP = [
+  // bg 层次
+  ["--dsw-alias-bg-base", "bg"], ["--dsw-alias-bg-layer-1", "bg"],
+  ["--dsw-alias-bg-layer-2", "bgCard"], ["--dsw-alias-bg-layer-3", "sidebarBg"],
+  ["--dsw-alias-bg-module-platform", "sidebarBg"], ["--dsw-alias-bg-multi-select", "accentLight"],
+  ["--dsw-alias-bg-overlay", "bgCard"],
+  // bg-mask：主题化遮罩层次（mask-3 全屏深遮罩/拖放 → drop-overlay；photo 保留黑底）
+  ["--dsw-alias-bg-mask-1", "overlayStrong"],
+  ["--dsw-alias-bg-mask-2", "overlayMedium"],
+  ["--dsw-alias-bg-mask-3", "dropOverlayBg"],
+  ["--dsw-alias-bg-mask-drop", "dropOverlayBg"],
+  // brand
+  ["--dsw-alias-brand-primary", "accent"], ["--dsw-alias-brand-primary-invert", "accent"],
+  ["--dsw-alias-brand-primary-new-colorprimary-new-color", "accent"], ["--dsw-alias-brand-text", "text"],
+  // button
+  ["--dsw-alias-button-primary-fill", "accent"], ["--dsw-alias-button-primary-hover", "accentHover"],
+  ["--dsw-alias-button-primary-dimmed", "accentLight"], ["--dsw-alias-button-contrast-fill", "accent"],
+  ["--dsw-alias-button-elevated-fill", "bgCard"], ["--dsw-alias-button-floating-fill", "bgCard"],
+  ["--dsw-alias-button-floating-hover", "accentLight"], ["--dsw-alias-button-info-fill", "accent"],
+  ["--dsw-alias-button-info-hover", "accentHover"],
+  ["--dsw-alias-button-ghost-active-border", "border"],
+  ["--dsw-alias-button-ghost-active-fill", "bgCard"],
+  ["--dsw-alias-button-ghost-active-hover", "accentLight"],
+  // label 三阶
+  ["--dsw-alias-label-primary", "text"], ["--dsw-alias-label-primary-bluish", "accent"],
+  ["--dsw-alias-label-primary-dimmed", "textLight"], ["--dsw-alias-label-secondary", "textLight"],
+  ["--dsw-alias-label-tertiary", "textMuted"], ["--dsw-alias-label-caption", "textMuted"],
+  ["--dsw-alias-label-dimmed", "textMuted"],
+  // border（Hana 单一 ink-line；darkmode-thin 为 l2 的 dark 特化）
+  ["--dsw-alias-border-l1", "border"], ["--dsw-alias-border-l2", "border"],
+  ["--dsw-alias-border-l2-darkmode-thin", "border"], ["--dsw-alias-border-l3", "border"], ["--dsw-alias-border-l4", "border"],
+  // interactive
+  ["--dsw-alias-interactive-bg-hover", "accentLight"], ["--dsw-alias-interactive-bg-active", "accentLight"],
+  ["--dsw-alias-interactive-bg-hover-accent", "accentLight"], ["--dsw-alias-interactive-bg-hover-solid", "bgCard"],
+  // markdown
+  ["--dsw-alias-markdown-inline-code", "accentLight"], ["--dsw-alias-markdown-code-block", "bg"],
+  ["--dsw-alias-markdown-code-block-banner", "bgCard"], ["--dsw-alias-markdown-code-segment-selected", "accentLight"],
+  ["--dsw-alias-markdown-code-segment-unselected", "bg"], ["--dsw-alias-markdown-tag", "accentLight"],
+  ["--dsw-alias-markdown-placeholder", "accentLight"], ["--dsw-alias-markdown-citation", "bgCard"],
+  // state 语义色
+  ["--dsw-alias-state-business-primary", "accent"], ["--dsw-alias-state-business-tertiary", "accentLight"],
+  ["--dsw-alias-state-error-primary", "danger"], ["--dsw-alias-state-error-secondary", "danger"],
+  ["--dsw-alias-state-success-primary", "green"], ["--dsw-alias-state-success-secondary", "green"],
+  // scrollbar：复刻 Hana 原生语言（中性灰，不主题化）
+  ["--dsw-alias-scrollbar-bg-l1", "~rgba(128,128,128,0.2)"], ["--dsw-alias-scrollbar-bg-l2", "~rgba(128,128,128,0.2)"],
+  ["--dsw-alias-scrollbar-hover-l1", "~rgba(128,128,128,0.4)"], ["--dsw-alias-scrollbar-hover-l2", "~rgba(128,128,128,0.4)"],
+  // specific 层：bubble 用 Hana userBg（accent 透明遮罩，非实色卡片）
+  ["--dsw-specific-bubble-highlight", "accentLight"],
+  ["--dsw-specific-bubble", "userBg"],
+  ["--dsw-specific-input-major", "bgCard"],
+  ["--dsw-specific-login-input", "bg"],
+  ["--dsw-specific-menu", "sidebarBg"],
+  ["--dsw-specific-selector", "bgCard"],
+  ["--dsw-specific-sidebar-fill", "sidebarBg"],
+  ["--dsw-specific-sidebar-nav-item-active-accent", "accentLight"],
+  ["--dsw-specific-sidebar-nav-item-active", "accentLight"],
+  ["--dsw-specific-sidebar-nav-item-hover", "accentLight"],
+  ["--dsw-specific-tip", "accentLight"],
+];
+
+function tokenCss(v) {
+  return TOKEN_MAP.map(([t, k]) => `${t}:${k[0] === "~" ? k.slice(1) : v[k]}!important`).join(";");
+}
+
+// 静态 fallback 写 body 层（压 presenter inline）；脚本启动即移除，仅无脚本时兜底
+const STATIC = `<style id="dsh-hana-theme">
+body{${tokenCss(DEFAULT_THEME)}}
+</style>`;
+
+// 动态脚本：宿主声明（壳桥 vars）直接应用 + preference 边界。自包含。
+const BRIDGE = `<script id="dsh-hana-theme-bridge">
+(function () {
+  var staticEl = document.getElementById("dsh-hana-theme");
+  if (staticEl && staticEl.remove) staticEl.remove();
+  var cur = null;
+  var pref = null;
+  function cssOf(v) {
+    var m = ${JSON.stringify(TOKEN_MAP)};
+    var c = "";
+    for (var i = 0; i < m.length; i++) {
+      var val = m[i][1][0] === "~" ? m[i][1].slice(1) : (v[m[i][1]] || "");
+      c += m[i][0] + ":" + val + "!important;";
+    }
+    return c;
+  }
+  function applyOrRemove() {
+    var st = document.getElementById("dsh-hana-theme-dyn");
+    if (pref === "system" && cur) {
+      if (!st) { st = document.createElement("style"); st.id = "dsh-hana-theme-dyn"; document.head.appendChild(st); }
+      st.textContent = "body{" + cssOf(cur) + "}";
+    } else if (st) {
+      st.remove();
+    }
+  }
+  function ask() { try { window.parent.postMessage({ dshHanaThemeRequest: true }, "*"); } catch (e) {} }
+  window.addEventListener("message", function (e) {
+    if (e.data && e.data.dshHanaTheme) {
+      var v = e.data.dshHanaTheme.vars;
+      if (v && Object.keys(v).length) { cur = v; applyOrRemove(); }
+    }
+  });
+  fetch("/api/settings.describe", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ type: "client-request", rpcId: "theme-pref-" + Date.now(), method: "settings.describe", payload: {} })
+  })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      var ns = d && d.result && d.result.value && d.result.value.namespaces;
+      if (Array.isArray(ns)) {
+        for (var i = 0; i < ns.length; i++) {
+          if (ns[i] && ns[i].ns === "ui-theme" && ns[i].value) { pref = ns[i].value.preference || "system"; break; }
+        }
+      }
+      applyOrRemove();
+    })
+    .catch(function () {});
+  var mq = window.matchMedia && matchMedia("(prefers-color-scheme: dark)");
+  if (mq && mq.addEventListener) mq.addEventListener("change", ask);
+  ask();
+})();
+</script>`;
+
+export function apply(ctx) {
+  ctx.inject(["webServer"], (httpCtx) => {
+    httpCtx.effect(() =>
+      httpCtx.webServer.tapIndex((html) => {
+        if (html.includes('id="dsh-hana-theme"')) return html;
+        return html.replace("</head>", STATIC + BRIDGE + "</head>");
+      })
+    );
+  });
+}

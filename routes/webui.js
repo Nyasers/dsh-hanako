@@ -95,6 +95,39 @@ window.parent.postMessage({ type: "ready" }, "*");
   window.addEventListener("beforeunload", function () {
     if (pollTimer) clearTimeout(pollTimer);
   });
+  // v0.8.1: 主题桥——dsh 页面（跨源 iframe）postMessage 索取 Hana 主题，
+  // 这里回传主题 id（location.search hana-theme）+ 实时变量值（hana-css 已
+  // link，getComputedStyle 读到当前主题生效值）；注入脚本与内置表合并后覆盖。
+  window.addEventListener("message", function (e) {
+    if (e.data && e.data.dshHanaThemeRequest) {
+      var cs = getComputedStyle(document.documentElement);
+      function v(name, fb) { var x = cs.getPropertyValue(name).trim(); return x || fb; }
+      var params = new URLSearchParams(location.search);
+      e.source.postMessage({
+        dshHanaTheme: {
+          themeId: params.get("hana-theme") || "inherit",
+          vars: {
+            bg: v("--bg", "#F5EFE4"),
+            bgCard: v("--bg-card", "#FBF7EE"),
+            sidebarBg: v("--sidebar-bg", "#EFE8DB"),
+            text: v("--text", "#2A2622"),
+            textLight: v("--text-light", "#4A433C"),
+            textMuted: v("--text-muted", "#6B6158"),
+            accent: v("--accent", "#537D96"),
+            accentHover: v("--accent-hover", "#3F6179"),
+            accentLight: v("--accent-light", "rgba(83,125,150,0.08)"),
+            userBg: v("--user-bg", "rgba(83,125,150,0.08)"),
+            border: v("--border", "#D8CFBE"),
+            green: v("--green", "#4A6B4A"),
+            danger: v("--danger", "#8B2C1F"),
+            overlayStrong: v("--overlay-strong", "rgba(42,38,34,0.15)"),
+            overlayMedium: v("--overlay-medium", "rgba(42,38,34,0.08)"),
+            dropOverlayBg: v("--drop-overlay-bg", "rgba(245,239,228,0.85)"),
+          },
+        },
+      }, "*");
+    }
+  });
   if (document.body.getAttribute("data-pending") === "1") poll();
 })();
 <\/script>

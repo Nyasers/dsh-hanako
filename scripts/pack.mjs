@@ -35,6 +35,7 @@ const staticItems = [
   "app",
   "routes",
   "config",
+  "assets",
   "README.md",
 ];
 const distDir = join(ROOT, "dist");

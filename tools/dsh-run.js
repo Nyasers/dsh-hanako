@@ -565,9 +565,21 @@ async function ensureWebHost(cfg) {
   mkdirSync(cfg.dataDir, { recursive: true });
   const port = Number(cfg.webPort) || 3080;
   // v0.5.11: 会话全文搜索 overlay（dsh 默认 openAt: never 禁用搜索，需 --patch 覆盖为 first-search）
+  // v0.8.1: 主题注入 overlay——cordis 插件从安装目录 assets/dsh-cordis 加载（file:// URL），
+  // patch 含机器绝对路径，启动前渲染模板（占位符→实际路径）到数据目录；
   // launcher flag（--profile/--patch）必须位于应用参数（--port）之前；patch 文件缺失时优雅降级不阻断启动
+  const patchFiles = [];
   const sessionQueryPatch = join(PLUGIN_ROOT, "config", "session-query.patch.yml");
-  const patchArgs = existsSync(sessionQueryPatch) ? ["--patch", sessionQueryPatch] : [];
+  if (existsSync(sessionQueryPatch)) patchFiles.push(sessionQueryPatch);
+  const themePatchTpl = join(PLUGIN_ROOT, "config", "hana-theme.patch.yml.tpl");
+  if (existsSync(themePatchTpl)) {
+    const themePluginFile =
+      "file:///" + join(PLUGIN_ROOT, "assets", "dsh-cordis", "dsh-hana-theme", "index.js").replace(/\\/g, "/");
+    const gen = join(cfg.dataDir, "hana-theme.patch.generated.yml");
+    writeFileSync(gen, readFileSync(themePatchTpl, "utf8").split("{{THEME_PLUGIN_FILE}}").join(themePluginFile), "utf8");
+    patchFiles.push(gen);
+  }
+  const patchArgs = patchFiles.flatMap((p) => ["--patch", p]);
   const child = spawn(nodePath, [cliBin, "--profile", "web", ...patchArgs, "--port", String(port)], {
     cwd: cfg.dataDir,
     stdio: ["ignore", "pipe", "pipe"],
