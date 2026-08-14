@@ -1,0 +1,13 @@
+# 启用会话全文搜索（v0.5.11）：dsh 上游默认 openAt: never 把全文搜索做成 opt-in
+# （dsh-base/cordis.patch.yml 与 dsh-web-app/cordis.patch.yml 两层均为 never，
+# 官方留给部署方按需启用）。本插件作为部署方，通过 dsh 启动器 --patch 以本
+# overlay 作为最后 patch 层**默认启用**搜索：openAt 覆盖为 first-search——推迟
+# node:sqlite 导入与句柄打开到首次搜索（启动输出保持干净），索引 :memory: 进程内
+# 自会话日志重建（历史会话日志持久，web host 重启后首次搜索自动重新索引）。
+# 交付效果：dsh_search 工具开箱即用，无需任何额外配置。
+# 若需持久化索引：path 改为磁盘路径（如 %DSH_HOME%/session-query.db），
+# 注意每个派生索引路径同时只能被一个进程拥有（web host 退出后新进程可接手）。
+- id: session-query-sqlite
+  config:
+    path: ':memory:'
+    openAt: first-search
