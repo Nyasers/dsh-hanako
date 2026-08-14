@@ -6,9 +6,10 @@
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { cpSync, existsSync, mkdirSync, rmSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, createWriteStream, existsSync, mkdirSync, renameSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { ZipArchive } from "archiver";
 
 const require = createRequire(import.meta.url);
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -49,14 +50,27 @@ rmSync(pkgDir, { recursive: true, force: true });
 cpSync(distDir, pkgDir, { recursive: true });
 
 // 4. zip + SHA256（发布产物归档 releases/，与项目群惯例一致）
+//    archiver 纯 Node 跨平台 zip（对齐 hana-remote-dev）：不用 tar -a -cf——
+//    GNU tar（Linux）不认 .zip 后缀会静默产出 tar 伪 zip（CI ubuntu 踩坑 2026-08-14，
+//    安装端报 end of central directory record signature not found）
 const relDir = join(ROOT, "releases");
 mkdirSync(relDir, { recursive: true });
 const zipPath = join(relDir, `dsh-hanako-v${version}.zip`);
 rmSync(zipPath, { force: true });
-execFileSync("tar", ["-a", "-cf", zipPath, `dsh-hanako-v${version}`], {
-  cwd: join(ROOT, "_tmp", "pkg"),
-  stdio: "inherit",
+const tmpZip = join(relDir, `.dsh-hanako-v${version}.zip.tmp`); // 先写临时文件，rename 原子落位（中断不留半成品）
+const output = createWriteStream(tmpZip);
+const archive = new ZipArchive({ zlib: { level: 9 } });
+const done = new Promise((resolve, reject) => {
+  output.on("close", resolve);
+  output.on("error", reject);
+  archive.on("error", reject);
 });
+archive.pipe(output);
+// zip 根 = dsh-hanako-v<version>/（保持既有形态：顶层目录带版本号）
+archive.directory(pkgDir, `dsh-hanako-v${version}`);
+await archive.finalize();
+await done;
+renameSync(tmpZip, zipPath);
 const buf = readFileSync(zipPath);
 const sha = createHash("sha256").update(buf).digest("hex").toUpperCase();
 const sizeMB = (buf.length / 1048576).toFixed(1);

@@ -117,7 +117,8 @@ jobs:
           path: releases/dsh-hanako-*.zip*
           if-no-files-found: error
 
-  # 单点收尾（仅 tag 场景）: 查 release 资产 zip + sha256 齐全，缺则删 release 并 fail
+  # 单点收尾（仅 tag 场景）: 查 release 资产 zip + sha256 齐全且为真 zip（node 校验
+  # 魔数/EOCD/sha256，见 scripts/verify-zip.mjs），缺则删 release 并 fail
   # （build 失败也进 verify → 资产不全即删 release，公开 release 不留残缺；
   #   create-release 失败时跳过，失败已由它自己报出，避免二次误报）
   verify:
@@ -129,6 +130,12 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+
+      # verify-zip.mjs 需要 node
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
 
       # 硬约束：zip + sha256 必须齐全，缺一个 CI fail（draft 留给人手动检查）。
       # 直接查 release 资产（gh release view --json assets），无需 download-artifact。
@@ -158,3 +165,12 @@ jobs:
             exit 1
           fi
           echo "All required assets present ✓"
+
+          # 下载资产，node 校验真实性 + 完整性（魔数 PK/EOCD/sha256）——
+          # pack 曾用 tar -a -cf 在 GNU tar（Linux）下产出 tar 伪 zip，verify 只查存在
+          # 查不出，安装端报 "end of central directory record signature not found"；
+          # scripts/verify-zip.mjs 全流程 node，防伪 zip 再混入
+          gh release download "${{ github.ref_name }}" --pattern "dsh-hanako-${TAG}.*" --dir "$RUNNER_TEMP/dsh-verify" --clobber
+          cd "$RUNNER_TEMP/dsh-verify"
+          ZIP="dsh-hanako-${TAG}.zip"
+          node "$GITHUB_WORKSPACE/scripts/verify-zip.mjs" "$ZIP" "$ZIP.sha256"
