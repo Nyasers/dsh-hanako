@@ -2,7 +2,7 @@
   "manifestVersion": 1,
   "id": "dsh-hanako",
   "name": "DSHana",
-  "version": "0.7.5",
+  "version": "0.8.0",
   "description": "常驻 DeepSeek Harness（dsh）web host（--profile web），向 Agent 提供进程外 subagent 能力：任务经 dsh /api 网关提交（DeepSeek 官方 API、沙箱 bash/文件系统、compaction、subagent 级联），DSH_HOME 锁进插件数据目录（账本随插件生命周期），dsh Web UI 天然可见全部任务（可浏览器查看/继续）。默认异步：提交即渲染实时卡片（状态 / 耗时 / 摘要 + 完整输出懒加载），完成后宿主唤醒结果后台送达（PTC 式回调压缩：默认只带最终结论摘要，省上下文）；可 wait=true 同步返回。",
   "author": "Nyaser",
   "minAppVersion": "0.82.0",
@@ -98,6 +98,11 @@
           "description": "异步任务完成后回调给 Agent 的输出体量：summary=只回传最终结论摘要（默认，省上下文；完整输出在卡片 op 快照与 dsh web UI 可查）；full=回传完整输出（上下文占用大）。"
         }
       }
+    },
+    "page": {
+      "title": { "zh": "DSHana", "en": "DSHana" },
+      "icon": "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\"><rect x=\"3\" y=\"4\" width=\"18\" height=\"16\" rx=\"1\"/><path d=\"M3 9h18\"/><path d=\"M7 13h4\"/></svg>",
+      "route": "/webui"
     }
   }
 }

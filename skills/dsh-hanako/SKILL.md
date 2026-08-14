@@ -50,7 +50,9 @@ description: "dsh-hanako 插件（把 DeepSeek Harness 接进 Hana 的进程外 
 
 ## 依赖自主部署（npm ci，Agent 可无人值守完成）
 
-dsh 运行需要 `@deepseek-ai/dsh` 依赖树（含原生模块 node-pty/koffi）。依赖位置两个可能：**插件安装目录 `node_modules/`**（zip 自带，现役形态）或**数据目录 `dsh-pkg/`**（轻量分发形态，依赖按需安装）。Agent 检测到依赖缺失时自主完成部署，无需用户介入（除网络/镜像场景）。
+dsh 运行需要 `@deepseek-ai/dsh` 依赖树（含原生模块 node-pty/koffi）。依赖位置两个可能：**数据目录 `dsh-pkg/`**（轻量分发形态，依赖按需安装，**优先**：resolveDshPkgDir 先找它）或**插件安装目录 `node_modules/`**（zip 自带，兑底）。Agent 检测到依赖缺失时自主完成部署，无需用户介入（除网络/镜像场景）。
+
+**部署位置选 dsh-pkg 的理由**：升级安装会整体替换插件目录、清掉 node_modules；数据目录随插件生命周期保留，装 dsh-pkg 后升级不再丢依赖。部署：把插件目录的 `package.json` + `package-lock.json` 复制进 `dsh-pkg/` 再执行 npm ci。
 
 ### 检测依赖缺失
 
@@ -159,6 +161,7 @@ dsh agent 请求越界权限（如提权写沙箱外文件）时任务挂起，�
 | 工具调用报 `node 可执行文件不存在：<路径>` | nodePath 未配置（初始为空）或路径失效 | 按上文第 1 步探测本机 node 并配置，重启 |
 | 报 `找不到 DEEPSEEK_API_KEY` | apiKey 未填 | 按第 2 步引导用户填，重启 |
 | 报 `dsh 包未就绪：...bin.js 不存在` | 依赖缺失/被裁剪（现役 zip 自带 node_modules，先确认解压完整；轻量分发形态需自行部署） | 按「依赖自主部署」章节 npm ci（部署目录需含 package.json + lockfile） |
+| 升级/重装插件后 web host 起不来（报 `dsh 包未就绪`） | 升级安装会**整体替换插件目录，清掉 node_modules**（zip 是零依赖形态，不含运行时树） | 依赖部署到**数据目录 `dsh-pkg/`**（`<宿主插件数据目录>/dsh-hanako/dsh-pkg`，resolveDshPkgDir 优先位置，升级不丢），npm ci 见下；装完调一次 dsh_run 触发 web host 重试拉起（onload 已失败不会自动重拉） |
 | 报 `dsh web 启动超时（...端口未就绪）` | web host 起不来（多为 nodePath/apiKey 问题） | 同上两项；`webPort` 被占用时改端口 |
 | 任务执行中 bash 报 `E_ACCESSDENIED` | dsh bash 沙箱在 Windows 的限制 | 改用文件系统工具（write/read/edit），Windows 上文件工具正常 |
 | npm ci 下载失败/超时 | registry 网络问题 | 切镜像 `--registry=https://registry.npmmirror.com` 重跑，仍失败查代理 |
@@ -166,6 +169,7 @@ dsh agent 请求越界权限（如提权写沙箱外文件）时任务挂起，�
 
 ## 已知限制
 
+- **插件页（DSHana 标签）主题不随 Hana 联动**：dsh Web UI 是独立 SPA，不读 Hana 的 hana-theme；深夜主题下 iframe 内仍为 dsh 自身主题（可在 dsh UI 内切换，dsh-client-ui-theme）。壳的 `data-hana-theme` 只作用于未就绪提示样式
 - **bash 工具在 Windows 可能 `E_ACCESSDENIED`**（dsh 沙箱环境限制，非插件问题）；文件系统工具（write/read/edit）在 workspace-write 沙箱下正常，Windows 优先用文件工具
 - **同步模式（wait=true）无审批通知**：审批挂起只能靠 Web UI 人工处理或超时；长任务建议异步
 - 越界权限请求默认走审批：插件捕获 approval/requested → deferred 通知 Agent → dsh_approve 应答；无人应答 30s 超时自动拒绝
