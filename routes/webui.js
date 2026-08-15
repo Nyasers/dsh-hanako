@@ -1,12 +1,25 @@
 // routes/webui.js — dsh-hanako 插件页：Hana 顶部 tab 内嵌 dsh Web UI
-//   GET /webui            插件页（iframe 嵌 http://127.0.0.1:<port>/，含就绪探测/主题注入）
-//   GET /webui/health     轻量就绪探测（浏览器端 3s 重试轮询源；Node fetch 无 CORS 问题）
+//   GET /webui            插件页（iframe 嵌 http://127.0.0.1:<port>/，含就绪探测/主题注入/失败自检）
+//   GET /webui/health     轻量就绪探测（浏览器端 3s 重试轮询源；Node fetch 无 CORS 问题；
+//                         未就绪时附带 diagnostics 字段供页面渲染自检）
+//   POST /webui/start        手动启动 web host（process 卡片「手动启动」按钮；ready/starting/触发启动三态）
+//   POST /webui/install-deps 自动安装 dsh 依赖（deps 卡片「安装依赖」按钮；installing/触发安装）
+//   GET  /webui/verify-deps  运行级依赖检测（node cliBin --version；进标签页自动一次 + 手动「检测依赖」按钮）
+//   GET  /webui/verify-node  运行级 Node/npm 可用性检测（node --version + npm-cli.js；进标签页自动一次 + 手动「检测 Node」按钮）
 //
 // 机制：与 routes/card.js 同构——宿主把 app 挂在 /api/plugins/<pluginId> 命名空间下，
 // 这里注册相对路径。渲染前服务端用 Node fetch 探测 dsh web host 的 /api/host.describe
 // （1.5s 超时，低延迟不拖慢页面）；就绪则直接渲染 iframe，未就绪渲染提示区并让浏览器
 // 每 3s 轮询本插件的 /webui/health，就绪后动态挂载 iframe。脚本首行 postMessage ready
 // 是宿主原始握手（参照 PLUGINS.md；插件 bundle 不含 @hana/plugin-sdk，不依赖它）。
+//
+// 连接失败自检（v0.8.3）：web host 未就绪时逐项检查 ① nodejs 配置 ② dsh 依赖
+// ③ DSH 进程状态，明确指出哪一项坏了、为什么、怎么修。诊断由服务端收集（Node 侧
+// 才能读 config.json、进程单例与 fs 状态；浏览器 iframe 读不到插件进程）——收集函数
+// 挂在 globalThis 单例（tools/dsh-run.js 的 collectDiagnostics），这里经单例调用而
+// 非静态 import：Hana 以 ?t= 时间戳加载 tools 模块，静态 import 会命中 Node ESM 固定
+// URL 缓存读到旧模块（见 tools/dsh-run.js 头部注释），与 index.js 经单例取 closeProcess
+// 同一套纪律。工具模块未加载（冷启动窗口）时单例函数缺失，返回 null 由轮询补上。
 
 function esc(v) {
   return String(v)
@@ -37,14 +50,34 @@ async function probeHost(port, log) {
   }
 }
 
-/** 插件页 HTML 壳：ready=true 直接内联 iframe；否则提示区 + 轮询 health 后动态挂载
+/** 读连接失败自检（服务端收集：config.json + 单例 + fs；经单例调用 tools 的收集函数）。
+ * 工具模块未加载（冷启动窗口）时返回 null，页面先渲染占位，轮询刷新后填充。
+ * 不返回 apiKey 明文（只回布尔）；stderr 尾部在收集端已截断 ≤800。 */
+function readDiagnostics(ctx, cfg, port) {
+  const g = globalThis.__dshHanako;
+  if (g && typeof g.collectDiagnostics === "function") {
+    try {
+      return g.collectDiagnostics({ dataDir: ctx?.dataDir, nodePath: cfg.nodePath, apiKey: cfg.apiKey, webPort: port });
+    } catch (e) {
+      ctx.log?.warn?.("[dsh-hanako] 收集连接自检失败:", e?.message || String(e));
+      return null;
+    }
+  }
+  return null;
+}
+
+/** 插件页 HTML 壳：ready=true 直接内联 iframe；否则提示区（标题 + 自检列表 + 重试）+ 轮询 health 后动态挂载
  * colorScheme：按宿主 hana-theme 映射的 color-scheme（dark/light）。dsh 主题为
  * system 时通过 prefers-color-scheme 解析，Chromium 会让跨源 iframe 继承父页面
- * 的 color-scheme，因此 dsh 会跟随宿主主题；dsh 内显式选了 light/dark 则不受影响。 */
-function buildShell({ ready, hcLink, theme, api, port, colorScheme }) {
+ * 的 color-scheme，因此 dsh 会跟随宿主主题；dsh 内显式选了 light/dark 则不受影响。
+ * diagnostics：未就绪时服务端收集的首帧自检数据（JSON 对象或 null）；浏览器端
+ * 渲染进提示区，并在每次 health 轮询未就绪时用新 diagnostics 刷新。 */
+function buildShell({ ready, hcLink, theme, api, port, colorScheme, diagnostics }) {
   const iframe = ready
     ? `<iframe id="dsh-frame" src="http://127.0.0.1:${port}/"></iframe>`
     : `<iframe id="dsh-frame"></iframe>`;
+  // 嵌入首帧自检 JSON：把 </ 转义成 <\/，防诊断文本（路径/stderr）里的 </script> 提前闭合脚本
+  const initDiag = diagnostics ? JSON.stringify(diagnostics).replace(/<\//g, "<\\/") : "null";
   return `<!DOCTYPE html>
 <html lang="zh">
 <head>
@@ -57,18 +90,50 @@ ${hcLink}
 html,body{height:100%;margin:0}
 html{color-scheme:${colorScheme}}
 iframe#dsh-frame{width:100%;height:100%;border:0;display:block}
-#dsh-pending{position:fixed;inset:0;display:none;align-items:center;justify-content:center;font-family:system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;font-size:14px;color:#333;background:#fafafa}
+/* v0.8.5: 诊断区全部改用宿主 hana 主题 CSS 变量（hcLink 注入样式表定义，变量清单见
+ * 下方主题桥 postMessage 的 vars）；fallback 用纸张风色值，明暗随宿主主题，不再用
+ * 硬编码色板与 prefers-color-scheme media query。 */
+#dsh-pending{position:fixed;inset:0;display:none;align-items:center;justify-content:center;font-family:system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;font-size:14px;color:var(--text,#2A2622);background:var(--bg,#F5EFE4);padding:24px;box-sizing:border-box;overflow:auto}
 body[data-pending="1"] #dsh-pending{display:flex}
 body[data-pending="1"] iframe#dsh-frame{display:none}
+.diag-box{max-width:680px;width:100%}
+.diag-title{font-size:18px;font-weight:600;margin:0 0 6px}
+.diag-sub{font-size:13px;color:var(--text-muted,#6B6158);margin:0 0 14px}
+.diag-list{list-style:none;margin:0 0 10px;padding:0;display:flex;flex-direction:column;gap:10px}
+.diag-item{display:flex;gap:10px;align-items:flex-start;border:1px solid var(--border,#D8CFBE);border-radius:8px;background:var(--bg-card,#FBF7EE);padding:10px 12px}
+.diag-mark{font-size:16px;line-height:20px;width:20px;text-align:center;flex:none}
+.diag-item.ok .diag-mark{color:var(--green,#4A6B4A)}
+.diag-item.bad .diag-mark{color:var(--danger,#8B2C1F)}
+.diag-body{min-width:0;flex:1}
+.diag-name{font-weight:600;margin-bottom:4px}
+.diag-detail{white-space:pre-wrap;word-break:break-all;color:var(--text-light,#4A433C);margin-bottom:4px}
+.diag-fix{color:var(--accent,#537D96);background:var(--accent-light,rgba(83,125,150,0.08));border-radius:4px;padding:6px 8px}
+.diag-apikey{font-size:12px;color:var(--text-muted,#6B6158);margin-bottom:10px}
+.diag-btn{font-family:inherit;font-size:13px;color:var(--accent,#537D96);background:var(--bg-card,#FBF7EE);border:1px solid var(--accent,#537D96);border-radius:6px;padding:6px 12px;margin-top:6px;cursor:pointer}
+.diag-btn:hover:not(:disabled){color:var(--accent-hover,#3F6179);border-color:var(--accent-hover,#3F6179)}
+.diag-btn:disabled{color:var(--text-muted,#6B6158);border-color:var(--border,#D8CFBE);cursor:default}
+.diag-btn-msg{display:block;font-size:12px;color:var(--danger,#8B2C1F);margin-top:4px}
+.diag-progress{white-space:pre-wrap;word-break:break-all;font-family:ui-monospace,SFMono-Regular,Consolas,"Courier New",monospace;font-size:12px;color:var(--text-light,#4A433C);background:var(--accent-light,rgba(83,125,150,0.08));border-radius:4px;padding:6px 8px;margin-bottom:4px;max-height:120px;overflow:auto}
+.diag-progress-time{font-size:11px;color:var(--text-muted,#6B6158);margin-bottom:4px}
+.diag-retry{font-size:13px;color:var(--text-muted,#6B6158);text-align:center}
 </style>
 </head>
 <body data-hana-theme="${esc(theme)}" data-pending="${ready ? "0" : "1"}">
-<div id="dsh-pending">dsh web host 未就绪，正在重试…</div>
+<div id="dsh-pending">
+  <div class="diag-box">
+    <div class="diag-title">dsh web host 未就绪</div>
+    <div class="diag-sub">连接失败自检（每 3 秒自动刷新，就绪后自动进入）</div>
+    <ul class="diag-list" id="diag-list"></ul>
+    <div class="diag-apikey" id="diag-apikey"></div>
+    <div class="diag-retry">正在重试…</div>
+  </div>
+</div>
 ${iframe}
 <script>
 window.parent.postMessage({ type: "ready" }, "*");
 (function () {
   var api = ${JSON.stringify(api)};
+  var initDiag = ${initDiag};
   var frame = document.getElementById("dsh-frame");
   function attach() {
     // 就绪即停轮询：显式清掉 pending 定时器（不依赖递归链隐式断开）
@@ -81,6 +146,396 @@ window.parent.postMessage({ type: "ready" }, "*");
     var sess = params.get("pluginSurfaceSession");
     return sess ? { "X-Hana-Plugin-Surface-Session": sess } : {};
   }
+  // v0.8.3: 连接失败自检渲染——服务端收集的 checks 列表（每项：状态图标/检查项名/
+  // 详情/修复指引）；escHtml 兜底转义（诊断文本含路径与 stderr，需防注入）
+  function escHtml(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;")
+      .replace(/"/g, "&quot;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+  }
+  function renderDiagList(diag) {
+    var list = document.getElementById("diag-list");
+    if (!list) return;
+    if (!diag || !diag.checks || diag.checks.length === 0) {
+      // 工具模块冷启动未加载/收集暂不可用：占位，下一轮轮询刷新
+      list.innerHTML = '<li class="diag-item"><div class="diag-body"><div class="diag-detail">正在收集自检信息…</div></div></li>';
+      return;
+    }
+    var html = "";
+    for (var i = 0; i < diag.checks.length; i++) {
+      var d = diag.checks[i];
+      var mark = d.ok ? "✓" : "✗";
+      html += '<li class="diag-item ' + (d.ok ? "ok" : "bad") + '" data-check="' + escHtml(d.key) + '">'
+        + '<span class="diag-mark">' + mark + '</span>'
+        + '<div class="diag-body">'
+        + '<div class="diag-name">' + escHtml(d.name) + '</div>'
+        + (d.detail ? '<div class="diag-detail">' + escHtml(d.detail) + '</div>' : "")
+        + (d.key === "deps" && d.installing ? progressHtml(d) : "") // v0.8.8: 安装实时进度
+        + (d.fix ? '<div class="diag-fix">修复：' + escHtml(d.fix) + '</div>' : "")
+        + actionButtonHtml(d)
+        + '</div></li>';
+    }
+    list.innerHTML = html;
+    // API Key 只展示「已配置/未配置」布尔（服务端不回明文）
+    var keyLine = document.getElementById("diag-apikey");
+    if (keyLine && diag.apiKey) {
+      keyLine.textContent = "DeepSeek API Key：" + (diag.apiKey.configured ? "已配置" : "未配置（dsh 走官方 API，无 key 启动会失败）");
+    }
+    syncActionButtons(diag); // 按检查项状态刷新卡片内操作按钮（启动中/安装中禁用，失败/缺失可用）
+  }
+  // v0.8.6: 操作按钮嵌入诊断卡片（data-check 定位，事件委托在列表上）——
+  // process 卡片：进程未在跑（从未启动/启动失败/已退出）→「手动启动 web host」；
+  // 启动中（alive=true 未 ready）→ 禁用「启动中…」；健康（ready+alive）不渲染按钮。
+  //   v0.8.8: t2（依赖）未通过（deps.ok=false / installing / verifyRunning）时启动按钮
+  //   不开放——禁用 + msg「依赖未就绪，请先安装/重新安装依赖」。
+  // deps 卡片：依赖缺失 →「安装依赖」；已装 → 常驻「检测依赖」（verify-deps，检测中禁用
+  // 「检测中…」）；存在但运行级验证失败 → 另加「重新安装依赖」（install-deps action）。
+  //   v0.8.10: node 卡片——nodePath 已配置 → 常驻「检测 Node」（verify-node，检测中禁用
+  //   「检测中…」）；未配置纯提示不渲染按钮（配置都没配，检测无意义）。
+  // 门禁链（v0.8.10）：t1（Node）未通过 → t2/t3 全锁；t1 过但 t2（依赖）未通过 → t3 锁。
+  // 状态机：startRequested/depsRequested/verifyRequested/nodeVerifyRequested 只覆盖
+  // 「请求已发出但诊断尚未反映状态」的短暂窗口，诊断确认后一律以检查项为准。
+  var startRequested = false;
+  var depsRequested = false;
+  var verifyRequested = false;
+  var nodeVerifyRequested = false;
+  // 卡片内操作按钮 HTML：node 等纯提示项返回空；deps 可返回多个按钮（重新安装 + 检测）
+  function actionButtonHtml(d) {
+    if (!d) return "";
+    if (d.key === "process") {
+      // 进程健康（已就绪且在跑）不渲染；否则卡片内给「手动启动」（启动中禁用）
+      if (d.alive && d.ready) return "";
+      var running = d.alive;
+      return '<button type="button" class="diag-btn" data-action="start" data-check="process"'
+        + (running ? " disabled" : "") + '>' + (running ? "启动中…" : "手动启动 web host") + '</button>'
+        + '<span class="diag-btn-msg"></span>';
+    }
+    if (d.key === "node") {
+      // v0.8.10: nodePath 已配置 → 常驻「检测 Node」（检测中禁用「检测中…」）；
+      // 未配置（configured=false）纯提示不渲染按钮（配置都没配，检测无意义）
+      if (!d.configured) return "";
+      return '<button type="button" class="diag-btn" data-action="verify-node" data-check="node"'
+        + (d.verifyRunning ? " disabled" : "") + '>' + (d.verifyRunning ? "检测中…" : "检测 Node") + '</button>'
+        + '<span class="diag-btn-msg"></span>';
+    }
+    if (d.key === "deps") {
+      var html = "";
+      if (!d.installed) {
+        // 缺失：安装依赖（安装中禁用）
+        html += '<button type="button" class="diag-btn" data-action="install-deps" data-check="deps"'
+          + (d.installing ? " disabled" : "") + '>' + (d.installing ? "安装中…" : "安装依赖") + '</button>';
+      } else {
+        // 已装：验证失败 → 重新安装依赖（同一 install-deps action）
+        if (d.verified === false && !d.verifyRunning) {
+          html += '<button type="button" class="diag-btn" data-action="install-deps" data-check="deps"'
+            + (d.installing ? " disabled" : "") + '>' + (d.installing ? "安装中…" : "重新安装依赖") + '</button>';
+        }
+        // 常驻「检测依赖」（v0.8.8: 检测中/安装中禁用）
+        if (!d.installing) {
+          html += '<button type="button" class="diag-btn" data-action="verify-deps" data-check="deps"'
+            + (d.verifyRunning ? " disabled" : "") + '>' + (d.verifyRunning ? "检测中…" : "检测依赖") + '</button>';
+        }
+      }
+      return html ? html + '<span class="diag-btn-msg"></span>' : "";
+    }
+    return "";
+  }
+  function listBtn(check, action) {
+    var list = document.getElementById("diag-list");
+    if (!list) return null;
+    var sel = '[data-check="' + check + '"] .diag-btn';
+    if (action) sel += '[data-action="' + action + '"]';
+    return list.querySelector(sel);
+  }
+  function checkByKey(diag, key) {
+    if (diag && diag.checks) {
+      for (var i = 0; i < diag.checks.length; i++) {
+        if (diag.checks[i].key === key) return diag.checks[i];
+      }
+    }
+    return null;
+  }
+  // v0.8.8: 安装/检测进度时间格式化（HH:MM:SS）
+  function fmtTime(iso) {
+    if (!iso) return "";
+    var t = new Date(iso);
+    if (isNaN(t.getTime())) return "";
+    var p = function (n) { return (n < 10 ? "0" : "") + n; };
+    return p(t.getHours()) + ":" + p(t.getMinutes()) + ":" + p(t.getSeconds());
+  }
+  // v0.8.8: deps 安装中实时进度块（npm ci 输出尾部 + 更新时间，随 3s 轮询刷新滚动）
+  function progressHtml(d) {
+    var html = '<pre class="diag-progress">' + escHtml(d.installLog || "正在准备…") + '</pre>';
+    if (d.installAt) html += '<div class="diag-progress-time">更新于 ' + escHtml(fmtTime(d.installAt)) + '</div>';
+    return html;
+  }
+  function setBtnMsg(check, text) {
+    var list = document.getElementById("diag-list");
+    var el = list ? list.querySelector('[data-check="' + check + '"] .diag-btn-msg') : null;
+    if (el) el.textContent = text;
+  }
+  function syncActionButtons(diag) {
+    var node = null, proc = null, deps = null;
+    if (diag && diag.checks) {
+      for (var i = 0; i < diag.checks.length; i++) {
+        if (diag.checks[i].key === "node") node = diag.checks[i];
+        else if (diag.checks[i].key === "process") proc = diag.checks[i];
+        else if (diag.checks[i].key === "deps") deps = diag.checks[i];
+      }
+    }
+    // v0.8.10: t1（Node）未通过 → t2/t3 全锁（node 不可用，安装依赖/启动进程都没意义）：
+    // node.ok=false（未配置/路径不存在/验证失败）、检测中（verifyRunning）均视为未通过
+    var nodeBlocked = node && (node.ok === false || node.verifyRunning === true);
+    // v0.8.8: t2（依赖）未通过 → t3 启动按钮不开放（依赖未就绪，启动必失败）：
+    // deps.ok=false（未装/验证失败）、安装中（installing）、检测中（verifyRunning）均视为未通过
+    var depsBlocked = deps && (deps.ok === false || deps.installing === true || deps.verifyRunning === true);
+    var pBtn = listBtn("process");
+    if (pBtn) {
+      if (nodeBlocked) {
+        // t1 未过 → t3 不开放（Node 不可用，启动必失败）
+        startRequested = false;
+        pBtn.disabled = true;
+        pBtn.textContent = "手动启动 web host";
+        setBtnMsg("process", "Node.js 不可用，请先修复（设置界面配置或让 Agent 协助）");
+      } else if (depsBlocked) {
+        // 依赖未就绪：禁用 + msg 提示原因（用户先去安装/重新安装/等待检测）
+        startRequested = false;
+        pBtn.disabled = true;
+        pBtn.textContent = "手动启动 web host";
+        setBtnMsg("process", "依赖未就绪，请先安装/重新安装依赖");
+      } else if (startRequested && !(proc && !proc.alive)) {
+        // 请求已发出：进程未确认停止（含 alive 确认中）→ 保持禁用；确认在跑则转入「启动中…」
+        if (proc && proc.alive) startRequested = false;
+        pBtn.disabled = true;
+        pBtn.textContent = proc && proc.alive ? "启动中…" : "正在启动…";
+      } else {
+        startRequested = false;
+        if (proc && proc.alive) {
+          pBtn.disabled = true;
+          pBtn.textContent = "启动中…";
+        } else {
+          pBtn.disabled = false;
+          pBtn.textContent = "手动启动 web host";
+        }
+      }
+    }
+    var installBtn = listBtn("deps", "install-deps");
+    if (installBtn && deps) {
+      if (nodeBlocked) {
+        // v0.8.10: t1 未过 → t2「安装依赖」不开放（node/npm 不可用，npm ci 必失败）
+        depsRequested = false;
+        installBtn.disabled = true;
+        installBtn.textContent = deps.installed ? "重新安装依赖" : "安装依赖";
+        setBtnMsg("deps", "Node.js 不可用，请先修复（设置界面配置或让 Agent 协助）");
+      } else if (deps.installing) {
+        depsRequested = false;
+        installBtn.disabled = true;
+        installBtn.textContent = "安装中…";
+      } else if (depsRequested) {
+        // 请求已发出但诊断尚未确认 installing/installed：保持禁用
+        installBtn.disabled = true;
+        installBtn.textContent = "正在安装…";
+      } else {
+        depsRequested = false;
+        installBtn.disabled = false;
+        installBtn.textContent = deps.installed ? "重新安装依赖" : "安装依赖";
+      }
+    }
+    var nodeVerifyBtn = listBtn("node", "verify-node");
+    if (nodeVerifyBtn && node) {
+      if (node.verifyRunning) {
+        nodeVerifyRequested = false;
+        nodeVerifyBtn.disabled = true;
+        nodeVerifyBtn.textContent = "检测中…";
+      } else if (nodeVerifyRequested) {
+        // 请求已发出但诊断尚未反映 running：保持禁用
+        nodeVerifyBtn.disabled = true;
+        nodeVerifyBtn.textContent = "正在检测…";
+      } else {
+        nodeVerifyRequested = false;
+        nodeVerifyBtn.disabled = false;
+        nodeVerifyBtn.textContent = "检测 Node";
+      }
+    }
+    var verifyBtn = listBtn("deps", "verify-deps");
+    if (verifyBtn && deps) {
+      if (deps.verifyRunning) {
+        verifyRequested = false;
+        verifyBtn.disabled = true;
+        verifyBtn.textContent = "检测中…";
+      } else if (verifyRequested) {
+        // 请求已发出但诊断尚未反映 running：保持禁用
+        verifyBtn.disabled = true;
+        verifyBtn.textContent = "正在检测…";
+      } else {
+        verifyRequested = false;
+        verifyBtn.disabled = false;
+        verifyBtn.textContent = "检测依赖";
+      }
+    }
+  }
+  function startWebHost() {
+    var btn = listBtn("process");
+    if (!btn || btn.disabled) return; // 幂等：已在启动中
+    startRequested = true;
+    btn.disabled = true;
+    btn.textContent = "正在启动…";
+    setBtnMsg("process", "");
+    fetch(api + "/webui/start", {
+      method: "POST",
+      headers: surfaceHeaders(),
+      signal: AbortSignal.timeout(5000),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d && d.ok && d.state === "ready") { attach(); return; } // 已就绪：直接切 iframe
+        if (d && d.ok) { return; } // starting：保持禁用，轮询检测就绪
+        // 失败：恢复按钮并提示错误
+        startRequested = false;
+        btn.disabled = false;
+        btn.textContent = "手动启动 web host";
+        setBtnMsg("process", d && d.error ? d.error : "启动请求失败，请稍后重试");
+      })
+      .catch(function () {
+        startRequested = false;
+        btn.disabled = false;
+        btn.textContent = "手动启动 web host";
+        setBtnMsg("process", "启动请求超时或网络错误，请重试");
+      });
+  }
+  function installDeps() {
+    var btn = listBtn("deps");
+    if (!btn || btn.disabled) return; // 幂等：已在安装中
+    depsRequested = true;
+    btn.disabled = true;
+    btn.textContent = "正在安装…";
+    setBtnMsg("deps", "");
+    fetch(api + "/webui/install-deps", {
+      method: "POST",
+      headers: surfaceHeaders(),
+      signal: AbortSignal.timeout(5000),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d && d.ok) { return; } // installing：保持禁用，轮询诊断刷新（安装中/完成）
+        // 失败：恢复按钮并提示错误
+        depsRequested = false;
+        btn.disabled = false;
+        btn.textContent = "安装依赖";
+        setBtnMsg("deps", d && d.error ? d.error : "安装请求失败，请稍后重试");
+      })
+      .catch(function () {
+        depsRequested = false;
+        btn.disabled = false;
+        btn.textContent = "安装依赖";
+        setBtnMsg("deps", "安装请求超时或网络错误，请重试");
+      });
+  }
+  // v0.8.8: 运行级依赖检测（GET /webui/verify-deps，只读）——进标签页自动一次 + 手动
+  // 「检测依赖」按钮。服务端 await 检测（≤10s），结果写入 g.depsSmoke；拿到 ok 响应后
+  // 触发一次 health 读取诊断刷新 deps 卡片（检测中显示「正在检测依赖完整性…」，结果
+  // 回来显示通过/失败）。不随 3s 轮询重复触发。
+  function refreshDiag() {
+    fetch(api + "/webui/health", { headers: surfaceHeaders(), signal: AbortSignal.timeout(3000) })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d && d.ok) { attach(); return; }
+        if (d && d.diagnostics) renderDiagList(d.diagnostics);
+      })
+      .catch(function () {});
+  }
+  function runVerifyDeps(btn) {
+    if (!btn || btn.disabled) return; // 幂等：已在检测中
+    verifyRequested = true;
+    btn.disabled = true;
+    btn.textContent = "正在检测…";
+    setBtnMsg("deps", "");
+    fetch(api + "/webui/verify-deps", {
+      headers: surfaceHeaders(),
+      signal: AbortSignal.timeout(15000), // 服务端 await 检测 ≤10s，留足余量
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        verifyRequested = false;
+        if (d && d.ok) {
+          // 结果已写入服务端 g.depsSmoke：刷新一次诊断（通过/失败状态进 deps 卡片）
+          refreshDiag();
+          return;
+        }
+        var b = listBtn("deps", "verify-deps");
+        if (b) { b.disabled = false; b.textContent = "检测依赖"; }
+        setBtnMsg("deps", d && d.error ? d.error : "检测请求失败，请稍后重试");
+      })
+      .catch(function () {
+        verifyRequested = false;
+        var b = listBtn("deps", "verify-deps");
+        if (b) { b.disabled = false; b.textContent = "检测依赖"; }
+        setBtnMsg("deps", "检测请求超时或网络错误，请重试");
+      });
+  }
+  function verifyDeps() {
+    runVerifyDeps(listBtn("deps", "verify-deps"));
+  }
+  // 进标签页自动检测一次（仅依赖已装时；不随轮询重复——只在这里调一次）
+  function autoVerifyDeps() {
+    var deps = checkByKey(initDiag, "deps");
+    if (!deps || !deps.installed) return; // 未装：先安装，安装成功会自动重验
+    runVerifyDeps(listBtn("deps", "verify-deps"));
+  }
+  // v0.8.10: 运行级 Node/npm 可用性检测（GET /webui/verify-node，只读）——进标签页自动一次 +
+  // 手动「检测 Node」按钮。同 runVerifyDeps：服务端 await（≤10s），结果写入 g.nodeSmoke，
+  // 成功则 refreshDiag() 刷新诊断（t1 卡片显示通过/失败，门禁随之解锁/加锁）。
+  function runVerifyNode(btn) {
+    if (!btn || btn.disabled) return; // 幂等：已在检测中
+    nodeVerifyRequested = true;
+    btn.disabled = true;
+    btn.textContent = "正在检测…";
+    setBtnMsg("node", "");
+    fetch(api + "/webui/verify-node", {
+      headers: surfaceHeaders(),
+      signal: AbortSignal.timeout(15000), // 服务端 await 检测 ≤10s，留足余量
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        nodeVerifyRequested = false;
+        if (d && d.ok) {
+          // 结果已写入服务端 g.nodeSmoke：刷新一次诊断（通过/失败状态进 t1 卡片）
+          refreshDiag();
+          return;
+        }
+        var b = listBtn("node", "verify-node");
+        if (b) { b.disabled = false; b.textContent = "检测 Node"; }
+        setBtnMsg("node", d && d.error ? d.error : "检测请求失败，请稍后重试");
+      })
+      .catch(function () {
+        nodeVerifyRequested = false;
+        var b = listBtn("node", "verify-node");
+        if (b) { b.disabled = false; b.textContent = "检测 Node"; }
+        setBtnMsg("node", "检测请求超时或网络错误，请重试");
+      });
+  }
+  function verifyNode() {
+    runVerifyNode(listBtn("node", "verify-node"));
+  }
+  // 进标签页自动检测一次（仅 nodePath 已配置时；不随轮询重复——只在这里调一次）
+  function autoVerifyNode() {
+    var node = checkByKey(initDiag, "node");
+    if (!node || !node.configured) return; // 未配置：先配置（纯提示，无按钮）
+    runVerifyNode(listBtn("node", "verify-node"));
+  }
+  // 事件委托：卡片按钮点击（列表 innerHTML 每轮轮询重建，监听挂在 ul 上持久）
+  function onDiagClick(e) {
+    var t = e.target;
+    var btn = t && t.closest ? t.closest(".diag-btn") : null;
+    if (!btn) return;
+    var action = btn.getAttribute("data-action");
+    if (action === "start") startWebHost();
+    else if (action === "install-deps") installDeps();
+    else if (action === "verify-deps") verifyDeps();
+    else if (action === "verify-node") verifyNode();
+  }
   var pollTimer = null;
   function poll() {
     if (document.hidden) { pollTimer = setTimeout(poll, 5000); return; }
@@ -88,7 +543,12 @@ window.parent.postMessage({ type: "ready" }, "*");
     fetch(api + "/webui/health", { headers: surfaceHeaders(), signal: AbortSignal.timeout(3000) })
       .then(function (r) { return r.json(); })
       .then(function (d) {
-        if (d && d.ok) { attach(); } else { pollTimer = setTimeout(poll, 3000); }
+        if (d && d.ok) { attach(); }
+        else {
+          // 未就绪：刷新自检列表（health 未就绪时附带 diagnostics 字段；为 null 时保留占位）
+          if (d && d.diagnostics) renderDiagList(d.diagnostics);
+          pollTimer = setTimeout(poll, 3000);
+        }
       })
       .catch(function () { pollTimer = setTimeout(poll, 3000); });
   }
@@ -128,7 +588,14 @@ window.parent.postMessage({ type: "ready" }, "*");
       }, "*");
     }
   });
-  if (document.body.getAttribute("data-pending") === "1") poll();
+  if (document.body.getAttribute("data-pending") === "1") {
+    renderDiagList(initDiag); // 首屏即渲染服务端带回的初始自检（null 时显示占位）+ 同步卡片内按钮
+    var diagList = document.getElementById("diag-list");
+    if (diagList) diagList.addEventListener("click", onDiagClick); // 卡片按钮事件委托
+    autoVerifyNode(); // v0.8.10: 进标签页 Node/npm 可用性检测一次（结果经 refreshDiag 进 t1 卡片）
+    autoVerifyDeps(); // v0.8.8: 进标签页依赖运行级检测一次（结果经 refreshDiag 进 deps 卡片）
+    poll();
+  }
 })();
 <\/script>
 </body>
@@ -141,7 +608,7 @@ export default function registerWebuiRoutes(app, ctx) {
   const cfg = ctx && typeof ctx.config === "object" && ctx.config ? ctx.config : {};
   const port = Number(cfg.webPort) || 3080;
 
-  // 插件页：服务端先探测 host，就绪直接渲染 iframe；未就绪给提示 + 浏览器端轮询
+  // 插件页：服务端先探测 host，就绪直接渲染 iframe；未就绪给提示（含自检诊断）+ 浏览器端轮询
   app.get("/webui", async (c) => {
     const ready = await probeHost(port, ctx.log);
     const hc = c.req.query("hana-css") || "";
@@ -149,14 +616,101 @@ export default function registerWebuiRoutes(app, ctx) {
     const hcLink = hc ? `<link rel="stylesheet" href="${esc(hc)}">` : "";
     // 宿主深色主题（midnight/dark 等）→ iframe 内 prefers-color-scheme dark，dsh 的 system 跟随宿主
     const colorScheme = /midnight|dark/i.test(th) ? "dark" : "light";
+    // 未就绪时服务端同步收集一次自检（首屏即渲染，轮询再刷新）；就绪不收集保持轻量
+    const diagnostics = ready ? null : readDiagnostics(ctx, cfg, port);
     return c.html(
-      buildShell({ ready, hcLink, theme: th, api: base, port, colorScheme })
+      buildShell({ ready, hcLink, theme: th, api: base, port, colorScheme, diagnostics })
     );
   });
 
-  // 轻量就绪探测端点（浏览器端重试轮询复用同一探测逻辑；附带诊断字段便于排障）
+  // 轻量就绪探测端点（浏览器端重试轮询复用同一探测逻辑；未就绪时附带自检诊断字段便于排障）
   app.get("/webui/health", async (c) => {
     const ready = await probeHost(port, ctx.log);
-    return c.json({ ok: ready, port, timestamp: Date.now() });
+    const body = { ok: ready, port, timestamp: Date.now() };
+    // 未就绪时附带诊断（可为 null——工具模块冷启动未加载，下一轮轮询补上）；就绪时保持轻量
+    if (!ready) body.diagnostics = readDiagnostics(ctx, cfg, port);
+    return c.json(body);
+  });
+
+  // 手动启动 web host（process 卡片「手动启动」按钮调用）：读单例按当前状态返回——
+  // 已就绪 → ready；启动中（readyPromise 挂起）→ starting；否则异步触发
+  // g.startWebHost(ctx.config, dataDir)（不 await 其就绪，页面靠轮询检测）→ starting。
+  // 单例缺失/无函数/异常一律容错回 {ok:false}，本路由不抛异常。
+  app.post("/webui/start", (c) => {
+    const g = globalThis.__dshHanako;
+    try {
+      if (!g || typeof g.startWebHost !== "function") {
+        return c.json({ ok: false, error: "插件工具模块未加载，稍后重试" });
+      }
+      if (g.web?.ready) return c.json({ ok: true, state: "ready" });
+      if (g.web?.readyPromise) return c.json({ ok: true, state: "starting" });
+      // 异步触发（startWebHostFromPlugin 内部已 try/catch 记 webLastError 返回布尔；
+      // 这里再 .catch 兜底——路由不等待就绪、不抛异常）。dataDir 缺省用单例记录值，
+      // 避免路由 ctx 无 dataDir 时误落 PLUGIN_ROOT/data。
+      Promise.resolve(g.startWebHost(ctx.config, ctx.dataDir || g.dataDir)).catch(() => {});
+      return c.json({ ok: true, state: "starting" });
+    } catch (e) {
+      ctx.log?.warn?.("[dsh-hanako] 手动启动 web host 失败:", e?.message || String(e));
+      return c.json({ ok: false, error: "启动请求失败，请稍后重试" });
+    }
+  });
+
+  // 自动安装 dsh 依赖（deps 卡片「安装依赖」按钮调用）：读单例按状态返回——
+  // 部署中（g.depsInstalling）→ {ok:true,state:"installing"}；否则异步触发
+  // g.installDeps(ctx.config, dataDir)（不 await 其完成，页面靠轮询诊断刷新）→ installing。
+  // 单例缺失/无函数/异常一律容错回 {ok:false}，本路由不抛异常。
+  app.post("/webui/install-deps", (c) => {
+    const g = globalThis.__dshHanako;
+    try {
+      if (!g || typeof g.installDeps !== "function") {
+        return c.json({ ok: false, error: "插件工具模块未加载，稍后重试" });
+      }
+      if (g.depsInstalling) return c.json({ ok: true, state: "installing" });
+      // 异步触发（installDepsFromPlugin 内部已 try/catch 记 depsInstallError 返回结果；
+      // 这里再 .catch 兜底——路由不等待完成、不抛异常）。dataDir 缺省用单例记录值。
+      Promise.resolve(g.installDeps(ctx.config, ctx.dataDir || g.dataDir)).catch(() => {});
+      return c.json({ ok: true, state: "installing" });
+    } catch (e) {
+      ctx.log?.warn?.("[dsh-hanako] 自动安装依赖失败:", e?.message || String(e));
+      return c.json({ ok: false, error: "安装请求失败，请稍后重试" });
+    }
+  });
+
+  // 运行级依赖检测（v0.8.8: deps 卡片「检测依赖」按钮 + 进标签页自动一次；GET 只读）：
+  // 检测中（g.depsSmoke.running）→ {ok:true,running:true}；否则 await verifyDepsSmoke(cfg)
+  // （≤10s 返回）→ {ok:true, verified, version, error, running:false}。结果写入 g.depsSmoke，
+  // 前端随后经 health 读取诊断刷新 deps 卡片。单例缺失/无函数/异常一律容错回 {ok:false}。
+  app.get("/webui/verify-deps", async (c) => {
+    const g = globalThis.__dshHanako;
+    try {
+      if (!g || typeof g.verifyDeps !== "function") {
+        return c.json({ ok: false, error: "插件工具模块未加载，稍后重试" });
+      }
+      if (g.depsSmoke?.running) return c.json({ ok: true, running: true });
+      const smoke = await g.verifyDeps({ dataDir: ctx.dataDir || g.dataDir, nodePath: cfg.nodePath, webPort: port });
+      return c.json({ ok: true, running: false, verified: smoke.ok, version: smoke.version, error: smoke.error || null });
+    } catch (e) {
+      ctx.log?.warn?.("[dsh-hanako] 运行级依赖检测失败:", e?.message || String(e));
+      return c.json({ ok: false, error: "检测请求失败，请稍后重试" });
+    }
+  });
+
+  // 运行级 Node/npm 可用性检测（v0.8.10: t1 卡片「检测 Node」按钮 + 进标签页自动一次；GET 只读）：
+  // 检测中（g.nodeSmoke.running）→ {ok:true,running:true}；否则 await verifyNodeSmoke(cfg)（≤10s）
+  // → {ok:true, verified, version, error, running:false}。结果写入 g.nodeSmoke，前端随后经
+  // health 读取诊断刷新 t1 卡片（t1 门禁随之解锁/加锁）。单例缺失/无函数/异常一律容错回 {ok:false}。
+  app.get("/webui/verify-node", async (c) => {
+    const g = globalThis.__dshHanako;
+    try {
+      if (!g || typeof g.verifyNode !== "function") {
+        return c.json({ ok: false, error: "插件工具模块未加载，稍后重试" });
+      }
+      if (g.nodeSmoke?.running) return c.json({ ok: true, running: true });
+      const smoke = await g.verifyNode({ dataDir: ctx.dataDir || g.dataDir, nodePath: cfg.nodePath, webPort: port });
+      return c.json({ ok: true, running: false, verified: smoke.ok, version: smoke.version, error: smoke.error || null });
+    } catch (e) {
+      ctx.log?.warn?.("[dsh-hanako] 运行级 Node 检测失败:", e?.message || String(e));
+      return c.json({ ok: false, error: "检测请求失败，请稍后重试" });
+    }
   });
 }

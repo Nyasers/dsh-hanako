@@ -6,8 +6,8 @@
 
 1. **拖入 zip 包**：把插件的 release zip（`dsh-hanako-v<version>.zip`，从 GitHub Releases 下载）拖进 Hana 插件安装界面（或解压到插件目录），插件即完成装载
 2. **配置 apiKey**：打开插件设置（DSHana），在「DeepSeek API Key」填入你的 key（设置界面可见，Agent 不代填）
-3. **让 agent 完成安装**：对你的 Agent 说「帮我完成 DSHana 的安装」。Agent 会按插件自带技能完成剩余步骤：探测本机 node 路径并写入配置、在插件数据目录 npm ci 部署依赖（约 30~45 秒，无人值守）、把默认工作目录设为你的项目目录
-4. **重启 Hana**：核心配置在插件加载时注入，重启后生效。重启后让 Agent 跑一个最小 `dsh_run` 试任务验证，即可正常派活
+3. **让 agent 完成安装**：对你的 Agent 说「帮我完成 DSHana 的安装」。Agent 会按插件自带技能完成剩余步骤：探测本机 node 路径并写入配置、在插件数据目录 npm ci 部署依赖（约 30~45 秒，无人值守）、把默认工作目录设为你的项目目录。依赖部署也可**页面自装**：打开 DSHana 标签页，在未就绪诊断的 deps 卡片点「安装依赖」（v0.8.6+，无需 Agent 介入）
+4. **重启 Hana（可选）**：配置写入 config.json 后即被**现读**——t1「检测 Node」与 t3「手动启动 web host」都直读 config.json（启动链路 resolveNodePath → spawn），Agent 直写配置后**无需重启**即可用新 node 拉起；仅旧 web host 进程存活（g.web.ready）时需先杀进程或重启 Hana。重启后让 Agent 跑一个最小 `dsh_run` 试任务验证，即可正常派活
 
 安装遇到问题，把报错丢给 Agent 即可（技能里有完整排错表）。
 
@@ -64,7 +64,7 @@
 
 插件顶部 tab 注册页面（manifest `contributes.page`，route `/webui`），iframe 内嵌 `http://127.0.0.1:<webPort>/`：
 
-- **就绪加载**：服务端先探测 host，未就绪时页面显示提示并轮询 `/webui/health`（3s，隐藏时 5s），就绪后挂载 iframe；health 请求回传 `X-Hana-Plugin-Surface-Session` 凭证
+- **就绪加载**：服务端先探测 host，未就绪时页面显示**自检诊断列表**（见「连接失败自检与自愈」）并轮询 `/webui/health`（3s，隐藏时 5s），就绪后挂载 iframe；health 请求回传 `X-Hana-Plugin-Surface-Session` 凭证
 - **主题跟随**：见下节
 
 ### 主题跟随
@@ -84,6 +84,31 @@ DSHana 标签内 dsh 主题与宿主 Hana 联动：
 4. **分发**：cordis 插件经 dsh-host-webserver `tapIndex` 注入 index 响应；插件本体在安装目录 `assets/dsh-cordis/dsh-hana-theme/`（file:// URL 由 dsh-run.js 启动前渲染 patch 模板注册，与 session-query patch 同机制）
 
 **生效时机**：用户切 dsh 偏好或宿主切 Hana 主题后，**重开 DSHana 标签页生效**（主题 CSS 只在打开标签页时拉取一次；重开即拉最新主题，宿主新增/修改主题零适配）。
+
+## 连接失败自检与自愈（v0.8.4+）
+
+web host 未就绪时，DSHana 标签页不再只显示「正在重试…」——未就绪诊断区展示**自检诊断列表**（配色跟随宿主主题的 CSS 变量），逐项检查并给出修复指引，同时保留 3s 轮询（就绪后自动挂载 iframe、诊断区消失）。三项检查（每项 ✓/✗ + 详情 + 修复指引）：
+
+| 检查项 | 判定 | 操作 |
+| --- | --- | --- |
+| **t1 Node.js 配置** | nodePath 是否配置 + 路径是否存在 + **运行级可用性**（`node --version` 可执行 + node 同目录 `npm-cli.js` 存在，v0.8.10+） | 卡片按钮「检测 Node」（常驻，检测中禁用）；修复双路径：去插件设置界面填写/修正 node.exe 路径，或让 Agent 协助（探测本机 node → 引导确认 → 写 config.json）——**直写后 t1 检测实时生效**（resolveNodePath 直读 config.json，可先点「检测 Node」验证），t3「手动启动 web host」同样现读 config.json 用新 node 拉起（无需重启；仅旧进程存活时先杀进程）。**t1 未通过 → t2/t3 全锁**（msg「Node.js 不可用，请先修复」） |
+| **t2 dsh 依赖** | 存在性（cliBin 文件存在）+ **运行级验证**（`node <cliBin> --version` 沿 import 图加载 cordis 模块树，能跑 = 依赖完整，抓 `ERR_MODULE_NOT_FOUND` 类假就绪） | 卡片按钮：缺失「安装依赖」/ 验证失败「重新安装依赖」/ 常驻「检测依赖」/ 安装中「安装中…」禁用。安装过程显示 npm ci **实时进度**（stdout/stderr 流式 → installLog 尾部 + 更新时间，3s 轮询刷新） |
+| **t3 DSH 进程** | 单例 web 状态：未启动 / 启动中 / 已就绪但探测未中 / 已退出（webLastExit 持久记录：code/signal/时间/stderr）/ 启动失败（webLastError） | 卡片按钮「手动启动 web host」；**t2 未通过时按钮禁用**（msg「依赖未就绪，请先安装/重新安装依赖」） |
+
+**自愈闭环**：t1 不可用（未配置/路径失效/检测失败）→ 先修 t1（设置界面或 Agent 协助，t1 未过时 t2/t3 全锁）→ t2 缺失 → deps 卡片「安装依赖」自动完成（复制插件 package.json+lock 到数据目录 `dsh-pkg/` → npm ci `--omit=dev` → 校验 → 自动运行级重验，官方源失败自动重试 npmmirror）→ t2 转 ✓ → t3 按钮解锁 → 「手动启动 web host」拉起进程 → 轮询就绪切 iframe。运行级检测「进标签页自动一次 + 手动「检测依赖」/「检测 Node」按钮」（v0.8.8/0.8.10 起，不再随 3s 轮询重复触发）。
+
+**任务持续**：npm ci 与 web host 都是宿主进程 spawn 的子进程——离开标签页任务继续，返回后重新渲染诊断仍可见进度（单例内存态；宿主重启则中断，需重装依赖）。
+
+### 路由
+
+| 路由 | 用途 |
+| --- | --- |
+| `GET /webui` | 页面壳（就绪探测 + 主题注入 + 首帧自检诊断） |
+| `GET /webui/health` | 就绪探测（浏览器端 3s 轮询源；未就绪时附带 `diagnostics` 字段供渲染） |
+| `POST /webui/start` | 手动启动 web host（`ready` / `starting` / 触发启动三态） |
+| `POST /webui/install-deps` | 安装依赖：npm ci `--omit=dev` 部署到数据目录 `dsh-pkg`，完成后自动运行级重验 |
+| `GET /webui/verify-deps` | 运行级依赖检测（`node cliBin --version`，只读；进标签页自动一次 + 手动「检测依赖」按钮） |
+| `GET /webui/verify-node` | 运行级 Node/npm 可用性检测（`node --version` + `npm-cli.js`，只读；进标签页自动一次 + 手动「检测 Node」按钮） |
 
 ## 任务反馈卡片
 
@@ -113,7 +138,7 @@ dsh 的 `/api/events.mux` **要求 WebSocket 升级**：GET 返回 `426 Upgrade 
 
 ## 架构
 
-- **依赖按需部署**：zip 零依赖（约 0.1MB，代码 bundle + 配置 + 技能 + lockfile）。dsh 依赖树（`@deepseek-ai/dsh` + node-pty/koffi 原生模块，约 246MB）由 Agent 部署时 **npm ci 到数据目录 `dsh-pkg/`**（升级安装整体替换插件目录不丢依赖；registry 不通时切镜像 `--registry=https://registry.npmmirror.com`）。解析链：`<dataDir>/dsh-pkg` 优先 → 插件安装目录 `node_modules`（兼容旧形态）
+- **依赖按需部署**：zip 零依赖（约 0.1MB，代码 bundle + 配置 + 技能 + lockfile）。dsh 依赖树（`@deepseek-ai/dsh` + node-pty/koffi 原生模块，约 246MB）由 Agent 部署时 **npm ci 到数据目录 `dsh-pkg/`**（升级安装整体替换插件目录不丢依赖；registry 不通时切镜像 `--registry=https://registry.npmmirror.com`），也可在 DSHana 标签页 deps 卡片点「安装依赖」自动完成（v0.8.6+，命令同上）。解析链：`<dataDir>/dsh-pkg` 优先 → 插件安装目录 `node_modules`（兼容旧形态）。依赖完整性另经**运行级验证**（`node cliBin --version`，v0.8.7+，能跑 = 依赖图完整，防 npm ci 中断/--omit=peer 误用造成的假就绪）
 - **插件本体 rspack bundle**：`index.js` + `tools/*.js` 经 `scripts/build.mjs` 打包，`scripts/pack.mjs` 铺平到标准位置交付（根 `index.js` + `tools/`，无 dist/）。构建工具 @rspack/core 声明为 devDependencies（构建契约，部署 `--omit=dev` 不装）
 - **dsh 启动 patch overlay**：dsh-run.js spawn `dsh --profile web --patch <...> --port <...>`，多个 patch 按序应用——`config/session-query.patch.yml`（全文搜索默认启用，`openAt: first-search`）+ `config/hana-theme.patch.yml.tpl`（主题插件注册，启动前渲染成本机 file:// 路径写到数据目录）；patch 缺失时优雅降级
 - **凭据解析**：`resolveApiKey` 优先级 = 宿主注入 `cfg.apiKey` → 直读 `dataDir/config.json` 的 `global.apiKey`（改配置即时生效）→ 文件兜底（dsh-home/.credentials.yaml → ~/.dsh/.credentials.yaml）
@@ -124,12 +149,12 @@ dsh 的 `/api/events.mux` **要求 WebSocket 升级**：GET 返回 `426 Upgrade 
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
-| `apiKey` | 空 | DeepSeek API Key（插件设置界面填写，Agent 不代填）。安装后必填（无 key web host 起不来），改后重启 Hana 生效 |
+| `apiKey` | 空 | DeepSeek API Key（插件设置界面填写，Agent 不代填）。安装后必填（无 key web host 起不来）。生效分层：手动启动时经 `resolveApiKey` 解析（插件加载快照 cfg.apiKey 非空优先；为空时直读 config.json/凭据文件，改后无需重启）；诊断层自检布尔直读 config.json 实时 |
 | `model` | `deepseek-v4-flash` | dsh 任务模型 id（provider 固定 deepseek-official，模型名 pass-through 直传）：内置 `deepseek-v4-flash` / `deepseek-v4-pro`，可填其他 DeepSeek 模型 id；改后对新任务立即生效（直读 config.json） |
 | `agentPreset` | `standard` | dsh_run 提交任务的默认 agent 预设；工具调用可显式覆盖；改后对新任务立即生效 |
 | `reasoningEffort` | `high` | 默认推理强度：off / high / max；工具调用可显式覆盖 |
 | `approvalTimeoutMs` | `30000` | 审批挂起超过该时长无人应答自动 rejected（应答方失联检测）；0=禁用；改后对新审批立即生效 |
-| `nodePath` | 空 | 启动 web host 的 node.exe（需 Node 24+）。**安装后必填本机 node 路径**（不预设默认值），改后重启 Hana 生效 |
+| `nodePath` | 空 | 启动 web host 的 node.exe（需 Node 24+）。**安装后必填本机 node 路径**（不预设默认值）。生效分层：t1 检测与手动启动（t3）都现读 config.json（resolveNodePath 直读优先）——改后无需重启即可用新 node 拉起；仅旧 web host 进程存活时需先杀进程或重启 |
 | `defaultCwd` | 空 | 默认沙箱工作目录。**安装后建议设为实际项目目录**（为空且未传 cwd 时报 `cwd 不能为空`） |
 | `defaultTimeoutMs` | 600000 | 默认超时（毫秒） |
 | `webPort` | 3080 | dsh Web UI 端口：>0 插件加载即拉起 web host（卸载一并回收），0 关闭 |
@@ -145,6 +170,13 @@ dsh 的 `/api/events.mux` **要求 WebSocket 升级**：GET 返回 `426 Upgrade 
 
 ## 版本历史
 
+- **v0.8.10**（2026-08-15）：t1（Node.js 配置）增强——配置存在性之外新增**运行级可用性检测**（`node --version` 可执行 + node 同目录 `npm-cli.js` 存在，verifyNodeSmoke 缓存 g.nodeSmoke + running 防并发，GET /webui/verify-node）；t1 卡片「检测 Node」按钮 + 进标签页自动检测一次；**t1 门禁 t2/t3**（t1 未通过时 t2「安装依赖」/t3「手动启动」禁用，msg「Node.js 不可用，请先修复（设置界面配置或让 Agent 协助）」）；t1 修复双路径（用户设置界面 / Agent 协助写 config.json）
+- **v0.8.9**（2026-08-15）：文档同步——README/SKILL 补全 0.8.3→0.8.8 自检体系说明（标签页自检三项 + 自愈按钮 + 运行级验证 + 页面自装路径）
+- **v0.8.8**（2026-08-15）：自检行为修订——运行级检测改「进标签页自动一次 + 手动「检测依赖」按钮」（移除 maybeTriggerDepsSmoke 轮询/过期自动触发，新增 GET /webui/verify-deps）；npm ci 安装过程显示实时进度（stdout/stderr 流式 → installLog 尾部 + 更新时间，3s 轮询刷新）；t2（依赖）未通过时 t3（进程）启动按钮禁用（msg「依赖未就绪，请先安装/重新安装依赖」，安装中/检测中同样视为未通过）
+- **v0.8.7**（2026-08-15）：依赖运行级完整性验证——`node cliBin --version` 冒烟（沿 import 图加载 cordis 模块树，能跑 = 依赖完整，抓 ERR_MODULE_NOT_FOUND 假就绪），结果缓存 g.depsSmoke + running 防并发；安装成功后自动重验；验证失败 deps 卡片出「重新安装依赖」
+- **v0.8.6**（2026-08-15）：操作按钮嵌入诊断卡片（手动启动/安装依赖在卡片内，事件委托）；deps「安装依赖」按钮自动化 npm ci 部署（installDeps：复制 package.json+lock 到数据目录 dsh-pkg → npm ci --omit=dev → 官方源失败重试 npmmirror → 校验 cliBin），新增 POST /webui/install-deps
+- **v0.8.5**（2026-08-15）：手动启动 web host（POST /webui/start + 卡片按钮）；进程被杀误报修复——webLastExit 持久退出记录（code/signal/时间/stderr）区分「已退出」而非「尚未启动」；诊断区主题化（CSS 变量跟随宿主明暗，删硬编码色板与 prefers-color-scheme）
+- **v0.8.4**（2026-08-15）：连接失败自检——web host 未就绪时标签页显示自检诊断列表（t1 node 配置 / t2 dsh 依赖 / t3 进程状态，每项 ✓/✗ + 详情 + 修复指引），服务端收集（config.json + 单例 + fs）、浏览器端渲染；/webui/health 未就绪时附带 diagnostics；apiKey 只回「已配置/未配置」布尔、stderr 尾部 ≤800 截断
 - **v0.8.3**（2026-08-15）：风险审查处置——清理 credentialsPath 死路径（manifest 未声明该设置项，错误提示与注释不再引用；凭据文件兜底收敛为 dsh-home/.credentials.yaml → ~/.dsh/.credentials.yaml）；主题插件 file:// URL 加 encodeURI（路径含空格/特殊字符时不再生成非法 URL，主题加载更稳）
 - **v0.8.1**（2026-08-15）：主题跟随宿主完整落地——`dsh-hana-theme` cordis 插件（tapIndex 注入 index 响应，安装目录 assets/dsh-cordis file:// 加载，patch 模板渲染注册），宿主声明取色（壳桥 getComputedStyle 读 theme.css 16 变量，随宿主更新、新增主题零适配），72 个 `--dsw-alias-*/--dsw-specific-*` token 映射（视觉主表面 + 遮罩 + 滚动条，功能性颜色保留原生），preference 边界（system 才覆盖，light/dark 原生，加载时读一次 settings.describe），覆盖写 body 层 !important（压 dsh presenter 的 body inline）。生效：切偏好/切主题重开标签页
 - **v0.8.0**（2026-08-15）：DSHana 标签页主题跟随基础版——壳页面按 hana-theme 映射 color-scheme（跨源 iframe 继承 prefers-color-scheme，dsh system 跟随宿主明暗）；升级清依赖事故处置（npm ci 部署 dsh-pkg，升级不丢依赖）；SKILL 排错表新增升级场景

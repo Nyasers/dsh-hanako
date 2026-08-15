@@ -12,8 +12,8 @@
 //
 // 权限：external_side_effect（调用 DeepSeek 官方 API，消耗额度，Auto 模式送审）。
 import { spawn } from "node:child_process";
-import { readFileSync, existsSync, mkdirSync, writeFileSync, appendFileSync, rmSync, readdirSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { readFileSync, existsSync, mkdirSync, writeFileSync, appendFileSync, rmSync, readdirSync, copyFileSync } from "node:fs";
+import { join, dirname, delimiter } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 
@@ -185,6 +185,15 @@ function getSingleton() {
   // 旧对象可能缺新字段（热更新后旧 globalThis 对象仍在）：逐字段兜底
   if (!g.ops) g.ops = new Map();
   g.closeProcess = closeProcess;
+  // v0.8.3: 插件页连接失败自检——经单例挂载诊断收集函数（routes 不静态 import 本模块：
+  // Hana 带 ?t= 加载 tools，静态 import 会命中 Node ESM 固定 URL 缓存读到旧模块）
+  g.collectDiagnostics = collectWebDiagnostics;
+  // v0.8.6: deps 缺失项「安装依赖」按钮的后端部署逻辑（同挂单例纪律）
+  g.installDeps = installDepsFromPlugin;
+  // v0.8.7: 依赖运行级完整性验证（node cliBin --version 冒烟，结果缓存 g.depsSmoke）
+  g.verifyDeps = verifyDepsSmoke;
+  // v0.8.10: Node/npm 运行级可用性检测（node --version + npm-cli.js，结果缓存 g.nodeSmoke）
+  g.verifyNode = verifyNodeSmoke;
   return g;
 }
 
@@ -592,8 +601,11 @@ async function ensureWebHost(cfg) {
   });
   child.once("exit", (code, signal) => {
     web.ready = false;
-    if (g.web === web) g.web = null;
     web.stderr += `\n[dsh web 退出 code=${code} signal=${signal}]`;
+    // v0.8.5: 退出信息记入单例持久字段（随后 g.web 摘除，局部 web.stderr 会丢）——
+    // 进程被外部杀掉（kill / Stop-Process）时诊断仍能区分「已退出」而非误报「尚未启动」
+    g.webLastExit = { code, signal, at: new Date().toISOString(), stderr: web.stderr.slice(-800) };
+    if (g.web === web) g.web = null;
   });
 
   // 等端口就绪（stdout 出现 "dsh web: http://" 或端口可连）
@@ -610,7 +622,12 @@ async function ensureWebHost(cfg) {
           body: JSON.stringify({ type: "client-request", rpcId: "probe", method: "host.describe", payload: {} }),
           signal: AbortSignal.timeout(2000),
         });
-        if (r.ok) { web.ready = true; return web; }
+        if (r.ok) {
+          web.ready = true;
+          // v0.8.5: 新进程就绪：清掉上次退出记录（持久字段只反映最近一次退出）
+          g.webLastExit = null;
+          return web;
+        }
       } catch { /* 未就绪，继续等 */ }
       await new Promise((r) => setTimeout(r, 500));
     }
@@ -647,6 +664,472 @@ getSingleton().startWebHost = async function startWebHostFromPlugin(ctxConfig, c
     return false;
   }
 };
+
+// ---- 依赖自主部署（v0.8.6: deps 缺失项「安装依赖」按钮的后端逻辑）----
+// 参照技能文档 dsh-hanako/SKILL.md 依赖自主部署章节：部署目标恒为数据目录 dsh-pkg
+// （升级安装会清插件目录 node_modules，数据目录随插件生命周期保留；不部署到插件根），
+// 把插件根的 package.json + package-lock.json 复制进去后用配置的 node 执行 npm ci。
+// 关键：npm ci 前把 node 目录加进 PATH——koffi/node-pty 的 install script 经 cmd 起
+// 子进程 node，PATH 缺 node 报 'node' is not recognized（技能文档有实测踩坑记录）。
+// --omit=dev 剔除 rspack 构建树（peer 自动装默认开启，保留 dsh 树，实测 528 包可运行）。
+// registry 默认官方源，失败自动重试 npmmirror。部署是长任务（约 35s）：本函数异步
+// 执行不 await（调用方立即返回，页面靠轮询诊断刷新）；状态记单例 g.depsInstalling /
+// g.depsInstallError / g.depsInstallAt / g.depsInstallLog（≤800）。
+async function installDepsFromPlugin(ctxConfig, ctxDataDir) {
+  const g = getSingleton();
+  // 部署中并发调用直接返回（路由侧也会先查 g.depsInstalling，这里是直调兜底）
+  if (g.depsInstalling) return { ok: false, state: "installing" };
+  const cfg = { ...manifestDefaults };
+  for (const [k, v] of Object.entries(ctxConfig || {})) {
+    if (v !== undefined && v !== null && v !== "") cfg[k] = v;
+  }
+  const dataDir = ctxDataDir || g.dataDir || join(PLUGIN_ROOT, "data");
+  cfg.dataDir = dataDir;
+  g.depsInstalling = true;
+  g.depsInstallError = null;
+  g.depsInstallAt = new Date().toISOString();
+  g.depsInstallLog = "";
+  // v0.8.8: log 写入也刷新最近更新时间（前端 installing 态显示「更新于 HH:MM:SS」）
+  const log = (s) => {
+    g.depsInstallLog = (g.depsInstallLog + String(s)).slice(-800);
+    g.depsInstallAt = new Date().toISOString();
+  };
+  try {
+    // 1. 部署目录 = 数据目录 dsh-pkg（mkdir recursive，不存在则建）
+    const pkgDir = join(dataDir, "dsh-pkg");
+    mkdirSync(pkgDir, { recursive: true });
+    // 2. 复制插件根 package.json + package-lock.json（npm ci 前置，缺 lockfile 会失败）
+    const srcPkg = join(PLUGIN_ROOT, "package.json");
+    const srcLock = join(PLUGIN_ROOT, "package-lock.json");
+    if (!existsSync(srcPkg)) throw new Error("插件根缺少 package.json：" + srcPkg);
+    if (!existsSync(srcLock)) throw new Error("插件根缺少 package-lock.json：" + srcLock);
+    copyFileSync(srcPkg, join(pkgDir, "package.json"));
+    copyFileSync(srcLock, join(pkgDir, "package-lock.json"));
+    log("已复制 package.json + package-lock.json 到 " + pkgDir);
+    // 3. 定位 node 与 npm-cli.js（node 同目录 node_modules/npm/bin/npm-cli.js）
+    const nodePath = resolveNodePath(cfg);
+    if (!nodePath || !existsSync(nodePath)) {
+      throw new Error("node 可执行文件不存在：" + nodePath + "，请在插件设置中配置 nodePath");
+    }
+    const nodeDir = dirname(nodePath);
+    const npmCli = join(nodeDir, "node_modules", "npm", "bin", "npm-cli.js");
+    if (!existsSync(npmCli)) {
+      throw new Error("npm-cli.js 不存在：" + npmCli + "（node 目录 " + nodeDir + " 未带 npm 分发）");
+    }
+    // 4. npm ci：--omit=dev 剔除构建树；先把 node 目录加进 PATH（install script 子进程需 node）
+    const run = async (registryArgs) => {
+      const child = spawn(nodePath, [npmCli, "ci", "--omit=dev", "--no-audit", "--no-fund", ...registryArgs], {
+        cwd: pkgDir,
+        stdio: ["ignore", "pipe", "pipe"],
+        env: { ...process.env, PATH: nodeDir + delimiter + (process.env.PATH || "") },
+        windowsHide: true,
+      });
+      let out = ""; // 仅用于错误信息提取（失败时拼进错误文本）
+      // v0.8.8: npm ci 输出流式累积到 depsInstallLog（≤800 截断）+ 每次 data 刷新
+      // depsInstallAt——前端 3s 轮询 health 会随诊断刷新 installLog 尾部，呈现实时进度
+      const cap = (d) => {
+        out = (out + String(d)).slice(-800);
+        g.depsInstallLog = (g.depsInstallLog + String(d)).slice(-800);
+        g.depsInstallAt = new Date().toISOString();
+      };
+      child.stdout.on("data", cap);
+      child.stderr.on("data", cap);
+      const code = await new Promise((res) => child.once("close", res));
+      if (code !== 0) throw new Error("npm ci 失败（exit " + code + "）：" + (out.slice(-300) || "无输出"));
+      return out;
+    };
+    try {
+      await run([]); // 官方源
+    } catch (e) {
+      log("[官方源失败] " + e.message + "，重试 npmmirror…");
+      await run(["--registry=https://registry.npmmirror.com"]);
+    }
+    // 5. 校验 dsh 包就位（resolveDshPkgDir 优先 dsh-pkg，这里 cliBin 即部署产物）
+    const cliBin = join(pkgDir, "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js");
+    if (!existsSync(cliBin)) {
+      throw new Error("npm ci 完成但未找到 dsh 包：" + cliBin + " 不存在（部署目录 " + pkgDir + "）");
+    }
+    g.depsInstallError = null;
+    log("[完成] " + cliBin);
+    // v0.8.7: 部署成功后强制运行级重验（清旧缓存，await 刷新——安装流程本身就是等待场景）
+    g.depsSmoke = null;
+    await verifyDepsSmoke(cfg);
+    return { ok: true, state: "installed", cliBin };
+  } catch (e) {
+    g.depsInstallError = String(e?.message || e).slice(0, 1500);
+    log("[失败] " + g.depsInstallError);
+    return { ok: false, state: "error", error: g.depsInstallError };
+  } finally {
+    g.depsInstalling = false;
+  }
+}
+// 挂单例（getSingleton() 内也有同款赋值，这里显式建立一次）
+getSingleton().installDeps = installDepsFromPlugin;
+
+// ---- 依赖运行级完整性验证（v0.8.7: deps 存在性之外的加载冒烟）----
+// dsh 是 cordis 生态，模块图挂大量 peer 依赖（dsh-agent/dsh-llm-deepseek/dsh-tool-* 等）：
+// npm ci 中断 / install script 失败未回滚 / --omit=peer 误用都会造成「入口文件在、依赖缺」
+// 的假就绪，运行时才抛 ERR_MODULE_NOT_FOUND。文件存在 ≠ 依赖完整。
+// 可靠检测 = 运行级验证「node <cliBin> --version」：node 沿 import 图加载整个 cordis 模块树，
+// 任何依赖缺失都会抛错且退出码非 0（技能文档「部署后验证 node lib/bin.js --version 应输出
+// 0.1.0-rc.6」同款逻辑）。能跑 = 依赖图完整。
+// 防并发/防轮询风暴：结果缓存到单例 g.depsSmoke = { ok, version, error, stderr, at, running }；
+// running=true 时直接返回当前缓存不重复 spawn（spawn 一次 --version 数百 ms，3s 轮询 ×
+// 每次 spawn 不可接受，必须缓存 + running 标志）。v0.8.8 起触发时机：进标签页自动一次 +
+// 手动「检测依赖」按钮（经 GET /webui/verify-deps 驱动）/ installDeps 部署成功后强制重验。
+async function verifyDepsSmoke(cfg) {
+  const g = getSingleton();
+  // 防并发：验证进行中直接返回当前缓存（不重复 spawn）
+  if (g.depsSmoke?.running) return g.depsSmoke;
+  const dataDir = cfg.dataDir || g.dataDir || (g.web?.dshHome ? dirname(g.web.dshHome) : "");
+  const diagCfg = { ...cfg, dataDir };
+  const pkgDir = resolveDshPkgDir(diagCfg);
+  const cliBin = join(pkgDir, "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js");
+  const nodePath = resolveNodePath(diagCfg);
+  const smoke = { ok: false, version: null, error: "", stderr: "", at: "", running: true };
+  g.depsSmoke = smoke;
+  try {
+    if (!existsSync(cliBin)) throw new Error("cliBin 不存在：" + cliBin);
+    if (!nodePath || !existsSync(nodePath)) throw new Error("node 可执行文件不存在：" + nodePath);
+    // spawn node cliBin --version，10s 超时兜底（child.kill）；capture stdout+stderr
+    const child = spawn(nodePath, [cliBin, "--version"], {
+      cwd: dirname(cliBin),
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env },
+      windowsHide: true,
+    });
+    let out = "";
+    let err = "";
+    child.stdout.on("data", (d) => { out = (out + String(d)).slice(-800); });
+    child.stderr.on("data", (d) => { err = (err + String(d)).slice(-800); });
+    const timer = setTimeout(() => { try { child.kill(); } catch { /* 已退出 */ } }, 10000);
+    const code = await new Promise((res) => child.once("close", res));
+    clearTimeout(timer);
+    const stdout = out.trim();
+    const version = (stdout.match(/^\s*(\d+\.\d+\.\d+)/) || [])[1] || null;
+    if (code === 0 && version) {
+      smoke.ok = true;
+      smoke.version = version;
+      smoke.error = "";
+      smoke.stderr = err.slice(-400);
+    } else {
+      // 真实错误（ERR_MODULE_NOT_FOUND 等）截断 ≤400 存入 error
+      smoke.ok = false;
+      smoke.error = String(err || out || "退出码 " + code).slice(0, 400);
+      smoke.stderr = String(err || out).slice(-400);
+    }
+  } catch (e) {
+    smoke.ok = false;
+    smoke.error = String(e?.message || e).slice(0, 400);
+  } finally {
+    smoke.at = new Date().toISOString();
+    smoke.running = false;
+  }
+  return smoke;
+}
+// 挂单例（getSingleton() 内也有同款赋值，这里显式建立一次）
+getSingleton().verifyDeps = verifyDepsSmoke;
+
+// ---- Node/npm 运行级可用性检测（v0.8.10: t1 配置存在性之外的可用性冒烟）----
+// 路径存在 ≠ 能跑（与 t2 依赖验证同理）：node.exe 可能是损坏/不匹配的二进制，node
+// 同目录可能不带 npm 分发（installDepsFromPlugin 的 npm ci 依赖 npm-cli.js）。检测 =
+// spawn「node --version」确认可执行 + 检查 node 同目录 node_modules/npm/bin/npm-cli.js。
+// 同 verifyDepsSmoke 纪律：结果缓存 g.nodeSmoke = { ok, version, error, at, running }，
+// running 防并发；不随轮询触发——由页面「进标签页自动一次 / 手动「检测 Node」按钮」
+// 经 GET /webui/verify-node 驱动。
+async function verifyNodeSmoke(cfg) {
+  const g = getSingleton();
+  // 防并发：验证进行中直接返回当前缓存（不重复 spawn）
+  if (g.nodeSmoke?.running) return g.nodeSmoke;
+  const dataDir = cfg.dataDir || g.dataDir || (g.web?.dshHome ? dirname(g.web.dshHome) : "");
+  const diagCfg = { ...cfg, dataDir };
+  const nodePath = resolveNodePath(diagCfg);
+  const smoke = { ok: false, version: null, error: "", at: "", running: true };
+  g.nodeSmoke = smoke;
+  try {
+    if (!nodePath || !existsSync(nodePath)) {
+      throw new Error("node 可执行文件不存在：" + nodePath + "，请在插件设置中配置 nodePath");
+    }
+    const nodeDir = dirname(nodePath);
+    // npm 可用性：node 同目录 node_modules/npm/bin/npm-cli.js（installDepsFromPlugin 同款定位）
+    const npmCli = join(nodeDir, "node_modules", "npm", "bin", "npm-cli.js");
+    // spawn node --version，10s 超时兜底（child.kill）；capture stdout+stderr
+    const child = spawn(nodePath, ["--version"], {
+      cwd: nodeDir,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env },
+      windowsHide: true,
+    });
+    let out = "";
+    let err = "";
+    child.stdout.on("data", (d) => { out = (out + String(d)).slice(-800); });
+    child.stderr.on("data", (d) => { err = (err + String(d)).slice(-800); });
+    const timer = setTimeout(() => { try { child.kill(); } catch { /* 已退出 */ } }, 10000);
+    const code = await new Promise((res) => child.once("close", res));
+    clearTimeout(timer);
+    const stdout = out.trim();
+    const version = (stdout.match(/^\s*v?(\d+\.\d+\.\d+)/) || [])[1] || null;
+    if (code !== 0 || !version) {
+      throw new Error(String(err || out || "退出码 " + code).slice(0, 400) || "node --version 无有效输出");
+    }
+    if (!existsSync(npmCli)) {
+      throw new Error("node 目录未带 npm 分发（npm-cli.js 不存在：" + npmCli + "）——安装依赖与启动 web host 需要 npm，请更换完整 node 安装（官方安装包或 fnm 等）");
+    }
+    smoke.ok = true;
+    smoke.version = version;
+    smoke.error = "";
+  } catch (e) {
+    smoke.ok = false;
+    smoke.error = String(e?.message || e).slice(0, 400);
+  } finally {
+    smoke.at = new Date().toISOString();
+    smoke.running = false;
+  }
+  return smoke;
+}
+// 挂单例（getSingleton() 内也有同款赋值，这里显式建立一次）
+getSingleton().verifyNode = verifyNodeSmoke;
+
+// ---- 连接失败自检（v0.8.3: 插件页 web host 未就绪时的诊断数据源）----
+// 供 routes/webui.js 使用（经单例 globalThis.__dshHanako.collectDiagnostics 挂载，
+// 不静态 import 本模块——Hana 带 ?t= 加载 tools，静态 import 会命中 Node ESM 固定
+// URL 缓存读到旧模块，见文件头注释；与 index.js 经单例取 closeProcess 同一套纪律）。
+// web host 未就绪时逐项检查：① nodejs 配置（resolveNodePath + existsSync）
+// ② dsh 依赖（resolveDshPkgDir + cliBin 存在性）③ DSH 进程状态（单例 web /
+// webLastError / stderr 尾部）。只回布尔与截断文本，不泄漏 apiKey 明文；单例/字段
+// 缺失（冷启动、web 从未拉起）全部容错，本函数永不抛异常。
+export function collectWebDiagnostics(cfg = {}) {
+  const out = {
+    port: Number(cfg.webPort) || 3080,
+    apiKey: { configured: false }, // 敏感：只回「已配置/未配置」布尔，不回明文
+    checks: [],
+  };
+  try {
+    // 数据目录解析链：显式传入 → 单例记录（onload/工具已写入）→ 从 web.dshHome 反推
+    const g = getSingleton();
+    const dataDir = cfg.dataDir || g.dataDir || (g.web?.dshHome ? dirname(g.web.dshHome) : "");
+    const diagCfg = { ...cfg, dataDir };
+    // v0.8.8: 不再自动触发运行级检测（去掉 maybeTriggerDepsSmoke）——检测改为「进标签页
+    // 自动一次 + 手动「检测依赖」按钮」，经 GET /webui/verify-deps 路由驱动；g.depsSmoke
+    // 只存最近一次检测结果供诊断展示（不随 3s 轮询重复 spawn）。
+    out.apiKey.configured = Boolean(resolveApiKey(diagCfg));
+    out.checks.push(buildNodeDiagCheck(g, diagCfg));
+    out.checks.push(buildDepsDiagCheck(g, diagCfg));
+    out.checks.push(buildProcessDiagCheck(g, out));
+  } catch (e) {
+    // 顶层兜底：诊断读取本身异常时回退成「未知」项，接口不抛
+    out.checks.push({ key: "unknown", name: "自检异常", ok: false, detail: String(e?.message || e).slice(0, 400), fix: "请查看 Hana 日志或重启 Hana 后重试" });
+  }
+  return out;
+}
+
+/** ① Node.js 配置：nodePath 配置 + 路径存在 + 运行级可用性（node --version + npm-cli.js）
+ * v0.8.10: 叠加 nodeSmoke（verifyNodeSmoke 缓存 { ok, version, error, at, running }）。
+ * ok：configured && exists 且（未验证/验证中暂通过；验证过必须通过）——路径存在 ≠ 能跑。 */
+function buildNodeDiagCheck(g, cfg) {
+  const nodePath = resolveNodePath(cfg);
+  const configured = Boolean(nodePath);
+  const exists = configured && existsSync(nodePath);
+  // 运行级可用性状态（verifyNodeSmoke 缓存；非敏感：布尔/版本号/截断错误文本）
+  const smoke = g.nodeSmoke || null;
+  const verifyRunning = Boolean(smoke?.running);
+  const verified = configured && exists && smoke ? Boolean(smoke.ok) : null; // null = 未配置/未验证（暂通过）
+  const verifyError = smoke && !smoke.ok && !smoke.running ? String(smoke.error || "").slice(0, 400) : null;
+  const verifyVersion = smoke?.version ?? null;
+  const verifyAt = smoke?.at ?? null;
+  const ok = configured && exists && (!smoke || smoke.ok || smoke.running);
+  const check = {
+    key: "node",
+    name: "Node.js 配置",
+    ok,
+    configured,
+    exists: configured ? exists : null,
+    path: nodePath,
+    verified,
+    verifyRunning,
+    verifyError,
+    verifyVersion,
+    verifyAt,
+    detail: "",
+    fix: "",
+  };
+  if (!configured) {
+    check.detail = "nodePath 未配置（插件设置「Node.js 可执行文件路径」为空）";
+    check.fix = "双路径修复：在插件设置中配置 Node.js 可执行文件路径（node.exe 绝对路径，需 Node 24+）；或让 Agent 协助（探测本机 node → 引导确认 → 写 config.json 的 global.nodePath → 重启 Hana）";
+  } else if (!exists) {
+    check.detail = "配置的路径不存在：" + nodePath;
+    check.fix = "双路径修复：在插件设置中修正 Node.js 可执行文件路径（当前路径无效）；或让 Agent 协助（探测本机 node → 引导确认 → 写 config.json → 重启 Hana）";
+  } else if (!smoke) {
+    // 未验证过（进标签页自动检测一次 / 手动「检测 Node」；ok 暂 true）
+    check.detail = "已配置且路径存在，点击「检测 Node」验证可用性";
+  } else if (verifyRunning) {
+    // 检测进行中：ok 暂 true，结果由检测接口返回后刷新
+    check.detail = "已配置，正在检测 Node/npm 可用性…";
+  } else if (!smoke.ok) {
+    // 配置存在但不可用：node 跑不起来或未带 npm
+    check.detail = "nodePath 配置存在但不可用：" + (verifyError ? "\n" + verifyError : "运行级检测失败");
+    check.fix = "修正 Node.js 可执行文件路径（配置的 node 无法运行或未带 npm），改后重启 Hana；或让 Agent 协助（探测本机 node → 引导确认 → 写 config.json → 重启）";
+  } else {
+    check.detail = "已配置且可用（node v" + smoke.version + "，npm 可用）：" + nodePath;
+  }
+  return check;
+}
+
+/** ② dsh 依赖：cliBin 存在性（resolveDshPkgDir 同款：数据目录 dsh-pkg 优先，插件根兑底）
+ * v0.8.6: 叠加部署状态——g.depsInstalling（npm ci 进行中）/ g.depsInstallError（上次失败）/ g.depsInstallLog
+ * v0.8.7: 叠加运行级完整性验证——g.depsSmoke（verifyDepsSmoke 缓存 { ok, version, error, stderr, at, running }）。
+ * ok 判定升级：存在 且（未验证/验证中视为暂通过，验证过必须通过）——文件存在 ≠ 依赖完整。 */
+function buildDepsDiagCheck(g, cfg) {
+  const pkgDir = resolveDshPkgDir(cfg);
+  const cliBin = join(pkgDir, "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js");
+  // 候选位置全列出，未命中时讲清「查了哪些位置」（resolveDshPkgDir 只回命中/兑底那一个）
+  const candidates = [];
+  if (cfg.dataDir) candidates.push(join(cfg.dataDir, "dsh-pkg"));
+  candidates.push(PLUGIN_ROOT);
+  const checked = [...new Set(candidates.map((p) => join(p, "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js")))];
+  const installed = existsSync(cliBin);
+  // 部署状态（installDeps 写入单例；只回非敏感布尔与截断文本）
+  const installing = Boolean(g.depsInstalling);
+  const installError = String(g.depsInstallError || "").slice(0, 300);
+  const installLog = String(g.depsInstallLog || "").slice(-800);
+  const installAt = g.depsInstallAt || null; // v0.8.8: 最近一次 npm ci 输出时间（实时进度）
+  // 运行级验证状态（verifyDepsSmoke 缓存；非敏感：布尔/版本号/截断错误文本）
+  const smoke = g.depsSmoke || null;
+  const verifyRunning = Boolean(smoke?.running);
+  const verified = installed && smoke ? Boolean(smoke.ok) : null; // null = 未安装/未验证过（暂通过）
+  const verifyError = smoke && !smoke.ok && !smoke.running ? String(smoke.error || smoke.stderr || "").slice(0, 400) : null;
+  const verifyVersion = smoke?.version ?? null;
+  const verifyAt = smoke?.at ?? null;
+  // ok：存在 且（未验证/验证中暂通过；验证过必须通过）——验证失败 → ok=false
+  const ok = installed && (!smoke || smoke.ok || smoke.running);
+  const check = {
+    key: "deps",
+    name: "dsh 依赖安装",
+    ok,
+    installed,
+    installing,
+    verified,
+    verifyRunning,
+    verifyError,
+    verifyVersion,
+    verifyAt,
+    installError: installError || null,
+    installLog: installLog || null,
+    installAt,
+    pkgDir,
+    cliBin,
+    detail: "",
+    fix: "",
+  };
+  if (installing) {
+    // v0.8.8: 安装中（含重装场景 installed 仍可能为 true）优先——实时进度
+    // installLog 尾部由前端 .diag-progress 展示（随轮询刷新）
+    check.detail = "正在安装依赖…（npm ci，约 30-40s，进度见下方）";
+    check.fix = "";
+  } else if (!installed) {
+    // 未安装：保持现有文案
+    check.detail = "未找到 dsh 包：" + cliBin + " 不存在" + (checked.length > 1 ? "（已检查 " + checked.join("、") + "）" : "");
+    if (installError) check.detail += "\n[上次安装失败] " + installError;
+    check.fix = "依赖缺失：点击本卡片「安装依赖」按钮自动在插件数据目录 dsh-pkg 执行 npm ci（约 30-40s）；或确认插件目录 node_modules 解压完整；完成后重启 Hana";
+  } else if (!smoke) {
+    // v0.8.8: 未检测过（进标签页自动检测一次 / 手动「检测依赖」；ok 暂算 installed）
+    check.detail = "dsh 包已就绪，点击「检测依赖」验证依赖完整性";
+  } else if (verifyRunning) {
+    // 检测进行中：ok 暂 true，结果由检测接口返回后刷新
+    check.detail = "正在检测依赖完整性…";
+  } else if (!smoke.ok) {
+    // 存在但验证失败：依赖图不完整（ERR_MODULE_NOT_FOUND 等真实错误）
+    check.detail = "dsh 包存在但依赖不完整：" + (verifyError ? "\n" + verifyError : "运行级验证失败");
+    check.fix = "点击本卡片「重新安装依赖」按钮重新执行 npm ci（自动部署到 dsh-pkg），完成后重启 Hana";
+  } else {
+    // 存在 + 验证通过：能跑 = 依赖图完整
+    check.detail = "dsh 包已就绪（运行级验证通过，版本 v" + smoke.version + "）：" + cliBin;
+  }
+  return check;
+}
+
+/** ③ DSH 进程：单例 web 状态（child/exitCode/ready/stderr 尾部）+ webLastError/webLastErrorAt + webLastExit
+ * v0.8.5: webLastExit 为单例持久退出记录（进程被外部杀掉时 g.web 已摘除，凭它区分
+ * 「已退出」而非误报「尚未启动」）；只在 ensureWebHost 成功拉起新进程（ready）时清掉。 */
+function buildProcessDiagCheck(g, out) {
+  const web = g.web || null;
+  const child = web?.child || null;
+  const lastExit = g.webLastExit || null; // 持久退出记录：{ code, signal, at, stderr } | null
+  const started = Boolean(web || g.webLastError || lastExit);
+  const alive = Boolean(child && child.exitCode === null);
+  const ready = Boolean(web?.ready);
+  const exitCode = child?.exitCode ?? lastExit?.code ?? null;
+  const stderr = String(web?.stderr || lastExit?.stderr || "").slice(-800); // stderr 尾部截断 ≤800
+  const lastError = String(g.webLastError || "").slice(-800);
+  const lastErrorAt = g.webLastErrorAt || "";
+  const check = {
+    key: "process",
+    name: "DSH 进程状态",
+    ok: started && ready && alive,
+    started,
+    alive,
+    ready,
+    exitCode,
+    stderr,
+    lastError,
+    lastErrorAt,
+    lastExit, // 结构化退出记录（非敏感），供前端/调试
+    detail: "",
+    fix: "",
+  };
+  const port = out.port;
+  if (!started) {
+    // 从未启动：无 web / webLastError / webLastExit（冷启动或从未拉起过）
+    check.detail = "web host 尚未启动（插件加载即拉起，可能仍在初始化，或从未成功启动过）";
+    check.fix = "稍候自动重试；若持续未就绪，可点击本卡片「手动启动 web host」按钮重新拉起，或检查上方 Node.js 配置与依赖项";
+  } else if (ready && alive) {
+    // 进程侧已就绪但探测未命中（端口短暂不可达等）：仍提示重试
+    check.detail = "进程运行中且已就绪，但端口 " + port + " 探测未命中（可能短暂不可达）";
+    check.fix = "稍候自动重试；若持续未就绪，检查端口是否被其他程序占用";
+  } else if (alive) {
+    check.detail = "进程运行中，端口 " + port + " 尚未就绪" + (stderr ? "\n[stderr 尾部] " + stderr : "");
+    check.fix = "正在启动，请稍候自动重试；若长时间未就绪，检查端口是否被占用，或重启 Hana";
+  } else if (lastExit) {
+    // 进程曾运行后退出/被外部杀掉：展示持久退出记录（g.web 已摘除，stderr 从 lastExit 取）。
+    // code/signal 可能为 null（Windows 杀进程无 signal、信号杀进程无 code）：只列非空项
+    const codeTxt = lastExit.code !== null && lastExit.code !== undefined ? "code=" + lastExit.code : null;
+    const sigTxt = lastExit.signal !== null && lastExit.signal !== undefined ? "signal=" + lastExit.signal : null;
+    const exitTxt = codeTxt || sigTxt ? [codeTxt, sigTxt].filter(Boolean).join(" ") : "code=? signal=?";
+    check.detail = "进程已退出（" + exitTxt + "，时间 " + lastExit.at + "）"
+      + (lastExit.stderr ? "\n[stderr 尾部] " + lastExit.stderr : "");
+    check.fix = "点击本卡片「手动启动 web host」按钮重新拉起，或重启 Hana";
+  } else {
+    // 启动失败（webLastError）：展示失败原因（其已含 stderr 尾部）+ 修复指引
+    check.detail = lastError
+      ? "启动失败：" + lastError
+      : "进程已退出（code=" + (exitCode ?? "?") + "）" + (stderr ? "\n[stderr 尾部] " + stderr : "");
+    check.fix = pickProcessFix(lastError, stderr, port, out.apiKey.configured);
+  }
+  return check;
+}
+
+/** 进程失败修复指引：按失败原因内容匹配（node / 依赖 / apiKey / 端口占用），兜底通用建议。
+ * 同时匹配 webLastError 与 stderr 尾部——端口占用等错误常只出现在 stderr（进程退出时
+ * webLastError 可能未携带 stderr 尾部，见「进程已退出」分支）。 */
+function pickProcessFix(lastError, stderr, port, apiKeyConfigured) {
+  const text = (lastError || "") + "\n" + (stderr || "");
+  if (/node 可执行文件不存在|nodePath/i.test(text)) {
+    return "按上方「Node.js 配置」项修复（在插件设置中配置 node.exe 路径），改后重启 Hana";
+  }
+  if (/dsh 包未就绪|cliBin|npm ci/i.test(text)) {
+    return "按上方「dsh 依赖安装」项修复（数据目录 dsh-pkg 执行 npm ci），完成后重启 Hana";
+  }
+  if (/DEEPSEEK_API_KEY|api\s?key/i.test(text)) {
+    return "检查 apiKey 是否配置（插件设置「DeepSeek API Key」，或写入插件数据目录 dsh-home/.credentials.yaml / ~/.dsh/.credentials.yaml），改后重启 Hana";
+  }
+  if (/EADDRINUSE|address already in use|占用|bind/i.test(text)) {
+    return "检查端口 " + port + " 是否被占用（释放后重启 Hana）";
+  }
+  if (!apiKeyConfigured) {
+    return "建议检查 apiKey 是否配置（dsh 走 DeepSeek 官方 API，无 key 时启动会失败），改后重启 Hana";
+  }
+  return "检查上方 Node.js 配置与依赖项；仍失败请重启 Hana 后重试";
+}
 
 export async function closeProcess() {
   const g = getSingleton();
