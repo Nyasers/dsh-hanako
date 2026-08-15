@@ -12,7 +12,7 @@
 //
 // 权限：external_side_effect（调用 dsh 编码 agent 执行任务，消耗 Hana 宿主 provider 额度，Auto 模式送审）。
 import { spawn } from "node:child_process";
-import { readFileSync, existsSync, mkdirSync, writeFileSync, appendFileSync, rmSync, readdirSync, copyFileSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync, writeFileSync, appendFileSync, rmSync, readdirSync, copyFileSync, symlinkSync, lstatSync, readlinkSync, unlinkSync } from "node:fs";
 import { join, dirname, delimiter } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -554,12 +554,42 @@ async function ensureWebHost(cfg) {
   // v0.8.1: 主题注入 overlay；v0.9.3: 宿主 provider 跟随 overlay——多份 patch 合并为
   // config/dsh-hanako.patch.yml.tpl 单一模板：段1 session-query 静态配置块 + 段2 theme
   // insert + 段3 provider insert（v0.9.5 起恒渲染：hostProvider 恒开跟随宿主，无关闭选项）
-  // + 段4 default-model insert（v0.9.5：设置页默认模型配置块插件，恒挂载）。
-  // cordis 插件从安装目录 assets/dsh-cordis 加载（file:// URL），patch 含机器绝对路径，
+  // + 段4 default-model insert（v0.9.5 起恒挂载）。
+  // cordis 插件加载：theme/provider 从安装目录 assets/dsh-cordis 经 file:// URL 加载（patch
+  // 含机器绝对路径）；default-model 走包名注册（v0.9.5 正规化升级）——dsh client 模块发现
+  // 按 loader entry 的 name 做 require.resolve('<name>/package.json')，file:// 无法解析，
+  // 故启动前须在 $DSH_HOME/profiles/node_modules 建 junction（包名 → 插件安装目录），
+  // 与 dsh 自维护的 junction farm 同机制（ensureDefaultModelJunction 幂等创建）。
   // 启动前渲染模板（占位符→实际路径）到数据目录 dsh-hanako.patch.generated.yml；launcher
   // flag（--profile/--patch）必须位于应用参数（--port）之前。模板缺失/渲染失败时降级：
   // 回退挂静态 session-query.patch.yml（保底搜索），再缺失则不挂任何 patch 记 warn，
   // 均不阻断 dsh 启动。
+  // v0.9.5 正规化升级：dsh-hana-default-model 以包名注册（dsh client 模块发现按
+  // require.resolve('<name>/package.json') 找 package.json 的 dsh.client 声明，file://
+  // 形式无法解析）。包名解析锚点是 $DSH_HOME/profiles（baseUrl 父目录的 node_modules），
+  // 启动前建 junction：$DSH_HOME/profiles/node_modules/dsh-hana-default-model →
+  // 插件安装目录 assets/dsh-cordis/dsh-hana-default-model（与 dsh 自维护的 junction
+  // farm 同机制；dsh 的 healProfilesModuleFallback 只管理自身依赖闭包，不碰外来 link）。
+  // 幂等：已指向正确目标则跳过；错误/悬空 link 重建；非 link 同名文件报错不静默覆盖。
+  const ensureDefaultModelJunction = (dshHome) => {
+    const link = join(dshHome, "profiles", "node_modules", "dsh-hana-default-model");
+    const target = join(PLUGIN_ROOT, "assets", "dsh-cordis", "dsh-hana-default-model");
+    try {
+      if (existsSync(link)) {
+        const stat = lstatSync(link);
+        if (!stat.isSymbolicLink()) throw new Error(link + " 已存在且不是 junction；请移除后重试");
+        if (readlinkSync(link) === target) return;
+        unlinkSync(link);
+      }
+      mkdirSync(dirname(link), { recursive: true });
+      symlinkSync(target, link, "junction");
+    } catch (e) {
+      // junction 创建失败降级：仅记 warn，不阻断 dsh 启动——default-model 分页
+      // 会退化为不可用（client 模块未发现），后端路由与其余插件不受影响
+      console.warn("[dsh-run] dsh-hana-default-model junction 创建失败（" + (e?.message || e) + "），前端分页将不可用");
+    }
+  };
+
   const patchFiles = [];
   const patchTpl = join(PLUGIN_ROOT, "config", "dsh-hanako.patch.yml.tpl");
   const renderPatchTpl = () => {
@@ -567,13 +597,10 @@ async function ensureWebHost(cfg) {
       "file:///" + encodeURI(join(PLUGIN_ROOT, "assets", "dsh-cordis", "dsh-hana-theme", "index.js").replace(/\\/g, "/"));
     const providerPluginFile =
       "file:///" + encodeURI(join(PLUGIN_ROOT, "assets", "dsh-cordis", "dsh-hana-provider", "index.js").replace(/\\/g, "/"));
-    const defaultModelPluginFile =
-      "file:///" + encodeURI(join(PLUGIN_ROOT, "assets", "dsh-cordis", "dsh-hana-default-model", "index.js").replace(/\\/g, "/"));
     const gen = join(cfg.dataDir, "dsh-hanako.patch.generated.yml");
     let content = readFileSync(patchTpl, "utf8")
       .split("{{THEME_PLUGIN_FILE}}").join(themePluginFile)
       .split("{{HANA_PROVIDER_PLUGIN_FILE}}").join(providerPluginFile)
-      .split("{{DEFAULT_MODEL_PLUGIN_FILE}}").join(defaultModelPluginFile)
       .split("{{MODELS_PATH}}").join(hostProvider.modelsPath)
       .split("{{CATALOG_PATH}}").join(hostProvider.catalogPath)
       .split("{{DSH_PKG_DIR}}").join(cfg.dshPkgDir || resolveDshPkgDir(cfg));
@@ -597,6 +624,8 @@ async function ensureWebHost(cfg) {
     else console.warn("[dsh-run] session-query.patch.yml 也不存在：不挂任何 patch（dsh 启动不受影响，会话全文搜索保持上游默认禁用）");
   }
   const patchArgs = patchFiles.flatMap((p) => ["--patch", p]);
+  // v0.9.5：default-model 以包名注册，spawn 前确保 junction 就绪（幂等）
+  ensureDefaultModelJunction(dshHome);
   const child = spawn(nodePath, [cliBin, "--profile", "web", ...patchArgs, "--port", String(port)], {
     cwd: cfg.dataDir,
     stdio: ["ignore", "pipe", "pipe"],

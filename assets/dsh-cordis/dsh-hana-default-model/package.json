@@ -1,9 +1,24 @@
 {
   "name": "dsh-hana-default-model",
-  "version": "0.9.5",
+  "version": "0.10.0",
   "private": true,
   "type": "module",
   "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-connection"
+      ],
+      "platform": "web"
+    }
+  },
   "cordis": {
     "name": "dsh-hana-default-model"
   }
