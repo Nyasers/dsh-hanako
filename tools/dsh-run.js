@@ -29,6 +29,45 @@ while (!existsSync(join(PLUGIN_ROOT, "manifest.json"))) {
 const STDERR_CAP = 8192;
 const DEFAULT_CREDENTIALS = () => join(homedir(), ".dsh", ".credentials.yaml");
 const PORT_READY_TIMEOUT_MS = 60000; // web host 端口就绪等待上限
+// v0.9.3: Hana 宿主 provider 配置默认路径（只读；可经 hostProvider.modelsPath/catalogPath 覆盖）。
+// homedir() 拼接同 DEFAULT_CREDENTIALS 写法——宿主 home 恒为 ~/.hanako（Windows 下即 <用户主目录>/.hanako）
+const DEFAULT_HANA_MODELS_PATH = () => join(homedir(), ".hanako", "models.json");
+const DEFAULT_HANA_CATALOG_PATH = () => join(homedir(), ".hanako", "provider-catalog.json");
+
+// ---- hostProvider 配置解析（v0.9.3: Hana 宿主 provider 跟随开关）----
+// enabled 默认开：开时不注入 DEEPSEEK_API_KEY、不强制 apiKey（dsh 经 dsh-hana-provider
+// 插件直读宿主配置，凭据来自 provider-catalog.json）；关则回到旧行为（官方 API + env key）。
+function resolveHostProvider(cfg) {
+  const raw = (cfg && typeof cfg.hostProvider === "object" && cfg.hostProvider) || {};
+  return {
+    enabled: raw.enabled !== false,
+    modelsPath: String(raw.modelsPath || DEFAULT_HANA_MODELS_PATH()),
+    catalogPath: String(raw.catalogPath || DEFAULT_HANA_CATALOG_PATH()),
+    taskProvider: String(raw.taskProvider || "").trim(),
+  };
+}
+
+// ---- dsh_run 任务模型 provider 解析（v0.9.4: hostProvider 开时任务走 Hana provider）----
+// dsh-hana-provider 插件把 Hana 宿主 provider 注册进 dsh（sensenova/agnes/deepseek...），
+// hostProvider 开启时任务不能走 deepseek-official（无官方 key 注入，会秒挂）。这里决定
+// 任务默认 provider：优先 hostProvider.taskProvider 显式配置；否则读宿主 models.json +
+// provider-catalog.json 取第一个「有凭据」的 provider（跳过规则与插件一致：catalog
+// 无 api_key 者跳过）。读失败/空目录返回 null，调用方报错提示配置。
+function resolveHostTaskProvider(hostProvider) {
+  if (hostProvider.taskProvider) return hostProvider.taskProvider;
+  try {
+    const models = JSON.parse(readFileSync(hostProvider.modelsPath, "utf8"));
+    const creds = JSON.parse(readFileSync(hostProvider.catalogPath, "utf8"));
+    const providers = (models && models.providers) || {};
+    const catalog = (creds && creds.providers) || {};
+    for (const id of Object.keys(providers)) {
+      const cred = catalog[id];
+      const key = cred && typeof cred.api_key === "string" ? cred.api_key.trim() : "";
+      if (key) return id;
+    }
+  } catch { /* 读配置失败，返回 null */ }
+  return null;
+}
 
 // ---- manifest configuration 默认值（单一事实源：manifest.json）----
 // dev invoke 等场景 ctx.config 可能未注入默认值或带 undefined 键，这里静态读取保证配置可用。
@@ -565,9 +604,12 @@ async function ensureWebHost(cfg) {
   if (!existsSync(cliBin)) {
     throw new Error(`dsh 包未就绪：${cliBin} 不存在。轻量分发形态请在插件数据目录 dsh-pkg 执行 npm ci（部署目录需含 package.json + package-lock.json，详见技能 dsh-hanako/SKILL.md 依赖自主部署章节）；现役 zip 形态请确认插件目录（${pkgDir}）node_modules 解压完整`);
   }
+  const hostProvider = resolveHostProvider(cfg);
   const apiKey = resolveApiKey(cfg);
-  if (!apiKey) {
-    throw new Error("找不到 DEEPSEEK_API_KEY：请在插件设置中配置 apiKey（配置后需重启 Hana 生效），或把 key 写入插件数据目录 dsh-home/.credentials.yaml（也可用 ~/.dsh/.credentials.yaml）");
+  // v0.9.3: hostProvider 开启时凭据由 Hana 宿主 provider 提供（provider-catalog.json），
+  // 不要求 DEEPSEEK_API_KEY；仅关闭 hostProvider（官方 API 路线）时才强制要求 key。
+  if (!apiKey && !hostProvider.enabled) {
+    throw new Error("找不到 DEEPSEEK_API_KEY：请在插件设置中配置 apiKey（配置后需重启 Hana 生效），或把 key 写入插件数据目录 dsh-home/.credentials.yaml（也可用 ~/.dsh/.credentials.yaml）；或开启 hostProvider（默认开）由 Hana 宿主 provider 提供凭据");
   }
 
   const dshHome = join(cfg.dataDir, "dsh-home");
@@ -575,25 +617,66 @@ async function ensureWebHost(cfg) {
   mkdirSync(cfg.dataDir, { recursive: true });
   const port = Number(cfg.webPort) || 3080;
   // v0.5.11: 会话全文搜索 overlay（dsh 默认 openAt: never 禁用搜索，需 --patch 覆盖为 first-search）
-  // v0.8.1: 主题注入 overlay——cordis 插件从安装目录 assets/dsh-cordis 加载（file:// URL），
-  // patch 含机器绝对路径，启动前渲染模板（占位符→实际路径）到数据目录；
-  // launcher flag（--profile/--patch）必须位于应用参数（--port）之前；patch 文件缺失时优雅降级不阻断启动
+  // v0.8.1: 主题注入 overlay；v0.9.3: 宿主 provider 跟随 overlay——三份 patch 合并为
+  // config/dsh-hanako.patch.yml.tpl 单一模板：段1 session-query 静态配置块 + 段2 theme
+  // insert + 段3 provider insert（条件段）。cordis 插件从安装目录 assets/dsh-cordis 加载
+  // （file:// URL），patch 含机器绝对路径，启动前渲染模板（占位符→实际路径）到数据目录
+  // dsh-hanako.patch.generated.yml；launcher flag（--profile/--patch）必须位于应用参数
+  // （--port）之前。hostProvider.enabled=false 时剔除段3（关闭宿主 provider = 官方 API
+  // 路线，不挂载 dsh-hana-provider 插件），只保留段1+段2。模板缺失/渲染失败时降级：
+  // 回退挂静态 session-query.patch.yml（保底搜索），再缺失则不挂任何 patch 记 warn，
+  // 均不阻断 dsh 启动。
   const patchFiles = [];
-  const sessionQueryPatch = join(PLUGIN_ROOT, "config", "session-query.patch.yml");
-  if (existsSync(sessionQueryPatch)) patchFiles.push(sessionQueryPatch);
-  const themePatchTpl = join(PLUGIN_ROOT, "config", "hana-theme.patch.yml.tpl");
-  if (existsSync(themePatchTpl)) {
+  const patchTpl = join(PLUGIN_ROOT, "config", "dsh-hanako.patch.yml.tpl");
+  const renderPatchTpl = () => {
     const themePluginFile =
       "file:///" + encodeURI(join(PLUGIN_ROOT, "assets", "dsh-cordis", "dsh-hana-theme", "index.js").replace(/\\/g, "/"));
-    const gen = join(cfg.dataDir, "hana-theme.patch.generated.yml");
-    writeFileSync(gen, readFileSync(themePatchTpl, "utf8").split("{{THEME_PLUGIN_FILE}}").join(themePluginFile), "utf8");
-    patchFiles.push(gen);
+    const providerPluginFile =
+      "file:///" + encodeURI(join(PLUGIN_ROOT, "assets", "dsh-cordis", "dsh-hana-provider", "index.js").replace(/\\/g, "/"));
+    const gen = join(cfg.dataDir, "dsh-hanako.patch.generated.yml");
+    let content = readFileSync(patchTpl, "utf8")
+      .split("{{THEME_PLUGIN_FILE}}").join(themePluginFile)
+      .split("{{HANA_PROVIDER_PLUGIN_FILE}}").join(providerPluginFile)
+      .split("{{MODELS_PATH}}").join(hostProvider.modelsPath)
+      .split("{{CATALOG_PATH}}").join(hostProvider.catalogPath)
+      .split("{{DSH_PKG_DIR}}").join(cfg.dshPkgDir || resolveDshPkgDir(cfg));
+    // v0.9.3: 段3 条件剔除——按模板内 <<< provider-section-begin/end >>> 标记行做文本
+    // 裁剪（含两标记行本身；.* 容忍标记行尾随说明注释；标记缺失则裁剪不命中、段3保留，
+    // 模板单一事实源保证标记常在）
+    if (!hostProvider.enabled) {
+      content = content.replace(/^# <<< provider-section-begin >>>.*\r?\n[\s\S]*?^# <<< provider-section-end >>>.*\r?\n/m, "");
+    }
+    writeFileSync(gen, content, "utf8");
+    return gen;
+  };
+  if (existsSync(patchTpl)) {
+    try {
+      patchFiles.push(renderPatchTpl());
+    } catch (e) {
+      // 渲染失败（读模板/写数据目录异常）：回退静态 session-query patch（保底搜索功能）
+      console.warn(`[dsh-run] patch 模板渲染失败（${e?.message || e}），回退静态 session-query.patch.yml`);
+      const fallback = join(PLUGIN_ROOT, "config", "session-query.patch.yml");
+      if (existsSync(fallback)) patchFiles.push(fallback);
+    }
+  } else {
+    // 模板缺失：回退静态 session-query patch（保底搜索）；再缺失则不挂任何 patch
+    console.warn("[dsh-run] config/dsh-hanako.patch.yml.tpl 缺失，回退静态 session-query.patch.yml");
+    const fallback = join(PLUGIN_ROOT, "config", "session-query.patch.yml");
+    if (existsSync(fallback)) patchFiles.push(fallback);
+    else console.warn("[dsh-run] session-query.patch.yml 也不存在：不挂任何 patch（dsh 启动不受影响，会话全文搜索保持上游默认禁用）");
   }
   const patchArgs = patchFiles.flatMap((p) => ["--patch", p]);
   const child = spawn(nodePath, [cliBin, "--profile", "web", ...patchArgs, "--port", String(port)], {
     cwd: cfg.dataDir,
     stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, DSH_HOME: dshHome, DSH_TELEMETRY_DISABLED: "1", DEEPSEEK_API_KEY: apiKey },
+    // v0.9.3: hostProvider 开启时不注入 DEEPSEEK_API_KEY（凭据由 dsh-hana-provider
+    // 插件直读宿主 provider-catalog.json）；关闭时保持旧行为（官方 API + env key）
+    env: {
+      ...process.env,
+      DSH_HOME: dshHome,
+      DSH_TELEMETRY_DISABLED: "1",
+      ...(hostProvider.enabled ? {} : { DEEPSEEK_API_KEY: apiKey }),
+    },
     windowsHide: true,
   });
 
@@ -1386,16 +1469,30 @@ function submitTask(cfg, { task, cwd, timeoutMs = 600000, signal, bus, sessionPa
     endOperation(opId, { sessionId, sessionCwd: createPayload.cwd });
 
     // 1.5 模型选择（dsh 会话级 call config：provider/model 经 session.selectModel 切换）
-    // provider 固定 deepseek-official（dsh-llm-deepseek 注册路由），模型名 pass-through 直传；
-    // 显式设置保证「配置的模型就是实际运行的模型」（单一事实源，不受 web host 默认值漂移影响）。
-    // resume 场景同样执行：会话级 call config 重设无冲突，配置的模型仍是实际运行的模型（单一事实源哲学）。
+    // provider：hostProvider 开时用 Hana 宿主 provider（resolveHostTaskProvider，显式配置
+    // taskProvider 优先，否则取第一个有凭据的），关时保持旧行为 deepseek-official（官方
+    // API 路线）；模型名 pass-through 直传。显式设置保证「配置的模型就是实际运行的模型」。
     const model = resolveModel(cfg);
-    await callUnary(base, "session.selectModel", {
-      sessionId,
-      provider: "deepseek-official",
-      model,
-        ...(effort && { reasoningEffort: effort }),
-    });
+    const hostProvider = resolveHostProvider(cfg);
+    const taskProvider = hostProvider.enabled ? resolveHostTaskProvider(hostProvider) : "deepseek-official";
+    if (!taskProvider) {
+      throw new Error("hostProvider 开启但无法确定任务 provider：请在插件设置中配置 hostProvider.taskProvider，或确认宿主 models.json/provider-catalog.json 存在且有凭据的 provider");
+    }
+    // selectModel：effort 按用户配置传递（dsh_run 显式 effort / 全局 reasoningEffort）。
+    // hostProvider 开时模型来自 Hana 宿主：部分模型（如 sensenova 的 deepseek-v4-flash，
+    // reasoning:false）不接受任何 reasoningEffort，传了会被拒（model-unavailable）——
+    // 捕获后降级不带 effort 重试（该模型天然不思考，不传即不思考）；其余模型
+    // （agnes/deepseek 等）按显式 effort 生效（off 即真关思考）。
+    const selectModelPayload = { sessionId, provider: taskProvider, model, ...(effort ? { reasoningEffort: effort } : {}) };
+    try {
+      await callUnary(base, "session.selectModel", selectModelPayload);
+    } catch (err) {
+      if (hostProvider.enabled && String(err?.message || "").includes("model-unavailable")) {
+        await callUnary(base, "session.selectModel", { sessionId, provider: taskProvider, model });
+      } else {
+        throw err;
+      }
+    }
 
     // 2. 开 mux 事件流 + prompt 竞速
     const ac = new AbortController();

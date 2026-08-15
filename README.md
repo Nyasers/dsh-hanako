@@ -141,7 +141,7 @@ dsh 的 `/api/events.mux` **要求 WebSocket 升级**：GET 返回 `426 Upgrade 
 
 - **依赖按需部署**：zip 零依赖（约 0.1MB，代码 bundle + 配置 + 技能 + lockfile）。dsh 依赖树（`@deepseek-ai/dsh` + node-pty/koffi 原生模块，约 246MB）由 Agent 部署时 **npm ci 到数据目录 `dsh-pkg/`**（升级安装整体替换插件目录不丢依赖；registry 不通时切镜像 `--registry=https://registry.npmmirror.com`），也可在 DSHana 标签页 deps 卡片点「安装依赖」自动完成（v0.8.6+，命令同上）。解析链：`<dataDir>/dsh-pkg` 优先 → 插件安装目录 `node_modules`（兼容旧形态）。依赖完整性另经**运行级验证**（`node cliBin --version`，v0.8.7+，能跑 = 依赖图完整，防 npm ci 中断/--omit=peer 误用造成的假就绪）
 - **插件本体 rspack bundle**：`index.js` + `tools/*.js` 经 `scripts/build.mjs` 打包，`scripts/pack.mjs` 铺平到标准位置交付（根 `index.js` + `tools/`，无 dist/）。构建工具 @rspack/core 声明为 devDependencies（构建契约，部署 `--omit=dev` 不装）
-- **dsh 启动 patch overlay**：dsh-run.js spawn `dsh --profile web --patch <...> --port <...>`，多个 patch 按序应用——`config/session-query.patch.yml`（全文搜索默认启用，`openAt: first-search`）+ `config/hana-theme.patch.yml.tpl`（主题插件注册，启动前渲染成本机 file:// 路径写到数据目录）；patch 缺失时优雅降级
+- **dsh 启动 patch overlay**：dsh-run.js spawn `dsh --profile web --patch <...> --port <...>`，启动前渲染单一模板 `config/dsh-hanako.patch.yml.tpl` 为机器绝对路径写数据目录 `dsh-hanako.patch.generated.yml`（三段：session-query 全文搜索默认启用 `openAt: first-search` + dsh-hana-theme 主题插件注册 + dsh-hana-provider 宿主 provider 跟随注册）；模板缺失/渲染失败回退静态 `config/session-query.patch.yml`（保底搜索），再缺失不挂 patch 记 warn——patch 缺失时优雅降级不阻断启动
 - **凭据解析**：`resolveApiKey` 优先级 = 宿主注入 `cfg.apiKey` → 直读 `dataDir/config.json` 的 `global.apiKey`（改配置即时生效）→ 文件兜底（dsh-home/.credentials.yaml → ~/.dsh/.credentials.yaml）
 - **进程单例挂 `globalThis.__dshHanako`**：`index.js` 卸载清理时读取（不 import 插件文件，避免读到旧模块缓存）
 - **宿主 tools 模块缓存**：宿主按插件 id 缓存 tools 模块，**改代码后必须重启 Hana 才加载新 tools**

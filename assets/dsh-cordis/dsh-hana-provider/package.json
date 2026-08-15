@@ -1,0 +1,10 @@
+{
+  "name": "dsh-hana-provider",
+  "version": "0.9.4",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "cordis": {
+    "name": "dsh-hana-provider"
+  }
+}

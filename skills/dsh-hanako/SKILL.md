@@ -45,7 +45,7 @@ Set-Location <部署目录：插件根或数据目录 dsh-pkg>
 
 ## 主题跟随（v0.8.1）
 
-dsh 偏好 `system`（默认）→ 跟随 Hana 主题（明暗+配色）；`light`/`dark` → dsh 原生配色。切偏好/切主题后**重开标签页生效**。部署要点：`assets/dsh-cordis/dsh-hana-theme/` 随包分发（缺失仅不跟随主题）；patch 模板 `config/hana-theme.patch.yml.tpl` 启动前渲染成本机路径写数据目录 `hana-theme.patch.generated.yml`（缺失优雅降级）。排错：不跟随明暗 → 查 settings.yaml `ui-theme.preference` 为 system + /webui 有 color-scheme；配色不注入 → 查 generated patch 与 assets 目录；patch 在仍不注入 → 重启后查 stderr 有无 dsh-hana-theme 加载错误；切换不实时 → 壳页面（webui.js）有 dshHanaTheme message 监听。
+dsh 偏好 `system`（默认）→ 跟随 Hana 主题（明暗+配色）；`light`/`dark` → dsh 原生配色。切偏好/切主题后**重开标签页生效**。部署要点：`assets/dsh-cordis/dsh-hana-theme/` 随包分发（缺失仅不跟随主题）；patch 模板 `config/dsh-hanako.patch.yml.tpl`（三段合一：session-query + theme + provider）启动前渲染成本机路径写数据目录 `dsh-hanako.patch.generated.yml`（模板缺失/渲染失败回退静态 `session-query.patch.yml`）。排错：不跟随明暗 → 查 settings.yaml `ui-theme.preference` 为 system + /webui 有 color-scheme；配色不注入 → 查 generated patch 与 assets 目录；patch 在仍不注入 → 重启后查 stderr 有无 dsh-hana-theme 加载错误；切换不实时 → 壳页面（webui.js）有 dshHanaTheme message 监听。
 
 ## 配置完成后验证
 

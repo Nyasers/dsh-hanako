@@ -2,7 +2,7 @@
   "manifestVersion": 1,
   "id": "dsh-hanako",
   "name": "DSHana",
-  "version": "0.9.3",
+  "version": "0.9.4",
   "description": "常驻 DeepSeek Harness（dsh）web host（--profile web），向 Agent 提供进程外 subagent 能力：任务经 dsh /api 网关提交（DeepSeek 官方 API、沙箱 bash/文件系统、compaction、subagent 级联），DSH_HOME 锁进插件数据目录（账本随插件生命周期），dsh Web UI 天然可见全部任务（可浏览器查看/继续）。默认异步：提交即渲染实时卡片（状态 / 耗时 / 摘要 + 完整输出懒加载），完成后宿主唤醒结果后台送达（PTC 式回调压缩：默认只带最终结论摘要，省上下文）；可 wait=true 同步返回。",
   "author": "Nyaser",
   "minAppVersion": "0.82.0",
@@ -28,11 +28,48 @@
           "title": "Node.js 可执行文件路径",
           "description": "必填：用于启动 dsh web host 的 node.exe 绝对路径（需 Node 24+）。初始为空（config.json 由宿主在设置界面填写后生成，插件包不携带配置、不预设路径），未填时 web host 启动报错，请在设置中填写本机 node 路径（改后重启 Hana 生效）。"
         },
+        "hostProvider": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true,
+              "title": "跟随 Hana 宿主 Provider",
+              "description": "开（默认）：dsh 经 dsh-hana-provider 插件直读 Hana 宿主 provider 配置（models.json + provider-catalog.json），dsh models 页出现 Hana 全部 provider，配置变化 fs.watch 热重载跟随，不再注入 DEEPSEEK_API_KEY（任务前请在 dsh models 页选择模型）。关：回到旧行为（dsh 走 DeepSeek 官方 API，需配置 apiKey）。改后重启 Hana 生效。"
+            },
+            "modelsPath": {
+              "type": "string",
+              "default": "E:\\Hanako\\.hanako\\models.json",
+              "title": "宿主 models.json 路径",
+              "description": "Hana 宿主 provider 目录文件（只读，不修改）。默认 E:\\Hanako\\.hanako\\models.json，宿主数据目录迁移后可覆盖。"
+            },
+            "catalogPath": {
+              "type": "string",
+              "default": "E:\\Hanako\\.hanako\\provider-catalog.json",
+              "title": "宿主 provider-catalog.json 路径",
+              "description": "Hana 宿主凭据目录文件（只读，不修改；api_key 明文在此）。默认 E:\\Hanako\\.hanako\\provider-catalog.json，宿主数据目录迁移后可覆盖。"
+            },
+            "taskProvider": {
+              "type": "string",
+              "default": "",
+              "title": "dsh_run 任务默认 Provider",
+              "description": "hostProvider 开启时 dsh_run 工具提交任务使用的 provider（dsh models 页手动选择的模型不生效于此）。留空自动取宿主 models.json 中第一个有凭据的 provider（如 sensenova）；显式填写如 sensenova/agnes/deepseek 可固定。需保证该 provider 下存在 global.model 指定的模型。改后对新任务立即生效。"
+            }
+          },
+          "default": {
+            "enabled": true,
+            "modelsPath": "E:\\Hanako\\.hanako\\models.json",
+            "catalogPath": "E:\\Hanako\\.hanako\\provider-catalog.json",
+            "taskProvider": ""
+          },
+          "title": "Hana 宿主 Provider 跟随",
+          "description": "dsh 直读 Hana 宿主 provider 配置并完全跟随：dsh models 页出现 Hana 全部 provider（sensenova/agnes/deepseek/deepseek-reverse 等，catalog 无凭据者跳过），配置变化热重载；凭据来自宿主 provider-catalog.json，不再需要 DEEPSEEK_API_KEY。"
+        },
         "model": {
           "type": "string",
           "default": "deepseek-v4-flash",
           "title": "dsh 模型",
-          "description": "dsh 任务使用的模型 id（provider 固定 deepseek-official，模型名 pass-through 直传 DeepSeek API）。内置：deepseek-v4-flash（默认）/ deepseek-v4-pro；也可填其他 DeepSeek 模型 id。改后对新任务立即生效，无需重启。"
+          "description": "dsh 任务的模型 id。hostProvider 开启时 provider 由 dsh-hana-provider 插件跟随 Hana 宿主（在 dsh models 页选择），此值作为回退兜底；hostProvider 关闭时 provider 固定 deepseek-official，模型名 pass-through 直传 DeepSeek API。内置：deepseek-v4-flash（默认）/ deepseek-v4-pro；也可填其他 DeepSeek 模型 id。改后对新任务立即生效，无需重启。"
         },
         "agentPreset": {
           "type": "string",
@@ -67,7 +104,7 @@
           "type": "string",
           "default": "",
           "title": "DeepSeek API Key（推荐）",
-          "description": "直接在此配置 API key，优先于文件读取（dsh-home / ~/.dsh 的 .credentials.yaml）。留空则回退到文件读取。安装后必填（dsh 走 DeepSeek 官方 API），改后重启 Hana 生效。"
+          "description": "直接在此配置 API key，优先于文件读取（dsh-home / ~/.dsh 的 .credentials.yaml）。hostProvider 默认开启时 dsh 凭据来自 Hana 宿主（provider-catalog.json），本项可留空；关闭 hostProvider（官方 API 路线）时必填。改后重启 Hana 生效。"
         },
         "defaultCwd": {
           "type": "string",
