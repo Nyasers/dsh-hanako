@@ -10,7 +10,7 @@
 // （Node 24 内置 fetch/AbortController，零第三方依赖）。
 // 进程单例挂 globalThis.__dshHanako，供 index.js 卸载清理。
 //
-// 权限：external_side_effect（调用 DeepSeek 官方 API，消耗额度，Auto 模式送审）。
+// 权限：external_side_effect（调用 dsh 编码 agent 执行任务，消耗 Hana 宿主 provider 额度，Auto 模式送审）。
 import { spawn } from "node:child_process";
 import { readFileSync, existsSync, mkdirSync, writeFileSync, appendFileSync, rmSync, readdirSync, copyFileSync } from "node:fs";
 import { join, dirname, delimiter } from "node:path";
@@ -27,46 +27,46 @@ while (!existsSync(join(PLUGIN_ROOT, "manifest.json"))) {
   PLUGIN_ROOT = parent;
 }
 const STDERR_CAP = 8192;
-const DEFAULT_CREDENTIALS = () => join(homedir(), ".dsh", ".credentials.yaml");
 const PORT_READY_TIMEOUT_MS = 60000; // web host 端口就绪等待上限
-// v0.9.3: Hana 宿主 provider 配置默认路径（只读；可经 hostProvider.modelsPath/catalogPath 覆盖）。
-// homedir() 拼接同 DEFAULT_CREDENTIALS 写法——宿主 home 恒为 ~/.hanako（Windows 下即 <用户主目录>/.hanako）
+// v0.9.5: Hana 宿主 provider 配置默认路径（只读；可经 hostProvider.modelsPath/catalogPath 覆盖）。
+// homedir() 拼接取宿主 home 恒为 ~/.hanako（Windows 下即 <用户主目录>/.hanako）
 const DEFAULT_HANA_MODELS_PATH = () => join(homedir(), ".hanako", "models.json");
 const DEFAULT_HANA_CATALOG_PATH = () => join(homedir(), ".hanako", "provider-catalog.json");
 
-// ---- hostProvider 配置解析（v0.9.3: Hana 宿主 provider 跟随开关）----
-// enabled 默认开：开时不注入 DEEPSEEK_API_KEY、不强制 apiKey（dsh 经 dsh-hana-provider
-// 插件直读宿主配置，凭据来自 provider-catalog.json）；关则回到旧行为（官方 API + env key）。
+// ---- hostProvider 配置解析（v0.9.5: 恒开跟随 Hana 宿主 provider，无关闭选项）----
+// dsh 经 dsh-hana-provider 插件直读宿主配置：凭据来自宿主 provider-catalog.json，
+// 模型跟随宿主 models.json（dsh models 页选择）。只解析路径覆盖项。
 function resolveHostProvider(cfg) {
   const raw = (cfg && typeof cfg.hostProvider === "object" && cfg.hostProvider) || {};
   return {
-    enabled: raw.enabled !== false,
     modelsPath: String(raw.modelsPath || DEFAULT_HANA_MODELS_PATH()),
     catalogPath: String(raw.catalogPath || DEFAULT_HANA_CATALOG_PATH()),
-    taskProvider: String(raw.taskProvider || "").trim(),
   };
 }
 
-// ---- dsh_run 任务模型 provider 解析（v0.9.4: hostProvider 开时任务走 Hana provider）----
-// dsh-hana-provider 插件把 Hana 宿主 provider 注册进 dsh（sensenova/agnes/deepseek...），
-// hostProvider 开启时任务不能走 deepseek-official（无官方 key 注入，会秒挂）。这里决定
-// 任务默认 provider：优先 hostProvider.taskProvider 显式配置；否则读宿主 models.json +
-// provider-catalog.json 取第一个「有凭据」的 provider（跳过规则与插件一致：catalog
-// 无 api_key 者跳过）。读失败/空目录返回 null，调用方报错提示配置。
-function resolveHostTaskProvider(hostProvider) {
-  if (hostProvider.taskProvider) return hostProvider.taskProvider;
+// 读 dsh-home/settings.yaml 的 agent-default-model（行级解析，零依赖）——
+// dsh 默认模型：dsh models 页设置后写回 settings.yaml（selectModel 同源）。
+// 返回 { provider, model } 或 null。
+function readDshDefaultModel(dshHome) {
   try {
-    const models = JSON.parse(readFileSync(hostProvider.modelsPath, "utf8"));
-    const creds = JSON.parse(readFileSync(hostProvider.catalogPath, "utf8"));
-    const providers = (models && models.providers) || {};
-    const catalog = (creds && creds.providers) || {};
-    for (const id of Object.keys(providers)) {
-      const cred = catalog[id];
-      const key = cred && typeof cred.api_key === "string" ? cred.api_key.trim() : "";
-      if (key) return id;
+    const f = join(dshHome, "settings.yaml");
+    if (!existsSync(f)) return null;
+    const lines = readFileSync(f, "utf8").split(/\r?\n/);
+    let inBlock = false;
+    const out = {};
+    for (const line of lines) {
+      if (/^agent-default-model\s*:/.test(line)) { inBlock = true; continue }
+      if (!inBlock) continue
+      const m = line.match(/^(\s+)([A-Za-z]+)\s*:\s*(.*)$/)
+      if (!m || m[1].length <= 2) break // 缩进不足 = 出块
+      const k = m[2]
+      const v = m[3].trim()
+      if (v) out[k] = v.replace(/^['"]|['"]$/g, "")
     }
-  } catch { /* 读配置失败，返回 null */ }
-  return null;
+    return out.provider ? out : null
+  } catch {
+    return null
+  }
 }
 
 // ---- manifest configuration 默认值（单一事实源：manifest.json）----
@@ -83,58 +83,7 @@ const manifestDefaults = (() => {
   }
 })();
 
-// ---- 凭据读取（仅 DEEPSEEK_API_KEY，支持裸值/单双引号值，不解析完整 YAML）----
-// 优先级：插件 DSH_HOME（账本落插件目录原则）→ ~/.dsh 全局。
-function readApiKey(dataDir) {
-  const candidates = [
-    dataDir && join(dataDir, "dsh-home", ".credentials.yaml"),
-    DEFAULT_CREDENTIALS(),
-  ].filter(Boolean);
-  for (const p of candidates) {
-    try {
-      if (!existsSync(p)) continue;
-      const text = readFileSync(p, "utf8");
-      const m = text.match(/^\s*DEEPSEEK_API_KEY\s*:\s*(?:"([^"]*)"|'([^']*)'|([^\s#]+))/m);
-      if (!m) continue;
-      const v = m[1] ?? m[2] ?? m[3] ?? null;
-      if (v) return v;
-    } catch { /* 该候选不可读，尝试下一个 */ }
-  }
-  return null;
-}
-
-// 最终 key 解析：宿主注入的 cfg.apiKey 优先；其次直接读宿主写的 config.json
-// （global.apiKey）——宿主对工具调用的 ctx.config 是插件加载时的配置快照，
-// 之后在设置界面改的 key 不会注入，需直接读文件绕过。
-function resolveApiKey(cfg) {
-  if (cfg.apiKey) return cfg.apiKey;
-  try {
-    const cf = join(cfg.dataDir, "config.json");
-    if (existsSync(cf)) {
-      const j = JSON.parse(readFileSync(cf, "utf8"));
-      const k = j?.global?.apiKey;
-      if (typeof k === "string" && k) return k;
-    }
-  } catch { /* 读配置失败忽略 */ }
-  return readApiKey(cfg.dataDir);
-}
-
-// 模型解析（绕宿主配置快照，同 resolveApiKey）：设置界面改的 model 写入
-// dataDir/config.json 的 global.model，工具调用的 ctx.config 是加载时快照不会更新，
-// 因此优先直读 config.json；没有（未改过）才回退到快照/默认值。
-function resolveModel(cfg) {
-  try {
-    const cf = join(cfg.dataDir, "config.json");
-    if (existsSync(cf)) {
-      const j = JSON.parse(readFileSync(cf, "utf8"));
-      const m = j?.global?.model;
-      if (typeof m === "string" && m.trim()) return m.trim();
-    }
-  } catch { /* 读配置失败忽略 */ }
-  return String(cfg.model || "deepseek-v4-flash");
-}
-
-// agent 预设解析（同 resolveModel 的「配置单一事实源」哲学）：优先直读
+// agent 预设解析（「配置单一事实源」哲学）：优先直读
 // dataDir/config.json 的 global.agentPreset（设置界面改动即时生效），无则回退
 // 配置快照/默认值 standard。工具调用显式传 agentPreset 时在 submitTask 内优先。
 function resolveAgentPreset(cfg) {
@@ -149,20 +98,11 @@ function resolveAgentPreset(cfg) {
   return String(cfg.agentPreset || "standard");
 }
 
-// reasoningEffort 解析（同 resolveAgentPreset 的「配置单一事实源」哲学）：优先直读
-// dataDir/config.json 的 global.reasoningEffort（设置界面改动即时生效），无则回退
-// 配置快照/工具调用入参。与 agentPreset 不同，缺省不补默认值，保持与现状一致
-// （不传时由 web host 默认处理，通常为 high）。
-function resolveReasoningEffort(cfg) {
-  try {
-    const cf = join(cfg.dataDir, "config.json");
-    if (existsSync(cf)) {
-      const j = JSON.parse(readFileSync(cf, "utf8"));
-      const r = j?.global?.reasoningEffort;
-      if (typeof r === "string" && r.trim()) return r.trim();
-    }
-  } catch { /* 读配置失败忽略 */ }
-  return cfg.reasoningEffort;
+// reasoningEffort 解析（v0.9.5：全局配置已移除，只接受工具显式参数，无配置回退；
+// 不传时由 dsh 默认处理）。返回显式值或 null。
+function resolveReasoningEffort(explicit) {
+  const v = String(explicit ?? "").trim();
+  return v || null;
 }
 
 // approvalTimeoutMs 解析（v0.5.12 起为唯一审批配置）：优先直读 dataDir/config.json 的
@@ -185,7 +125,7 @@ function resolveApprovalTimeoutMs(cfg) {
   return 0; // 快照缺失/非数字/0/负数：禁用超时拒绝（0，调用方判断）
 }
 
-// nodePath 解析（同 resolveModel 的「配置单一事实源」哲学，补齐直读兜底）：优先直读
+// nodePath 解析（「配置单一事实源」哲学，补齐直读兜底）：优先直读
 // dataDir/config.json 的 global.nodePath（设置界面改动即时生效；Agent 直改文件同样生效），
 // 无则回退配置快照/空。未配置时报「node 可执行文件不存在」引导填写。
 function resolveNodePath(cfg) {
@@ -605,12 +545,6 @@ async function ensureWebHost(cfg) {
     throw new Error(`dsh 包未就绪：${cliBin} 不存在。轻量分发形态请在插件数据目录 dsh-pkg 执行 npm ci（部署目录需含 package.json + package-lock.json，详见技能 dsh-hanako/SKILL.md 依赖自主部署章节）；现役 zip 形态请确认插件目录（${pkgDir}）node_modules 解压完整`);
   }
   const hostProvider = resolveHostProvider(cfg);
-  const apiKey = resolveApiKey(cfg);
-  // v0.9.3: hostProvider 开启时凭据由 Hana 宿主 provider 提供（provider-catalog.json），
-  // 不要求 DEEPSEEK_API_KEY；仅关闭 hostProvider（官方 API 路线）时才强制要求 key。
-  if (!apiKey && !hostProvider.enabled) {
-    throw new Error("找不到 DEEPSEEK_API_KEY：请在插件设置中配置 apiKey（配置后需重启 Hana 生效），或把 key 写入插件数据目录 dsh-home/.credentials.yaml（也可用 ~/.dsh/.credentials.yaml）；或开启 hostProvider（默认开）由 Hana 宿主 provider 提供凭据");
-  }
 
   const dshHome = join(cfg.dataDir, "dsh-home");
   // spawn 的 cwd 必须是已存在目录（无效 cwd 会让 Node 报误导性的 ENOENT）
@@ -619,11 +553,10 @@ async function ensureWebHost(cfg) {
   // v0.5.11: 会话全文搜索 overlay（dsh 默认 openAt: never 禁用搜索，需 --patch 覆盖为 first-search）
   // v0.8.1: 主题注入 overlay；v0.9.3: 宿主 provider 跟随 overlay——三份 patch 合并为
   // config/dsh-hanako.patch.yml.tpl 单一模板：段1 session-query 静态配置块 + 段2 theme
-  // insert + 段3 provider insert（条件段）。cordis 插件从安装目录 assets/dsh-cordis 加载
-  // （file:// URL），patch 含机器绝对路径，启动前渲染模板（占位符→实际路径）到数据目录
-  // dsh-hanako.patch.generated.yml；launcher flag（--profile/--patch）必须位于应用参数
-  // （--port）之前。hostProvider.enabled=false 时剔除段3（关闭宿主 provider = 官方 API
-  // 路线，不挂载 dsh-hana-provider 插件），只保留段1+段2。模板缺失/渲染失败时降级：
+  // insert + 段3 provider insert（v0.9.5 起恒渲染：hostProvider 恒开跟随宿主，无关闭选项）。
+  // cordis 插件从安装目录 assets/dsh-cordis 加载（file:// URL），patch 含机器绝对路径，
+  // 启动前渲染模板（占位符→实际路径）到数据目录 dsh-hanako.patch.generated.yml；launcher
+  // flag（--profile/--patch）必须位于应用参数（--port）之前。模板缺失/渲染失败时降级：
   // 回退挂静态 session-query.patch.yml（保底搜索），再缺失则不挂任何 patch 记 warn，
   // 均不阻断 dsh 启动。
   const patchFiles = [];
@@ -640,12 +573,6 @@ async function ensureWebHost(cfg) {
       .split("{{MODELS_PATH}}").join(hostProvider.modelsPath)
       .split("{{CATALOG_PATH}}").join(hostProvider.catalogPath)
       .split("{{DSH_PKG_DIR}}").join(cfg.dshPkgDir || resolveDshPkgDir(cfg));
-    // v0.9.3: 段3 条件剔除——按模板内 <<< provider-section-begin/end >>> 标记行做文本
-    // 裁剪（含两标记行本身；.* 容忍标记行尾随说明注释；标记缺失则裁剪不命中、段3保留，
-    // 模板单一事实源保证标记常在）
-    if (!hostProvider.enabled) {
-      content = content.replace(/^# <<< provider-section-begin >>>.*\r?\n[\s\S]*?^# <<< provider-section-end >>>.*\r?\n/m, "");
-    }
     writeFileSync(gen, content, "utf8");
     return gen;
   };
@@ -669,13 +596,12 @@ async function ensureWebHost(cfg) {
   const child = spawn(nodePath, [cliBin, "--profile", "web", ...patchArgs, "--port", String(port)], {
     cwd: cfg.dataDir,
     stdio: ["ignore", "pipe", "pipe"],
-    // v0.9.3: hostProvider 开启时不注入 DEEPSEEK_API_KEY（凭据由 dsh-hana-provider
-    // 插件直读宿主 provider-catalog.json）；关闭时保持旧行为（官方 API + env key）
+    // v0.9.5: 恒不注入 API Key 环境变量——凭据由 dsh-hana-provider 插件直读
+    // 宿主 provider-catalog.json（dsh models 页/任务均走 Hana 宿主 provider）
     env: {
       ...process.env,
       DSH_HOME: dshHome,
       DSH_TELEMETRY_DISABLED: "1",
-      ...(hostProvider.enabled ? {} : { DEEPSEEK_API_KEY: apiKey }),
     },
     windowsHide: true,
   });
@@ -736,7 +662,6 @@ getSingleton().startWebHost = async function startWebHostFromPlugin(ctxConfig, c
   getSingleton().dataDir = cfg.dataDir;
   loadOps();
   if (!cfg.dshPkgDir) cfg.dshPkgDir = resolveDshPkgDir(cfg);
-  cfg.apiKey = cfg.apiKey || "";
   try {
     await ensureWebHost(cfg);
     return true;
@@ -1030,12 +955,11 @@ getSingleton().detectNodeCandidates = detectNodeCandidates;
 // URL 缓存读到旧模块，见文件头注释；与 index.js 经单例取 closeProcess 同一套纪律）。
 // web host 未就绪时逐项检查：① nodejs 配置（resolveNodePath + existsSync）
 // ② dsh 依赖（resolveDshPkgDir + cliBin 存在性）③ DSH 进程状态（单例 web /
-// webLastError / stderr 尾部）。只回布尔与截断文本，不泄漏 apiKey 明文；单例/字段
-// 缺失（冷启动、web 从未拉起）全部容错，本函数永不抛异常。
+// webLastError / stderr 尾部）。只回布尔与截断文本；单例/字段缺失（冷启动、
+// web 从未拉起）全部容错，本函数永不抛异常。
 export function collectWebDiagnostics(cfg = {}) {
   const out = {
     port: Number(cfg.webPort) || 3080,
-    apiKey: { configured: false }, // 敏感：只回「已配置/未配置」布尔，不回明文
     checks: [],
   };
   try {
@@ -1046,7 +970,6 @@ export function collectWebDiagnostics(cfg = {}) {
     // v0.8.8: 不再自动触发运行级检测（去掉 maybeTriggerDepsSmoke）——检测改为「进标签页
     // 自动一次 + 手动「检测依赖」按钮」，经 GET /webui/verify-deps 路由驱动；g.depsSmoke
     // 只存最近一次检测结果供诊断展示（不随 3s 轮询重复 spawn）。
-    out.apiKey.configured = Boolean(resolveApiKey(diagCfg));
     out.checks.push(buildNodeDiagCheck(g, diagCfg));
     out.checks.push(buildDepsDiagCheck(g, diagCfg));
     out.checks.push(buildProcessDiagCheck(g, out));
@@ -1243,15 +1166,15 @@ function buildProcessDiagCheck(g, out) {
     check.detail = lastError
       ? "启动失败：" + lastError
       : "进程已退出（code=" + (exitCode ?? "?") + "）" + (stderr ? "\n[stderr 尾部] " + stderr : "");
-    check.fix = pickProcessFix(lastError, stderr, port, out.apiKey.configured);
+    check.fix = pickProcessFix(lastError, stderr, port);
   }
   return check;
 }
 
-/** 进程失败修复指引：按失败原因内容匹配（node / 依赖 / apiKey / 端口占用），兜底通用建议。
+/** 进程失败修复指引：按失败原因内容匹配（node / 依赖 / 端口占用），兜底通用建议。
  * 同时匹配 webLastError 与 stderr 尾部——端口占用等错误常只出现在 stderr（进程退出时
  * webLastError 可能未携带 stderr 尾部，见「进程已退出」分支）。 */
-function pickProcessFix(lastError, stderr, port, apiKeyConfigured) {
+function pickProcessFix(lastError, stderr, port) {
   const text = (lastError || "") + "\n" + (stderr || "");
   if (/node 可执行文件不存在|nodePath/i.test(text)) {
     return "按上方「Node.js 配置」项修复（在插件设置中配置 node.exe 路径），改后重启 Hana";
@@ -1259,14 +1182,8 @@ function pickProcessFix(lastError, stderr, port, apiKeyConfigured) {
   if (/dsh 包未就绪|cliBin|npm ci/i.test(text)) {
     return "按上方「dsh 依赖安装」项修复（数据目录 dsh-pkg 执行 npm ci，完成后自动验证）";
   }
-  if (/DEEPSEEK_API_KEY|api\s?key/i.test(text)) {
-    return "检查 apiKey 是否配置（插件设置「DeepSeek API Key」，或写入插件数据目录 dsh-home/.credentials.yaml / ~/.dsh/.credentials.yaml），改后重启 Hana";
-  }
   if (/EADDRINUSE|address already in use|占用|bind/i.test(text)) {
     return "检查端口 " + port + " 是否被占用（释放后重启 Hana）";
-  }
-  if (!apiKeyConfigured) {
-    return "建议检查 apiKey 是否配置（dsh 走 DeepSeek 官方 API，无 key 时启动会失败），改后重启 Hana";
   }
   return "检查上方 Node.js 配置与依赖项；仍失败请重启 Hana 后重试";
 }
@@ -1420,14 +1337,15 @@ function cacheToolCall(opId, payload) {
 // ---- 任务提交：同步注册 op + 后台执行（不 await）----
 // 返回 { opId, promise }：opId 立即可用（构造卡片 route / deferred taskId），
 // promise 在后台跑：session.create → events.mux 订阅 → session.prompt → 事件循环 → 终态。
-function submitTask(cfg, { task, cwd, timeoutMs = 600000, signal, bus, sessionPath, agentPreset, reasoningEffort, sessionId }) {
+function submitTask(cfg, { task, cwd, timeoutMs = 600000, signal, bus, sessionPath, agentPreset, reasoningEffort, sessionId, provider, model }) {
   const taskText = String(task ?? "").trim();
   if (!taskText) throw new Error("task 不能为空");
 
   // agent 预设解析须在 startOperation 之前完成：op 快照要带 agentPreset（卡片对账可见）
   const preset = agentPreset ?? resolveAgentPreset(cfg);
-  // reasoningEffort 同样在 startOperation 之前解析：op 快照要带该字段（卡片对账可见）
-  const effort = reasoningEffort ?? resolveReasoningEffort(cfg);
+  // reasoningEffort 同样在 startOperation 之前解析：op 快照要带该字段（卡片对账可见）。
+  // v0.9.5: 只取工具显式参数（全局配置已移除），不传为 null（由 dsh 默认处理）。
+  const effort = resolveReasoningEffort(reasoningEffort);
   // resume 会话解析同样在 startOperation 之前完成：op 快照要带 resumeSessionId（卡片对账可见，值为 null 或 sessionId）
   const resumeSessionId = String(sessionId ?? "").trim() || null;
 
@@ -1468,29 +1386,35 @@ function submitTask(cfg, { task, cwd, timeoutMs = 600000, signal, bus, sessionPa
     // 即 dsh 会话落盘 projectKey 所用的 cwd；op.cwd 在 resume 时可能不一致，不能拿来构造 sessionRecord 链接）
     endOperation(opId, { sessionId, sessionCwd: createPayload.cwd });
 
-    // 1.5 模型选择（dsh 会话级 call config：provider/model 经 session.selectModel 切换）
-    // provider：hostProvider 开时用 Hana 宿主 provider（resolveHostTaskProvider，显式配置
-    // taskProvider 优先，否则取第一个有凭据的），关时保持旧行为 deepseek-official（官方
-    // API 路线）；模型名 pass-through 直传。显式设置保证「配置的模型就是实际运行的模型」。
-    const model = resolveModel(cfg);
-    const hostProvider = resolveHostProvider(cfg);
-    const taskProvider = hostProvider.enabled ? resolveHostTaskProvider(hostProvider) : "deepseek-official";
-    if (!taskProvider) {
-      throw new Error("hostProvider 开启但无法确定任务 provider：请在插件设置中配置 hostProvider.taskProvider，或确认宿主 models.json/provider-catalog.json 存在且有凭据的 provider");
-    }
-    // selectModel：effort 按用户配置传递（dsh_run 显式 effort / 全局 reasoningEffort）。
-    // hostProvider 开时模型来自 Hana 宿主：部分模型（如 sensenova 的 deepseek-v4-flash，
-    // reasoning:false）不接受任何 reasoningEffort，传了会被拒（model-unavailable）——
-    // 捕获后降级不带 effort 重试（该模型天然不思考，不传即不思考）；其余模型
-    // （agnes/deepseek 等）按显式 effort 生效（off 即真关思考）。
-    const selectModelPayload = { sessionId, provider: taskProvider, model, ...(effort ? { reasoningEffort: effort } : {}) };
-    try {
-      await callUnary(base, "session.selectModel", selectModelPayload);
-    } catch (err) {
-      if (hostProvider.enabled && String(err?.message || "").includes("model-unavailable")) {
-        await callUnary(base, "session.selectModel", { sessionId, provider: taskProvider, model });
-      } else {
-        throw err;
+    // 1.5 模型选择：仅当工具显式传 provider/model/effort 时才 selectModel（显式覆盖
+    // dsh 默认模型）；都不传时不 selectModel，任务直接用 dsh 默认模型
+    // （settings.yaml agent-default-model）。dsh 的 selectModel 会把所选模型写回全局
+    // 默认 settings.yaml——显式指定即成为新默认（注意：任何 selectModel(sensenova)
+    // 都会把默认覆盖回 sensenova，要长期固定 deepseek 需在 dsh models 页设置默认）。
+    const explicitProvider = String(provider ?? "").trim();
+    const explicitModel = String(model ?? "").trim();
+    if (explicitProvider || explicitModel || effort) {
+      // 只传其一/只传 effort 时，另一侧从 dsh 默认模型（settings.yaml）补齐
+      let sp = explicitProvider;
+      let sm = explicitModel;
+      if (!sp || !sm) {
+        const dm = readDshDefaultModel(join(cfg.dataDir, "dsh-home"));
+        sp = sp || (dm && dm.provider) || "";
+        sm = sm || (dm && dm.model) || "";
+      }
+      if (!sp || !sm) {
+        throw new Error("dsh_run 需要 provider/model：请显式传 provider/model，或先在 dsh models 页设置默认模型（settings.yaml agent-default-model）");
+      }
+      const selectModelPayload = { sessionId, provider: sp, model: sm, ...(effort ? { reasoningEffort: effort } : {}) };
+      try {
+        await callUnary(base, "session.selectModel", selectModelPayload);
+      } catch (err) {
+        // 显式 effort 被拒（如 reasoning:false 模型不接受 effort）：降级不带 effort 重试
+        if (effort && String(err?.message || "").includes("model-unavailable")) {
+          await callUnary(base, "session.selectModel", { sessionId, provider: sp, model: sm });
+        } else {
+          throw err;
+        }
       }
     }
 
@@ -1519,6 +1443,13 @@ function submitTask(cfg, { task, cwd, timeoutMs = 600000, signal, bus, sessionPa
             if (!d) continue;
             if (ev.type === "assistant/chunk") {
               sawChunk = true;
+              // v0.9.4.1: 错误透传——finish 帧 reason=error（如 429/400）直接带真实信息
+              const c = d?.chunk;
+              if (c?.type === "finish" && c.reason?.kind === "error") {
+                const f = c.reason.failure || c.reason.error || {};
+                outcome = { stopReason: "error", failure: { message: f.message || c.reason.message || "模型调用失败（无详情）" } };
+                return;
+              }
               const t = textFromChunk(d);
               if (t) { collected += t; updateOpOutput(collected); }
             } else if (ev.type === "assistant/message") {
@@ -1549,6 +1480,8 @@ function submitTask(cfg, { task, cwd, timeoutMs = 600000, signal, bus, sessionPa
               else if (kind === "max-tokens") outcome = { stopReason: "max_tokens" };
               else if (kind === "aborted") outcome = { stopReason: "aborted" };
               else if (reason?.failure) outcome = { stopReason: "error", failure: reason.failure };
+              else if (reason?.error) outcome = { stopReason: "error", failure: { message: reason.error.message || "模型调用失败（无详情）" } };
+              else if (kind === "error") outcome = { stopReason: "error", failure: { message: "dsh 任务失败（无错误详情）" } };
               else outcome = { stopReason: kind || "end_turn" };
               return; // 一次 prompt = 一个 turn，turn/end 即终态
             }
@@ -1787,7 +1720,10 @@ export const description =
   "回调压缩（PTC 式）：异步完成回调默认只带最终结论摘要（callbackMode=summary，省上下文），完整输出在卡片 op 快照与 dsh web UI 可查；设 callbackMode=full 可回传全量。" +
   "审批：dsh agent 请求越界权限时任务挂起，插件经 deferred 通道发来 dsh-approval 通知（带 opId/approvalId/理由/命令参数原文），用 dsh_approve 工具应答（allowed-once/rejected）；无人应答超时自动拒绝（approvalTimeoutMs，0=禁用）；也可在 dsh Web UI 人工处理。" +
   "agentPreset：任务可指定 agent 预设模式（standard/code/cordis/minimal），缺省用插件配置。" +
-    "reasoningEffort：任务可指定推理强度（off/high/max），缺省用插件配置。" +
+    "reasoningEffort：任务可显式指定推理强度（off/high/max）；不传时不指定，由 dsh 默认处理（通常 high）。" +
+    "provider/model：任务可显式指定模型（如 provider=deepseek model=deepseek-v4-flash），" +
+    "传了则 selectModel 覆盖 dsh 默认（dsh 会把所选模型写回全局默认 settings.yaml，显式指定即成为新默认）；" +
+    "都不传则任务直接用 dsh 默认模型（settings.yaml agent-default-model），不 selectModel。" +
     "resume：传 sessionId 复用已有会话继续任务（agent 保留上文），省上下文重建。resume 时以会话已有 cwd 为准（自动查询沿用，无需传 cwd）。";
 
 export const parameters = {
@@ -1817,7 +1753,15 @@ export const parameters = {
       reasoningEffort: {
         type: "string",
         enum: ["off", "high", "max"],
-        description: "推理强度（DeepSeek adapter）：off=关闭思考 / high=高（默认）/ max=最高。缺省用插件配置 reasoningEffort。",
+        description: "推理强度（DeepSeek adapter）：off=关闭思考 / high=高 / max=最高。工具显式传时才指定（v0.9.5 起无全局配置）；不传时由 dsh 默认处理（通常 high）。",
+      },
+      provider: {
+        type: "string",
+        description: "显式指定任务 provider（如 deepseek/sensenova/agnes）。与 model 一起传时 selectModel 覆盖 dsh 默认模型；只传一个时另一侧从 settings.yaml 默认模型补齐。都不传时不 selectModel，任务用 dsh 默认。",
+      },
+      model: {
+        type: "string",
+        description: "显式指定任务模型 id（如 deepseek-v4-flash）。与 provider 一起传时 selectModel 覆盖 dsh 默认模型；都不传时不 selectModel，任务用 dsh 默认。",
       },
       sessionId: {
         type: "string",
@@ -1831,7 +1775,7 @@ export const sessionPermission = {
   kind: "external_side_effect",
   describeSideEffect: () => ({
     kind: "external_llm_api",
-    summary: "把任务交给 DeepSeek Harness（dsh web host）执行：调用 DeepSeek 官方 API（消耗 API 额度），dsh agent 可能在指定 cwd 内读写文件、运行沙箱命令",
+    summary: "把任务交给 DeepSeek Harness（dsh web host）执行：经 Hana 宿主 provider（sensenova/agnes/deepseek）消耗模型额度，dsh agent 可能在指定 cwd 内读写文件、运行沙箱命令",
     ruleId: "dsh-hanako-external-llm",
   }),
 };
@@ -1860,15 +1804,13 @@ async function doExecute(input, ctx) {
     nodePath: resolveNodePath(cfg),
     dshPkgDir: cfg.dshPkgDir,
     dataDir: cfg.dataDir,
-    apiKey: cfg.apiKey,
-    model: cfg.model,
     agentPreset: cfg.agentPreset,
     reasoningEffort: cfg.reasoningEffort,
     webPort: cfg.webPort,
     // v0.5.12: 审批配置收敛为唯一键 approvalTimeoutMs（超时兜底，0=禁用；manifest 默认 30000）
     approvalTimeoutMs: cfg.approvalTimeoutMs,
   };
-  const taskParams = { task: input.task, cwd, timeoutMs, signal: ctx.signal, bus: ctx.bus ?? getSingleton().bus, sessionPath: ctx.sessionPath, agentPreset: input.agentPreset, reasoningEffort: input.reasoningEffort, sessionId: input.sessionId };
+  const taskParams = { task: input.task, cwd, timeoutMs, signal: ctx.signal, bus: ctx.bus ?? getSingleton().bus, sessionPath: ctx.sessionPath, agentPreset: input.agentPreset, reasoningEffort: input.reasoningEffort, sessionId: input.sessionId, provider: input.provider, model: input.model };
 
   const wait = input.wait === true;
   const { opId, promise } = submitTask(taskCfg, taskParams);

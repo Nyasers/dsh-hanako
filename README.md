@@ -2,25 +2,27 @@
 
 插件 id：`dsh-hanako`。把 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（dsh）接进 Hana，作为进程外 subagent 使用。任务执行走 **dsh web host**（`--profile web`），dsh 官方 Web UI 以 **DSHana 标签页**内嵌在 Hana 顶部，可见全部任务会话；账本与依赖锁进插件数据目录。
 
-## 安装（人类版，四步）
+## 安装（人类版，三步）
 
 1. **拖入 zip 包**：把插件的 release zip（`dsh-hanako-v<version>.zip`，从 GitHub Releases 下载）拖进 Hana 插件安装界面（或解压到插件目录），插件即完成装载
-2. **配置 apiKey**：打开插件设置（DSHana），在「DeepSeek API Key」填入你的 key（设置界面可见，Agent 不代填）
-3. **让 agent 完成安装**：对你的 Agent 说「帮我完成 DSHana 的安装」。Agent 会按插件自带技能完成剩余步骤：探测本机 node 路径并写入配置、在插件数据目录 npm ci 部署依赖（约 30~45 秒，无人值守）、把默认工作目录设为你的项目目录。依赖部署也可**页面自装**：打开 DSHana 标签页，在未就绪诊断的 deps 卡片点「安装依赖」（v0.8.6+，无需 Agent 介入）
-4. **重启 Hana（可选）**：配置写入 config.json 后即被**现读**——t1「检测 Node」与 t3「手动启动 web host」都直读 config.json（启动链路 resolveNodePath → spawn），Agent 直写配置后**无需重启**即可用新 node 拉起；仅旧 web host 进程存活（g.web.ready）时需先杀进程或重启 Hana。重启后让 Agent 跑一个最小 `dsh_run` 试任务验证，即可正常派活
+2. **让 agent 完成安装**：对你的 Agent 说「帮我完成 DSHana 的安装」。Agent 会按插件自带技能完成剩余步骤：探测本机 node 路径并写入配置、在插件数据目录 npm ci 部署依赖（约 30~45 秒，无人值守）、把默认工作目录设为你的项目目录。依赖部署也可**页面自装**：打开 DSHana 标签页，在未就绪诊断的 deps 卡片点「安装依赖」（v0.8.6+，无需 Agent 介入）
+3. **重启 Hana（可选）**：配置写入 config.json 后即被**现读**——t1「检测 Node」与 t3「手动启动 web host」都直读 config.json（启动链路 resolveNodePath → spawn），Agent 直写配置后**无需重启**即可用新 node 拉起；仅旧 web host 进程存活（g.web.ready）时需先杀进程或重启 Hana。重启后让 Agent 跑一个最小 `dsh_run` 试任务验证，即可正常派活
+
+**无需配置 API Key / 模型**（v0.9.5+）：dsh 凭据由 dsh-hana-provider 插件直读 Hana 宿主 `provider-catalog.json`，模型跟随宿主 `models.json`（dsh models 页设置默认）。任务模型默认 = dsh 默认模型（`settings.yaml` 的 `agent-default-model`），`dsh_run` 工具参数 `provider` / `model` / `reasoningEffort` 可显式覆盖。
 
 安装遇到问题，把报错丢给 Agent 即可（技能里有完整排错表）。
 
 ## 工具
 
-`dsh_run(task, cwd?, timeout?, wait?, agentPreset?, reasoningEffort?, sessionId?)`
+`dsh_run(task, cwd?, timeout?, wait?, agentPreset?, reasoningEffort?, provider?, model?, sessionId?)`
 
 - `task`：任务描述，作为用户消息发给 dsh 编码 agent
 - `cwd`：沙箱工作目录（bash 与文件系统工具的活动范围），默认 `defaultCwd`；resume 时（传了 `sessionId`）可省略，沿用会话已有 cwd
 - `timeout`：超时秒数，默认 `defaultTimeoutMs`
 - `wait`：false（默认）= 异步，立即返回，完成后宿主唤醒、结果后台送达；true = 同步等结果直接返回
 - `agentPreset`：agent 预设模式 `standard`（默认）/ `code` / `cordis` / `minimal`，缺省用插件配置
-- `reasoningEffort`：推理强度 `off` / `high`（默认）/ `max`，缺省用插件配置
+- `reasoningEffort`：推理强度 `off` / `high` / `max`，**只接受工具显式参数**（v0.9.5 起无全局配置），不传时由 dsh 默认处理（通常 high）
+- `provider` / `model`：显式指定任务 provider（deepseek/sensenova/agnes）与模型 id。与 model 一起传时 selectModel 覆盖 dsh 默认；只传一个时另一侧从 dsh 默认模型补齐；都不传时不 selectModel，任务直接用 dsh 默认模型（dsh models 页设置的 `agent-default-model`）。**注意**：dsh selectModel 会把所选模型写回全局默认 `settings.yaml`——显式指定即成为新默认，要长期固定某模型请在 dsh models 页设置默认
 - `sessionId`：复用已有 dsh 会话（resume）：传上次任务的 sessionId 在该会话上继续，agent 保留上文（省上下文重建）；目标会话应已空闲。无 sessionId 时新建会话
 
 权限：`external_side_effect`，Auto 模式下调用会送审。
@@ -60,7 +62,7 @@
 
 ## dsh Web UI（DSHana 标签页）
 
-配置 `webPort`（默认 3080）时，**插件加载即拉起** `dsh --profile web`（dsh 官方浏览器 UI：观察任务会话、模型配置、密钥管理），卸载/重载时一并回收。设 `webPort: 0` 可关闭。
+配置 `webPort`（默认 3080）时，**插件加载即拉起** `dsh --profile web`（dsh 官方浏览器 UI：观察任务会话、模型配置——Hana 宿主 provider、会话全文搜索），卸载/重载时一并回收。设 `webPort: 0` 可关闭。
 
 插件顶部 tab 注册页面（manifest `contributes.page`，route `/webui`），iframe 内嵌 `http://127.0.0.1:<webPort>/`：
 
@@ -141,8 +143,8 @@ dsh 的 `/api/events.mux` **要求 WebSocket 升级**：GET 返回 `426 Upgrade 
 
 - **依赖按需部署**：zip 零依赖（约 0.1MB，代码 bundle + 配置 + 技能 + lockfile）。dsh 依赖树（`@deepseek-ai/dsh` + node-pty/koffi 原生模块，约 246MB）由 Agent 部署时 **npm ci 到数据目录 `dsh-pkg/`**（升级安装整体替换插件目录不丢依赖；registry 不通时切镜像 `--registry=https://registry.npmmirror.com`），也可在 DSHana 标签页 deps 卡片点「安装依赖」自动完成（v0.8.6+，命令同上）。解析链：`<dataDir>/dsh-pkg` 优先 → 插件安装目录 `node_modules`（兼容旧形态）。依赖完整性另经**运行级验证**（`node cliBin --version`，v0.8.7+，能跑 = 依赖图完整，防 npm ci 中断/--omit=peer 误用造成的假就绪）
 - **插件本体 rspack bundle**：`index.js` + `tools/*.js` 经 `scripts/build.mjs` 打包，`scripts/pack.mjs` 铺平到标准位置交付（根 `index.js` + `tools/`，无 dist/）。构建工具 @rspack/core 声明为 devDependencies（构建契约，部署 `--omit=dev` 不装）
-- **dsh 启动 patch overlay**：dsh-run.js spawn `dsh --profile web --patch <...> --port <...>`，启动前渲染单一模板 `config/dsh-hanako.patch.yml.tpl` 为机器绝对路径写数据目录 `dsh-hanako.patch.generated.yml`（三段：session-query 全文搜索默认启用 `openAt: first-search` + dsh-hana-theme 主题插件注册 + dsh-hana-provider 宿主 provider 跟随注册）；模板缺失/渲染失败回退静态 `config/session-query.patch.yml`（保底搜索），再缺失不挂 patch 记 warn——patch 缺失时优雅降级不阻断启动
-- **凭据解析**：`resolveApiKey` 优先级 = 宿主注入 `cfg.apiKey` → 直读 `dataDir/config.json` 的 `global.apiKey`（改配置即时生效）→ 文件兜底（dsh-home/.credentials.yaml → ~/.dsh/.credentials.yaml）
+- **dsh 启动 patch overlay**：dsh-run.js spawn `dsh --profile web --patch <...> --port <...>`，启动前渲染单一模板 `config/dsh-hanako.patch.yml.tpl` 为机器绝对路径写数据目录 `dsh-hanako.patch.generated.yml`（三段：session-query 全文搜索默认启用 `openAt: first-search` + dsh-hana-theme 主题插件注册 + dsh-hana-provider 宿主 provider 跟随注册；v0.9.5 起 provider 段**恒渲染**，hostProvider 无关闭选项）；模板缺失/渲染失败回退静态 `config/session-query.patch.yml`（保底搜索），再缺失不挂 patch 记 warn——patch 缺失时优雅降级不阻断启动
+- **凭据与模型跟随**（v0.9.5+）：dsh-hana-provider 插件恒开直读 Hana 宿主 `provider-catalog.json`（凭据）+ `models.json`（模型，fs.watch 热重载），dsh models 页出现 Hana 全部 provider；任务模型默认 = dsh 默认模型（`settings.yaml` 的 `agent-default-model`），`dsh_run` 工具参数 `provider`/`model`/`reasoningEffort` 显式覆盖（显式时 selectModel，dsh 会把所选模型写回全局默认 settings.yaml）
 - **进程单例挂 `globalThis.__dshHanako`**：`index.js` 卸载清理时读取（不 import 插件文件，避免读到旧模块缓存）
 - **宿主 tools 模块缓存**：宿主按插件 id 缓存 tools 模块，**改代码后必须重启 Hana 才加载新 tools**
 
@@ -150,10 +152,9 @@ dsh 的 `/api/events.mux` **要求 WebSocket 升级**：GET 返回 `426 Upgrade 
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
-| `apiKey` | 空 | DeepSeek API Key（插件设置界面填写，Agent 不代填）。安装后必填（无 key web host 起不来）。生效分层：手动启动时经 `resolveApiKey` 解析（插件加载快照 cfg.apiKey 非空优先；为空时直读 config.json/凭据文件，改后无需重启）；诊断层自检布尔直读 config.json 实时 |
-| `model` | `deepseek-v4-flash` | dsh 任务模型 id（provider 固定 deepseek-official，模型名 pass-through 直传）：内置 `deepseek-v4-flash` / `deepseek-v4-pro`，可填其他 DeepSeek 模型 id；改后对新任务立即生效（直读 config.json） |
+| `hostProvider.modelsPath` | `~/.hanako/models.json` | 恒开跟随 Hana 宿主 provider（v0.9.5 起无「关闭」选项）：宿主模型目录文件（只读，dsh models 页显示 Hana 全部 provider）。宿主数据目录迁移后可覆盖 |
+| `hostProvider.catalogPath` | `~/.hanako/provider-catalog.json` | 宿主凭据目录文件（只读，dsh 直读其中的凭据，无需配置 API Key）。宿主数据目录迁移后可覆盖 |
 | `agentPreset` | `standard` | dsh_run 提交任务的默认 agent 预设；工具调用可显式覆盖；改后对新任务立即生效 |
-| `reasoningEffort` | `high` | 默认推理强度：off / high / max；工具调用可显式覆盖 |
 | `approvalTimeoutMs` | `30000` | 审批挂起超过该时长无人应答自动 rejected（应答方失联检测）；0=禁用；改后对新审批立即生效 |
 | `nodePath` | 空 | 启动 web host 的 node.exe（需 Node 24+）。**安装后必填本机 node 路径**（不预设默认值）。生效分层：t1 检测与手动启动（t3）都现读 config.json（resolveNodePath 直读优先）——改后无需重启即可用新 node 拉起；仅旧 web host 进程存活时需先杀进程或重启 |
 | `defaultCwd` | 空 | 默认沙箱工作目录。**安装后建议设为实际项目目录**（为空且未传 cwd 时报 `cwd 不能为空`） |
@@ -171,6 +172,7 @@ dsh 的 `/api/events.mux` **要求 WebSocket 升级**：GET 返回 `426 Upgrade 
 
 ## 版本历史
 
+- **v0.9.5**（2026-08-15）：彻底移除插件自身「填 API Key」「手动设置模型」回退路径——删除 `apiKey` / `model` / `reasoningEffort`（全局）配置与 `.credentials.yaml` / config.json 读取链；`hostProvider` 恒开跟随宿主（无「关闭」选项，不再有官方 API 回退路线），凭据直读宿主 `provider-catalog.json`；任务模型默认 = dsh 默认（settings.yaml `agent-default-model`，dsh models 页设置），`dsh_run` 工具参数 `provider`/`model`/`reasoningEffort` 显式覆盖（显式时 selectModel，dsh 会把所选模型写回全局默认）；诊断不再显示 apiKey。含 0.9.4（dsh-hana-provider 宿主 provider 直通定稿：dsh_run 加入 provider/model/reasoningEffort 工具参数与 selectModel 显式分支、readDshDefaultModel、错误透传）中间迭代
 - **v0.9.3**（2026-08-15）：t1 候选列表体验完善（空候选提示「未检测到本机可用 Node.js」+ 去用户可见文案写死版本号与版本后缀）+ 配置生效文案统一（t1/t2/t3 依赖相关「重启 Hana」全部改为「立即生效/完成后自动验证」，与页面自愈能力对齐）；含 0.9.1（t1 fix 文案去重启）、0.9.2（候选探测扩展 nvm-windows NVM_HOME / volta VOLTA_HOME，FNM_DIR 多版本遍历刻意不实现）中间迭代
 - **v0.9.0**（2026-08-15）：大版本收尾（0.8.3 以来全量迭代，CI 三段式发版，GitHub Release pre-release）——**连接失败自检与自愈体系**（web host 未就绪时标签页自检 t1 node 配置 / t2 dsh 依赖 / t3 进程状态 + 操作按钮进卡片）：t2 依赖运行级验证（`node cliBin --version` 冒烟抓假就绪）+ 页面自装（POST /webui/install-deps，npm ci --omit=dev 部署 dsh-pkg，实时进度）+ 手动启动（POST /webui/start）+ 运行级检测（GET /webui/verify-deps / verify-node，进页自动一次 + 手动按钮）；门禁链 t1→t2→t3（依赖/Node 未通过时下游按钮禁用）；webLastExit 持久退出记录；诊断区主题化（CSS 变量跟随宿主）；配置生效分层（检测层实时 / 启动层现读 config.json / 仅旧进程存活需杀进程）；SKILL 瘦身（15323→7362 字符，移除「构建与打包」章节与构建触发词，定位为排障手册）
 - **v0.8.3**（2026-08-15）：风险审查处置——清理 credentialsPath 死路径（manifest 未声明该设置项，错误提示与注释不再引用；凭据文件兜底收敛为 dsh-home/.credentials.yaml → ~/.dsh/.credentials.yaml）；主题插件 file:// URL 加 encodeURI（路径含空格/特殊字符时不再生成非法 URL，主题加载更稳）

@@ -56,12 +56,12 @@ async function probeHost(port, log) {
 
 /** 读连接失败自检（服务端收集：config.json + 单例 + fs；经单例调用 tools 的收集函数）。
  * 工具模块未加载（冷启动窗口）时返回 null，页面先渲染占位，轮询刷新后填充。
- * 不返回 apiKey 明文（只回布尔）；stderr 尾部在收集端已截断 ≤800。 */
+ * 只回布尔与截断文本（不返回凭据）；stderr 尾部在收集端已截断 ≤800。 */
 function readDiagnostics(ctx, cfg, port) {
   const g = globalThis.__dshHanako;
   if (g && typeof g.collectDiagnostics === "function") {
     try {
-      return g.collectDiagnostics({ dataDir: ctx?.dataDir, nodePath: cfg.nodePath, apiKey: cfg.apiKey, webPort: port });
+      return g.collectDiagnostics({ dataDir: ctx?.dataDir, nodePath: cfg.nodePath, webPort: port });
     } catch (e) {
       ctx.log?.warn?.("[dsh-hanako] 收集连接自检失败:", e?.message || String(e));
       return null;
@@ -112,7 +112,6 @@ body[data-pending="1"] iframe#dsh-frame{display:none}
 .diag-name{font-weight:600;margin-bottom:4px}
 .diag-detail{white-space:pre-wrap;word-break:break-all;color:var(--text-light,#4A433C);margin-bottom:4px}
 .diag-fix{color:var(--accent,#537D96);background:var(--accent-light,rgba(83,125,150,0.08));border-radius:4px;padding:6px 8px}
-.diag-apikey{font-size:12px;color:var(--text-muted,#6B6158);margin-bottom:10px}
 .diag-btn{font-family:inherit;font-size:13px;color:var(--accent,#537D96);background:var(--bg-card,#FBF7EE);border:1px solid var(--accent,#537D96);border-radius:6px;padding:6px 12px;margin-top:6px;cursor:pointer}
 .diag-btn:hover:not(:disabled){color:var(--accent-hover,#3F6179);border-color:var(--accent-hover,#3F6179)}
 .diag-btn:disabled{color:var(--text-muted,#6B6158);border-color:var(--border,#D8CFBE);cursor:default}
@@ -134,7 +133,6 @@ body[data-pending="1"] iframe#dsh-frame{display:none}
     <div class="diag-title">dsh web host 未就绪</div>
     <div class="diag-sub">连接失败自检（每 3 秒自动刷新，就绪后自动进入）</div>
     <ul class="diag-list" id="diag-list"></ul>
-    <div class="diag-apikey" id="diag-apikey"></div>
     <div class="diag-retry">正在重试…</div>
   </div>
 </div>
@@ -188,11 +186,6 @@ window.parent.postMessage({ type: "ready" }, "*");
         + '</div></li>';
     }
     list.innerHTML = html;
-    // API Key 只展示「已配置/未配置」布尔（服务端不回明文）
-    var keyLine = document.getElementById("diag-apikey");
-    if (keyLine && diag.apiKey) {
-      keyLine.textContent = "DeepSeek API Key：" + (diag.apiKey.configured ? "已配置" : "未配置（dsh 走官方 API，无 key 启动会失败）");
-    }
     syncActionButtons(diag); // 按检查项状态刷新卡片内操作按钮（启动中/安装中禁用，失败/缺失可用）
   }
   // v0.8.6: 操作按钮嵌入诊断卡片（data-check 定位，事件委托在列表上）——
@@ -772,7 +765,7 @@ export default function registerWebuiRoutes(app, ctx) {
   // 采用 Node 候选（v0.9.1: t1 候选列表「采用」按钮）——用户确认后写入 config.json：
   // 校验候选（existsSync + await verifyNodeSmoke 语义：node --version + npm-cli.js，可复用
   // g.verifyNode）→ 可用才写 dataDir/config.json 的 global.nodePath（读改写，只动 nodePath，
-  // apiKey 等其他字段原样保留不打印），写入后置空 g.nodeSmoke（强制下次检测重验）。
+  // 其他字段原样保留不打印），写入后置空 g.nodeSmoke（强制下次检测重验）。
   // 返回 {ok, path, version}。单例缺失/无函数/异常一律容错回 {ok:false}，本路由不抛异常。
   app.post("/webui/adopt-node", async (c) => {
     const g = globalThis.__dshHanako;
@@ -804,7 +797,7 @@ export default function registerWebuiRoutes(app, ctx) {
       if (!smoke.ok) {
         return c.json({ ok: false, error: "候选 Node 不可用：" + (smoke.error || "运行级校验失败") });
       }
-      // 写入 config.json（读改写：只动 global.nodePath，其他字段含 apiKey 原样保留）
+      // 写入 config.json（读改写：只动 global.nodePath，其他字段原样保留）
       const cf = join(dataDir, "config.json");
       let conf = { global: {} };
       try {

@@ -1,6 +1,6 @@
 ---
 name: dsh-hanako
-description: "dsh-hanako 插件（把 DeepSeek Harness 接进 Hana 的进程外 subagent 执行器）的配置辅助与使用指南。触发场景：dsh-hanako 刚装好需要配置、配置 nodePath/apiKey/defaultCwd、依赖缺失需要安装（DSHana 标签页自装或 npm ci）、registry 镜像切换、标签页自检/自愈（安装依赖/手动启动/检测依赖）、web host 起不来（先看标签页自检 t1/t2/t3）、发版、dsh 任务失败排查、审批怎么应答、dsh_run/dsh_approve/dsh_cancel/dsh_ops/dsh_search 怎么用、DeepSeek Harness 相关。遇到 dsh-hanako 相关需求优先读本技能再动手。"
+description: "dsh-hanako 插件（把 DeepSeek Harness 接进 Hana 的进程外 subagent 执行器）的配置辅助与使用指南。触发场景：dsh-hanako 刚装好需要配置、配置 nodePath/defaultCwd、依赖缺失需要安装（DSHana 标签页自装或 npm ci）、registry 镜像切换、标签页自检/自愈（安装依赖/手动启动/检测依赖）、web host 起不来（先看标签页自检 t1/t2/t3）、发版、dsh 任务失败排查、审批怎么应答、dsh_run/dsh_approve/dsh_cancel/dsh_ops/dsh_search 怎么用、DeepSeek Harness 相关。遇到 dsh-hanako 相关需求优先读本技能再动手。"
 ---
 
 # dsh-hanako 配置辅助与使用指南
@@ -11,17 +11,15 @@ description: "dsh-hanako 插件（把 DeepSeek Harness 接进 Hana 的进程外 
 
 config.json 由宿主设置界面生成、**不随包分发**；nodePath/defaultCwd 初始为空。按序完成：
 
-**0. 先看现状**：配置在 <宿主插件数据目录>/dsh-hanako/config.json（Windows 常见 %USERPROFILE%\.hanako\plugin-data\dsh-hanako\config.json）。**找不到**（全新安装）：先引导用户在设置界面保存一次（填 apiKey 即触发写入），不要跳过直接写文件（宿主以设置界面为准，直接写可能被覆盖）。
+**0. 先看现状**：配置在 <宿主插件数据目录>/dsh-hanako/config.json（Windows 常见 %USERPROFILE%\.hanako\plugin-data\dsh-hanako\config.json）。**找不到**（全新安装）：先引导用户在设置界面保存一次（任意改动即触发写入），不要跳过直接写文件（宿主以设置界面为准，直接写可能被覆盖）。**无需配置 API Key / 模型**（v0.9.5+）：凭据由 dsh-hana-provider 插件直读宿主 `provider-catalog.json`，模型跟随宿主 `models.json`（dsh models 页设置默认）。
 
 **1. nodePath（必改）**：未填时启动报 `node 可执行文件不存在`。探测本机 Node 24+：`where node`（cmd）/ `Get-Command node`（PowerShell）等。改法：设置界面填 node.exe 绝对路径、Agent 确认后直写 config.json `global.nodePath`，或**标签页 t1 候选列表点「采用」**（未配置时展示本机探测候选，写入 config.json）。**候选探测链按通用性排序**：PATH 最通用（任何 node 管理器/官方安装都会把 node 目录或 shim 放进 PATH）→ Program Files 官方安装 → nvm-windows/fnm/volta 等工具特定变量仅作补充（只认环境变量信号，不假设用户用特定版本管理器）；「采用」时服务端会真实校验 node --version + npm-cli.js。**生效分层**：检测层（标签页 t1）实时生效（resolveNodePath 直读 config.json 优先）；启动层同样现读——t3「手动启动」链路 startWebHostFromPlugin → ensureWebHost → resolveNodePath → spawn，无需重启即用新 node；仅旧进程存活（g.web.ready=true）时先杀进程（任务管理器/Stop-Process）再点，或重启 Hana。
 
-**2. apiKey（必填）**：无 key 启动报 `找不到 DEEPSEEK_API_KEY`。**Agent 不代填**（密钥留日志）——引导用户在设置界面填，Agent 只查「已填/未填」。兜底：写 `dsh-home/.credentials.yaml` 或 `~/.dsh/.credentials.yaml`（解析链 apiKey→dsh-home→~/.dsh）。**生效分层**：手动启动经 resolveApiKey 解析——快照 cfg.apiKey 非空优先（此时改 key 需重启）；为空才直读 config.json/凭据文件（现读，无需重启）。
+**2. defaultCwd（建议）**：为空且未传 cwd 时报 `cwd 不能为空`；设为项目沙箱目录。
 
-**3. defaultCwd（建议）**：为空且未传 cwd 时报 `cwd 不能为空`；设为项目沙箱目录。
+**3. 其余项默认可用**：agentPreset（standard）/ approvalTimeoutMs（30000）/ webPort（3080）/ callbackMode（summary）/ defaultTimeoutMs（600000）。任务模型不需要配置：默认用 dsh 默认模型（settings.yaml `agent-default-model`，dsh models 页设置），`dsh_run` 工具参数 `provider`/`model`/`reasoningEffort` 可显式覆盖（显式时 selectModel，dsh 会把所选模型写回全局默认 settings.yaml——显式指定即成为新默认）。
 
-**4. 其余项默认可用**：model（deepseek-v4-flash）/ agentPreset（standard）/ reasoningEffort（high）/ approvalTimeoutMs（30000）/ webPort（3080）/ callbackMode（summary）/ defaultTimeoutMs（600000）。
-
-**5. 配置生效铁律（检测层实时，启动层现读）**：「改完都要重启 Hana」不成立：t1 检测/t2/t3 状态直读 config.json/单例实时；t3 手动启动链路 resolveNodePath 现读 config.json → spawn（dsh-run.js 557/591 行），直写后无需重启即用新 node；apiKey 同链路（快照非空优先，见 §2）；仅旧进程存活（g.web.ready=true）需先杀进程或重启。
+**4. 配置生效铁律（检测层实时，启动层现读）**：「改完都要重启 Hana」不成立：t1 检测/t2/t3 状态直读 config.json/单例实时；t3 手动启动链路 resolveNodePath 现读 config.json → spawn，直写后无需重启即用新 node；仅旧进程存活（g.web.ready=true）需先杀进程或重启。
 
 ## 依赖自主部署（页面自装首选，Agent npm ci 兜底）
 
@@ -45,7 +43,7 @@ Set-Location <部署目录：插件根或数据目录 dsh-pkg>
 
 ## 主题跟随（v0.8.1）
 
-dsh 偏好 `system`（默认）→ 跟随 Hana 主题（明暗+配色）；`light`/`dark` → dsh 原生配色。切偏好/切主题后**重开标签页生效**。部署要点：`assets/dsh-cordis/dsh-hana-theme/` 随包分发（缺失仅不跟随主题）；patch 模板 `config/dsh-hanako.patch.yml.tpl`（三段合一：session-query + theme + provider）启动前渲染成本机路径写数据目录 `dsh-hanako.patch.generated.yml`（模板缺失/渲染失败回退静态 `session-query.patch.yml`）。排错：不跟随明暗 → 查 settings.yaml `ui-theme.preference` 为 system + /webui 有 color-scheme；配色不注入 → 查 generated patch 与 assets 目录；patch 在仍不注入 → 重启后查 stderr 有无 dsh-hana-theme 加载错误；切换不实时 → 壳页面（webui.js）有 dshHanaTheme message 监听。
+dsh 偏好 `system`（默认）→ 跟随 Hana 主题（明暗+配色）；`light`/`dark` → dsh 原生配色。切偏好/切主题后**重开标签页生效**。部署要点：`assets/dsh-cordis/dsh-hana-theme/` 随包分发（缺失仅不跟随主题）；patch 模板 `config/dsh-hanako.patch.yml.tpl`（三段合一：session-query + theme + provider，v0.9.5 起 provider 段**恒渲染**——hostProvider 恒开跟随宿主，无关闭选项）启动前渲染成本机路径写数据目录 `dsh-hanako.patch.generated.yml`（模板缺失/渲染失败回退静态 `session-query.patch.yml`）。排错：不跟随明暗 → 查 settings.yaml `ui-theme.preference` 为 system + /webui 有 color-scheme；配色不注入 → 查 generated patch 与 assets 目录；patch 在仍不注入 → 重启后查 stderr 有无 dsh-hana-theme 加载错误；切换不实时 → 壳页面（webui.js）有 dshHanaTheme message 监听。
 
 ## 配置完成后验证
 
@@ -58,7 +56,7 @@ dsh 偏好 `system`（默认）→ 跟随 Hana 主题（明暗+配色）；`ligh
 
 | 工具 | 用途 | 关键点 |
 |---|---|---|
-| `dsh_run(task, cwd?, timeout?, wait?, agentPreset?, reasoningEffort?, sessionId?)` | 提交任务 | 默认异步（后台送达）；wait=true 同步；sessionId resume |
+| `dsh_run(task, cwd?, timeout?, wait?, agentPreset?, reasoningEffort?, provider?, model?, sessionId?)` | 提交任务 | 默认异步（后台送达）；wait=true 同步；provider/model 显式覆盖模型（显式时 selectModel，写回 dsh 全局默认）；sessionId resume |
 | `dsh_approve(opId, approvalId, outcome?)` | 应答审批 | allowed-once 放行 / rejected 拒绝；通知带 args 命令原文 |
 | `dsh_cancel(opId)` | 取消任务 | 误派/卡死止损 |
 | `dsh_ops(status?)` | 查任务历史 | 落盘可查；过滤 running/ok/error/interrupted |
@@ -87,13 +85,12 @@ dsh 请求越界权限时任务挂起，插件经 deferred 发 dsh-approval 通�
 |---|---|---|
 | 报 `node 可执行文件不存在` | nodePath 未配置/失效 | 探测并配置（写 config.json 后手动启动/下次工具调用现读生效，无需重启；旧进程存活先杀） |
 | t1「配置存在但不可用」 | node 跑不了/无 npm 分发 | 换完整 node 安装（官方包/fnm）或 Agent 写 config.json；t1 检测实时生效，点「检测 Node」验证后 t3「手动启动」拉起 |
-| 报 `找不到 DEEPSEEK_API_KEY` | apiKey 未填 | 引导填（见 §2），重启或快照为空时现读 |
 | 报 `dsh 包未就绪：...bin.js 不存在` | 依赖缺失 | 首选标签页 deps「安装依赖」；或手动 npm ci（目录需 package.json+lockfile） |
 | deps「存在但依赖不完整：ERR_MODULE_NOT_FOUND」 | 依赖图缺 peer（--omit=peer/中断假就绪） | 点「重新安装依赖」重跑 npm ci（自动重验）；或「检测依赖」重验 |
 | 显示「正在检测依赖完整性…」/「检测中…」 | 运行级验证中（数百 ms~10s） | 等待（进页自动一次）或手动点「检测依赖」 |
 | t3 按钮禁用（msg「依赖未就绪…」） | t2 未过（缺失/验证失败/安装中/检测中） | 先完成 t2 再点「手动启动 web host」 |
 | 升级/重装后 web host 起不来 | 升级清掉插件目录 node_modules | 依赖部署到**数据目录 dsh-pkg/**（升级不丢），页面自装或 npm ci；装完调 dsh_run 重试拉起 |
-| 报 `dsh web 启动超时（...端口未就绪）` | 多为 nodePath/apiKey | 同上；webPort 被占用时改端口 |
+| 报 `dsh web 启动超时（...端口未就绪）` | 多为 nodePath 未配置/失效 | 同上；webPort 被占用时改端口 |
 | bash 报 `E_ACCESSDENIED` | dsh bash 沙箱 Windows 限制 | 改用文件系统工具（write/read/edit） |
 | npm ci 下载失败/超时 | registry 网络 | 切 `--registry=https://registry.npmmirror.com`（页面自装已内置重试），仍失败查代理 |
 | 改了配置/代码不生效 | 宿主 tools 模块缓存 | 重启 Hana |
