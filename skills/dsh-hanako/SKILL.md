@@ -13,7 +13,7 @@ config.json 由宿主设置界面生成、**不随包分发**；nodePath/default
 
 **0. 先看现状**：配置在 <宿主插件数据目录>/dsh-hanako/config.json（Windows 常见 %USERPROFILE%\.hanako\plugin-data\dsh-hanako\config.json）。**找不到**（全新安装）：先引导用户在设置界面保存一次（填 apiKey 即触发写入），不要跳过直接写文件（宿主以设置界面为准，直接写可能被覆盖）。
 
-**1. nodePath（必改）**：未填时启动报 `node 可执行文件不存在`。探测本机 Node 24+：`fnm exec -- node -v` / `where node`（cmd）/ `Get-Command node`（PowerShell），或 %USERPROFILE%\AppData\Roaming\fnm\node-versions\<版本>\installation\node.exe。改法：设置界面填 node.exe 绝对路径，或 Agent 确认后直写 config.json `global.nodePath`。**生效分层**：检测层（标签页 t1）实时生效（resolveNodePath 直读 config.json 优先）；启动层同样现读——t3「手动启动」链路 startWebHostFromPlugin → ensureWebHost → resolveNodePath → spawn，无需重启即用新 node；仅旧进程存活（g.web.ready=true）时先杀进程（任务管理器/Stop-Process）再点，或重启 Hana。
+**1. nodePath（必改）**：未填时启动报 `node 可执行文件不存在`。探测本机 Node 24+：`where node`（cmd）/ `Get-Command node`（PowerShell）等。改法：设置界面填 node.exe 绝对路径、Agent 确认后直写 config.json `global.nodePath`，或**标签页 t1 候选列表点「采用」**（未配置时展示本机探测候选，写入 config.json）。**候选探测链按通用性排序**：PATH 最通用（任何 node 管理器/官方安装都会把 node 目录或 shim 放进 PATH）→ Program Files 官方安装 → nvm-windows/fnm/volta 等工具特定变量仅作补充（只认环境变量信号，不假设用户用特定版本管理器）；「采用」时服务端会真实校验 node --version + npm-cli.js。**生效分层**：检测层（标签页 t1）实时生效（resolveNodePath 直读 config.json 优先）；启动层同样现读——t3「手动启动」链路 startWebHostFromPlugin → ensureWebHost → resolveNodePath → spawn，无需重启即用新 node；仅旧进程存活（g.web.ready=true）时先杀进程（任务管理器/Stop-Process）再点，或重启 Hana。
 
 **2. apiKey（必填）**：无 key 启动报 `找不到 DEEPSEEK_API_KEY`。**Agent 不代填**（密钥留日志）——引导用户在设置界面填，Agent 只查「已填/未填」。兜底：写 `dsh-home/.credentials.yaml` 或 `~/.dsh/.credentials.yaml`（解析链 apiKey→dsh-home→~/.dsh）。**生效分层**：手动启动经 resolveApiKey 解析——快照 cfg.apiKey 非空优先（此时改 key 需重启）；为空才直读 config.json/凭据文件（现读，无需重启）。
 

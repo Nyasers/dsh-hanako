@@ -194,6 +194,8 @@ function getSingleton() {
   g.verifyDeps = verifyDepsSmoke;
   // v0.8.10: Node/npm 运行级可用性检测（node --version + npm-cli.js，结果缓存 g.nodeSmoke）
   g.verifyNode = verifyNodeSmoke;
+  // v0.9.1: Node 候选探测（t1 未配置时的环境变量感知候选，纯 fs existsSync）
+  g.detectNodeCandidates = detectNodeCandidates;
   return g;
 }
 
@@ -890,6 +892,55 @@ async function verifyNodeSmoke(cfg) {
 // 挂单例（getSingleton() 内也有同款赋值，这里显式建立一次）
 getSingleton().verifyNode = verifyNodeSmoke;
 
+// ---- Node 候选探测（v0.9.1: t1 未配置时的环境变量感知候选）----
+// 纯 fs 探测（existsSync），同步、无子进程无网络，可放进诊断轮询。探测链按「通用性」排序，
+// **PATH 最通用**（任何 node 管理器/官方安装都会把 node 目录或 shim 放进 PATH：nvm-windows
+// 的 symlink、fnm 的 shim、scoop 的 shim 都能被 PATH 找到；existsSync 过滤后，「采用」时
+// verifyNodeSmoke 会真实 spawn --version 校验，shim 也能转发到真实 node，校验兜底成立）；
+// ProgramFiles 官方安装次之（官方安装包默认路径，跨工具通用）；工具特定变量层仅作补充
+// （**不假设用户使用特定版本管理器**，只认环境变量信号——环境变量没有的不探测默认安装路径，
+// 保持轻量不猜、不过度设计）。工具层内按常见程度排列：nvm-windows → fnm → volta。
+// 不做 spawn 校验（版本/可用性推迟到「采用」动作时 await verifyNodeSmoke 校验），
+// 避免诊断轮询时批量 spawn 子进程。返回 [{ path, source }]，全空返回 []。
+function detectNodeCandidates(cfg) {
+  const out = [];
+  const push = (p, source) => {
+    if (!p) return;
+    p = String(p);
+    if (!existsSync(p)) return;
+    if (out.some((c) => c.path === p)) return; // 去重（工具特定变量常已含于 PATH，先到先得）
+    out.push({ path: p, source });
+  };
+  // 1. PATH 解析（最通用：任何 node 管理器/官方安装都会把 node 目录或 shim 放进 PATH）
+  const seen = new Set();
+  for (const dir of String(process.env.PATH || "").split(delimiter)) {
+    if (!dir || seen.has(dir)) continue;
+    seen.add(dir);
+    push(join(dir, "node.exe"), "PATH");
+  }
+  // 2. ProgramFiles 官方安装（官方安装包默认路径，npm 随官方安装包分发，跨工具通用）
+  push(join(process.env.ProgramFiles || "C:\\Program Files", "nodejs", "node.exe"), "Program Files");
+  // 3. 工具特定补充层（v0.9.2：nvm-windows → fnm → volta，只认环境变量信号）
+  // 3a. nvm-windows：NVM_HOME（安装目录内 node.exe）+ NVM_SYMLINK（当前版本 symlink）
+  const nvmHome = process.env.NVM_HOME || "";
+  if (nvmHome) push(join(nvmHome, "node.exe"), "nvm-windows");
+  const nvmSym = process.env.NVM_SYMLINK || "";
+  if (nvmSym) push(join(nvmSym, "node.exe"), "nvm-windows");
+  // 3b. fnm：FNM_MULTISHELL_PATH（当前激活版本 shim 目录）。
+  //     FNM_DIR 下的多版本目录遍历（node-versions/<v>/installation/node.exe 取最新）刻意不实现——
+  //     按「轻量、不猜」原则：多版本遍历需读目录，且 PATH 通常已含 fnm shim（3a 前 PATH 层已覆盖）。
+  const fnmShell = process.env.FNM_MULTISHELL_PATH || "";
+  if (fnmShell) push(join(fnmShell, "node.exe"), "fnm 当前版本");
+  // 3c. volta：VOLTA_HOME/bin/node.exe
+  const voltaHome = process.env.VOLTA_HOME || "";
+  if (voltaHome) push(join(voltaHome, "bin", "node.exe"), "volta");
+  // 未实现（注释说明，非 Windows/小众）：nvm-sh 的 NVM_DIR 是 Unix 路径（Windows 场景忽略）；
+  // asdf 等小众管理器无稳定 Windows 环境变量约定，暂不探测。
+  return out;
+}
+// 挂单例（getSingleton() 内也有同款赋值，这里显式建立一次）
+getSingleton().detectNodeCandidates = detectNodeCandidates;
+
 // ---- 连接失败自检（v0.8.3: 插件页 web host 未就绪时的诊断数据源）----
 // 供 routes/webui.js 使用（经单例 globalThis.__dshHanako.collectDiagnostics 挂载，
 // 不静态 import 本模块——Hana 带 ?t= 加载 tools，静态 import 会命中 Node ESM 固定
@@ -950,15 +1001,21 @@ function buildNodeDiagCheck(g, cfg) {
     verifyError,
     verifyVersion,
     verifyAt,
+    candidates: null, // v0.9.1: 未配置时的环境变量感知候选 [{ path, source }]（空则不渲染）
     detail: "",
     fix: "",
   };
   if (!configured) {
     check.detail = "nodePath 未配置（插件设置「Node.js 可执行文件路径」为空）";
-    check.fix = "双路径修复：在插件设置中配置 Node.js 可执行文件路径（node.exe 绝对路径，需 Node 24+）；或让 Agent 协助（探测本机 node → 引导确认 → 写 config.json 的 global.nodePath → 重启 Hana）";
+    check.fix = "双路径修复：在插件设置中配置 Node.js 可执行文件路径（node.exe 绝对路径）；或让 Agent 协助（探测本机 node → 引导确认 → 写 config.json 的 global.nodePath → 立即生效，无需重启）；或点下方候选列表「采用」";
+    // v0.9.1: 环境变量感知候选探测（纯 fs existsSync 同步；探测失败/全空则保持纯提示）
+    try {
+      const cands = detectNodeCandidates(cfg);
+      if (cands.length) check.candidates = cands;
+    } catch { /* 探测失败静默 */ }
   } else if (!exists) {
     check.detail = "配置的路径不存在：" + nodePath;
-    check.fix = "双路径修复：在插件设置中修正 Node.js 可执行文件路径（当前路径无效）；或让 Agent 协助（探测本机 node → 引导确认 → 写 config.json → 重启 Hana）";
+    check.fix = "双路径修复：在插件设置中修正 Node.js 可执行文件路径（当前路径无效）；或让 Agent 协助（探测本机 node → 引导确认 → 写 config.json → 立即生效，无需重启）";
   } else if (!smoke) {
     // 未验证过（进标签页自动检测一次 / 手动「检测 Node」；ok 暂 true）
     check.detail = "已配置且路径存在，点击「检测 Node」验证可用性";
@@ -968,7 +1025,7 @@ function buildNodeDiagCheck(g, cfg) {
   } else if (!smoke.ok) {
     // 配置存在但不可用：node 跑不起来或未带 npm
     check.detail = "nodePath 配置存在但不可用：" + (verifyError ? "\n" + verifyError : "运行级检测失败");
-    check.fix = "修正 Node.js 可执行文件路径（配置的 node 无法运行或未带 npm），改后重启 Hana；或让 Agent 协助（探测本机 node → 引导确认 → 写 config.json → 重启）";
+    check.fix = "修正 Node.js 可执行文件路径（配置的 node 无法运行或未带 npm），修正后立即生效无需重启；或让 Agent 协助（探测本机 node → 引导确认 → 写 config.json → 立即生效）";
   } else {
     check.detail = "已配置且可用（node v" + smoke.version + "，npm 可用）：" + nodePath;
   }
@@ -1030,7 +1087,7 @@ function buildDepsDiagCheck(g, cfg) {
     // 未安装：保持现有文案
     check.detail = "未找到 dsh 包：" + cliBin + " 不存在" + (checked.length > 1 ? "（已检查 " + checked.join("、") + "）" : "");
     if (installError) check.detail += "\n[上次安装失败] " + installError;
-    check.fix = "依赖缺失：点击本卡片「安装依赖」按钮自动在插件数据目录 dsh-pkg 执行 npm ci（约 30-40s）；或确认插件目录 node_modules 解压完整；完成后重启 Hana";
+    check.fix = "依赖缺失：点击本卡片「安装依赖」按钮自动在插件数据目录 dsh-pkg 执行 npm ci（约 30-40s，完成后自动验证）；或确认插件目录 node_modules 解压完整";
   } else if (!smoke) {
     // v0.8.8: 未检测过（进标签页自动检测一次 / 手动「检测依赖」；ok 暂算 installed）
     check.detail = "dsh 包已就绪，点击「检测依赖」验证依赖完整性";
@@ -1040,7 +1097,7 @@ function buildDepsDiagCheck(g, cfg) {
   } else if (!smoke.ok) {
     // 存在但验证失败：依赖图不完整（ERR_MODULE_NOT_FOUND 等真实错误）
     check.detail = "dsh 包存在但依赖不完整：" + (verifyError ? "\n" + verifyError : "运行级验证失败");
-    check.fix = "点击本卡片「重新安装依赖」按钮重新执行 npm ci（自动部署到 dsh-pkg），完成后重启 Hana";
+    check.fix = "点击本卡片「重新安装依赖」按钮重新执行 npm ci（自动部署到 dsh-pkg，完成后自动验证）";
   } else {
     // 存在 + 验证通过：能跑 = 依赖图完整
     check.detail = "dsh 包已就绪（运行级验证通过，版本 v" + smoke.version + "）：" + cliBin;
@@ -1117,7 +1174,7 @@ function pickProcessFix(lastError, stderr, port, apiKeyConfigured) {
     return "按上方「Node.js 配置」项修复（在插件设置中配置 node.exe 路径），改后重启 Hana";
   }
   if (/dsh 包未就绪|cliBin|npm ci/i.test(text)) {
-    return "按上方「dsh 依赖安装」项修复（数据目录 dsh-pkg 执行 npm ci），完成后重启 Hana";
+    return "按上方「dsh 依赖安装」项修复（数据目录 dsh-pkg 执行 npm ci，完成后自动验证）";
   }
   if (/DEEPSEEK_API_KEY|api\s?key/i.test(text)) {
     return "检查 apiKey 是否配置（插件设置「DeepSeek API Key」，或写入插件数据目录 dsh-home/.credentials.yaml / ~/.dsh/.credentials.yaml），改后重启 Hana";
@@ -1171,7 +1228,7 @@ async function callUnary(base, method, payload, signal) {
 // Node 24 内置全局 WebSocket；帧为 JSON，payload 即 MuxFrame。
 async function* openMux(base, signal) {
   if (typeof WebSocket !== "function") {
-    throw new Error("宿主环境无全局 WebSocket，无法订阅 dsh 事件流（需要 Node 22+）");
+    throw new Error("宿主环境无全局 WebSocket，无法订阅 dsh 事件流");
   }
   const url = base.replace(/^http/, "ws") + "/api/events.mux";
   const ws = new WebSocket(url);
