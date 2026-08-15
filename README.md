@@ -170,23 +170,10 @@ dsh 的 `/api/events.mux` **要求 WebSocket 升级**：GET 返回 `426 Upgrade 
 
 ## 版本历史
 
-- **v0.8.10**（2026-08-15）：t1（Node.js 配置）增强——配置存在性之外新增**运行级可用性检测**（`node --version` 可执行 + node 同目录 `npm-cli.js` 存在，verifyNodeSmoke 缓存 g.nodeSmoke + running 防并发，GET /webui/verify-node）；t1 卡片「检测 Node」按钮 + 进标签页自动检测一次；**t1 门禁 t2/t3**（t1 未通过时 t2「安装依赖」/t3「手动启动」禁用，msg「Node.js 不可用，请先修复（设置界面配置或让 Agent 协助）」）；t1 修复双路径（用户设置界面 / Agent 协助写 config.json）
-- **v0.8.9**（2026-08-15）：文档同步——README/SKILL 补全 0.8.3→0.8.8 自检体系说明（标签页自检三项 + 自愈按钮 + 运行级验证 + 页面自装路径）
-- **v0.8.8**（2026-08-15）：自检行为修订——运行级检测改「进标签页自动一次 + 手动「检测依赖」按钮」（移除 maybeTriggerDepsSmoke 轮询/过期自动触发，新增 GET /webui/verify-deps）；npm ci 安装过程显示实时进度（stdout/stderr 流式 → installLog 尾部 + 更新时间，3s 轮询刷新）；t2（依赖）未通过时 t3（进程）启动按钮禁用（msg「依赖未就绪，请先安装/重新安装依赖」，安装中/检测中同样视为未通过）
-- **v0.8.7**（2026-08-15）：依赖运行级完整性验证——`node cliBin --version` 冒烟（沿 import 图加载 cordis 模块树，能跑 = 依赖完整，抓 ERR_MODULE_NOT_FOUND 假就绪），结果缓存 g.depsSmoke + running 防并发；安装成功后自动重验；验证失败 deps 卡片出「重新安装依赖」
-- **v0.8.6**（2026-08-15）：操作按钮嵌入诊断卡片（手动启动/安装依赖在卡片内，事件委托）；deps「安装依赖」按钮自动化 npm ci 部署（installDeps：复制 package.json+lock 到数据目录 dsh-pkg → npm ci --omit=dev → 官方源失败重试 npmmirror → 校验 cliBin），新增 POST /webui/install-deps
-- **v0.8.5**（2026-08-15）：手动启动 web host（POST /webui/start + 卡片按钮）；进程被杀误报修复——webLastExit 持久退出记录（code/signal/时间/stderr）区分「已退出」而非「尚未启动」；诊断区主题化（CSS 变量跟随宿主明暗，删硬编码色板与 prefers-color-scheme）
-- **v0.8.4**（2026-08-15）：连接失败自检——web host 未就绪时标签页显示自检诊断列表（t1 node 配置 / t2 dsh 依赖 / t3 进程状态，每项 ✓/✗ + 详情 + 修复指引），服务端收集（config.json + 单例 + fs）、浏览器端渲染；/webui/health 未就绪时附带 diagnostics；apiKey 只回「已配置/未配置」布尔、stderr 尾部 ≤800 截断
+- **v0.9.0**（2026-08-15）：大版本收尾（0.8.3 以来全量迭代，CI 三段式发版，GitHub Release pre-release）——**连接失败自检与自愈体系**（web host 未就绪时标签页自检 t1 node 配置 / t2 dsh 依赖 / t3 进程状态 + 操作按钮进卡片）：t2 依赖运行级验证（`node cliBin --version` 冒烟抓假就绪）+ 页面自装（POST /webui/install-deps，npm ci --omit=dev 部署 dsh-pkg，实时进度）+ 手动启动（POST /webui/start）+ 运行级检测（GET /webui/verify-deps / verify-node，进页自动一次 + 手动按钮）；门禁链 t1→t2→t3（依赖/Node 未通过时下游按钮禁用）；webLastExit 持久退出记录；诊断区主题化（CSS 变量跟随宿主）；配置生效分层（检测层实时 / 启动层现读 config.json / 仅旧进程存活需杀进程）；SKILL 瘦身（15323→7362 字符，移除「构建与打包」章节与构建触发词，定位为排障手册）
 - **v0.8.3**（2026-08-15）：风险审查处置——清理 credentialsPath 死路径（manifest 未声明该设置项，错误提示与注释不再引用；凭据文件兜底收敛为 dsh-home/.credentials.yaml → ~/.dsh/.credentials.yaml）；主题插件 file:// URL 加 encodeURI（路径含空格/特殊字符时不再生成非法 URL，主题加载更稳）
+- **v0.8.2**（2026-08-15）：文档翻新——README 无版本痕迹化 + 主题跟随章节 + 名称/ID 规范；SKILL 部署运维版（主题排错、config.json 缺失引导）
 - **v0.8.1**（2026-08-15）：主题跟随宿主完整落地——`dsh-hana-theme` cordis 插件（tapIndex 注入 index 响应，安装目录 assets/dsh-cordis file:// 加载，patch 模板渲染注册），宿主声明取色（壳桥 getComputedStyle 读 theme.css 16 变量，随宿主更新、新增主题零适配），72 个 `--dsw-alias-*/--dsw-specific-*` token 映射（视觉主表面 + 遮罩 + 滚动条，功能性颜色保留原生），preference 边界（system 才覆盖，light/dark 原生，加载时读一次 settings.describe），覆盖写 body 层 !important（压 dsh presenter 的 body inline）。生效：切偏好/切主题重开标签页
 - **v0.8.0**（2026-08-15）：DSHana 标签页主题跟随基础版——壳页面按 hana-theme 映射 color-scheme（跨源 iframe 继承 prefers-color-scheme，dsh system 跟随宿主明暗）；升级清依赖事故处置（npm ci 部署 dsh-pkg，升级不丢依赖）；SKILL 排错表新增升级场景
-- **v0.7.9**（2026-08-15）：agnes 审查处置——health 返回结构、轮询 hidden 降频、beforeunload 清理、probeHost 日志
-- **v0.7.8**（2026-08-15）：标签页标题「DSH 任务台」→「DSHana」
-- **v0.7.7**（2026-08-15）：health 轮询 403 修复——页面 URL 带 pluginSurfaceSession，fetch 需回传 `X-Hana-Plugin-Surface-Session` 头
-- **v0.7.6**（2026-08-15）：DSHana 标签页落地——manifest `contributes.page` 注册顶部 tab，route `/webui` iframe 内嵌 dsh Web UI（就绪探测 + 轮询）
-- **v0.7.3**（2026-08-14）：修复 v0.7.2 sessionRecord 链接迁移盲区（存在性校验 + 扫描兜底，找不到时省略链接不阻塞）
-- **v0.7.2**（2026-08-14）：ops.jsonl 终态行不再落盘 output，改存 sessionRecord 链接指向 dsh 会话完整日志（单一事实源）
-- **v0.7.1**（2026-08-14）：op 历史落盘 JSON 改 JSONL（增量追加、防抖、恢复端逐行解析 + opId 去重、旧格式自动迁移）
-- **v0.7.0**（2026-08-14）：改名 **DSHana**——插件 id 改为 `dsh-hanako`，显示名 DSHana，内部单例/日志前缀/ruleId 统一；技能目录随 id 改 `skills/dsh-hanako/`；配置数据目录改 `plugin-data/dsh-hanako/`
-- **v0.6.x**（2026-08-14）：轻量化分化——依赖剥离（npm ci 到数据目录 dsh-pkg，交付物 57MB → 0.1MB）、插件本体 rspack 打包、Agent 自主部署依赖闭环、配置默认值修正（不预设打包者机器路径）
-- **v0.5.x**（2026-08-14）：审批自动化收敛（唯一流程：挂起 → 通知 Agent 附参数原文 → dsh_approve 应答 → 超时自动拒绝）、会话全文搜索（dsh_search）、跨会话内容搜索、首次安装可配置闭环（SKILL 引导）
+- **v0.7.5**（2026-08-14）：版本号迭代（功能见 v0.7.x 早期迭代）
+- **v0.7.4**（2026-08-14）：版本号迭代（功能见 v0.7.x 早期迭代）
