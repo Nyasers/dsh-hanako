@@ -1,0 +1,10 @@
+{
+  "name": "dsh-hana-default-model",
+  "version": "0.9.5",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "cordis": {
+    "name": "dsh-hana-default-model"
+  }
+}

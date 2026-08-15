@@ -551,9 +551,10 @@ async function ensureWebHost(cfg) {
   mkdirSync(cfg.dataDir, { recursive: true });
   const port = Number(cfg.webPort) || 3080;
   // v0.5.11: 会话全文搜索 overlay（dsh 默认 openAt: never 禁用搜索，需 --patch 覆盖为 first-search）
-  // v0.8.1: 主题注入 overlay；v0.9.3: 宿主 provider 跟随 overlay——三份 patch 合并为
+  // v0.8.1: 主题注入 overlay；v0.9.3: 宿主 provider 跟随 overlay——多份 patch 合并为
   // config/dsh-hanako.patch.yml.tpl 单一模板：段1 session-query 静态配置块 + 段2 theme
-  // insert + 段3 provider insert（v0.9.5 起恒渲染：hostProvider 恒开跟随宿主，无关闭选项）。
+  // insert + 段3 provider insert（v0.9.5 起恒渲染：hostProvider 恒开跟随宿主，无关闭选项）
+  // + 段4 default-model insert（v0.9.5：设置页默认模型配置块插件，恒挂载）。
   // cordis 插件从安装目录 assets/dsh-cordis 加载（file:// URL），patch 含机器绝对路径，
   // 启动前渲染模板（占位符→实际路径）到数据目录 dsh-hanako.patch.generated.yml；launcher
   // flag（--profile/--patch）必须位于应用参数（--port）之前。模板缺失/渲染失败时降级：
@@ -566,10 +567,13 @@ async function ensureWebHost(cfg) {
       "file:///" + encodeURI(join(PLUGIN_ROOT, "assets", "dsh-cordis", "dsh-hana-theme", "index.js").replace(/\\/g, "/"));
     const providerPluginFile =
       "file:///" + encodeURI(join(PLUGIN_ROOT, "assets", "dsh-cordis", "dsh-hana-provider", "index.js").replace(/\\/g, "/"));
+    const defaultModelPluginFile =
+      "file:///" + encodeURI(join(PLUGIN_ROOT, "assets", "dsh-cordis", "dsh-hana-default-model", "index.js").replace(/\\/g, "/"));
     const gen = join(cfg.dataDir, "dsh-hanako.patch.generated.yml");
     let content = readFileSync(patchTpl, "utf8")
       .split("{{THEME_PLUGIN_FILE}}").join(themePluginFile)
       .split("{{HANA_PROVIDER_PLUGIN_FILE}}").join(providerPluginFile)
+      .split("{{DEFAULT_MODEL_PLUGIN_FILE}}").join(defaultModelPluginFile)
       .split("{{MODELS_PATH}}").join(hostProvider.modelsPath)
       .split("{{CATALOG_PATH}}").join(hostProvider.catalogPath)
       .split("{{DSH_PKG_DIR}}").join(cfg.dshPkgDir || resolveDshPkgDir(cfg));

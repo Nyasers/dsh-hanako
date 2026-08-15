@@ -1,6 +1,6 @@
 ---
 name: dsh-hanako
-description: "dsh-hanako 插件（把 DeepSeek Harness 接进 Hana 的进程外 subagent 执行器）的配置辅助与使用指南。触发场景：dsh-hanako 刚装好需要配置、配置 nodePath/defaultCwd、依赖缺失需要安装（DSHana 标签页自装或 npm ci）、registry 镜像切换、标签页自检/自愈（安装依赖/手动启动/检测依赖）、web host 起不来（先看标签页自检 t1/t2/t3）、发版、dsh 任务失败排查、审批怎么应答、dsh_run/dsh_approve/dsh_cancel/dsh_ops/dsh_search 怎么用、DeepSeek Harness 相关。遇到 dsh-hanako 相关需求优先读本技能再动手。"
+description: "dsh-hanako 插件（把 DeepSeek Harness 接进 Hana 的进程外 subagent 执行器）的配置辅助与使用指南。触发场景：dsh-hanako 刚装好需要配置、配置 nodePath/defaultCwd、依赖缺失需要安装（DSHana 标签页自装或 npm ci）、registry 镜像切换、标签页自检/自愈（安装依赖/手动启动/检测依赖）、web host 起不来（先看标签页自检 t1/t2/t3）、发版、dsh 任务失败排查、审批怎么应答、dsh_run/dsh_approve/dsh_cancel/dsh_ops/dsh_search 怎么用、默认模型怎么配（dsh 设置页「默认模型」块，provider/model/思考三级联动）、DeepSeek Harness 相关。遇到 dsh-hanako 相关需求优先读本技能再动手。"
 ---
 
 # dsh-hanako 配置辅助与使用指南
@@ -17,7 +17,7 @@ config.json 由宿主设置界面生成、**不随包分发**；nodePath/default
 
 **2. defaultCwd（建议）**：为空且未传 cwd 时报 `cwd 不能为空`；设为项目沙箱目录。
 
-**3. 其余项默认可用**：agentPreset（standard）/ approvalTimeoutMs（30000）/ webPort（3080）/ callbackMode（summary）/ defaultTimeoutMs（600000）。任务模型不需要配置：默认用 dsh 默认模型（settings.yaml `agent-default-model`，dsh models 页设置），`dsh_run` 工具参数 `provider`/`model`/`reasoningEffort` 可显式覆盖（显式时 selectModel，dsh 会把所选模型写回全局默认 settings.yaml——显式指定即成为新默认）。
+**3. 其余项默认可用**：agentPreset（standard）/ approvalTimeoutMs（30000）/ webPort（3080）/ callbackMode（summary）/ defaultTimeoutMs（600000）。任务模型不需要配置：默认用 dsh 默认模型（settings.yaml `agent-default-model`），可在 **dsh 设置页「默认模型」配置块**直接配置（Provider/模型/思考强度三级联动，选项 = dsh 全部可用 provider，保存即生效），`dsh_run` 工具参数 `provider`/`model`/`reasoningEffort` 可显式覆盖（显式时 selectModel，dsh 会把所选模型写回全局默认 settings.yaml——显式指定即成为新默认）。
 
 **4. 配置生效铁律（检测层实时，启动层现读）**：「改完都要重启 Hana」不成立：t1 检测/t2/t3 状态直读 config.json/单例实时；t3 手动启动链路 resolveNodePath 现读 config.json → spawn，直写后无需重启即用新 node；仅旧进程存活（g.web.ready=true）需先杀进程或重启。
 
@@ -43,7 +43,11 @@ Set-Location <部署目录：插件根或数据目录 dsh-pkg>
 
 ## 主题跟随（v0.8.1）
 
-dsh 偏好 `system`（默认）→ 跟随 Hana 主题（明暗+配色）；`light`/`dark` → dsh 原生配色。切偏好/切主题后**重开标签页生效**。部署要点：`assets/dsh-cordis/dsh-hana-theme/` 随包分发（缺失仅不跟随主题）；patch 模板 `config/dsh-hanako.patch.yml.tpl`（三段合一：session-query + theme + provider，v0.9.5 起 provider 段**恒渲染**——hostProvider 恒开跟随宿主，无关闭选项）启动前渲染成本机路径写数据目录 `dsh-hanako.patch.generated.yml`（模板缺失/渲染失败回退静态 `session-query.patch.yml`）。排错：不跟随明暗 → 查 settings.yaml `ui-theme.preference` 为 system + /webui 有 color-scheme；配色不注入 → 查 generated patch 与 assets 目录；patch 在仍不注入 → 重启后查 stderr 有无 dsh-hana-theme 加载错误；切换不实时 → 壳页面（webui.js）有 dshHanaTheme message 监听。
+dsh 偏好 `system`（默认）→ 跟随 Hana 主题（明暗+配色）；`light`/`dark` → dsh 原生配色。切偏好/切主题后**重开标签页生效**。部署要点：`assets/dsh-cordis/dsh-hana-theme/` 随包分发（缺失仅不跟随主题）；patch 模板 `config/dsh-hanako.patch.yml.tpl`（四段合一：session-query + theme + provider + default-model，v0.9.5 起 provider 段**恒渲染**——hostProvider 恒开跟随宿主，无关闭选项；default-model 段恒挂载）启动前渲染成本机路径写数据目录 `dsh-hanako.patch.generated.yml`（模板缺失/渲染失败回退静态 `session-query.patch.yml`）。排错：不跟随明暗 → 查 settings.yaml `ui-theme.preference` 为 system + /webui 有 color-scheme；配色不注入 → 查 generated patch 与 assets 目录；patch 在仍不注入 → 重启后查 stderr 有无 dsh-hana-theme 加载错误；切换不实时 → 壳页面（webui.js）有 dshHanaTheme message 监听。
+
+## 默认模型配置（v0.9.5）
+
+dsh 任务默认模型 = settings.yaml `agent-default-model`（`dsh_run` 不显式传 provider/model 时用）。设置页原生无该段配置 UI（settings.mutate 不可用），由 `dsh-hana-default-model` 插件补：dsh Web UI 左下角齿轮打开设置面板 → 通用设置上方「默认模型」配置块（Provider/模型/思考强度三级联动 + 保存 + 当前值回显），选项 = `llm.models` 权威列表（全部可用 provider 含宿主 sensenova/agnes/deepseek 与 deepseek-official），保存即写 settings.yaml 生效。部署要点：`assets/dsh-cordis/dsh-hana-default-model/` 随包分发（缺失仅设置页无该块，任务默认模型仍可在 dsh 会话模型选择器设置并写回）；patch 段4 注册；路由 `/api/hana-default-model.read` / `.save`。排错：块不出现 → 查 generated patch 段4 与 assets 目录、stderr 有无 dsh-hana-default-model 加载错误；保存失败 → 看块内错误提示（provider/model 空、服务不可用等）。
 
 ## 配置完成后验证
 

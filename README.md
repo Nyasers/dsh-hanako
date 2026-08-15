@@ -8,7 +8,7 @@
 2. **让 agent 完成安装**：对你的 Agent 说「帮我完成 DSHana 的安装」。Agent 会按插件自带技能完成剩余步骤：探测本机 node 路径并写入配置、在插件数据目录 npm ci 部署依赖（约 30~45 秒，无人值守）、把默认工作目录设为你的项目目录。依赖部署也可**页面自装**：打开 DSHana 标签页，在未就绪诊断的 deps 卡片点「安装依赖」（v0.8.6+，无需 Agent 介入）
 3. **重启 Hana（可选）**：配置写入 config.json 后即被**现读**——t1「检测 Node」与 t3「手动启动 web host」都直读 config.json（启动链路 resolveNodePath → spawn），Agent 直写配置后**无需重启**即可用新 node 拉起；仅旧 web host 进程存活（g.web.ready）时需先杀进程或重启 Hana。重启后让 Agent 跑一个最小 `dsh_run` 试任务验证，即可正常派活
 
-**无需配置 API Key / 模型**（v0.9.5+）：dsh 凭据由 dsh-hana-provider 插件直读 Hana 宿主 `provider-catalog.json`，模型跟随宿主 `models.json`（dsh models 页设置默认）。任务模型默认 = dsh 默认模型（`settings.yaml` 的 `agent-default-model`），`dsh_run` 工具参数 `provider` / `model` / `reasoningEffort` 可显式覆盖。
+**无需配置 API Key / 模型**（v0.9.5+）：dsh 凭据由 dsh-hana-provider 插件直读 Hana 宿主 `provider-catalog.json`，模型跟随宿主 `models.json`。任务模型默认 = dsh 默认模型（`settings.yaml` 的 `agent-default-model`），可在 **dsh 设置页「默认模型」配置块**直接配置（Provider/模型/思考强度三级联动，保存即生效，见下文），`dsh_run` 工具参数 `provider` / `model` / `reasoningEffort` 可显式覆盖。
 
 安装遇到问题，把报错丢给 Agent 即可（技能里有完整排错表）。
 
@@ -87,6 +87,15 @@ DSHana 标签内 dsh 主题与宿主 Hana 联动：
 
 **生效时机**：用户切 dsh 偏好或宿主切 Hana 主题后，**重开 DSHana 标签页生效**（主题 CSS 只在打开标签页时拉取一次；重开即拉最新主题，宿主新增/修改主题零适配）。
 
+### 默认模型配置（v0.9.5）
+
+dsh 的 `agent-default-model`（`settings.yaml`）是任务默认模型的事实源——`dsh_run` 不显式传 `provider` / `model` 时用它。dsh 设置页原生没有该段的配置 UI（`settings.mutate` 对 `agent-default-model` 段不可用，「not exposed to configuration clients」），由本插件补一个显式入口：
+
+- **位置**：dsh Web UI 左下角齿轮打开设置面板，**通用设置上方**出现「默认模型」配置块（Provider / 模型 / 思考强度 三级联动下拉 + 保存按钮 + 当前值回显）
+- **选项**：`llm.models` RPC 权威列表——dsh 全部可用 provider（宿主注入的 sensenova/agnes/deepseek 与 dsh 单独配置的 deepseek-official 等）；模型按 provider 联动过滤；思考强度按模型 `reasoning.efforts` 动态填充（off/high/max 或 minimal/low/medium/high 等，无 `reasoning` 的模型不显示思考下拉）
+- **保存即生效**：写 `settings.yaml` 的 `agent-default-model` + 更新内存态，无需重启；此后 `dsh_run` 不显式指定时即用此默认
+- **机制**：`dsh-hana-default-model` cordis 插件经 `dsh-host-webserver` `tapIndex` 注入设置页脚本（检测设置面板模态并插入配置块），注册 `POST /api/hana-default-model.read` / `.save` 两条路由（`webServer.register` exact，经 `agentDefaultModel` 服务读写）
+
 ## 连接失败自检与自愈（v0.8.4+）
 
 web host 未就绪时，DSHana 标签页不再只显示「正在重试…」——未就绪诊断区展示**自检诊断列表**（配色跟随宿主主题的 CSS 变量），逐项检查并给出修复指引，同时保留 3s 轮询（就绪后自动挂载 iframe、诊断区消失）。三项检查（每项 ✓/✗ + 详情 + 修复指引）：
@@ -143,8 +152,9 @@ dsh 的 `/api/events.mux` **要求 WebSocket 升级**：GET 返回 `426 Upgrade 
 
 - **依赖按需部署**：zip 零依赖（约 0.1MB，代码 bundle + 配置 + 技能 + lockfile）。dsh 依赖树（`@deepseek-ai/dsh` + node-pty/koffi 原生模块，约 246MB）由 Agent 部署时 **npm ci 到数据目录 `dsh-pkg/`**（升级安装整体替换插件目录不丢依赖；registry 不通时切镜像 `--registry=https://registry.npmmirror.com`），也可在 DSHana 标签页 deps 卡片点「安装依赖」自动完成（v0.8.6+，命令同上）。解析链：`<dataDir>/dsh-pkg` 优先 → 插件安装目录 `node_modules`（兼容旧形态）。依赖完整性另经**运行级验证**（`node cliBin --version`，v0.8.7+，能跑 = 依赖图完整，防 npm ci 中断/--omit=peer 误用造成的假就绪）
 - **插件本体 rspack bundle**：`index.js` + `tools/*.js` 经 `scripts/build.mjs` 打包，`scripts/pack.mjs` 铺平到标准位置交付（根 `index.js` + `tools/`，无 dist/）。构建工具 @rspack/core 声明为 devDependencies（构建契约，部署 `--omit=dev` 不装）
-- **dsh 启动 patch overlay**：dsh-run.js spawn `dsh --profile web --patch <...> --port <...>`，启动前渲染单一模板 `config/dsh-hanako.patch.yml.tpl` 为机器绝对路径写数据目录 `dsh-hanako.patch.generated.yml`（三段：session-query 全文搜索默认启用 `openAt: first-search` + dsh-hana-theme 主题插件注册 + dsh-hana-provider 宿主 provider 跟随注册；v0.9.5 起 provider 段**恒渲染**，hostProvider 无关闭选项）；模板缺失/渲染失败回退静态 `config/session-query.patch.yml`（保底搜索），再缺失不挂 patch 记 warn——patch 缺失时优雅降级不阻断启动
+- **dsh 启动 patch overlay**：dsh-run.js spawn `dsh --profile web --patch <...> --port <...>`，启动前渲染单一模板 `config/dsh-hanako.patch.yml.tpl` 为机器绝对路径写数据目录 `dsh-hanako.patch.generated.yml`（四段：session-query 全文搜索默认启用 `openAt: first-search` + dsh-hana-theme 主题插件注册 + dsh-hana-provider 宿主 provider 跟随注册 + dsh-hana-default-model 设置页默认模型配置块注册；v0.9.5 起 provider 段**恒渲染**，hostProvider 无关闭选项，default-model 段同样恒挂载）；模板缺失/渲染失败回退静态 `config/session-query.patch.yml`（保底搜索），再缺失不挂 patch 记 warn——patch 缺失时优雅降级不阻断启动
 - **凭据与模型跟随**（v0.9.5+）：dsh-hana-provider 插件恒开直读 Hana 宿主 `provider-catalog.json`（凭据）+ `models.json`（模型，fs.watch 热重载），dsh models 页出现 Hana 全部 provider；任务模型默认 = dsh 默认模型（`settings.yaml` 的 `agent-default-model`），`dsh_run` 工具参数 `provider`/`model`/`reasoningEffort` 显式覆盖（显式时 selectModel，dsh 会把所选模型写回全局默认 settings.yaml）
+- **设置页默认模型配置**（v0.9.5+）：dsh-hana-default-model 插件（tapIndex 注入设置页脚本 + `webServer.register` 两条 `/api/hana-default-model.*` exact 路由）在 dsh 设置面板补上 `agent-default-model` 配置 UI——Provider/模型/思考强度三级联动（选项 = `llm.models` 权威列表），保存经 `agentDefaultModel` 服务写 `settings.yaml` 并更新内存态，立即生效
 - **进程单例挂 `globalThis.__dshHanako`**：`index.js` 卸载清理时读取（不 import 插件文件，避免读到旧模块缓存）
 - **宿主 tools 模块缓存**：宿主按插件 id 缓存 tools 模块，**改代码后必须重启 Hana 才加载新 tools**
 
@@ -172,7 +182,7 @@ dsh 的 `/api/events.mux` **要求 WebSocket 升级**：GET 返回 `426 Upgrade 
 
 ## 版本历史
 
-- **v0.9.5**（2026-08-15）：彻底移除插件自身「填 API Key」「手动设置模型」回退路径——删除 `apiKey` / `model` / `reasoningEffort`（全局）配置与 `.credentials.yaml` / config.json 读取链；`hostProvider` 恒开跟随宿主（无「关闭」选项，不再有官方 API 回退路线），凭据直读宿主 `provider-catalog.json`；任务模型默认 = dsh 默认（settings.yaml `agent-default-model`，dsh models 页设置），`dsh_run` 工具参数 `provider`/`model`/`reasoningEffort` 显式覆盖（显式时 selectModel，dsh 会把所选模型写回全局默认）；诊断不再显示 apiKey。含 0.9.4（dsh-hana-provider 宿主 provider 直通定稿：dsh_run 加入 provider/model/reasoningEffort 工具参数与 selectModel 显式分支、readDshDefaultModel、错误透传）中间迭代
+- **v0.9.5**（2026-08-15）：彻底移除插件自身「填 API Key」「手动设置模型」回退路径——删除 `apiKey` / `model` / `reasoningEffort`（全局）配置与 `.credentials.yaml` / config.json 读取链；`hostProvider` 恒开跟随宿主（无「关闭」选项，不再有官方 API 回退路线），凭据直读宿主 `provider-catalog.json`；任务模型默认 = dsh 默认（settings.yaml `agent-default-model`），`dsh_run` 工具参数 `provider`/`model`/`reasoningEffort` 显式覆盖（显式时 selectModel，dsh 会把所选模型写回全局默认）；**新增 dsh-hana-default-model 插件——dsh 设置页「默认模型」配置块**（Provider/模型/思考强度三级联动，选项 = llm.models 权威列表全部 provider，保存即写 agent-default-model 生效，补上 settings 页缺失的该段配置 UI）；诊断不再显示 apiKey。含 0.9.4（dsh-hana-provider 宿主 provider 直通定稿：dsh_run 加入 provider/model/reasoningEffort 工具参数与 selectModel 显式分支、readDshDefaultModel、错误透传）中间迭代
 - **v0.9.3**（2026-08-15）：t1 候选列表体验完善（空候选提示「未检测到本机可用 Node.js」+ 去用户可见文案写死版本号与版本后缀）+ 配置生效文案统一（t1/t2/t3 依赖相关「重启 Hana」全部改为「立即生效/完成后自动验证」，与页面自愈能力对齐）；含 0.9.1（t1 fix 文案去重启）、0.9.2（候选探测扩展 nvm-windows NVM_HOME / volta VOLTA_HOME，FNM_DIR 多版本遍历刻意不实现）中间迭代
 - **v0.9.0**（2026-08-15）：大版本收尾（0.8.3 以来全量迭代，CI 三段式发版，GitHub Release pre-release）——**连接失败自检与自愈体系**（web host 未就绪时标签页自检 t1 node 配置 / t2 dsh 依赖 / t3 进程状态 + 操作按钮进卡片）：t2 依赖运行级验证（`node cliBin --version` 冒烟抓假就绪）+ 页面自装（POST /webui/install-deps，npm ci --omit=dev 部署 dsh-pkg，实时进度）+ 手动启动（POST /webui/start）+ 运行级检测（GET /webui/verify-deps / verify-node，进页自动一次 + 手动按钮）；门禁链 t1→t2→t3（依赖/Node 未通过时下游按钮禁用）；webLastExit 持久退出记录；诊断区主题化（CSS 变量跟随宿主）；配置生效分层（检测层实时 / 启动层现读 config.json / 仅旧进程存活需杀进程）；SKILL 瘦身（15323→7362 字符，移除「构建与打包」章节与构建触发词，定位为排障手册）
 - **v0.8.3**（2026-08-15）：风险审查处置——清理 credentialsPath 死路径（manifest 未声明该设置项，错误提示与注释不再引用；凭据文件兜底收敛为 dsh-home/.credentials.yaml → ~/.dsh/.credentials.yaml）；主题插件 file:// URL 加 encodeURI（路径含空格/特殊字符时不再生成非法 URL，主题加载更稳）
