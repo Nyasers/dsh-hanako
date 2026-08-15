@@ -45,10 +45,9 @@ const manifestDefaults = (() => {
 })();
 
 // ---- 凭据读取（仅 DEEPSEEK_API_KEY，支持裸值/单双引号值，不解析完整 YAML）----
-// 优先级：配置的 credentialsPath → 插件 DSH_HOME（账本落插件目录原则）→ ~/.dsh 全局。
-function readApiKey(credentialsPath, dataDir) {
+// 优先级：插件 DSH_HOME（账本落插件目录原则）→ ~/.dsh 全局。
+function readApiKey(dataDir) {
   const candidates = [
-    credentialsPath && String(credentialsPath).trim(),
     dataDir && join(dataDir, "dsh-home", ".credentials.yaml"),
     DEFAULT_CREDENTIALS(),
   ].filter(Boolean);
@@ -78,7 +77,7 @@ function resolveApiKey(cfg) {
       if (typeof k === "string" && k) return k;
     }
   } catch { /* 读配置失败忽略 */ }
-  return readApiKey(cfg.credentialsPath, cfg.dataDir);
+  return readApiKey(cfg.dataDir);
 }
 
 // 模型解析（绕宿主配置快照，同 resolveApiKey）：设置界面改的 model 写入
@@ -557,7 +556,7 @@ async function ensureWebHost(cfg) {
   }
   const apiKey = resolveApiKey(cfg);
   if (!apiKey) {
-    throw new Error("找不到 DEEPSEEK_API_KEY：请在插件设置中配置 apiKey（配置后需重启 Hana 生效），或把 key 写入插件数据目录 dsh-home/.credentials.yaml（也可用 ~/.dsh/.credentials.yaml / credentialsPath）");
+    throw new Error("找不到 DEEPSEEK_API_KEY：请在插件设置中配置 apiKey（配置后需重启 Hana 生效），或把 key 写入插件数据目录 dsh-home/.credentials.yaml（也可用 ~/.dsh/.credentials.yaml）");
   }
 
   const dshHome = join(cfg.dataDir, "dsh-home");
@@ -574,7 +573,7 @@ async function ensureWebHost(cfg) {
   const themePatchTpl = join(PLUGIN_ROOT, "config", "hana-theme.patch.yml.tpl");
   if (existsSync(themePatchTpl)) {
     const themePluginFile =
-      "file:///" + join(PLUGIN_ROOT, "assets", "dsh-cordis", "dsh-hana-theme", "index.js").replace(/\\/g, "/");
+      "file:///" + encodeURI(join(PLUGIN_ROOT, "assets", "dsh-cordis", "dsh-hana-theme", "index.js").replace(/\\/g, "/"));
     const gen = join(cfg.dataDir, "hana-theme.patch.generated.yml");
     writeFileSync(gen, readFileSync(themePatchTpl, "utf8").split("{{THEME_PLUGIN_FILE}}").join(themePluginFile), "utf8");
     patchFiles.push(gen);
@@ -1224,7 +1223,6 @@ async function doExecute(input, ctx) {
     nodePath: resolveNodePath(cfg),
     dshPkgDir: cfg.dshPkgDir,
     dataDir: cfg.dataDir,
-    credentialsPath: cfg.credentialsPath,
     apiKey: cfg.apiKey,
     model: cfg.model,
     agentPreset: cfg.agentPreset,

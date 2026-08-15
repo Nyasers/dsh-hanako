@@ -145,6 +145,7 @@ dsh 的 `/api/events.mux` **要求 WebSocket 升级**：GET 返回 `426 Upgrade 
 
 ## 版本历史
 
+- **v0.8.3**（2026-08-15）：风险审查处置——清理 credentialsPath 死路径（manifest 未声明该设置项，错误提示与注释不再引用；凭据文件兜底收敛为 dsh-home/.credentials.yaml → ~/.dsh/.credentials.yaml）；主题插件 file:// URL 加 encodeURI（路径含空格/特殊字符时不再生成非法 URL，主题加载更稳）
 - **v0.8.1**（2026-08-15）：主题跟随宿主完整落地——`dsh-hana-theme` cordis 插件（tapIndex 注入 index 响应，安装目录 assets/dsh-cordis file:// 加载，patch 模板渲染注册），宿主声明取色（壳桥 getComputedStyle 读 theme.css 16 变量，随宿主更新、新增主题零适配），72 个 `--dsw-alias-*/--dsw-specific-*` token 映射（视觉主表面 + 遮罩 + 滚动条，功能性颜色保留原生），preference 边界（system 才覆盖，light/dark 原生，加载时读一次 settings.describe），覆盖写 body 层 !important（压 dsh presenter 的 body inline）。生效：切偏好/切主题重开标签页
 - **v0.8.0**（2026-08-15）：DSHana 标签页主题跟随基础版——壳页面按 hana-theme 映射 color-scheme（跨源 iframe 继承 prefers-color-scheme，dsh system 跟随宿主明暗）；升级清依赖事故处置（npm ci 部署 dsh-pkg，升级不丢依赖）；SKILL 排错表新增升级场景
 - **v0.7.9**（2026-08-15）：agnes 审查处置——health 返回结构、轮询 hidden 降频、beforeunload 清理、probeHost 日志
