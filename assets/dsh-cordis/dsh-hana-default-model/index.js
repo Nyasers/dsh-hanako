@@ -109,14 +109,15 @@ const BRIDGE = `<script id="dsh-hana-default-model">
   }
 
   // 找设置面板：role=dialog + aria-modal + 含「设置/Settings」标题且有 nav（设置页特征）
+  // 热路径（observer 每帧回调）优化：先查 nav（轻量）再聚合文本（较贵）——非设置
+  // 对话框无 nav 直接跳过，不重复扫描
   function findPanel() {
     var dialogs = document.querySelectorAll('[role="dialog"][aria-modal="true"]')
     for (var i = 0; i < dialogs.length; i++) {
       var d = dialogs[i]
+      if (!d.querySelector || !d.querySelector('nav')) continue
       var txt = d.textContent || ''
-      if (txt.indexOf('设置') !== -1 || txt.indexOf('Settings') !== -1) {
-        if (d.querySelector('nav')) return d
-      }
+      if (txt.indexOf('设置') !== -1 || txt.indexOf('Settings') !== -1) return d
     }
     return null
   }
@@ -425,7 +426,7 @@ const BRIDGE = `<script id="dsh-hana-default-model">
     // 放置到正确位置（appendChild 幂等：已在目标父级则不重复放置）
     if (myTab.parentElement !== navList) navList.appendChild(myTab)
     if (myPanel.parentElement !== content) content.appendChild(myPanel)
-    // 新建（新模态）→ 重置未激活态 + 加载数据；复用（同模态重 tick）→ 保持状态不打扰
+    // 新建（新模态）→ 重置未激活态 + 加载数据；复用（同模态重复扫描）→ 保持状态不打扰
     if (fresh) {
       resetTab()
       loadData()
@@ -437,12 +438,14 @@ const BRIDGE = `<script id="dsh-hana-default-model">
     if (myPanel && myPanel.parentElement) myPanel.parentElement.removeChild(myPanel)
   }
 
-  function tick() {
+  // 主检测：查设置面板锚点并挂载（幂等——已挂载/无锚点立即返回），
+  // 供 MutationObserver 即时回调与低频轮询兜底共用
+  function scan() {
     try {
       var panel = findPanel()
       if (panel) mount(panel)
       else unmount()
-    } catch (e) { /* 单轮失败不阻断循环 */ }
+    } catch (e) { /* 单轮失败不阻断 */ }
   }
 
   // document 级点击委托：自己 tab → 激活；分页导航内其他 tab → 停用（让 dsh 接管）
@@ -469,17 +472,20 @@ const BRIDGE = `<script id="dsh-hana-default-model">
     } catch (err) { /* 单次点击处理失败不影响 */ }
   })
 
-  tick()
-  setInterval(tick, 800)
+  // MutationObserver 即时响应为主：设置面板打开的瞬间（navList 出现的第一观察
+  // 回调）同步挂载 tab/面板，无防抖/轮询延迟；回调只做轻量锚点查询，未命中立即
+  // 返回，不重复扫描（findPanel 先查 nav 再聚合文本）
   try {
-    var pending = false
-    var mo = new MutationObserver(function () {
-      if (pending) return
-      pending = true
-      setTimeout(function () { pending = false; tick() }, 200)
-    })
+    var mo = new MutationObserver(scan)
     mo.observe(document.documentElement, { childList: true, subtree: true })
-  } catch (e) { /* 观察器不可用则仅靠轮询 */ }
+  } catch (e) { /* 观察器不可用则仅靠轮询兜底 */ }
+
+  // 低频轮询兜底（1s）：防 observer 漏检/SPA 路由切换/React 异常渲染路径；
+  // 命中已挂载则跳过（幂等保持），正常路径以 observer 即时为准
+  setInterval(scan, 1000)
+
+  // 启动即扫一次（页面加载时设置面板可能已存在——如恢复会话/直接打开）
+  scan()
 })()
 </script>`
 
