@@ -2,7 +2,7 @@
   "manifestVersion": 1,
   "id": "dsh-hanako",
   "name": "DSHana",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "description": "常驻 DeepSeek Harness（dsh）web host（--profile web），向 Agent 提供进程外 subagent 能力：任务经 dsh /api 网关提交（Hana 宿主 provider、沙箱 bash/文件系统、compaction、subagent 级联），DSH_HOME 锁进插件数据目录（账本随插件生命周期），dsh Web UI 天然可见全部任务（可浏览器查看/继续）。默认异步：提交即渲染实时卡片（状态 / 耗时 / 摘要 + 完整输出懒加载），完成后宿主唤醒结果后台送达（PTC 式回调压缩：默认只带最终结论摘要，省上下文）；可 wait=true 同步返回。",
   "author": "Nyaser",
   "minAppVersion": "0.82.0",
@@ -28,41 +28,6 @@
           "title": "Node.js 可执行文件路径",
           "description": "必填：用于启动 dsh web host 的 node.exe 绝对路径（需 Node 24+）。初始为空（config.json 由宿主在设置界面填写后生成，插件包不携带配置、不预设路径），未填时 web host 启动报错，请在设置中填写本机 node 路径（改后重启 Hana 生效）。"
         },
-        "hostProvider": {
-          "type": "object",
-          "properties": {
-            "modelsPath": {
-              "type": "string",
-              "default": "E:\\Hanako\\.hanako\\models.json",
-              "title": "宿主 models.json 路径",
-              "description": "Hana 宿主 provider 目录文件（只读，不修改）。默认 E:\\Hanako\\.hanako\\models.json，宿主数据目录迁移后可覆盖。"
-            },
-            "catalogPath": {
-              "type": "string",
-              "default": "E:\\Hanako\\.hanako\\provider-catalog.json",
-              "title": "宿主 provider-catalog.json 路径",
-              "description": "Hana 宿主凭据目录文件（只读，不修改；凭据明文在此）。默认 E:\\Hanako\\.hanako\\provider-catalog.json，宿主数据目录迁移后可覆盖。"
-            }
-          },
-          "default": {
-            "modelsPath": "E:\\Hanako\\.hanako\\models.json",
-            "catalogPath": "E:\\Hanako\\.hanako\\provider-catalog.json"
-          },
-          "title": "Hana 宿主 Provider 跟随",
-          "description": "恒开（v0.9.5 起无「关闭」选项）：dsh 经 dsh-hana-provider 插件直读 Hana 宿主 provider 配置并完全跟随——dsh models 页出现 Hana 全部 provider（sensenova/agnes/deepseek 等，catalog 无凭据者跳过），配置变化 fs.watch 热重载；凭据来自宿主 provider-catalog.json，无需再配置 API Key。任务模型默认用 dsh 默认模型（settings.yaml agent-default-model，在 dsh models 页设置），dsh_run 工具参数 provider/model/reasoningEffort 可显式覆盖。"
-        },
-        "agentPreset": {
-          "type": "string",
-          "enum": [
-            "standard",
-            "code",
-            "cordis",
-            "minimal"
-          ],
-          "default": "standard",
-          "title": "Agent 预设模式",
-          "description": "dsh_run 提交任务的默认 agent 预设（standard/code/cordis/minimal），工具调用可显式覆盖"
-        },
         "approvalTimeoutMs": {
           "type": "number",
           "default": 30000,
@@ -77,9 +42,9 @@
         },
         "defaultTimeoutMs": {
           "type": "number",
-          "default": 600000,
+          "default": 1800000,
           "title": "默认超时（毫秒）",
-          "description": "单次任务默认超时，工具调用未显式传 timeout 时使用。"
+          "description": "单次任务默认超时，工具调用未显式传 timeout 时使用。默认 30 分钟（10 分钟对编码任务偏短）。"
         },
         "webPort": {
           "type": "number",

@@ -28,19 +28,24 @@ while (!existsSync(join(PLUGIN_ROOT, "manifest.json"))) {
 }
 const STDERR_CAP = 8192;
 const PORT_READY_TIMEOUT_MS = 60000; // web host 端口就绪等待上限
-// v0.9.5: Hana 宿主 provider 配置默认路径（只读；可经 hostProvider.modelsPath/catalogPath 覆盖）。
-// homedir() 拼接取宿主 home 恒为 ~/.hanako（Windows 下即 <用户主目录>/.hanako）
-const DEFAULT_HANA_MODELS_PATH = () => join(homedir(), ".hanako", "models.json");
-const DEFAULT_HANA_CATALOG_PATH = () => join(homedir(), ".hanako", "provider-catalog.json");
-
-// ---- hostProvider 配置解析（v0.9.5: 恒开跟随 Hana 宿主 provider，无关闭选项）----
-// dsh 经 dsh-hana-provider 插件直读宿主配置：凭据来自宿主 provider-catalog.json，
-// 模型跟随宿主 models.json（dsh models 页选择）。只解析路径覆盖项。
-function resolveHostProvider(cfg) {
-  const raw = (cfg && typeof cfg.hostProvider === "object" && cfg.hostProvider) || {};
+// 宿主 provider 路径探测：不再暴露 hostProvider 配置项，直接探测宿主数据目录。
+// 候选 ① process.env.HANA_HOME 宿主进程注入（最权威：宿主进程恒注入，dev 源码/安装形态均成立）；
+// ② 插件安装形态 <宿主数据目录>/plugins/<pluginId> 上溯两级（仅安装形态成立）；
+// ③ 标准 home <用户主目录>/.hanako。按存在性逐项验证命中；全部未命中取候选 ②
+// 构造（dsh-hana-provider 读不到会 warn 停用，不影响主流程）。
+function detectHostProviderPaths() {
+  const fromPlugin = dirname(dirname(PLUGIN_ROOT));
+  const candidates = [process.env.HANA_HOME, fromPlugin, join(homedir(), ".hanako")].filter(Boolean);
+  let modelsPath = null;
+  let catalogPath = null;
+  for (const dir of candidates) {
+    if (!modelsPath && existsSync(join(dir, "models.json"))) modelsPath = join(dir, "models.json");
+    if (!catalogPath && existsSync(join(dir, "provider-catalog.json"))) catalogPath = join(dir, "provider-catalog.json");
+    if (modelsPath && catalogPath) break;
+  }
   return {
-    modelsPath: String(raw.modelsPath || DEFAULT_HANA_MODELS_PATH()),
-    catalogPath: String(raw.catalogPath || DEFAULT_HANA_CATALOG_PATH()),
+    modelsPath: modelsPath || join(fromPlugin, "models.json"),
+    catalogPath: catalogPath || join(fromPlugin, "provider-catalog.json"),
   };
 }
 
@@ -82,21 +87,6 @@ const manifestDefaults = (() => {
     return {};
   }
 })();
-
-// agent 预设解析（「配置单一事实源」哲学）：优先直读
-// dataDir/config.json 的 global.agentPreset（设置界面改动即时生效），无则回退
-// 配置快照/默认值 standard。工具调用显式传 agentPreset 时在 submitTask 内优先。
-function resolveAgentPreset(cfg) {
-  try {
-    const cf = join(cfg.dataDir, "config.json");
-    if (existsSync(cf)) {
-      const j = JSON.parse(readFileSync(cf, "utf8"));
-      const p = j?.global?.agentPreset;
-      if (typeof p === "string" && p.trim()) return p.trim();
-    }
-  } catch { /* 读配置失败忽略 */ }
-  return String(cfg.agentPreset || "standard");
-}
 
 // reasoningEffort 解析（v0.9.5：全局配置已移除，只接受工具显式参数，无配置回退；
 // 不传时由 dsh 默认处理）。返回显式值或 null。
@@ -544,7 +534,7 @@ async function ensureWebHost(cfg) {
   if (!existsSync(cliBin)) {
     throw new Error(`dsh 包未就绪：${cliBin} 不存在。轻量分发形态请在插件数据目录 dsh-pkg 执行 npm ci（部署目录需含 package.json + package-lock.json，详见技能 dsh-hanako/SKILL.md 依赖自主部署章节）；现役 zip 形态请确认插件目录（${pkgDir}）node_modules 解压完整`);
   }
-  const hostProvider = resolveHostProvider(cfg);
+  const hostProvider = detectHostProviderPaths();
 
   const dshHome = join(cfg.dataDir, "dsh-home");
   // spawn 的 cwd 必须是已存在目录（无效 cwd 会让 Node 报误导性的 ENOENT）
@@ -1375,7 +1365,7 @@ function submitTask(cfg, { task, cwd, timeoutMs = 600000, signal, bus, sessionPa
   if (!taskText) throw new Error("task 不能为空");
 
   // agent 预设解析须在 startOperation 之前完成：op 快照要带 agentPreset（卡片对账可见）
-  const preset = agentPreset ?? resolveAgentPreset(cfg);
+  const preset = agentPreset || null; // 只取工具显式参数；不显式传不传 session.create 的 agentPreset 字段（dsh 用 Web UI 默认 agent 预设）
   // reasoningEffort 同样在 startOperation 之前解析：op 快照要带该字段（卡片对账可见）。
   // v0.9.5: 只取工具显式参数（全局配置已移除），不传为 null（由 dsh 默认处理）。
   const effort = resolveReasoningEffort(reasoningEffort);
@@ -1399,7 +1389,7 @@ function submitTask(cfg, { task, cwd, timeoutMs = 600000, signal, bus, sessionPa
     // request.payload.cwd ?? defaults.cwd（defaults.cwd = web host 进程 cwd = 插件数据目录），
     // 不传会与目标会话既有 cwd 不符触发 session-conflict，create 不会自动采用会话已有 cwd。
     // 故 resume 分支先 session.list 查目标会话已有 cwd（忽略用户传入的 cwd——resume 语义即沿用会话）。
-    // agentPreset 无值不传（保持兼容：缺省走 web host 默认 standard）
+    // agentPreset 无值不传（缺省走 web host 默认，Web UI 可调）
     let createPayload;
     if (resumeSessionId) {
       const list = await callUnary(base, "session.list", { projections: ["id", "cwd"] });
@@ -1752,7 +1742,7 @@ export const description =
   "任务会话在 dsh Web UI（webPort 端口，默认 3080）中可见且持久化，可随时浏览器查看/继续。" +
   "回调压缩（PTC 式）：异步完成回调默认只带最终结论摘要（callbackMode=summary，省上下文），完整输出在卡片 op 快照与 dsh web UI 可查；设 callbackMode=full 可回传全量。" +
   "审批：dsh agent 请求越界权限时任务挂起，插件经 deferred 通道发来 dsh-approval 通知（带 opId/approvalId/理由/命令参数原文），用 dsh_approve 工具应答（allowed-once/rejected）；无人应答超时自动拒绝（approvalTimeoutMs，0=禁用）；也可在 dsh Web UI 人工处理。" +
-  "agentPreset：任务可指定 agent 预设模式（standard/code/cordis/minimal），缺省用插件配置。" +
+  "agentPreset：任务可指定 agent 预设模式（standard/code/cordis/minimal），缺省不指定，用 dsh 默认（dsh Web UI 可调）。" +
     "reasoningEffort：任务可显式指定推理强度（off/high/max）；不传时不指定，由 dsh 默认处理（通常 high）。" +
     "provider/model：任务可显式指定模型（如 provider=deepseek model=deepseek-v4-flash），" +
     "传了则 selectModel 覆盖 dsh 默认（dsh 会把所选模型写回全局默认 settings.yaml，显式指定即成为新默认）；" +
@@ -1781,7 +1771,7 @@ export const parameters = {
     agentPreset: {
       type: "string",
       enum: ["standard", "code", "cordis", "minimal"],
-      description: "agent 预设模式：standard=完整编码 agent（默认）/ code=工具呈现批量调用（适合大型编码任务）/ cordis=可读写运行时的 agent / minimal=固定提示词精简 agent。缺省用插件配置 agentPreset。",
+      description: "agent 预设模式：standard=完整编码 agent（默认）/ code=工具呈现批量调用（适合大型编码任务）/ cordis=可读写运行时的 agent / minimal=固定提示词精简 agent。缺省不传，用 dsh 默认（dsh Web UI 可调）。",
     },
       reasoningEffort: {
         type: "string",
@@ -1837,7 +1827,6 @@ async function doExecute(input, ctx) {
     nodePath: resolveNodePath(cfg),
     dshPkgDir: cfg.dshPkgDir,
     dataDir: cfg.dataDir,
-    agentPreset: cfg.agentPreset,
     reasoningEffort: cfg.reasoningEffort,
     webPort: cfg.webPort,
     // v0.5.12: 审批配置收敛为唯一键 approvalTimeoutMs（超时兜底，0=禁用；manifest 默认 30000）

@@ -14,51 +14,15 @@
 
 ## 工具
 
-`dsh_run(task, cwd?, timeout?, wait?, agentPreset?, reasoningEffort?, provider?, model?, sessionId?)`
+五个工具由插件注册（实现 `tools/*.js`），**完整调用手册（参数语义、返回结构、错误码、审批通道、副作用）见各工具的 SKILL**：
 
-- `task`：任务描述，作为用户消息发给 dsh 编码 agent
-- `cwd`：沙箱工作目录（bash 与文件系统工具的活动范围），默认 `defaultCwd`；resume 时（传了 `sessionId`）可省略，沿用会话已有 cwd
-- `timeout`：超时秒数，默认 `defaultTimeoutMs`
-- `wait`：false（默认）= 异步，立即返回，完成后宿主唤醒、结果后台送达；true = 同步等结果直接返回
-- `agentPreset`：agent 预设模式 `standard`（默认）/ `code` / `cordis` / `minimal`，缺省用插件配置
-- `reasoningEffort`：推理强度 `off` / `high` / `max`，**只接受工具显式参数**（v0.9.5 起无全局配置），不传时由 dsh 默认处理（通常 high）
-- `provider` / `model`：显式指定任务 provider（deepseek/sensenova/agnes）与模型 id。与 model 一起传时 selectModel 覆盖 dsh 默认；只传一个时另一侧从 dsh 默认模型补齐；都不传时不 selectModel，任务直接用 dsh 默认模型（dsh models 页设置的 `agent-default-model`）。**注意**：dsh selectModel 会把所选模型写回全局默认 `settings.yaml`——显式指定即成为新默认，要长期固定某模型请在 dsh models 页设置默认
-- `sessionId`：复用已有 dsh 会话（resume）：传上次任务的 sessionId 在该会话上继续，agent 保留上文（省上下文重建）；目标会话应已空闲。无 sessionId 时新建会话
-
-权限：`external_side_effect`，Auto 模式下调用会送审。
-
-`dsh_approve(opId, approvalId, outcome?)`
-
-- 应答 dsh 任务挂起的权限审批（approval/policy=ask 触发 approval/requested 时任务等待应答）
-- `opId` + `approvalId`：来自宿主 deferred 通道的 dsh-approval 通知（同一任务可挂起多个审批，逐个应答）
-- `outcome`：`allowed-once`（默认，仅放行该次）/ `rejected`（拒绝，agent 改用其他方式）
-- 内部经 `POST /api/respond` 应答；无人应答时审批仍可在 dsh Web UI 人工处理
-
-权限：`external_side_effect`。
-
-`dsh_cancel(opId)`
-
-- 取消一个已派发的 dsh 任务（主动止损）：按 `dsh_run` 返回的 `opId` 请求取消运行中的任务
-- 内部调 `POST /api/session.cancel` 中断该会话，dsh agent 收到中断后任务以 aborted 终态收尾
-- 已结束的任务幂等返回提示无需取消；`opId` 只可取消本会话近期提交的任务
-
-权限：`external_side_effect`。
-
-`dsh_ops(status?)`
-
-- 查询 dsh 任务历史（op 快照）：不传返回全部（最多 50 条，最新在前），传 `status` 过滤（`running` / `ok` / `error` / `interrupted`）
-- 每条返回 opId / 任务（前 80 字符）/ 状态 / 耗时 / usage 摘要，供对账与回溯
-- **历史已落盘**：op 快照写 `<数据目录>/ops.jsonl`（JSON Lines 增量追加），插件启动时自动恢复——重启后仍可查历史任务与结论；终态行不落盘完整 output（完整输出在内存 op 快照/卡片，重启后经 `sessionRecord` 链接指向 dsh-home 会话完整日志回溯）；旧版 `ops.json` 首次启动自动迁移
-
-权限：只读。
-
-`dsh_search(query)`
-
-- 跨会话内容搜索：给 `query` 关键词（1~500 字符），经 dsh web host `session.search` RPC 跨全部历史会话内容匹配
-- 返回命中的会话（`sessionId` + 内容摘要 ≤240 字符，最多 20 条 + `hasMore`）
-- 命中后可用 `dsh_run` 的 `sessionId` 参数 resume 该会话继续（上下文继承，知识复用）
-
-权限：只读。
+| 工具 | 用途 | 调用手册 |
+| --- | --- | --- |
+| `dsh_run` | 提交任务给 dsh agent 执行（默认异步，wait=true 同步；provider/model 显式覆盖） | [dsh-run](skills/dsh-run/SKILL.md) |
+| `dsh_approve` | 应答 dsh 任务挂起的权限审批（allowed-once / rejected） | [dsh-approve](skills/dsh-approve/SKILL.md) |
+| `dsh_cancel` | 取消运行中的 dsh 任务（主动止损，幂等） | [dsh-cancel](skills/dsh-cancel/SKILL.md) |
+| `dsh_ops` | 查询 dsh 任务历史（对账/回溯，落盘可查） | [dsh-ops](skills/dsh-ops/SKILL.md) |
+| `dsh_search` | 跨会话搜索历史内容，命中可 resume | [dsh-search](skills/dsh-search/SKILL.md) |
 
 ## dsh Web UI（DSHana 标签页）
 
@@ -152,7 +116,7 @@ dsh 的 `/api/events.mux` **要求 WebSocket 升级**：GET 返回 `426 Upgrade 
 
 - **依赖按需部署**：zip 零依赖（约 0.1MB，代码 bundle + 配置 + 技能 + lockfile）。dsh 依赖树（`@deepseek-ai/dsh` + node-pty/koffi 原生模块，约 246MB）由 Agent 部署时 **npm ci 到数据目录 `dsh-pkg/`**（升级安装整体替换插件目录不丢依赖；registry 不通时切镜像 `--registry=https://registry.npmmirror.com`），也可在 DSHana 标签页 deps 卡片点「安装依赖」自动完成（v0.8.6+，命令同上）。解析链：`<dataDir>/dsh-pkg` 优先 → 插件安装目录 `node_modules`（兼容旧形态）。依赖完整性另经**运行级验证**（`node cliBin --version`，v0.8.7+，能跑 = 依赖图完整，防 npm ci 中断/--omit=peer 误用造成的假就绪）
 - **插件本体 rspack bundle**：`index.js` + `tools/*.js` 经 `scripts/build.mjs` 打包，`scripts/pack.mjs` 铺平到标准位置交付（根 `index.js` + `tools/`，无 dist/）。构建工具 @rspack/core 声明为 devDependencies（构建契约，部署 `--omit=dev` 不装）
-- **dsh 启动 patch overlay**：dsh-run.js spawn `dsh --profile web --patch <...> --port <...>`，启动前渲染单一模板 `config/dsh-hanako.patch.yml.tpl` 为机器绝对路径写数据目录 `dsh-hanako.patch.generated.yml`（四段：session-query 全文搜索默认启用 `openAt: first-search` + dsh-hana-theme 主题插件注册 + dsh-hana-provider 宿主 provider 跟随注册 + dsh-hana-default-model 设置页默认模型配置块注册；v0.9.5 起 provider 段**恒渲染**，hostProvider 无关闭选项，default-model 段同样恒挂载——**且改包名注册**（`name: dsh-hana-default-model`，非 file:// URL，因 dsh client 模块发现按 `require.resolve('<name>/package.json')` 解析，file:// 不可解析），dsh-run.js spawn 前在 `$DSH_HOME/profiles/node_modules` 幂等创建 junction 指向插件安装目录）；模板缺失/渲染失败回退静态 `config/session-query.patch.yml`（保底搜索），再缺失不挂 patch 记 warn——patch 缺失时优雅降级不阻断启动
+- **dsh 启动 patch overlay**：dsh-run.js spawn `dsh --profile web --patch <...> --port <...>`，启动前渲染单一模板 `config/dsh-hanako.patch.yml.tpl` 为机器绝对路径写数据目录 `dsh-hanako.patch.generated.yml`（四段：session-query 全文搜索默认启用 `openAt: first-search` + dsh-hana-theme 主题插件注册 + dsh-hana-provider 宿主 provider 跟随注册 + dsh-hana-default-model 设置页默认模型配置块注册；v0.9.5 起 provider 段**恒渲染**——无配置项，宿主数据目录直接探测（插件安装形态 `<宿主数据目录>/plugins/<pluginId>` 上溯定位 models.json / provider-catalog.json），default-model 段同样恒挂载——**且改包名注册**（`name: dsh-hana-default-model`，非 file:// URL，因 dsh client 模块发现按 `require.resolve('<name>/package.json')` 解析，file:// 不可解析），dsh-run.js spawn 前在 `$DSH_HOME/profiles/node_modules` 幂等创建 junction 指向插件安装目录）；模板缺失/渲染失败回退静态 `config/session-query.patch.yml`（保底搜索），再缺失不挂 patch 记 warn——patch 缺失时优雅降级不阻断启动
 - **凭据与模型跟随**（v0.9.5+）：dsh-hana-provider 插件恒开直读 Hana 宿主 `provider-catalog.json`（凭据）+ `models.json`（模型，fs.watch 热重载），dsh models 页出现 Hana 全部 provider；任务模型默认 = dsh 默认模型（`settings.yaml` 的 `agent-default-model`），`dsh_run` 工具参数 `provider`/`model`/`reasoningEffort` 显式覆盖（显式时 selectModel，dsh 会把所选模型写回全局默认 settings.yaml）
 - **设置页默认模型配置**（v0.9.5+）：dsh-hana-default-model 插件按 dsh client 插件规范双端部署（后端 `webServer.register` 两条 `/api/hana-default-model.*` exact 路由 + 前端 `client.js` 注册 `settings.section` slot 原生渲染「默认模型」分页）在 dsh 设置面板补上 `agent-default-model` 配置 UI——Provider/模型/思考强度三级联动（选项 = `llm.models` 权威列表），保存经 `agentDefaultModel` 服务写 `settings.yaml` 并更新内存态，立即生效
 - **进程单例挂 `globalThis.__dshHanako`**：`index.js` 卸载清理时读取（不 import 插件文件，避免读到旧模块缓存）
@@ -162,13 +126,10 @@ dsh 的 `/api/events.mux` **要求 WebSocket 升级**：GET 返回 `426 Upgrade 
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
-| `hostProvider.modelsPath` | `~/.hanako/models.json` | 恒开跟随 Hana 宿主 provider（v0.9.5 起无「关闭」选项）：宿主模型目录文件（只读，dsh models 页显示 Hana 全部 provider）。宿主数据目录迁移后可覆盖 |
-| `hostProvider.catalogPath` | `~/.hanako/provider-catalog.json` | 宿主凭据目录文件（只读，dsh 直读其中的凭据，无需配置 API Key）。宿主数据目录迁移后可覆盖 |
-| `agentPreset` | `standard` | dsh_run 提交任务的默认 agent 预设；工具调用可显式覆盖；改后对新任务立即生效 |
 | `approvalTimeoutMs` | `30000` | 审批挂起超过该时长无人应答自动 rejected（应答方失联检测）；0=禁用；改后对新审批立即生效 |
 | `nodePath` | 空 | 启动 web host 的 node.exe（需 Node 24+）。**安装后必填本机 node 路径**（不预设默认值）。生效分层：t1 检测与手动启动（t3）都现读 config.json（resolveNodePath 直读优先）——改后无需重启即可用新 node 拉起；仅旧 web host 进程存活时需先杀进程或重启 |
 | `defaultCwd` | 空 | 默认沙箱工作目录。**安装后建议设为实际项目目录**（为空且未传 cwd 时报 `cwd 不能为空`） |
-| `defaultTimeoutMs` | 600000 | 默认超时（毫秒） |
+| `defaultTimeoutMs` | 1800000 | 默认超时（毫秒，30 分钟） |
 | `webPort` | 3080 | dsh Web UI 端口：>0 插件加载即拉起 web host（卸载一并回收），0 关闭 |
 | `callbackMode` | `summary` | 异步完成回调输出体量：summary=只带最终结论摘要（默认，省上下文）/ full=全量 |
 
@@ -182,6 +143,7 @@ dsh 的 `/api/events.mux` **要求 WebSocket 升级**：GET 返回 `426 Upgrade 
 
 ## 版本历史
 
+- **v0.10.1**（2026-08-16）：配置项收敛与工具技能体系——**移除 hostProvider 配置项**（modelsPath/catalogPath 不再配置，宿主 provider 路径直接探测：`HANA_HOME`（宿主进程注入）→ 插件安装形态 `<宿主数据目录>/plugins/<pluginId>` 上溯 → `homedir()/.hanako`，存在性验证命中；清除 manifest/文档中的开发机路径泄漏）；**移除 agentPreset 配置项**（不显式传时不传 `session.create` 的 agentPreset 字段，用 dsh Web UI 默认 agent 预设，reasoningEffort 同理）；`defaultTimeoutMs` 默认 600000 → 1800000（10 分钟对编码任务偏短，默认 30 分钟）；**新增五个独立工具 SKILL**（dsh-run/dsh-approve/dsh-cancel/dsh-ops/dsh-search，从源码 tools/*.js 核对参数语义/返回结构/错误码/审批通道/副作用），索引 skill 工具速查挂接，README 工具章节精简为列举 + SKILL 链接
 - **v0.9.5**（2026-08-15）：彻底移除插件自身「填 API Key」「手动设置模型」回退路径——删除 `apiKey` / `model` / `reasoningEffort`（全局）配置与 `.credentials.yaml` / config.json 读取链；`hostProvider` 恒开跟随宿主（无「关闭」选项，不再有官方 API 回退路线），凭据直读宿主 `provider-catalog.json`；任务模型默认 = dsh 默认（settings.yaml `agent-default-model`），`dsh_run` 工具参数 `provider`/`model`/`reasoningEffort` 显式覆盖（显式时 selectModel，dsh 会把所选模型写回全局默认）；**新增 dsh-hana-default-model 插件——dsh 设置页「默认模型」配置块**（Provider/模型/思考强度三级联动（切 provider 自动选中首个模型 + 默认思考强度，打开分页回显当前默认），选项 = llm.models 权威列表全部 provider，保存即写 agent-default-model 生效，补上 settings 页缺失的该段配置 UI）；**默认模型分页正规化升级**——前端由 tapIndex DOM 注入改为 dsh 前端 `settings.section` slot 注册原生渲染（client.js + package.json `dsh.client` 声明，patch 段4 包名注册 + `$DSH_HOME/profiles/node_modules` junction 解析，导航自动投影分页、点击切换全走原生 React）；诊断不再显示 apiKey。含 0.9.4（dsh-hana-provider 宿主 provider 直通定稿：dsh_run 加入 provider/model/reasoningEffort 工具参数与 selectModel 显式分支、readDshDefaultModel、错误透传）中间迭代
 - **v0.9.3**（2026-08-15）：t1 候选列表体验完善（空候选提示「未检测到本机可用 Node.js」+ 去用户可见文案写死版本号与版本后缀）+ 配置生效文案统一（t1/t2/t3 依赖相关「重启 Hana」全部改为「立即生效/完成后自动验证」，与页面自愈能力对齐）；含 0.9.1（t1 fix 文案去重启）、0.9.2（候选探测扩展 nvm-windows NVM_HOME / volta VOLTA_HOME，FNM_DIR 多版本遍历刻意不实现）中间迭代
 - **v0.9.0**（2026-08-15）：大版本收尾（0.8.3 以来全量迭代，CI 三段式发版，GitHub Release pre-release）——**连接失败自检与自愈体系**（web host 未就绪时标签页自检 t1 node 配置 / t2 dsh 依赖 / t3 进程状态 + 操作按钮进卡片）：t2 依赖运行级验证（`node cliBin --version` 冒烟抓假就绪）+ 页面自装（POST /webui/install-deps，npm ci --omit=dev 部署 dsh-pkg，实时进度）+ 手动启动（POST /webui/start）+ 运行级检测（GET /webui/verify-deps / verify-node，进页自动一次 + 手动按钮）；门禁链 t1→t2→t3（依赖/Node 未通过时下游按钮禁用）；webLastExit 持久退出记录；诊断区主题化（CSS 变量跟随宿主）；配置生效分层（检测层实时 / 启动层现读 config.json / 仅旧进程存活需杀进程）；SKILL 瘦身（15323→7362 字符，移除「构建与打包」章节与构建触发词，定位为排障手册）

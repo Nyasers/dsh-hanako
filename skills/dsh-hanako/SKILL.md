@@ -17,7 +17,7 @@ config.json 由宿主设置界面生成、**不随包分发**；nodePath/default
 
 **2. defaultCwd（建议）**：为空且未传 cwd 时报 `cwd 不能为空`；设为项目沙箱目录。
 
-**3. 其余项默认可用**：agentPreset（standard）/ approvalTimeoutMs（30000）/ webPort（3080）/ callbackMode（summary）/ defaultTimeoutMs（600000）。任务模型不需要配置：默认用 dsh 默认模型（settings.yaml `agent-default-model`），可在 **dsh 设置页「默认模型」配置块**直接配置（Provider/模型/思考强度三级联动，选项 = dsh 全部可用 provider，保存即生效），`dsh_run` 工具参数 `provider`/`model`/`reasoningEffort` 可显式覆盖（显式时 selectModel，dsh 会把所选模型写回全局默认 settings.yaml——显式指定即成为新默认）。
+**3. 其余项默认可用**：approvalTimeoutMs（30000）/ webPort（3080）/ callbackMode（summary）/ defaultTimeoutMs（1800000）。agentPreset / reasoningEffort 不需要配置：工具不显式传时用 dsh 默认（dsh Web UI 可调 agent 预设与思考强度）。任务模型不需要配置：默认用 dsh 默认模型（settings.yaml `agent-default-model`），可在 **dsh 设置页「默认模型」配置块**直接配置（Provider/模型/思考强度三级联动，选项 = dsh 全部可用 provider，保存即生效），`dsh_run` 工具参数 `provider`/`model`/`reasoningEffort` 可显式覆盖（显式时 selectModel，dsh 会把所选模型写回全局默认 settings.yaml——显式指定即成为新默认）。
 
 **4. 配置生效铁律（检测层实时，启动层现读）**：「改完都要重启 Hana」不成立：t1 检测/t2/t3 状态直读 config.json/单例实时；t3 手动启动链路 resolveNodePath 现读 config.json → spawn，直写后无需重启即用新 node；仅旧进程存活（g.web.ready=true）需先杀进程或重启。
 
@@ -43,7 +43,7 @@ Set-Location <部署目录：插件根或数据目录 dsh-pkg>
 
 ## 主题跟随（v0.8.1）
 
-dsh 偏好 `system`（默认）→ 跟随 Hana 主题（明暗+配色）；`light`/`dark` → dsh 原生配色。切偏好/切主题后**重开标签页生效**。部署要点：`assets/dsh-cordis/dsh-hana-theme/` 随包分发（缺失仅不跟随主题）；patch 模板 `config/dsh-hanako.patch.yml.tpl`（四段合一：session-query + theme + provider + default-model，v0.9.5 起 provider 段**恒渲染**——hostProvider 恒开跟随宿主，无关闭选项；default-model 段恒挂载、**包名注册**（dsh-run.js spawn 前在 `$DSH_HOME/profiles/node_modules` 建 junction 指向插件目录））启动前渲染成本机路径写数据目录 `dsh-hanako.patch.generated.yml`（模板缺失/渲染失败回退静态 `session-query.patch.yml`）。排错：不跟随明暗 → 查 settings.yaml `ui-theme.preference` 为 system + /webui 有 color-scheme；配色不注入 → 查 generated patch 与 assets 目录；patch 在仍不注入 → 重启后查 stderr 有无 dsh-hana-theme 加载错误；切换不实时 → 壳页面（webui.js）有 dshHanaTheme message 监听。
+dsh 偏好 `system`（默认）→ 跟随 Hana 主题（明暗+配色）；`light`/`dark` → dsh 原生配色。切偏好/切主题后**重开标签页生效**。部署要点：`assets/dsh-cordis/dsh-hana-theme/` 随包分发（缺失仅不跟随主题）；patch 模板 `config/dsh-hanako.patch.yml.tpl`（四段合一：session-query + theme + provider + default-model，v0.9.5 起 provider 段**恒渲染**——无配置项，宿主数据目录直接探测（插件安装形态 `<宿主数据目录>/plugins/<pluginId>` 上溯定位 models.json/provider-catalog.json）；default-model 段恒挂载、**包名注册**（dsh-run.js spawn 前在 `$DSH_HOME/profiles/node_modules` 建 junction 指向插件目录））启动前渲染成本机路径写数据目录 `dsh-hanako.patch.generated.yml`（模板缺失/渲染失败回退静态 `session-query.patch.yml`）。排错：不跟随明暗 → 查 settings.yaml `ui-theme.preference` 为 system + /webui 有 color-scheme；配色不注入 → 查 generated patch 与 assets 目录；patch 在仍不注入 → 重启后查 stderr 有无 dsh-hana-theme 加载错误；切换不实时 → 壳页面（webui.js）有 dshHanaTheme message 监听。
 
 ## 默认模型配置（v0.9.5）
 
@@ -58,13 +58,15 @@ DSHana 任务默认模型 = settings.yaml `agent-default-model`（`dsh_run` 不�
 
 ## 工具速查
 
-| 工具 | 用途 | 关键点 |
-|---|---|---|
-| `dsh_run(task, cwd?, timeout?, wait?, agentPreset?, reasoningEffort?, provider?, model?, sessionId?)` | 提交任务 | 默认异步（后台送达）；wait=true 同步；provider/model 显式覆盖模型（显式时 selectModel，写回 dsh 全局默认）；sessionId resume |
-| `dsh_approve(opId, approvalId, outcome?)` | 应答审批 | allowed-once 放行 / rejected 拒绝；通知带 args 命令原文 |
-| `dsh_cancel(opId)` | 取消任务 | 误派/卡死止损 |
-| `dsh_ops(status?)` | 查任务历史 | 落盘可查；过滤 running/ok/error/interrupted |
-| `dsh_search(query)` | 跨会话搜索 | 命中后可 resume |
+| 工具 | 用途 | 关键点 | 详情 |
+|---|---|---|---|
+| `dsh_run(task, cwd?, timeout?, wait?, agentPreset?, reasoningEffort?, provider?, model?, sessionId?)` | 提交任务 | 默认异步（后台送达）；wait=true 同步；provider/model 显式覆盖模型（显式时 selectModel，写回 dsh 全局默认）；sessionId resume | [dsh-run 技能](dsh-run) |
+| `dsh_approve(opId, approvalId, outcome?)` | 应答审批 | allowed-once 放行 / rejected 拒绝；通知带 args 命令原文 | [dsh-approve 技能](dsh-approve) |
+| `dsh_cancel(opId)` | 取消任务 | 误派/卡死止损；幂等 | [dsh-cancel 技能](dsh-cancel) |
+| `dsh_ops(status?)` | 查任务历史 | 落盘可查；过滤 running/ok/error/interrupted；50 条上限 | [dsh-ops 技能](dsh-ops) |
+| `dsh_search(query)` | 跨会话搜索 | 命中后可 resume；snippet ≤240 字符 | [dsh-search 技能](dsh-search) |
+
+**工具调用的完整参数语义、返回结构、错误码、审批通道、副作用分别见上述五个独立工具技能（均从源码 tools/*.js 核对）**——本表只是速查。
 
 ### 标签页自愈路由（浏览器按钮调用，Agent 一般不直接调）
 
