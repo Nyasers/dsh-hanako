@@ -6,7 +6,7 @@
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { cpSync, createWriteStream, existsSync, mkdirSync, renameSync, rmSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, createWriteStream, existsSync, mkdirSync, renameSync, rmSync, readFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { ZipArchive } from "archiver";
@@ -43,6 +43,115 @@ for (const item of staticItems) {
   const src = join(ROOT, item);
   if (!existsSync(src)) throw new Error(`静态项不存在：${item}`);
   cpSync(src, join(distDir, item), { recursive: true });
+}
+
+// 2.5 静态资产压缩（terser JS 纯语法级 + clean-css CSS 压缩，覆盖写回 dist 副本）
+//     JS 不走 rspack 管线（会被模块系统转换+依赖内联破坏加载语义）：cordis 插件
+//     （assets/dsh-cordis/*/index.js）被 dsh 运行时 import() 加载、client.js 被浏览器
+//     ModuleLoader 按 window.__ModuleLoader__.load 注册、app/card.js 在 iframe 内执行；
+//     CSS（app/card.css）同样只做语法级压缩。两者均为构建期工具，解析与 build.mjs 的
+//     resolveRspackEntry 同模式：优先 RSPACK_ENV 构建环境 node_modules，否则本地
+//     node_modules（CI npm ci --omit=peer 装 dev 树，terser/clean-css 必装）。
+function resolveTool(pkgName) {
+  const envDir = process.env.RSPACK_ENV;
+  if (envDir) {
+    const envRequire = createRequire(join(envDir, "node_modules", "noop.js"));
+    try {
+      return envRequire(pkgName);
+    } catch {
+      console.log(`[pack] RSPACK_ENV 下未找到 ${pkgName}，回退本地 node_modules`);
+    }
+  }
+  return require(pkgName);
+}
+
+// 收集待压缩的静态资产：assets/（递归）、routes/（顶层）、app/（顶层），按扩展名过滤
+function collectStaticFiles(dir, recursive = true, ext = ".js") {
+  const files = [];
+  if (!existsSync(dir)) return files;
+  for (const name of readdirSync(dir)) {
+    const p = join(dir, name);
+    const st = statSync(p);
+    if (st.isDirectory()) {
+      if (recursive) files.push(...collectStaticFiles(p, true, ext));
+    } else if (name.endsWith(ext)) {
+      files.push(p);
+    }
+  }
+  return files;
+}
+
+// module 启发式（JS 专用）：内容含顶层 import/export 语句 → module: true（ESM），
+// 否则浏览器脚本（先粗略去掉注释，避免注释里 "import/export" 字样误判；简单判断即可）
+function isEsm(code) {
+  const noComments = code
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\/\/[^\n]*/g, "");
+  return /\b(?:import|export)\s/.test(noComments);
+}
+
+{
+  // --- JS 压缩（terser 纯语法级：保留模块格式/import 语句，只做语法压缩/去注释/改名）---
+  const terser = resolveTool("terser");
+  const minify = terser.minify ?? terser.default?.minify;
+  if (typeof minify !== "function") throw new Error("terser 加载失败：未找到 minify（构建环境必装 terser）");
+  const staticJs = [
+    ...collectStaticFiles(join(distDir, "assets")),
+    ...collectStaticFiles(join(distDir, "routes"), false),
+    ...collectStaticFiles(join(distDir, "app"), false),
+  ];
+  console.log(`[pack] minify static js (${staticJs.length} files)...`);
+  for (const file of staticJs) {
+    const code = readFileSync(file, "utf8");
+    const before = Buffer.byteLength(code, "utf8");
+    let result;
+    try {
+      result = await minify(code, {
+        compress: true,
+        mangle: true,
+        module: isEsm(code),
+        format: { comments: false },
+      });
+    } catch (err) {
+      throw new Error(`terser 压缩失败（${file}）：${err.message}`);
+    }
+    if (!result?.code) throw new Error(`terser 压缩失败（${file}）：无输出`);
+    const out = result.code;
+    writeFileSync(file, out, "utf8");
+    const after = Buffer.byteLength(out, "utf8");
+    const rel = file.startsWith(distDir + "\\") ? file.slice(distDir.length + 1) : file;
+    console.log(`[pack]   ${rel}: ${before} -> ${after} bytes (${((1 - after / before) * 100).toFixed(1)}% 缩减)`);
+  }
+
+  // --- CSS 压缩（clean-css level 2：合并/去空白/优化颜色，普通样式安全）---
+  const cleanCssMod = resolveTool("clean-css");
+  const CleanCSS = cleanCssMod.default ?? cleanCssMod; // CJS 包：interop 后取构造函数
+  if (typeof CleanCSS !== "function") throw new Error("clean-css 加载失败：未找到构造函数（构建环境必装 clean-css）");
+  const staticCss = [
+    ...collectStaticFiles(join(distDir, "assets"), true, ".css"),
+    ...collectStaticFiles(join(distDir, "routes"), false, ".css"),
+    ...collectStaticFiles(join(distDir, "app"), false, ".css"),
+  ];
+  if (staticCss.length) {
+    console.log(`[pack] minify static css (${staticCss.length} files)...`);
+    for (const file of staticCss) {
+      const css = readFileSync(file, "utf8");
+      const before = Buffer.byteLength(css, "utf8");
+      let result;
+      try {
+        result = new CleanCSS({ level: 2 }).minify(css);
+      } catch (err) {
+        throw new Error(`clean-css 压缩失败（${file}）：${err.message}`);
+      }
+      if (result.errors?.length) throw new Error(`clean-css 压缩失败（${file}）：${result.errors.join("; ")}`);
+      if (typeof result.styles !== "string") throw new Error(`clean-css 压缩失败（${file}）：无输出`);
+      const out = result.styles;
+      writeFileSync(file, out, "utf8");
+      const after = Buffer.byteLength(out, "utf8");
+      const rel = file.startsWith(distDir + "\\") ? file.slice(distDir.length + 1) : file;
+      console.log(`[pack]   ${rel}: ${before} -> ${after} bytes (${((1 - after / before) * 100).toFixed(1)}% 缩减)`);
+    }
+  }
 }
 
 // 3. dist → 铺平目录（zip 中间原料，放 _tmp 可随时清空）
