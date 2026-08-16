@@ -145,6 +145,7 @@ dsh 的 `/api/events.mux` **要求 WebSocket 升级**：GET 返回 `426 Upgrade 
 
 ## 版本历史
 
+- **v0.11.1**（2026-08-16）：文档同步修正——README 任务反馈卡片章节更新为 SSE 推送渲染（baseline + /ops/stream，插件零状态、jsonl 唯一事实源、重启后恢复），审批流程改运行期协调条目表述；dsh-ops/dsh-run SKILL 的运行态与完整输出来源改 jsonl 恢复语义（不再重启即清）；dsh-cancel SKILL 补 sessionId 来源实操示例（异步回调/卡片 URL/dsh_ops/opId 反查四途径）；明确 opId 定位（宿主卡片契约 + Agent 指代 + 运行期协调条目键，不参与数据定位）
 - **v0.11.0**（2026-08-16）：卡片架构大版本——**SSE 推送 + 零状态插件**。① 卡片链路从 HTTP 轮询改为 SSE 服务端推送：新增 `/ops/stream`（先推 baseline = jsonl 恢复快照，再按 sessionId 转发 DSH mux 实时事件），卡片 EventSource 本地拼文本节流渲染、收 blocks/usage、turn/end 定终态，轮询退役（`/ops/status`、`/ops/output` 降级为纯 jsonl 兜底）；② **op Map 退役**：插件不再存任务快照（status/output/summary），session.jsonl 为唯一事实源，运行中归一化（重建窗口无 turn/end 如实显示 running，不再误报完成），审批/取消靠运行期协调条目（终态即删）；③ `dsh_cancel` 支持 sessionId 直接取消；④ 本地超时倒计时（URL timeoutMs + startedAt）；⑤ 顺带合入终态瘦身（op.output 清空留预览）、URL 携带 timeoutMs（恢复态时间行有预算）、词元缺失不显示（cache/thinking 无源不兜 0）
 - **v0.10.45**（2026-08-16）：终态瘦身 + URL 携带 timeoutMs——① **内存降级**：任务终态后 op.output 全文清空（只留 1KB outputPreview + outputLength），完整输出按需从会话 jsonl 恢复（recovered 路径 + LRU 缓存），op Map 50 条内存从 MB 级降到 ~150KB；② **URL 带 timeoutMs**：卡片 URL 追加 timeoutMs（会话日志无该配置项），恢复态「时间」行能显示超时预算（readOp 在快照无值时用 URL 值覆盖）
 - **v0.10.44**（2026-08-16）：词元缺失不显示——累计器初始化不再把 cacheReadTokens/reasoningTokens 兜成 0（字段恒存在导致 fmtUsage 误显示 0）：缺失字段不初始化，API 未返回（如 deepseek-v4-flash 不报 cache/reasoning 明细）时卡片不显示对应项，真 0 仍显示 0；dsh-run 累计与 routes mergeUsage 同步修正
