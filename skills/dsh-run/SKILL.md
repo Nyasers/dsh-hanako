@@ -49,7 +49,7 @@ ensureWebHost（nodePath 现读 config.json → spawn dsh web，DSH_HOME=数据�
   stopReason, usage, stderr }
 ```
 
-**callbackMode 摘要压缩**（buildSummary）：默认 summary 只回传摘要。锚点 = 最后一条 assistant/message 文本（`summaryOf: "final-message"`）；无 finalText 时超长（>1500+600）head-tail 折叠（`summaryOf: "head-tail"`）；短输出原样（`summaryOf: "full"`）。full 模式回传全量。**完整输出永远在卡片 op 快照与 dsh Web UI（sessionId 定位）可查**。
+**callbackMode 摘要压缩**（buildSummary）：默认 summary 只回传摘要。锚点 = 最后一条 assistant/message 文本（`summaryOf: "final-message"`）；无 finalText 时超长（>1500+600）head-tail 折叠（`summaryOf: "head-tail"`）；短输出原样（`summaryOf: "full"`）。full 模式回传全量。**完整输出永远在卡片（会话 jsonl 恢复，v0.11.0 起）+ dsh Web UI（sessionId 定位）可查**。
 
 **同步模式（wait=true）**：content = `res.output` +（非 end_turn 附 `[stopReason: …]`）；details.dsh = `{ stopReason, usage, cwd, opId, sessionId, wait: true }`，stderr 附 `dshStderr`（截 2000）。阻塞当前回合、无卡片进度；长任务建议异步。
 

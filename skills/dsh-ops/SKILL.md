@@ -59,4 +59,4 @@ description: "dsh_ops 工具手册（源码 tools/dsh-ops.js 核对）。触发�
 ## 关联
 
 - 完整会话内容不在 dsh_ops 返回里：dsh Web UI（sessionId 定位会话）或 dsh_run resume 后查看。
-- 任务运行态（running/ok/error、耗时、stopReason）看运行卡片（op 快照，仅本次运行期内存，重启即清），不在 dsh_ops 里。
+- 任务运行态（running/ok/error、耗时、stopReason）看运行卡片（v0.11.0 起卡片走会话 jsonl 恢复 + SSE 推送，重启后仍可查），不在 dsh_ops 里。

@@ -34,6 +34,19 @@ v0.10.46（op Map 退役，任务状态零存储、jsonl 唯一事实源）：`r
 - 卡死（长时间无进度，先看卡片/Web UI 再决定）
 - 不再需要结果（省 token）
 
+## 示例：从哪拿 sessionId
+
+sessionId 优先来源（v0.11.0 起 op Map 退役，**取消一律推荐显式传 sessionId**）：
+
+1. **dsh_run 异步回调**：任务完成/失败时后台消息带 `sessionId`（形如 `session-xxxx`）——直接抄用
+2. **运行卡片 URL**：卡片 iframe 地址带 `sessionId=<session-xxxx>&rpcId=<r_xxx>&opId=<op_xxx>`——从 URL 取
+3. **dsh_ops**：查会话清单（`dsh_ops`）按 `sessionId` 定位，再取消
+4. 只有 dsh_run 提交返回值（opId）且任务仍在运行期 → 只传 opId 可反查（进程残留，重启后失效）
+
+```
+dsh_cancel(sessionId="session-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx")
+```
+
 ## 关联
 
 - 取消后的终态、错误码 DSH_ABORTED、usage 对账见 dsh-run 技能「错误码速查」。
