@@ -21,9 +21,10 @@
 # 前端 client 模块注册 settings.section slot（id "default-model"）原生渲染分页；无需 config
 # 注入——列表/保存走 llm.models RPC 与 agentDefaultModel 服务。
 # v0.9.5：段3 恒渲染（hostProvider 恒开跟随宿主，无关闭选项），模板无条件标记。
-# 与旧文件 session-query.patch.yml / hana-theme.patch.yml.tpl / hana-provider.patch.yml.tpl
-# / hana-default-model.patch.yml.tpl 为同一 --patch overlay 机制；旧文件保留作渲染失败
-# 回退与参考，dsh-run.js 不再引用。
+# 与同目录 session-query.patch.yml 为同一 --patch overlay 机制：本模板渲染失败/缺失时
+# dsh-run.js 回退挂静态 session-query.patch.yml（保底搜索）；旧 hana-theme /
+# hana-provider / hana-default-model 三个分文件模板（v0.9.5 归一前的历史文件）
+# 已删除，不再保留。
 - id: session-query-sqlite
   config:
     path: ':memory:'

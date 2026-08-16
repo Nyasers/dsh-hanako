@@ -34,7 +34,6 @@ const staticItems = [
   "skills",
   "app",
   "routes",
-  "config",
   "assets",
   "README.md",
 ];

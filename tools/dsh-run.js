@@ -380,7 +380,7 @@ async function ensureWebHost(cfg) {
   const port = Number(cfg.webPort) || 3080;
   // v0.5.11: 会话全文搜索 overlay（dsh 默认 openAt: never 禁用搜索，需 --patch 覆盖为 first-search）
   // v0.8.1: 主题注入 overlay；v0.9.3: 宿主 provider 跟随 overlay——多份 patch 合并为
-  // config/dsh-hanako.patch.yml.tpl 单一模板：段1 session-query 静态配置块 + 段2 theme
+  // assets/patches/dsh-hanako.patch.yml.tpl 单一模板：段1 session-query 静态配置块 + 段2 theme
   // insert + 段3 provider insert（v0.9.5 起恒渲染：hostProvider 恒开跟随宿主，无关闭选项）
   // + 段4 default-model insert（v0.9.5 起恒挂载）。
   // cordis 插件加载：theme/provider/default-model 三段均以包名注册（dsh client 模块发现
@@ -423,7 +423,7 @@ async function ensureWebHost(cfg) {
   };
 
   const patchFiles = [];
-  const patchTpl = join(PLUGIN_ROOT, "config", "dsh-hanako.patch.yml.tpl");
+  const patchTpl = join(PLUGIN_ROOT, "assets", "patches", "dsh-hanako.patch.yml.tpl");
   // 渲染仅剩 provider 的 config 依赖解析基座占位符（MODELS_PATH / CATALOG_PATH /
   // DSH_PKG_DIR）——theme/provider/default-model 三段均以包名注册，不再有 file:// URL
   // 占位符；包名经 ensureCordisJunctions 的 junction 解析
@@ -442,13 +442,13 @@ async function ensureWebHost(cfg) {
     } catch (e) {
       // 渲染失败（读模板/写数据目录异常）：回退静态 session-query patch（保底搜索功能）
       console.warn(`[dsh-run] patch 模板渲染失败（${e?.message || e}），回退静态 session-query.patch.yml`);
-      const fallback = join(PLUGIN_ROOT, "config", "session-query.patch.yml");
+      const fallback = join(PLUGIN_ROOT, "assets", "patches", "session-query.patch.yml");
       if (existsSync(fallback)) patchFiles.push(fallback);
     }
   } else {
     // 模板缺失：回退静态 session-query patch（保底搜索）；再缺失则不挂任何 patch
-    console.warn("[dsh-run] config/dsh-hanako.patch.yml.tpl 缺失，回退静态 session-query.patch.yml");
-    const fallback = join(PLUGIN_ROOT, "config", "session-query.patch.yml");
+    console.warn("[dsh-run] assets/patches/dsh-hanako.patch.yml.tpl 缺失，回退静态 session-query.patch.yml");
+    const fallback = join(PLUGIN_ROOT, "assets", "patches", "session-query.patch.yml");
     if (existsSync(fallback)) patchFiles.push(fallback);
     else console.warn("[dsh-run] session-query.patch.yml 也不存在：不挂任何 patch（dsh 启动不受影响，会话全文搜索保持上游默认禁用）");
   }
