@@ -1,0 +1,10 @@
+{
+  "name": "dsh-hana-logger",
+  "version": "0.10.8",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "cordis": {
+    "name": "dsh-hana-logger"
+  }
+}

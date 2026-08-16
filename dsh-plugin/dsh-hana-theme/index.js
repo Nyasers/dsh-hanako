@@ -19,9 +19,11 @@
 // specific 组件/滚动条），功能性颜色保留原生（mask-photo 黑底、danger/warn
 // 语义色、toast/tooltip 深色浮层、工具栏半透明、反白文字/边框、骨架屏）。
 //
-// 依赖注入：webServer 服务（host 半部），与 dsh-client-ui-theme 同姿势。
+// 依赖注入：webServer 服务（host 半部），与 dsh-client-ui-theme 同姿势；统一日志经
+// dsh-hana-logger 服务（inject ['hanaLogger']）写入本次会话日志（行格式 [theme]）。
 
 export const name = "dsh-hana-theme";
+export const inject = ["hanaLogger"];
 
 // 默认主题 fallback（Hana 默认 new-warm-paper；仅桥不可用时兜底）
 const DEFAULT_THEME = {
@@ -157,13 +159,19 @@ const BRIDGE = `<script id="dsh-hana-theme-bridge">
 })();
 </script>`;
 
-export function apply(ctx) {
-  ctx.inject(["webServer"], (httpCtx) => {
-    httpCtx.effect(() =>
-      httpCtx.webServer.tapIndex((html) => {
-        if (html.includes('id="dsh-hana-theme"')) return html;
-        return html.replace("</head>", STATIC + BRIDGE + "</head>");
-      })
-    );
+export function apply(ctx, config) {
+  ctx.inject(["webServer", "hanaLogger"], (httpCtx) => {
+    httpCtx.effect(() => {
+      try {
+        httpCtx.webServer.tapIndex((html) => {
+          if (html.includes('id="dsh-hana-theme"')) return html;
+          return html.replace("</head>", STATIC + BRIDGE + "</head>");
+        });
+        httpCtx.hanaLogger.log("theme", "主题注入 tapIndex 已注册");
+      } catch (e) {
+        httpCtx.hanaLogger.log("theme", `主题注入注册失败：${e?.message || e}`);
+        try { ctx.logger?.warn?.(`[dsh-hana-theme] tapIndex 注册失败：${e?.message || e}`); } catch { /* 忽略 */ }
+      }
+    });
   });
 }

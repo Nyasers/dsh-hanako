@@ -118,6 +118,7 @@ body[data-pending="1"] iframe#dsh-frame{display:none}
 .diag-btn-msg{display:block;font-size:12px;color:var(--danger,#8B2C1F);margin-top:4px}
 .diag-progress{white-space:pre-wrap;word-break:break-all;font-family:ui-monospace,SFMono-Regular,Consolas,"Courier New",monospace;font-size:12px;color:var(--text-light,#4A433C);background:var(--accent-light,rgba(83,125,150,0.08));border-radius:4px;padding:6px 8px;margin-bottom:4px;max-height:120px;overflow:auto}
 .diag-progress-time{font-size:11px;color:var(--text-muted,#6B6158);margin-bottom:4px}
+.diag-logpath{font-family:ui-monospace,SFMono-Regular,Consolas,"Courier New",monospace;font-size:12px;color:var(--text-muted,#6B6158);word-break:break-all;margin-top:4px}
 .diag-cands{margin-top:6px;display:flex;flex-direction:column;gap:6px}
 .diag-cands-empty{font-size:12px;color:var(--text-muted,#6B6158);background:var(--accent-light,rgba(83,125,150,0.08));border-radius:4px;padding:6px 8px;margin-top:6px}
 .diag-cand{display:flex;align-items:center;gap:8px;border:1px solid var(--border,#D8CFBE);border-radius:6px;background:var(--bg-card,#FBF7EE);padding:6px 8px}
@@ -181,6 +182,7 @@ window.parent.postMessage({ type: "ready" }, "*");
         + '<div class="diag-name">' + escHtml(d.name) + '</div>'
         + (d.detail ? '<div class="diag-detail">' + escHtml(d.detail) + '</div>' : "")
         + (d.key === "deps" && d.installing ? progressHtml(d) : "") // v0.8.8: 安装实时进度
+        + (d.key === "process" && d.logPath ? '<div class="diag-logpath">本次会话日志：' + escHtml(d.logPath) + '</div>' : "") // v0.10.8: 时间戳会话文件路径
         + (d.fix ? '<div class="diag-fix">修复：' + escHtml(d.fix) + '</div>' : "")
         + actionButtonHtml(d)
         + '</div></li>';

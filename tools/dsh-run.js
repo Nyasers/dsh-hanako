@@ -12,7 +12,7 @@
 //
 // 权限：external_side_effect（调用 dsh 编码 agent 执行任务，消耗 Hana 宿主 provider 额度，Auto 模式送审）。
 import { spawn } from "node:child_process";
-import { readFileSync, existsSync, mkdirSync, writeFileSync, copyFileSync, symlinkSync, lstatSync, readlinkSync, unlinkSync, renameSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync, writeFileSync, copyFileSync, symlinkSync, lstatSync, readlinkSync, unlinkSync, renameSync, appendFileSync } from "node:fs";
 import { join, dirname, delimiter } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -28,6 +28,48 @@ while (!existsSync(join(PLUGIN_ROOT, "manifest.json"))) {
 }
 const STDERR_CAP = 8192;
 const PORT_READY_TIMEOUT_MS = 60000; // web host 端口就绪等待上限
+// ---- 统一日志（v0.10.8 定稿：时间戳会话文件，index.js onload 初始化）----
+// 当前会话日志 = <dataDir>/logs/<YYYYMMDD-HHmmss-SSS>.log 时间戳会话文件——DSHana 插件
+// 全量运行日志（index.js 生命周期 + web host 进程 stdout/stderr + dsh-hana-provider
+// 诊断 + dsh-run 工具关键路径）；旧日志由 index.js onload zstd 压缩为 .log.zst 全部保留。
+// 本模块只把 stdout/stderr 写入 logPath（单例 g.logPath 优先），并保留兜底初始化
+// （index.js 未初始化时自建时间戳会话文件）。
+// 行格式 [<HH:mm:ss.SSS>] [<src>] <内容>，src ∈ out/err/provider/hana；写失败静默。
+function logTs() {
+  const d = new Date();
+  const p = (n, w) => String(n).padStart(w || 2, "0");
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
+}
+// 追加一行日志：整体加前缀 + 尾部换行（多行 chunk 不拆行，简单起见同前缀）
+function appendLog(logPath, src, chunk) {
+  try {
+    if (!logPath) return;
+    mkdirSync(dirname(logPath), { recursive: true });
+    const text = String(chunk ?? "").replace(/\r\n/g, "\n").replace(/\n+$/, "");
+    appendFileSync(logPath, `[${logTs()}] [${src}] ${text}\n`, "utf8");
+  } catch { /* 日志失败不阻断 */ }
+}
+function logFileStamp(d) {
+  const p = (n) => String(n).padStart(2, "0");
+  const p3 = (n) => String(n).padStart(3, "0");
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}-${p3(d.getMilliseconds())}`;
+}
+// 兜底初始化：index.js onload 未初始化（冷启动边缘）时建时间戳会话文件（与 index.js
+// 同命名约定，后续 onload 会把它当作旧日志 zstd 压缩）；不归档不压缩——属于 index.js
+// 插件会话边界逻辑，避免重复
+function newWebLogPath(dataDir) {
+  const logsDir = join(dataDir, "logs");
+  mkdirSync(logsDir, { recursive: true });
+  const stamp = logFileStamp(new Date());
+  let target = join(logsDir, stamp + ".log");
+  let i = 1;
+  while (existsSync(target)) {
+    i += 1;
+    target = join(logsDir, stamp + "-" + i + ".log");
+  }
+  try { writeFileSync(target, "", "utf8"); } catch { /* 建文件失败不阻断 */ }
+  return target;
+}
 // 宿主 provider 路径探测：不再暴露 hostProvider 配置项，直接探测宿主数据目录。
 // 候选 ① process.env.HANA_HOME 宿主进程注入（最权威：宿主进程恒注入，dev 源码/安装形态均成立）；
 // ② 插件安装形态 <宿主数据目录>/plugins/<pluginId> 上溯两级（仅安装形态成立）；
@@ -378,16 +420,19 @@ async function ensureWebHost(cfg) {
   // spawn 的 cwd 必须是已存在目录（无效 cwd 会让 Node 报误导性的 ENOENT）
   mkdirSync(cfg.dataDir, { recursive: true });
   const port = Number(cfg.webPort) || 3080;
+  // 当前会话日志 = 时间戳会话文件（index.js onload 已初始化单例 g.logPath）。
+  // 单例优先；index.js 未初始化（冷启动边缘）时兜底自建。写进 web/logLastExit/错误消息供诊断。
+  const logPath = g.logPath || newWebLogPath(cfg.dataDir);
   // v0.5.11: 会话全文搜索 overlay（dsh 默认 openAt: never 禁用搜索，需 --patch 覆盖为 first-search）
   // v0.8.1: 主题注入 overlay；v0.9.3: 宿主 provider 跟随 overlay——多份 patch 合并为
   // dsh-plugin/dsh-hanako.patch.yml.tpl 单一模板：段1 session-query 静态配置块 + 段2 theme
   // insert + 段3 provider insert（v0.9.5 起恒渲染：hostProvider 恒开跟随宿主，无关闭选项）
   // + 段4 default-model insert（v0.9.5 起恒挂载）。
-  // cordis 插件加载：theme/provider/default-model 三段均以包名注册（dsh client 模块发现
+  // cordis 插件加载：theme/provider/default-model/logger 四段均以包名注册（dsh client 模块发现
   // 按 loader entry 的 name 做 require.resolve('<name>/package.json')，file:// 无法解析），
   // 故启动前须在 $DSH_HOME/profiles/node_modules 统一建 junction（包名 → 插件安装目录
   // dsh-plugin/<pkg>），与 dsh 自维护的 junction farm 同机制（ensureCordisJunctions
-  // 幂等创建）。
+  // 每次启动无条件重建）。
   // 启动前渲染模板（占位符→实际路径）到数据目录 dsh-hanako.patch.generated.yml；launcher
   // flag（--profile/--patch）必须位于应用参数（--port）之前。模板缺失/渲染失败时不挂
   // 任何 patch 记 warn（会话全文搜索保持上游默认禁用），不阻断 dsh 启动。
@@ -395,22 +440,28 @@ async function ensureWebHost(cfg) {
   // 正规化——dsh client 模块发现按 require.resolve('<name>/package.json') 找 package.json
   // 的 dsh.client 声明，file:// 形式无法解析。包名解析锚点是 $DSH_HOME/profiles（baseUrl
   // 父目录的 node_modules），启动前统一建 junction：$DSH_HOME/profiles/node_modules/
-  // <dsh-hana-theme|dsh-hana-provider|dsh-hana-default-model> → 插件安装目录
+  // <dsh-hana-theme|dsh-hana-provider|dsh-hana-default-model|dsh-hana-logger> → 插件安装目录
   // dsh-plugin/<同名包>（与 dsh 自维护的 junction farm 同机制；dsh 的
   // healProfilesModuleFallback 只管理自身依赖闭包，不碰外来 link）。
-  // 幂等：已指向正确目标则跳过；错误/悬空 link 重建；非 link 同名文件报错不静默覆盖。
+  // 无条件重建：每次启动删旧建新（不比较 readlink）——junction 状态无条件收敛到当前
+  // 代码期望，杜绝一切残留（悬空 junction / 指向旧路径）导致的解析失败；与 patch 每次
+  // 渲染覆盖同一哲学。存在性用 lstatSync（不跟随目标）判断——existsSync 沿目标解析，
+  // 悬空 junction 会误判不存在，导致 symlinkSync EEXIST。非 junction 同名实体报错
+  // 不静默覆盖。
   const ensureCordisJunctions = (dshHome) => {
-    const packages = ["dsh-hana-theme", "dsh-hana-provider", "dsh-hana-default-model"];
+    const packages = ["dsh-hana-theme", "dsh-hana-provider", "dsh-hana-default-model", "dsh-hana-logger"];
     for (const pkg of packages) {
       const link = join(dshHome, "profiles", "node_modules", pkg);
       const target = join(PLUGIN_ROOT, "dsh-plugin", pkg);
       try {
-        if (existsSync(link)) {
-          const stat = lstatSync(link);
-          if (!stat.isSymbolicLink()) throw new Error(link + " 已存在且不是 junction；请移除后重试");
-          if (readlinkSync(link) === target) continue;
-          unlinkSync(link);
-        }
+        let existed = false;
+        let isLink = false;
+        try {
+          isLink = lstatSync(link).isSymbolicLink();
+          existed = true;
+        } catch { /* 不存在（含 lstat 失败） */ }
+        if (existed && !isLink) throw new Error(link + " 已存在且不是 junction；请移除后重试");
+        if (existed) unlinkSync(link);
         mkdirSync(dirname(link), { recursive: true });
         symlinkSync(target, link, "junction");
       } catch (e) {
@@ -423,15 +474,18 @@ async function ensureWebHost(cfg) {
 
   const patchFiles = [];
   const patchTpl = join(PLUGIN_ROOT, "dsh-plugin", "dsh-hanako.patch.yml.tpl");
-  // 渲染仅剩 provider 的 config 依赖解析基座占位符（MODELS_PATH / CATALOG_PATH /
-  // DSH_PKG_DIR）——theme/provider/default-model 三段均以包名注册，不再有 file:// URL
-  // 占位符；包名经 ensureCordisJunctions 的 junction 解析
+  // 渲染 provider 的 config 依赖解析基座占位符（MODELS_PATH / CATALOG_PATH /
+  // DSH_PKG_DIR / LOG_PATH）——theme/provider/default-model 三段均以包名注册，不再有
+  // file:// URL 占位符；包名经 ensureCordisJunctions 的 junction 解析。LOG_PATH 为本次
+  // 会话日志文件路径，四个内嵌插件（theme/provider/default-model/logger）经统一日志
+  // 服务（dsh-hana-logger，inject ['hanaLogger']）写入同一文件（src 前缀不变）。
   const renderPatchTpl = () => {
     const gen = join(cfg.dataDir, "dsh-hanako.patch.generated.yml");
     let content = readFileSync(patchTpl, "utf8")
       .split("{{MODELS_PATH}}").join(hostProvider.modelsPath)
       .split("{{CATALOG_PATH}}").join(hostProvider.catalogPath)
-      .split("{{DSH_PKG_DIR}}").join(cfg.dshPkgDir || resolveDshPkgDir(cfg));
+      .split("{{DSH_PKG_DIR}}").join(cfg.dshPkgDir || resolveDshPkgDir(cfg))
+      .split("{{LOG_PATH}}").join(logPath);
     writeFileSync(gen, content, "utf8");
     return gen;
   };
@@ -448,7 +502,7 @@ async function ensureWebHost(cfg) {
     console.warn("[dsh-run] dsh-plugin/dsh-hanako.patch.yml.tpl 缺失：不挂任何 patch（dsh 启动不受影响，会话全文搜索保持上游默认禁用）");
   }
   const patchArgs = patchFiles.flatMap((p) => ["--patch", p]);
-  // 三段 cordis 插件均以包名注册，spawn 前确保 junction 就绪（幂等）
+  // 四段 cordis 插件均以包名注册，spawn 前确保 junction 就绪（幂等）
   ensureCordisJunctions(dshHome);
   const child = spawn(nodePath, [cliBin, "--profile", "web", ...patchArgs, "--port", String(port)], {
     cwd: cfg.dataDir,
@@ -463,16 +517,28 @@ async function ensureWebHost(cfg) {
     windowsHide: true,
   });
 
-  const web = { child, port, dshHome, ready: false, stderr: "", readyPromise: null };
+  const web = { child, port, dshHome, logPath, ready: false, stderr: "", readyPromise: null };
+  // v0.10.7: stdout/stderr 全量落盘（src=out/err；stderr 另保留内存尾部供诊断界面）。
+  // 写入优先用单例 appendLog（index.js 提供，行格式一致 [ts] [src] 内容），
+  // 无单例时回退本模块 appendLog（两者写同一 logPath）
+  const emitLog = (src, d) => {
+    if (typeof g.appendLog === "function") g.appendLog(src, d);
+    else appendLog(logPath, src, d);
+  };
+  child.stdout.on("data", (d) => {
+    emitLog("out", d);
+  });
   child.stderr.on("data", (d) => {
+    emitLog("err", d);
     web.stderr = (web.stderr + String(d)).slice(-STDERR_CAP);
   });
   child.once("exit", (code, signal) => {
     web.ready = false;
     web.stderr += `\n[dsh web 退出 code=${code} signal=${signal}]`;
+    emitLog("hana", `dsh web 退出 code=${code} signal=${signal}`);
     // v0.8.5: 退出信息记入单例持久字段（随后 g.web 摘除，局部 web.stderr 会丢）——
     // 进程被外部杀掉（kill / Stop-Process）时诊断仍能区分「已退出」而非误报「尚未启动」
-    g.webLastExit = { code, signal, at: new Date().toISOString(), stderr: web.stderr.slice(-800) };
+    g.webLastExit = { code, signal, at: new Date().toISOString(), stderr: web.stderr.slice(-800), logPath };
     if (g.web === web) g.web = null;
   });
 
@@ -481,7 +547,7 @@ async function ensureWebHost(cfg) {
     const deadline = Date.now() + PORT_READY_TIMEOUT_MS;
     while (Date.now() < deadline) {
       if (child.exitCode !== null) {
-        throw new Error(`dsh web 进程提前退出 (code=${child.exitCode})：${web.stderr.slice(-1200) || "无 stderr"}`);
+        throw new Error(`dsh web 进程提前退出 (code=${child.exitCode})：${web.stderr.slice(-1200) || "无 stderr"}（完整日志：${logPath}）`);
       }
       try {
         const r = await fetch(`http://127.0.0.1:${port}/api/host.describe`, {
@@ -499,11 +565,121 @@ async function ensureWebHost(cfg) {
       } catch { /* 未就绪，继续等 */ }
       await new Promise((r) => setTimeout(r, 500));
     }
-    throw new Error(`dsh web 启动超时（${Math.round(PORT_READY_TIMEOUT_MS / 1000)}s 内端口 ${port} 未就绪）：${web.stderr.slice(-1200) || "无 stderr"}`);
+    throw new Error(`dsh web 启动超时（${Math.round(PORT_READY_TIMEOUT_MS / 1000)}s 内端口 ${port} 未就绪）：${web.stderr.slice(-1200) || "无 stderr"}（完整日志：${logPath}）`);
   })();
   web.readyPromise = readyPromise;
   g.web = web;
   return readyPromise;
+}
+
+// ---- 宿主侧 provider 跟随 push 链路（v0.10.7：fs.watch → ctx.resources.watch + HTTP push）----
+// 语义：dsh-hana-provider 插件不再自建 fs.watch（Windows rename 原子替换等平台坑一并消除）——
+// 宿主侧经 ctx.resources.watch 感知 models.json / provider-catalog.json 变化（bus 派发
+// resource.changed，resourceKey 格式 local_fs:<path>），防抖 300ms（与旧实现同 DEBOUNCE
+// 语义）后 POST dsh web host /api/hana-provider.refresh，dsh 侧插件收到通知重读配置
+// refresh()（handle.replace 原子更新）。watch 建立失败降级不阻断（dsh 侧启动时仍会
+// refresh 一次，功能不受影响）。
+// 幂等：startWebHost 重复调用 / web host 重建时先清理旧 watch 再建；cleanup 挂单例
+// g.providerPushCleanup，closeProcess 回收 web host 时调用（退订 bus + 关 watchers）。
+const PROVIDER_SYNC_DEBOUNCE_MS = 300;
+function ensureProviderPushWatch(cfg) {
+  const g = getSingleton();
+  // 幂等：先清理旧 watch + 退订（startWebHost 重复调用 / web host 重建时）
+  if (typeof g.providerPushCleanup === "function") {
+    try { g.providerPushCleanup(); } catch { /* 清理失败不阻断 */ }
+    g.providerPushCleanup = null;
+  }
+  const resources = g.resources;
+  const bus = g.bus;
+  // resources/bus 缺失（旧宿主无此服务 / onload 未注入）：降级不阻断
+  if (!resources || typeof resources.watch !== "function") {
+    console.warn("[dsh-run] 宿主 resources 不可用，provider 热跟随 watch 未建立（dsh 侧启动时仍会 refresh 一次）");
+    return;
+  }
+  if (!bus || typeof bus.subscribe !== "function") {
+    console.warn("[dsh-run] 宿主 bus 不可用，provider 热跟随订阅未建立（dsh 侧启动时仍会 refresh 一次）");
+    return;
+  }
+  const hostProvider = detectHostProviderPaths();
+  const paths = [hostProvider.modelsPath, hostProvider.catalogPath].filter(Boolean);
+  const port = Number(cfg.webPort) || 3080;
+  const handles = [];
+  const resourceKeys = new Set();
+  let timer = null;
+  const triggerPush = () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = null;
+      pushProviderRefresh(port);
+    }, PROVIDER_SYNC_DEBOUNCE_MS);
+  };
+  for (const path of paths) {
+    try {
+      const handle = resources.watch({ kind: "local-file", path }, { purpose: "dsh-hana-provider-sync" });
+      handles.push(handle);
+      // watch 返回 { subscriptionId, resourceKeys, unsubscribe, close }：resourceKeys 即
+      // 事件过滤键（格式 local_fs:<path>）；无 resourceKeys 时按约定格式兜底
+      if (Array.isArray(handle?.resourceKeys) && handle.resourceKeys.length > 0) {
+        for (const key of handle.resourceKeys) resourceKeys.add(key);
+      } else {
+        resourceKeys.add(`local_fs:${path}`);
+      }
+    } catch (e) {
+      // watch 建立失败：降级不阻断（dsh 侧启动时仍会 refresh 一次）
+      console.warn(`[dsh-run] provider 热跟随 watch 建立失败 ${path}（${e?.message || e}），该文件变化将不触发 push`);
+    }
+  }
+  if (handles.length === 0) {
+    console.warn("[dsh-run] provider 热跟随 watch 全部建立失败（dsh 侧启动时仍会 refresh 一次）");
+    return;
+  }
+  // bus.subscribe 返回 unsubscribe 函数（SDK 类型 () => void）；防御性兼容 { unsubscribe } 形状
+  const unsub = bus.subscribe((event) => {
+    if (!event || typeof event !== "object") return;
+    if (event.type !== "resource.changed") return;
+    const key = event.resourceKey;
+    if (typeof key === "string" && resourceKeys.has(key)) {
+      console.log(`[dsh-run] 宿主配置变化（${key}），防抖后 push dsh 刷新`);
+      triggerPush();
+    }
+  });
+  g.providerPushCleanup = () => {
+    if (timer) clearTimeout(timer);
+    timer = null;
+    for (const handle of handles) {
+      try { handle?.unsubscribe?.(); } catch { /* 已关闭 */ }
+    }
+    handles.length = 0;
+    resourceKeys.clear();
+    if (typeof unsub === "function") {
+      try { unsub(); } catch { /* 退订失败忽略 */ }
+    } else if (unsub && typeof unsub.unsubscribe === "function") {
+      try { unsub.unsubscribe(); } catch { /* 退订失败忽略 */ }
+    }
+    g.providerPushCleanup = null;
+  };
+  console.log(`[dsh-run] provider 热跟随 watch 已建立（${paths.length} 文件），宿主配置变化将 push dsh 刷新`);
+}
+
+// push dsh web host 刷新（回环调用 127.0.0.1:{port}，5s 超时；成功/失败都 console.log 简记，
+// 失败不阻断——web host 未起/端口未就绪时静默忽略，dsh 侧启动时已 refresh 一次）
+async function pushProviderRefresh(port) {
+  const g = getSingleton();
+  const network = g.network;
+  const doFetch = network && typeof network.fetch === "function" ? network.fetch.bind(network) : fetch;
+  const url = `http://127.0.0.1:${port}/api/hana-provider.refresh`;
+  try {
+    const res = await doFetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+      signal: AbortSignal.timeout(5000),
+    });
+    console.log(`[dsh-run] provider push ${res.ok ? "成功" : `失败（HTTP ${res.status}）`}：${url}`);
+  } catch (e) {
+    // web host 未起 / 端口未就绪：静默忽略（dsh 侧启动时已 refresh 一次，功能不受影响）
+    console.log(`[dsh-run] provider push 未送达（${e?.message || e}）：${url}`);
+  }
 }
 
 // 单例挂载：index.js 不 import 本文件（避免模块缓存），onload 时通过单例拉起 web host。
@@ -522,12 +698,18 @@ getSingleton().startWebHost = async function startWebHostFromPlugin(ctxConfig, c
   if (!cfg.dshPkgDir) cfg.dshPkgDir = resolveDshPkgDir(cfg);
   try {
     await ensureWebHost(cfg);
+    // v0.10.7: web host 就绪后建立宿主侧 provider 跟随 push watch（幂等：先清理旧 watch 再建）
+    ensureProviderPushWatch(cfg);
     return true;
   } catch (e) {
     // 记录失败原因供诊断（onload 侧只能看到布尔）；后续工具调用重试
     const g = getSingleton();
     g.webLastError = String(e?.message || e).slice(0, 1500);
     if (g.web?.stderr) g.webLastError += `\n[dsh web stderr] ${g.web.stderr.slice(-800)}`;
+    // v0.10.7: 失败也记日志路径（诊断界面可跳完整日志；g.web 在启动失败后可能已摘除，
+    // 从 webLastExit 取兜底）
+    const logPath = g.web?.logPath || g.webLastExit?.logPath || null;
+    if (logPath) g.webLastLogPath = logPath;
     g.webLastErrorAt = new Date().toISOString();
     return false;
   }
@@ -975,7 +1157,7 @@ function buildDepsDiagCheck(g, cfg) {
 function buildProcessDiagCheck(g, out) {
   const web = g.web || null;
   const child = web?.child || null;
-  const lastExit = g.webLastExit || null; // 持久退出记录：{ code, signal, at, stderr } | null
+  const lastExit = g.webLastExit || null; // 持久退出记录：{ code, signal, at, stderr, logPath } | null
   const started = Boolean(web || g.webLastError || lastExit);
   const alive = Boolean(child && child.exitCode === null);
   const ready = Boolean(web?.ready);
@@ -983,6 +1165,8 @@ function buildProcessDiagCheck(g, out) {
   const stderr = String(web?.stderr || lastExit?.stderr || "").slice(-800); // stderr 尾部截断 ≤800
   const lastError = String(g.webLastError || "").slice(-800);
   const lastErrorAt = g.webLastErrorAt || "";
+  // v0.10.7: 本次会话日志路径（当前 web / 退出记录 / 失败记录，三级兜底）
+  const logPath = web?.logPath || lastExit?.logPath || g.webLastLogPath || null;
   const check = {
     key: "process",
     name: "DSH 进程状态",
@@ -994,6 +1178,7 @@ function buildProcessDiagCheck(g, out) {
     stderr,
     lastError,
     lastErrorAt,
+    logPath, // 完整日志路径（界面展示「本次会话日志」）
     lastExit, // 结构化退出记录（非敏感），供前端/调试
     detail: "",
     fix: "",
@@ -1048,6 +1233,10 @@ function pickProcessFix(lastError, stderr, port) {
 
 export async function closeProcess() {
   const g = getSingleton();
+  // 先清理 provider 热跟随 watch（退订 bus + 关 watchers），再回收 web host 进程
+  if (typeof g.providerPushCleanup === "function") {
+    try { g.providerPushCleanup(); } catch { /* 清理失败不阻断 */ }
+  }
   const web = g.web;
   g.web = null;
   if (web?.child) {

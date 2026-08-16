@@ -22,14 +22,16 @@
 // 的 /api 前缀，冲突只会发生在同 (kind, path) 重复注册（插件重载未清理场景），此时
 // 降级记日志不阻断。错误统一返回 { ok:false, error } 结构。
 //
-// 服务依赖：export const inject = ['webServer', 'agentDefaultModel'] 声明依赖（cordis
-// 服务注入经 inject 声明生效，无声明则 apply 内 ctx.webServer / ctx.agentDefaultModel
-// 抛 "cannot get property ... without inject"），apply 内再经 ctx.inject 取作用域上下文。
+// 服务依赖：export const inject = ['webServer', 'agentDefaultModel', 'hanaLogger'] 声明依赖
+// （cordis 服务注入经 inject 声明生效，无声明则 apply 内 ctx.webServer /
+// ctx.agentDefaultModel 抛 "cannot get property ... without inject"），apply 内再经
+// ctx.inject 取作用域上下文。诊断日志经 dsh-hana-logger 统一日志服务写入本次会话日志
+// （行格式 [default-model]，src 前缀不变）。
 // 容错纪律：apply 全程 try/catch 不抛出——依赖缺失/路由重复只记日志，插件降级为
 // 空操作，不阻断 dsh 启动（边界要求）。注释风格同 dsh-hana-provider（中文/单引号/无分号）。
 
 export const name = 'dsh-hana-default-model'
-export const inject = ['webServer', 'agentDefaultModel']
+export const inject = ['webServer', 'agentDefaultModel', 'hanaLogger']
 
 // ---- 读请求 body（JSON）----
 function readJsonBody(req) {
@@ -63,9 +65,9 @@ function json(res, body) {
 }
 
 // ---- 插件 apply：路由注册（全程容错，降级不阻断 dsh 启动；前端分页见 client.js）----
-export function apply(ctx) {
+export function apply(ctx, config) {
   try {
-    ctx.inject(['webServer', 'agentDefaultModel'], (httpCtx) => {
+    ctx.inject(['webServer', 'agentDefaultModel', 'hanaLogger'], (httpCtx) => {
       httpCtx.effect(() => {
         const disposers = []
         const registerRoute = (path, handler) => {
@@ -73,6 +75,7 @@ export function apply(ctx) {
             disposers.push(httpCtx.webServer.register({ kind: 'exact', path, handler }))
           } catch (e) {
             // 重复注册（插件重载未清理）：降级记日志，不阻断
+            httpCtx.hanaLogger.log('default-model', `路由 ${path} 注册失败：${e?.message || e}`)
             try {
               ctx.logger?.warn?.(`[dsh-hana-default-model] 路由 ${path} 注册失败：${e?.message || e}`)
             } catch { /* 日志失败不阻断 */ }
@@ -106,8 +109,10 @@ export function apply(ctx) {
               model,
               ...(reasoningEffort ? { reasoningEffort } : {})
             })
+            httpCtx.hanaLogger.log('default-model', `默认模型已保存：${provider} / ${model}${reasoningEffort ? ' / ' + reasoningEffort : ''}`)
             json(res, { ok: true })
           } catch (e) {
+            try { httpCtx.hanaLogger.log('default-model', `默认模型保存失败：${e?.message || e}`) } catch { /* 日志失败不阻断（防二次抛错挂起响应） */ }
             json(res, { ok: false, error: e?.message || String(e) })
           }
         })

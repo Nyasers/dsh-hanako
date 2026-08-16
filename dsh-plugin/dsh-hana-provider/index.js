@@ -5,8 +5,14 @@
 //   · 目录：models.json 的 providers 对象 → { baseURL, api, apiKey, models, displayName }
 //   · 凭据：models.json 的 apiKey 是引用（"hana-runtime-api-key:X"），实际 api_key
 //     从 provider-catalog.json 对应条目直读；catalog 缺失的 provider 跳过并记日志
-//   · 跟随：两文件 fs.watch（防抖 300ms）→ 重读 → handle.replace() 原子更新，
-//     JSON 解析失败保留旧配置并记日志；不动 dsh 自身 profile，与用户 provider 共存
+//   · 跟随：宿主侧 ctx.resources.watch 感知两文件变化（bus 派发 resource.changed，
+//     resourceKey 格式 local_fs:<path>）→ POST /api/hana-provider.refresh 通知刷新 →
+//     重读 → handle.replace() 原子更新，JSON 解析失败保留旧配置并记日志；不动 dsh
+//     自身 profile，与用户 provider 共存（本插件不再自建 fs.watch）
+//   · 诊断日志：经 dsh-hana-logger 统一日志服务（inject ['hanaLogger']）写入本次插件会话
+//     日志文件（宿主 patch config 注入 {{LOG_PATH}}），refresh 成功/失败/收到刷新请求
+//     写入同一文件（行格式 [<HH:mm:ss.SSS>] [provider] <内容>，与宿主侧 appendLog
+//     一致）；服务未就绪/写失败时静默跳过（日志失败不阻断）
 //
 // compat 映射（定稿）：
 //   · Hana compat.thinkingFormat → pi-ai compat.thinkingFormat 直通
@@ -30,34 +36,27 @@
 // （settingsNs 用本插件专用名，dsh 侧无对应 settings 分节 → models 页显示为「未配置」
 // 行，配置只读跟随 Hana，编辑仍发生在宿主）。stream 委托 pi-ai provider。
 //
-// 服务依赖（关键）：必须 export const inject = ['llm'] 声明 llm 依赖（同 dsh-llm-pi-ai
-// 姿势）——cordis 服务注入经 inject 声明生效，无声明则 apply 内 ctx.llm 抛
-// "cannot get property llm without inject"（被下方 try/catch 吞掉 → 插件静默停用）。
+// 服务依赖（关键）：必须 export const inject = ['llm', 'webServer', 'hanaLogger'] 声明依赖
+// （同 dsh-llm-pi-ai 姿势）——cordis 服务注入经 inject 声明生效，无声明则 apply 内
+// ctx.llm / ctx.webServer 抛 "cannot get property llm without inject"（被下方 try/catch
+// 吞掉 → 插件静默停用）。webServer 用于注册 /api/hana-provider.refresh 路由（宿主 push
+// 通知入口），经 ctx.inject(['webServer'], ...) 取用；logger 为 dsh-hana-logger 统一日志
+// 服务（诊断日志写入本次会话日志，参考 dsh-hana-default-model 写法）。
 // 另注意：勿给模块加 default 导出——Entry 加载器提取 default 会丢具名导出（inject 失效）。
 //
 // 容错纪律：apply 全程 try/catch 不抛出——依赖缺失/配置缺失/解析失败只记日志，
 // 插件降级为空操作，不阻断 dsh 启动（边界要求）。
 
 export const name = 'dsh-hana-provider'
-export const inject = ['llm']
+export const inject = ['llm', 'webServer', 'hanaLogger']
 
-import { existsSync, readFileSync, watch, appendFileSync } from 'node:fs'
-import { join, dirname, basename } from 'node:path'
-import { tmpdir } from 'node:os'
+import { existsSync, readFileSync } from 'node:fs'
+import { join, dirname } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-const DEBOUNCE_MS = 300
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300000
 const DEFAULT_CONTEXT_WINDOW = 262144
 
-// 诊断文件日志（绕开 cordis logger 级别过滤——实测 dsh 内 logger info/warn 均不落地，
-// 热跟随排查期间用文件日志直证 watch 链路；写入 DSH_HOME 下，正式环境亦保留）
-const diagFile = process.env.DSH_HOME ? join(process.env.DSH_HOME, 'dsh-hana-provider.log') : join(tmpdir(), 'dsh-hana-provider.log')
-const diagLog = (msg) => {
-  try {
-    appendFileSync(diagFile, `[${new Date().toISOString()}] ${msg}\n`)
-  } catch { /* 日志失败不阻断 */ }
-}
 const DEFAULT_MAX_TOKENS = 32768
 const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
 const THINKING_FORMATS = ['openai', 'openrouter', 'deepseek', 'together', 'zai', 'qwen', 'chat-template', 'qwen-chat-template', 'string-thinking', 'ant-ling']
@@ -250,6 +249,36 @@ function readHostConfig(modelsPath, catalogPath) {
   return result
 }
 
+// ---- 路由 HTTP 辅助（宿主 push 通知入口 /api/hana-provider.refresh 用，同 dsh-hana-default-model）----
+function readJsonBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = []
+    let size = 0
+    req.on('data', (chunk) => {
+      size += chunk.length
+      if (size > 1e6) {
+        req.destroy(new Error('body 过大'))
+        return
+      }
+      chunks.push(chunk)
+    })
+    req.on('end', () => {
+      try {
+        const raw = Buffer.concat(chunks).toString('utf8')
+        resolve(raw ? JSON.parse(raw) : {})
+      } catch (e) {
+        reject(new Error('body 不是合法 JSON'))
+      }
+    })
+    req.on('error', reject)
+  })
+}
+
+function json(res, body) {
+  res.writeHead(200, { 'Content-Type': 'application/json' })
+  res.end(JSON.stringify(body))
+}
+
 // ---- 组装：pi-ai provider + LlmAdapter（参考 dsh-llm-pi-ai 的 buildProvider/routeAuth/apply 段）----
 // 凭据由本插件直读 catalog，走 pi-ai 的 apiKey override 通道（options.apiKey 优先级最高，
 // provider.auth 的 resolve 只在无 override 时被问询），因此 auth 提供最简 api-key 形状即可
@@ -284,6 +313,18 @@ export async function apply(ctx, config) {
     if (!modelsPath || !catalogPath) {
       ctx.logger.warn('[dsh-hana-provider] 配置缺少 modelsPath/catalogPath，插件停用（patch config 未渲染？）')
       return
+    }
+    // 诊断日志：经 dsh-hana-logger 统一日志服务（inject ['hanaLogger']）写入本次会话日志，
+    // 行格式 [<HH:mm:ss.SSS>] [provider] <内容>（与宿主侧 appendLog 一致）；
+    // 服务未就绪/写失败静默（日志失败不阻断）
+    let loggerSvc = null
+    ctx.inject(['hanaLogger'], (logCtx) => {
+      loggerSvc = logCtx.hanaLogger
+    })
+    const providerLog = (msg) => {
+      try {
+        loggerSvc?.log('provider', msg)
+      } catch { /* 日志失败不阻断 */ }
     }
 
     // ---- 消息转换：harness message → pi-ai Context（复刻 dsh-llm-pi-ai 的
@@ -646,7 +687,7 @@ export async function apply(ctx, config) {
       // directory 注册前过滤与 dsh 已有 configurable provider 撞名的条目（如宿主 deepseek 与
       // dsh-llm-pi-ai 内置 configurable deepseek 同名）。registerConfigurableProviders 是
       // all-or-nothing：一个撞名整体抛错，曾导致 refresh 每次都失败、snapshot 永不更新、
-      // 热跟随失效（watch/refresh 链路本身正常）。adapter 注册不受影响（deepseek 照常可用）。
+      // 热跟随失效（refresh 链路本身正常）。adapter 注册不受影响（deepseek 照常可用）。
       const declared = new Set((ctx.llm.listConfigurableProviders?.() || []).map((e) => e.provider))
       const filteredEntries = entries.filter((e) => !declared.has(e.provider))
       if (directory === null) {
@@ -659,75 +700,72 @@ export async function apply(ctx, config) {
       if (adapter !== null) adapter.replaceSnapshot(built)
     }
 
-    const refresh = () => {
-      diagLog('refresh 执行')
+    const refresh = (source = '启动/路由') => {
+      const t0 = Date.now()
       const host = readHostConfig(modelsPath, catalogPath)
       // 解析失败（文件缺失/损坏）：保留旧配置并记日志（首次则目录为空，插件静默降级）
       if (host.errors.length > 0 && host.routes.length === 0) {
-        diagLog(`refresh 失败，保留旧配置：${host.errors.join('；')}`)
         ctx.logger.warn(`[dsh-hana-provider] 读取宿主配置失败，保留旧配置：${host.errors.join('；')}`)
+        providerLog(`refresh 失败（${source}）：${host.errors.join('；')}`)
         return
       }
       for (const error of host.errors) ctx.logger.warn(`[dsh-hana-provider] 宿主配置部分异常：${error}`)
       for (const skipped of host.skipped) ctx.logger.info(`[dsh-hana-provider] 跳过 provider "${skipped.id}"：${skipped.reason}`)
       try {
         applySnapshot(host)
-        diagLog(`refresh 完成：${snapshot.byId.size} 个 provider（跳过 ${host.skipped.length}，异常 ${host.errors.length}）`)
+        const modelCount = [...snapshot.byId.values()].reduce((n, r) => n + (r.models ? r.models.length : 0), 0)
+        const elapsed = Date.now() - t0
         ctx.logger.info(`[dsh-hana-provider] 已同步 ${snapshot.byId.size} 个 provider（跳过 ${host.skipped.length}，异常 ${host.errors.length}）`)
+        providerLog(`refresh 完成（${source}）：${snapshot.byId.size} 个 provider / ${modelCount} 个模型（跳过 ${host.skipped.length}，异常 ${host.errors.length}），耗时 ${elapsed}ms`)
       } catch (e) {
         // replace 抛错（如 DUPLICATE_ADAPTER：与用户已有 provider 同名）：保留旧注册
-        diagLog(`refresh 应用失败，保留旧配置：${e?.message || e}`)
         ctx.logger.error(`[dsh-hana-provider] 应用配置失败，保留旧配置：${e?.message || e}`)
+        providerLog(`refresh 应用失败（${source}），保留旧配置：${e?.message || e}`)
       }
     }
 
-    // ---- fs.watch 热跟随（防抖 300ms；文件缺失/不可监听时延后重试）----
-    // 注意：必须监听【所在目录】而非文件本身——Windows 编辑器保存通常是「写临时文件 +
-    // rename 原子替换」，单文件 watch 挂在旧 inode/句柄上，rename 后不再触发事件（实测
-    // 改 models.json 后 provider 快照不刷新）；目录 watch 对 rename 敏感，回调按 basename
-    // 过滤目标文件名（filename 为 null 时不过滤，保底刷新）。
-    let watchers = []
-    let timer = null
-    const ensureWatchers = () => {
-      for (const path of [modelsPath, catalogPath]) {
-        if (watchers.some((w) => w.path === path && w.active)) continue
-        const dir = dirname(path)
-        const base = basename(path)
-        try {
-          const handle = watch(dir, (eventType, filename) => {
-            // 只响应目标文件（Windows rename 替换场景 filename 即目标名；无关文件忽略）
-            if (filename !== null && filename !== base) {
-              diagLog(`watch 忽略 ${eventType} ${String(filename)}（非 ${base}）`)
-              return
-            }
-            diagLog(`watch 命中 ${eventType} ${String(filename)}（${base}），防抖刷新`)
-            if (timer) clearTimeout(timer)
-            timer = setTimeout(() => {
-              timer = null
-              refresh()
-              ensureWatchers()
-            }, DEBOUNCE_MS)
-          })
-          watchers.push({ path, active: true, handle, dir, base })
-          diagLog(`watch 已建立：${path}（目录 ${dir}，basename ${base}）`)
-        } catch (e) {
-          // 目录暂不存在：不标记 active，下次 refresh 后重试
-          diagLog(`watch 建立失败 ${path}（目录 ${dir}）：${e?.message || e}`)
-          ctx.logger.warn(`[dsh-hana-provider] 无法监听 ${path}（目录 ${dir}）：${e?.message || e}（配置目录出现后再试）`)
+    // ---- 宿主 push 通知路由（v0.10.7：宿主侧 ctx.resources.watch 感知配置变化后
+    // POST /api/hana-provider.refresh 通知刷新；本插件不再自建 fs.watch）----
+    // 路由经 webServer.register（kind: exact）注册——webserver 匹配 exact 优先于
+    // apiproxy 的 /api 前缀，冲突只发生在同 (kind, path) 重复注册（插件重载未清理场景），
+    // 此时降级记日志不阻断。错误统一返回 { ok:false, error } 结构（同 dsh-hana-default-model）。
+    ctx.inject(['webServer'], (httpCtx) => {
+      httpCtx.effect(() => {
+        const disposers = []
+        const registerRoute = (path, handler) => {
+          try {
+            disposers.push(httpCtx.webServer.register({ kind: 'exact', path, handler }))
+          } catch (e) {
+            // 重复注册（插件重载未清理）：降级记日志，不阻断
+            try {
+              ctx.logger?.warn?.(`[dsh-hana-provider] 路由 ${path} 注册失败：${e?.message || e}`)
+            } catch { /* 日志失败不阻断 */ }
+          }
         }
-      }
-    }
-    ctx.effect(() => () => {
-      if (timer) clearTimeout(timer)
-      timer = null
-      for (const w of watchers) {
-        try { w.handle.close() } catch { /* 已关闭 */ }
-      }
-      watchers = []
+
+        // POST /api/hana-provider.refresh：宿主 push 通知 → 重读配置 refresh()
+        registerRoute('/api/hana-provider.refresh', async (req, res) => {
+          try {
+            await readJsonBody(req)
+            providerLog('收到 /api/hana-provider.refresh 请求（宿主 push 通知）')
+            refresh('宿主 push')
+            json(res, { ok: true })
+          } catch (e) {
+            providerLog(`路由处理失败：${e?.message || e}`)
+            json(res, { ok: false, error: e?.message || String(e) })
+          }
+        })
+
+        return () => {
+          for (const dispose of disposers) {
+            try { dispose() } catch { /* 清理失败不阻断 */ }
+          }
+        }
+      })
     })
 
-    refresh()
-    ensureWatchers()
+    // 启动时刷新一次（宿主 push 未建立/未触发时也有完整目录；随后靠路由通知增量刷新）
+    refresh('启动')
   } catch (e) {
     // 顶层兜底：apply 永不抛出（边界要求——不阻断 dsh 启动）
     ctx.logger.error(`[dsh-hana-provider] 插件初始化失败，已降级为空操作：${e?.message || e}`)
