@@ -389,9 +389,8 @@ async function ensureWebHost(cfg) {
   // assets/dsh-cordis/<pkg>），与 dsh 自维护的 junction farm 同机制（ensureCordisJunctions
   // 幂等创建）。
   // 启动前渲染模板（占位符→实际路径）到数据目录 dsh-hanako.patch.generated.yml；launcher
-  // flag（--profile/--patch）必须位于应用参数（--port）之前。模板缺失/渲染失败时降级：
-  // 回退挂静态 session-query.patch.yml（保底搜索），再缺失则不挂任何 patch 记 warn，
-  // 均不阻断 dsh 启动。
+  // flag（--profile/--patch）必须位于应用参数（--port）之前。模板缺失/渲染失败时不挂
+  // 任何 patch 记 warn（会话全文搜索保持上游默认禁用），不阻断 dsh 启动。
   // v0.9.5 正规化升级：dsh-hana-default-model 先行改包名注册；本版 theme/provider 一并
   // 正规化——dsh client 模块发现按 require.resolve('<name>/package.json') 找 package.json
   // 的 dsh.client 声明，file:// 形式无法解析。包名解析锚点是 $DSH_HOME/profiles（baseUrl
@@ -440,17 +439,13 @@ async function ensureWebHost(cfg) {
     try {
       patchFiles.push(renderPatchTpl());
     } catch (e) {
-      // 渲染失败（读模板/写数据目录异常）：回退静态 session-query patch（保底搜索功能）
-      console.warn(`[dsh-run] patch 模板渲染失败（${e?.message || e}），回退静态 session-query.patch.yml`);
-      const fallback = join(PLUGIN_ROOT, "assets", "patches", "session-query.patch.yml");
-      if (existsSync(fallback)) patchFiles.push(fallback);
+      // 渲染失败（读模板/写数据目录异常）：不挂任何 patch 记 warn（dsh 启动不受影响，
+      // 会话全文搜索保持上游默认禁用）
+      console.warn(`[dsh-run] patch 模板渲染失败（${e?.message || e}）：不挂任何 patch（dsh 启动不受影响，会话全文搜索保持上游默认禁用）`);
     }
   } else {
-    // 模板缺失：回退静态 session-query patch（保底搜索）；再缺失则不挂任何 patch
-    console.warn("[dsh-run] assets/patches/dsh-hanako.patch.yml.tpl 缺失，回退静态 session-query.patch.yml");
-    const fallback = join(PLUGIN_ROOT, "assets", "patches", "session-query.patch.yml");
-    if (existsSync(fallback)) patchFiles.push(fallback);
-    else console.warn("[dsh-run] session-query.patch.yml 也不存在：不挂任何 patch（dsh 启动不受影响，会话全文搜索保持上游默认禁用）");
+    // 模板缺失：不挂任何 patch 记 warn（dsh 启动不受影响，会话全文搜索保持上游默认禁用）
+    console.warn("[dsh-run] assets/patches/dsh-hanako.patch.yml.tpl 缺失：不挂任何 patch（dsh 启动不受影响，会话全文搜索保持上游默认禁用）");
   }
   const patchArgs = patchFiles.flatMap((p) => ["--patch", p]);
   // 三段 cordis 插件均以包名注册，spawn 前确保 junction 就绪（幂等）
