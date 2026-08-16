@@ -48,5 +48,5 @@ dsh_run(task=…, sessionId=<命中的 sessionId>)
 
 ## 关联
 
-- 历史账本（opId/status/usage 对账）用 dsh_ops，本工具只按内容搜会话。
+- 会话清单/摘要（sessionId/title/cwd/时间/token/统计）用 dsh_ops，本工具只按内容搜会话。
 - resume 的参数细节与副作用见 dsh-run 技能。

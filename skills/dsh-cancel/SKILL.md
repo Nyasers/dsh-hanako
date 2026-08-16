@@ -37,4 +37,4 @@ description: "dsh_cancel 工具手册（源码 tools/dsh-cancel.js 核对）。�
 ## 关联
 
 - 取消后的终态、错误码 DSH_ABORTED、usage 对账见 dsh-run 技能「错误码速查」。
-- 取消后查终态用 dsh_ops（status=running 过滤含 cancelling；aborted 归入 error 过滤的说明见 dsh-ops 技能）。
+- 取消后查终态（op 快照，仅本次运行期内存）看运行卡片；跨会话清单/摘要（含取消后遗留的会话）用 dsh_ops（详见 dsh-ops 技能）。

@@ -12,7 +12,7 @@
 //
 // 权限：external_side_effect（调用 dsh 编码 agent 执行任务，消耗 Hana 宿主 provider 额度，Auto 模式送审）。
 import { spawn } from "node:child_process";
-import { readFileSync, existsSync, mkdirSync, writeFileSync, appendFileSync, rmSync, readdirSync, copyFileSync, symlinkSync, lstatSync, readlinkSync, unlinkSync, renameSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync, writeFileSync, copyFileSync, symlinkSync, lstatSync, readlinkSync, unlinkSync, renameSync } from "node:fs";
 import { join, dirname, delimiter } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -318,7 +318,7 @@ function startOperation({ task, cwd, timeoutMs, agentPreset, reasoningEffort, re
     stopReason: null,
     error: null,
     sessionId: null,
-    sessionCwd: null, // v0.7.2: 会话实际 cwd（resume 时与 op.cwd 可能不一致，sessionRecord 链接构造用）
+    sessionCwd: null, // 会话实际 cwd（resume 时与 op.cwd 可能不一致，session.create 时记录）
     approvalPending: false,
     pendingApprovals: [],
   });
@@ -335,188 +335,6 @@ function endOperation(opId, patch) {
   if (!op) return;
   const started = new Date(op.startedAt).getTime();
   Object.assign(op, patch, { durationMs: Date.now() - started });
-  dirtyOps.add(opId); // v0.7.1: JSONL 增量——标记待写行，persistOps 按 dirty 追加
-  schedulePersist(); // 终态触发落盘（防抖 300ms，见 persistOps）
-}
-
-// ---- op 历史落盘与恢复（v0.7.1）：终态快照增量追加写 dataDir/ops.jsonl，重启后 loadOps 恢复可查 ----
-// 落盘是增强，不阻塞主流程：写失败 try/catch 静默；进程退出前不保证 flush
-// （终态以卡片/对话内容为准）。防抖 300ms：多次 endOperation 只写最后一次。
-// v0.7.1 起 ops.json（整文件 JSON 数组，每次终态全量重写）→ ops.jsonl（JSON Lines）：
-// 每行一条 op 快照，终态只 append 一行（O(1)，不再全量序列化历史）；恢复端逐行解析，
-// 单行损坏只丢该条（旧格式整体 JSON.parse 失败则全部丢失），同一 op 多行按 opId 去重留最后一行。
-let persistTimer = null;
-let dirtyOps = new Set(); // 待落盘 opId（endOperation 标记，persistOps 消费后清空；失败不清下次重试）
-
-// ---- dsh 会话落盘路径算法（v0.7.2 起，复刻 @deepseek-ai/dsh-session-persistence-jsonl@0.1.0-rc.6）----
-// 用途：serializeOpRow 构造 sessionRecord 链接——指向 dsh 官方会话完整记录
-// <dataDir>/dsh-home/sessions/<projectKey(cwd)>/<encodeSegment(sessionId)>/session.jsonl.zstd。
-// 依赖被 package-lock.json 锁死 rc.6（漂移风险可控）；dsh 升级可能漂移——ops.jsonl 是增强型
-// 账本，链接失效不影响主流程（完整记录仍可经 sessionId 在 dsh Web UI 定位）。
-// 算法逐 code unit 复刻自 dsh-session-persistence-jsonl/lib/index.js（encodeSegment 84~96 行，
-// projectKey 106~125 行）：
-function encodeSegment(raw) {
-  if (raw.length === 0) throw new Error("cannot encode an empty path segment");
-  if (raw === ".") return "~002E";
-  if (raw === "..") return "~002E~002E";
-  let out = "";
-  for (let i = 0; i < raw.length; i++) {
-    const code = raw.charCodeAt(i);
-    const ch = String.fromCharCode(code);
-    if (ch !== "~" && /^[A-Za-z0-9._-]$/.test(ch)) out += ch;
-    else out += "~" + code.toString(16).toUpperCase().padStart(4, "0");
-  }
-  return out;
-}
-
-function projectKey(cwd) {
-  if (cwd.length === 0) throw new Error("cannot encode an empty project path");
-  let readable = "";
-  let separatorRun = false;
-  for (let i = 0; i < cwd.length; i++) {
-    const code = cwd.charCodeAt(i);
-    const ch = String.fromCharCode(code);
-    if (ch === "/" || ch === "\\" || ch === ":") {
-      if (!separatorRun) readable += "-";
-      separatorRun = true;
-    } else if (ch !== "~" && /^[A-Za-z0-9._-]$/.test(ch)) {
-      readable += ch;
-      separatorRun = false;
-    } else {
-      readable += "~" + code.toString(16).toUpperCase().padStart(4, "0");
-      separatorRun = false;
-    }
-  }
-  return `--${(readable.replace(/^-+/, "") || "root").slice(0, 251)}--`;
-}
-
-// ---- v0.7.3: sessionRecord 链接构造 = 存在性校验 + 扫描兜底 ----
-// v0.7.2 盲区：旧行（v0.7.1 时代产生）无 sessionCwd，loadOps 回写迁移时 serializeOpRow 回退
-// op.cwd 构造链接；resume 任务的 op.cwd 是用户传入/defaultCwd（如 E:\Hanako\workspace），
-// 而会话实际 cwd（dsh 落盘 projectKey 依据）可能是别的目录——回退用错 cwd 指向不存在的文件。
-// 本函数先按 <dataDir>/dsh-home/sessions/<projectKey(cwd)>/<encodedId>/ 探测（新任务 sessionCwd
-// 恒正确 → 一次 existsSync 直接命中，零额外扫描成本）；未命中再按 encodedId 扫 sessions/*/
-// 定位真实路径（会话量小，成本可忽略）；仍找不到返回 null——调用方省略链接（诚实缺失，
-// 优于坏链接；完整记录仍可经 sessionId 在 dsh Web UI / sessions 目录定位）。
-function resolveSessionRecord(dataDir, cwd, sessionId) {
-  const encoded = encodeSegment(sessionId);
-  const probeDir = join(dataDir, "dsh-home", "sessions", projectKey(cwd), encoded);
-  for (const name of ["session.jsonl.zstd", "session.jsonl"]) {   // 兼容 zstd / compression:none 两种后缀
-    const p = join(probeDir, name);
-    if (existsSync(p)) return p;
-  }
-  // projectKey 漂移（旧行 resume 回退 op.cwd 等）：按 encodedId 扫 sessions/*/ 定位真实路径
-  const sessionsRoot = join(dataDir, "dsh-home", "sessions");
-  try {
-    for (const proj of readdirSync(sessionsRoot, { withFileTypes: true })) {
-      if (!proj.isDirectory()) continue;
-      for (const name of ["session.jsonl.zstd", "session.jsonl"]) {
-        const p = join(sessionsRoot, proj.name, encoded, name);
-        if (existsSync(p)) return p;
-      }
-    }
-  } catch { /* 扫描失败：返回 null，调用方省略链接 */ }
-  return null;
-}
-
-function serializeOpRow(op, dataDir) {
-  // v0.7.2: 终态行不再落盘完整 output——完整输出在内存 op 快照（卡片懒加载）与
-  // dsh 会话完整记录（sessionRecord 链接指向 dsh-home/sessions/.../session.jsonl.zstd）里，
-  // ops.jsonl 只留账本元数据 + 链接（单一事实源）。映射只发生在持久化时，不污染内存 Map
-  // （内存快照仍保留完整 output 供卡片懒加载）。summary/usage/task/status/stopReason/error 照旧保留。
-  const row = { ...op };
-  delete row.output;
-  if (dataDir && row.sessionId) {
-    try {
-      // v0.7.3: 经 resolveSessionRecord 构造——存在性校验 + 扫描兜底：
-      // sessionCwd 优先（resume 时 op.cwd 可能与会话实际 cwd 不一致，不能用来构造链接）；
-      // 缺失（恢复的旧行）回退 op.cwd（旧行 resume 的 op.cwd 可能不是会话实际 cwd，探测
-      // 未命中时按 encodedId 扫描 sessions/*/ 定位真实路径）；找不到真实文件：省略链接
-      // （诚实缺失，优于坏链接，同时清除历史坏链接）——不构造链接不阻塞主流程。
-      const rec = resolveSessionRecord(dataDir, row.sessionCwd || row.cwd, row.sessionId);
-      if (rec) row.sessionRecord = rec;
-      else delete row.sessionRecord;
-    } catch { delete row.sessionRecord; /* 路径算法异常（cwd 为空等）：省略链接——完整记录仍可经 sessionId 在 dsh Web UI 定位 */ }
-  }
-  return row;
-}
-
-function persistOps() {
-  const g = getSingleton();
-  if (!g.dataDir || dirtyOps.size === 0) return; // 单例未记数据目录或无待写：直接返回不抛
-  try {
-    mkdirSync(g.dataDir, { recursive: true });
-    const file = join(g.dataDir, "ops.jsonl");
-    for (const opId of dirtyOps) {
-      const op = g.ops.get(opId);
-      if (!op) continue; // 已被 OP_KEEP 裁掉：不补写（其历史行下次 load 去重裁剪）
-      appendFileSync(file, JSON.stringify(serializeOpRow(op, g.dataDir)) + "\n", "utf8");
-    }
-    dirtyOps.clear();
-  } catch { /* 落盘失败静默：历史落盘是增强，不阻塞主流程；dirty 未清，下次终态重试（重复行 load 去重兜底） */ }
-}
-
-function schedulePersist() {
-  if (persistTimer) clearTimeout(persistTimer);
-  persistTimer = setTimeout(persistOps, 300);
-}
-
-function loadOps() {
-  const g = getSingleton();
-  if (g._opsLoaded) return; // 幂等：startWebHostFromPlugin / doExecute 双调用点只恢复一次
-  g._opsLoaded = true;
-  if (!g.dataDir) return;
-  const jsonlPath = join(g.dataDir, "ops.jsonl");
-  const legacyPath = join(g.dataDir, "ops.json");
-  const rows = [];
-  if (existsSync(jsonlPath)) {
-    // v0.7.1: JSONL 逐行解析——单行损坏跳过只丢该条；同一 op 多行（中间态 sessionId 行 + 终态行）
-    // 按 opId 去重留最后一行（Map.set 覆盖保持首次插入位置，顺序仍按文件行序）。
-    let text = "";
-    try { text = readFileSync(jsonlPath, "utf8"); } catch { /* 读失败：按空启动 */ }
-    const lastIdx = new Map(); // opId -> rows 中的下标
-    for (const line of text.split("\n")) {
-      if (!line.trim()) continue;
-      let row = null;
-      try { row = JSON.parse(line); } catch { continue; } // 单行损坏：跳过该条，不影响其余
-      if (!row || typeof row !== "object" || !row.opId) continue;
-      const idx = lastIdx.get(row.opId);
-      if (idx !== undefined) rows[idx] = row; // 后行覆盖前行
-      else { lastIdx.set(row.opId, rows.length); rows.push(row); }
-    }
-  } else if (existsSync(legacyPath)) {
-    // v0.7.1: 旧版 ops.json（JSON 数组）一次性迁移——读旧文件写 jsonl 后删除旧文件；
-    // 迁移失败（旧文件损坏）静默忽略，按空 Map 启动。
-    try {
-      const legacy = JSON.parse(readFileSync(legacyPath, "utf8"));
-      if (Array.isArray(legacy)) {
-        rows.push(...legacy.filter((r) => r && typeof r === "object" && r.opId));
-        mkdirSync(g.dataDir, { recursive: true });
-        writeFileSync(jsonlPath, rows.map((r) => JSON.stringify(r)).join("\n") + (rows.length ? "\n" : ""), "utf8");
-        rmSync(legacyPath, { force: true });
-      }
-    } catch { /* 旧文件不存在/损坏：忽略，空 Map 启动 */ }
-    if (rows.length === 0) return;
-  } else {
-    return; // 无任何历史文件：空 Map 启动
-  }
-  const interruptedAt = new Date().toISOString();
-  for (const row of rows) {
-    // 非终态 op（重启前仍 running，未及结束）标为 interrupted（重启即中断，符合事实）；终态原样恢复
-    g.ops.set(row.opId, row.status === "running" ? { ...row, status: "interrupted", interruptedAt } : row);
-  }
-  // 恢复后同样遵守 OP_KEEP：超出删最老（Map 按插入序，最老在前）
-  while (g.ops.size > OP_KEEP) {
-    const first = g.ops.keys().next().value;
-    if (!first) break;
-    g.ops.delete(first);
-  }
-  // v0.7.1: 恢复态（interrupted 标记 + 去重 + 裁剪后）回写 jsonl，文件与内存对齐——
-  // 压缩历史行、持久化 interrupted 标记（重启不再重复标记新时间戳）、防文件无界增长。
-  try {
-    const rowsNow = [...g.ops.values()].map((op) => JSON.stringify(serializeOpRow(op, g.dataDir)));
-    writeFileSync(jsonlPath, rowsNow.join("\n") + (rowsNow.length ? "\n" : ""), "utf8");
-  } catch { /* 回写失败静默：下次 load 再对齐 */ }
 }
 
 // ---- web host 生命周期：spawn dsh web（DSH_HOME 锁进插件数据目录）----
@@ -703,9 +521,8 @@ getSingleton().startWebHost = async function startWebHostFromPlugin(ctxConfig, c
   cfg.dataDir = ctxDataDir || join(PLUGIN_ROOT, "data");
   // v0.10.2: 插件初始化（拉起 web host）即自动生成 config.json（不存在时按 manifest 默认值）
   ensureConfigJson(cfg);
-  // v0.5.7: 单例记数据目录（落盘/恢复共用）+ 恢复 op 历史（ops.json 落盘，重启可查）
+  // 单例记数据目录（dsh_ops 经 g.dataDir 定位 dsh 会话缓存等数据文件）
   getSingleton().dataDir = cfg.dataDir;
-  loadOps();
   if (!cfg.dshPkgDir) cfg.dshPkgDir = resolveDshPkgDir(cfg);
   try {
     await ensureWebHost(cfg);
@@ -1427,8 +1244,8 @@ function submitTask(cfg, { task, cwd, timeoutMs = 600000, signal, bus, sessionPa
     }
     const session = await callUnary(base, "session.create", createPayload);
     const sessionId = session.sessionId;
-    // v0.7.2: 记会话实际 cwd（createPayload.cwd = resume 时查到的会话已有 cwd / 新建时用户传入 cwd，
-    // 即 dsh 会话落盘 projectKey 所用的 cwd；op.cwd 在 resume 时可能不一致，不能拿来构造 sessionRecord 链接）
+    // 记会话实际 cwd（createPayload.cwd = resume 时查到的会话已有 cwd / 新建时用户传入 cwd；
+    // op.cwd 在 resume 时可能与会话实际 cwd 不一致，sessionCwd 以这里为准）
     endOperation(opId, { sessionId, sessionCwd: createPayload.cwd });
 
     // 1.5 模型选择：仅当工具显式传 provider/model/effort 时才 selectModel（显式覆盖
@@ -1836,9 +1653,8 @@ async function doExecute(input, ctx) {
   cfg.dataDir = dataDir;
   // v0.10.2: 首次工具调用即自动生成 config.json（不存在时按 manifest 默认值；幂等，失败静默）
   ensureConfigJson(cfg);
-  // v0.5.7: 单例记数据目录（落盘/恢复共用）+ 幂等恢复 op 历史（防 startWebHostFromPlugin 未触发场景；loadOps 内部 _opsLoaded 防重复）
+  // 单例记数据目录（dsh_ops 经 g.dataDir 定位 dsh 会话缓存等数据文件）
   getSingleton().dataDir = dataDir;
-  loadOps();
   // v0.6.0: dsh 依赖位置——数据目录 dsh-pkg/（Agent npm ci 部署）优先，插件根兑底
   if (!cfg.dshPkgDir) cfg.dshPkgDir = resolveDshPkgDir(cfg);
 

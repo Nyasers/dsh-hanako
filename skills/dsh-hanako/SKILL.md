@@ -1,6 +1,6 @@
 ---
 name: dsh-hanako
-description: "dsh-hanako 插件（把 DeepSeek Harness 接进 Hana 的进程外 subagent 执行器）的配置辅助与使用指南。触发场景：dsh-hanako 刚装好需要配置、配置 nodePath/defaultCwd、依赖缺失需要安装（DSHana 标签页自装或 npm ci）、registry 镜像切换、标签页自检/自愈（安装依赖/手动启动/检测依赖）、web host 起不来（先看标签页自检 t1/t2/t3）、发版、dsh 任务失败排查、审批怎么应答、dsh_run/dsh_approve/dsh_cancel/dsh_ops/dsh_search 怎么用、默认模型怎么配（dsh 设置页「默认模型」块，provider/model/思考三级联动）、DeepSeek Harness 相关。遇到 dsh-hanako 相关需求优先读本技能再动手。"
+description: "dsh-hanako 插件（把 DeepSeek Harness 接进 Hana 的进程外 subagent 执行器）的配置辅助与使用指南。触发场景：dsh-hanako 刚装好需要配置、配置 nodePath/defaultCwd、依赖缺失需要安装（DSHana 标签页自装或 npm ci）、registry 镜像切换、标签页自检/自愈（安装依赖/手动启动/检测依赖）、web host 起不来（先看标签页自检 t1/t2/t3）、dsh 任务失败排查、审批怎么应答、dsh_run/dsh_approve/dsh_cancel/dsh_ops/dsh_search 怎么用、默认模型怎么配（dsh 设置页「默认模型」块，provider/model/思考三级联动）、DeepSeek Harness 相关。遇到 dsh-hanako 相关需求优先读本技能再动手。"
 ---
 
 # dsh-hanako 配置辅助与使用指南
@@ -41,14 +41,6 @@ Set-Location <部署目录：插件根或数据目录 dsh-pkg>
 - **registry 镜像**：默认源失败切 `--registry=https://registry.npmmirror.com`（或持久化 `npm config set registry https://registry.npmmirror.com`）；镜像只影响 registry 层，koffi/node-pty 产物同源。重跑前残留不完整先 `Remove-Item node_modules -Recurse -Force`。
 - **部署后**：Agent 手动路径依赖就位后重启 Hana（tools 缓存）；页面自装无需重启。装完调一次 dsh_run 触发拉起。
 
-## 主题跟随（v0.8.1）
-
-dsh 偏好 `system`（默认）→ 跟随 Hana 主题（明暗+配色）；`light`/`dark` → dsh 原生配色。切偏好/切主题后**重开标签页生效**。部署要点：`assets/dsh-cordis/dsh-hana-theme/` 随包分发（缺失仅不跟随主题）；patch 模板 `config/dsh-hanako.patch.yml.tpl`（四段合一：session-query + theme + provider + default-model，v0.9.5 起 provider 段**恒渲染**——无配置项，宿主数据目录直接探测（插件安装形态 `<宿主数据目录>/plugins/<pluginId>` 上溯定位 models.json/provider-catalog.json）；default-model 段恒挂载、**包名注册**（dsh-run.js spawn 前在 `$DSH_HOME/profiles/node_modules` 建 junction 指向插件目录））启动前渲染成本机路径写数据目录 `dsh-hanako.patch.generated.yml`（模板缺失/渲染失败回退静态 `session-query.patch.yml`）。排错：不跟随明暗 → 查 settings.yaml `ui-theme.preference` 为 system + /webui 有 color-scheme；配色不注入 → 查 generated patch 与 assets 目录；patch 在仍不注入 → 重启后查 stderr 有无 dsh-hana-theme 加载错误；切换不实时 → 壳页面（webui.js）有 dshHanaTheme message 监听。
-
-## 默认模型配置（v0.9.5）
-
-DSHana 任务默认模型 = settings.yaml `agent-default-model`（`dsh_run` 不显式传 provider/model 时用）。设置页原生无该段配置 UI（settings.mutate 不可用），由 `dsh-hana-default-model` 插件补：dsh Web UI 左下角齿轮打开设置面板 → 导航栏**原生**「默认模型」分页（v0.9.5 正规化升级：经 dsh 前端 `settings.section` slot 注册，注册即自动投影导航 tab，点击切换/内容渲染全走 dsh 原生 React 逻辑，无 DOM hack；Provider/模型/思考强度三级联动（切 provider 自动选中该 provider 第一模型 + 默认思考强度，打开分页回显当前默认）+ 保存 + 当前值回显），选项 = `llm.models` 权威列表（全部可用 provider 含宿主 sensenova/agnes/deepseek 与 deepseek-official），保存即写 settings.yaml 生效。部署要点：`assets/dsh-cordis/dsh-hana-default-model/` 随包分发（缺失仅设置页无该分页，任务默认模型仍可在 dsh 会话模型选择器设置并写回）；**patch 段4 以包名注册**（`name: dsh-hana-default-model`，非 file:// URL——dsh client 模块发现按 `require.resolve('<name>/package.json')` 解析，file:// 不可解析），dsh-run.js spawn 前在 `$DSH_HOME/profiles/node_modules` 幂等建 junction 指向插件安装目录；路由 `/api/hana-default-model.read` / `.save`。排错：分页不出现 → 查 generated patch 段4 是否包名注册、`$DSH_HOME/profiles/node_modules/dsh-hana-default-model` junction 是否存在、浏览器 Console 有无 client 模块加载错误（`/plugins/dsh-hana-default-model/client.js` 404 等）、stderr 有无 dsh-hana-default-model 加载错误；保存失败 → 看分页内错误提示（provider/model 空、服务不可用等）。
-
 ## 配置完成后验证
 
 1. 打开 DSHana 标签页看自检（t1 node / t2 依赖 / t3 进程，每项 ✓/✗ + 修复指引），按序修：t1 ✗ → 填 nodePath（设置界面或 Agent 写 config.json；直写后 t1 检测实时生效，点「检测 Node」验证，再点 t3「手动启动」拉起，无需重启）；t2 ✗ → deps 卡片「安装依赖/重新安装依赖」；t3 ✗ → 先确认 t2 过，再点「手动启动 web host」
@@ -63,7 +55,7 @@ DSHana 任务默认模型 = settings.yaml `agent-default-model`（`dsh_run` 不�
 | `dsh_run(task, cwd?, timeout?, wait?, agentPreset?, reasoningEffort?, provider?, model?, sessionId?)` | 提交任务 | 默认异步（后台送达）；wait=true 同步；provider/model 显式覆盖模型（显式时 selectModel，写回 dsh 全局默认）；sessionId resume | [dsh-run 技能](dsh-run) |
 | `dsh_approve(opId, approvalId, outcome?)` | 应答审批 | allowed-once 放行 / rejected 拒绝；通知带 args 命令原文 | [dsh-approve 技能](dsh-approve) |
 | `dsh_cancel(opId)` | 取消任务 | 误派/卡死止损；幂等 | [dsh-cancel 技能](dsh-cancel) |
-| `dsh_ops(status?)` | 查任务历史 | 落盘可查；过滤 running/ok/error/interrupted；50 条上限 | [dsh-ops 技能](dsh-ops) |
+| `dsh_ops(limit?)` | 查会话清单与摘要 | 解析 dsh 会话缓存 session_projcache 可查；limit 默认 10；最新在前 | [dsh-ops 技能](dsh-ops) |
 | `dsh_search(query)` | 跨会话搜索 | 命中后可 resume；snippet ≤240 字符 | [dsh-search 技能](dsh-search) |
 
 **工具调用的完整参数语义、返回结构、错误码、审批通道、副作用分别见上述五个独立工具技能（均从源码 tools/*.js 核对）**——本表只是速查。
@@ -78,6 +70,7 @@ DSHana 任务默认模型 = settings.yaml `agent-default-model`（`dsh_run` 不�
 | `POST /webui/install-deps` | 安装依赖（npm ci --omit=dev 到 dsh-pkg，npmmirror 兜底；t2 按钮） |
 | `GET /webui/verify-deps` | 运行级依赖检测（node cliBin --version；进页自动一次 + 手动） |
 | `GET /webui/verify-node` | Node/npm 可用性检测（node --version + npm-cli.js；进页自动一次 + 手动） |
+| `POST /webui/adopt-node` | 采用 Node 候选（t1 候选列表「采用」按钮；服务端校验后写入 config.json 的 global.nodePath） |
 
 ## 审批流程（Agent 应答）
 
