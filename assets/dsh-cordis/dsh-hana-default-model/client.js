@@ -311,7 +311,7 @@ window.__ModuleLoader__.load({
     */
     function apply(ctx) {
       const t = ctx.locale.bind(NS)
-      ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'hana-default-model: dictionaries')
+      ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-hana-default-model: dictionaries')
       const connection = ctx.get('connection')
       const injected = () => ({ api: connection.api })
       ctx.slots.inject('settings.section', () => ctx.slots.register({
