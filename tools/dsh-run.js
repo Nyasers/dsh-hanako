@@ -380,13 +380,13 @@ async function ensureWebHost(cfg) {
   const port = Number(cfg.webPort) || 3080;
   // v0.5.11: 会话全文搜索 overlay（dsh 默认 openAt: never 禁用搜索，需 --patch 覆盖为 first-search）
   // v0.8.1: 主题注入 overlay；v0.9.3: 宿主 provider 跟随 overlay——多份 patch 合并为
-  // assets/patches/dsh-hanako.patch.yml.tpl 单一模板：段1 session-query 静态配置块 + 段2 theme
+  // dsh-plugin/dsh-hanako.patch.yml.tpl 单一模板：段1 session-query 静态配置块 + 段2 theme
   // insert + 段3 provider insert（v0.9.5 起恒渲染：hostProvider 恒开跟随宿主，无关闭选项）
   // + 段4 default-model insert（v0.9.5 起恒挂载）。
   // cordis 插件加载：theme/provider/default-model 三段均以包名注册（dsh client 模块发现
   // 按 loader entry 的 name 做 require.resolve('<name>/package.json')，file:// 无法解析），
   // 故启动前须在 $DSH_HOME/profiles/node_modules 统一建 junction（包名 → 插件安装目录
-  // assets/dsh-cordis/<pkg>），与 dsh 自维护的 junction farm 同机制（ensureCordisJunctions
+  // dsh-plugin/<pkg>），与 dsh 自维护的 junction farm 同机制（ensureCordisJunctions
   // 幂等创建）。
   // 启动前渲染模板（占位符→实际路径）到数据目录 dsh-hanako.patch.generated.yml；launcher
   // flag（--profile/--patch）必须位于应用参数（--port）之前。模板缺失/渲染失败时不挂
@@ -396,14 +396,14 @@ async function ensureWebHost(cfg) {
   // 的 dsh.client 声明，file:// 形式无法解析。包名解析锚点是 $DSH_HOME/profiles（baseUrl
   // 父目录的 node_modules），启动前统一建 junction：$DSH_HOME/profiles/node_modules/
   // <dsh-hana-theme|dsh-hana-provider|dsh-hana-default-model> → 插件安装目录
-  // assets/dsh-cordis/<同名包>（与 dsh 自维护的 junction farm 同机制；dsh 的
+  // dsh-plugin/<同名包>（与 dsh 自维护的 junction farm 同机制；dsh 的
   // healProfilesModuleFallback 只管理自身依赖闭包，不碰外来 link）。
   // 幂等：已指向正确目标则跳过；错误/悬空 link 重建；非 link 同名文件报错不静默覆盖。
   const ensureCordisJunctions = (dshHome) => {
     const packages = ["dsh-hana-theme", "dsh-hana-provider", "dsh-hana-default-model"];
     for (const pkg of packages) {
       const link = join(dshHome, "profiles", "node_modules", pkg);
-      const target = join(PLUGIN_ROOT, "assets", "dsh-cordis", pkg);
+      const target = join(PLUGIN_ROOT, "dsh-plugin", pkg);
       try {
         if (existsSync(link)) {
           const stat = lstatSync(link);
@@ -422,7 +422,7 @@ async function ensureWebHost(cfg) {
   };
 
   const patchFiles = [];
-  const patchTpl = join(PLUGIN_ROOT, "assets", "patches", "dsh-hanako.patch.yml.tpl");
+  const patchTpl = join(PLUGIN_ROOT, "dsh-plugin", "dsh-hanako.patch.yml.tpl");
   // 渲染仅剩 provider 的 config 依赖解析基座占位符（MODELS_PATH / CATALOG_PATH /
   // DSH_PKG_DIR）——theme/provider/default-model 三段均以包名注册，不再有 file:// URL
   // 占位符；包名经 ensureCordisJunctions 的 junction 解析
@@ -445,7 +445,7 @@ async function ensureWebHost(cfg) {
     }
   } else {
     // 模板缺失：不挂任何 patch 记 warn（dsh 启动不受影响，会话全文搜索保持上游默认禁用）
-    console.warn("[dsh-run] assets/patches/dsh-hanako.patch.yml.tpl 缺失：不挂任何 patch（dsh 启动不受影响，会话全文搜索保持上游默认禁用）");
+    console.warn("[dsh-run] dsh-plugin/dsh-hanako.patch.yml.tpl 缺失：不挂任何 patch（dsh 启动不受影响，会话全文搜索保持上游默认禁用）");
   }
   const patchArgs = patchFiles.flatMap((p) => ["--patch", p]);
   // 三段 cordis 插件均以包名注册，spawn 前确保 junction 就绪（幂等）

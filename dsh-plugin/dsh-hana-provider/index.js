@@ -19,7 +19,7 @@
 //   · 模型 defaultThinkingLevel → pi-ai thinking 级别（off/minimal/low/medium/high/xhigh/max）
 //   · 模型 reasoning → pi-ai model reasoning；id/name/contextWindow/maxTokens/input 直通
 //
-// 依赖解析：插件文件位于 dsh 安装树之外（插件安装目录 assets/dsh-cordis），Node ESM
+// 依赖解析：插件文件位于 dsh 安装树之外（插件安装目录 dsh-plugin），Node ESM
 // 裸导入无法解析 pi-ai/dsh-llm（实测 ERR_MODULE_NOT_FOUND，node_modules 沿插件文件
 // 向上找、够不到数据目录 dsh-pkg）——因此经 config.dshPkgDir 指向的 dsh-pkg 按 import
 // 语义解析包入口（package.json 的 exports/main，见 resolvePkgEntry）+ file:// 动态导入；

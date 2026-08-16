@@ -16,7 +16,7 @@
 # require.resolve 不支持 file:// scheme，实测 MODULE_NOT_FOUND），必须以可解析的包名
 # 注册。包名解析锚点是 profile 目录（$DSH_HOME/profiles/web，baseUrl），dsh-run.js 启动
 # 前在 $DSH_HOME/profiles/node_modules 统一建 junction（dsh-hana-theme / dsh-hana-provider
-# / dsh-hana-default-model → 插件安装目录 assets/dsh-cordis/<同名包>）——与 dsh 自维护的
+# / dsh-hana-default-model → 插件安装目录 dsh-plugin/<同名包>）——与 dsh 自维护的
 # junction farm 同机制，healProfilesModuleFallback 只管理自身依赖闭包，不碰外来 junction。
 # 前端 client 模块注册 settings.section slot（id "default-model"）原生渲染分页；无需 config
 # 注入——列表/保存走 llm.models RPC 与 agentDefaultModel 服务。

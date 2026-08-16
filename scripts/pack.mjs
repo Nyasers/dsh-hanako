@@ -34,7 +34,7 @@ const staticItems = [
   "skills",
   "app",
   "routes",
-  "assets",
+  "dsh-plugin",
   "README.md",
 ];
 const distDir = join(ROOT, "dist");
@@ -46,7 +46,7 @@ for (const item of staticItems) {
 
 // 2.5 静态资产压缩（terser JS 纯语法级 + clean-css CSS 压缩，覆盖写回 dist 副本）
 //     JS 不走 rspack 管线（会被模块系统转换+依赖内联破坏加载语义）：cordis 插件
-//     （assets/dsh-cordis/*/index.js）被 dsh 运行时 import() 加载、client.js 被浏览器
+//     （dsh-plugin/*/index.js）被 dsh 运行时 import() 加载、client.js 被浏览器
 //     ModuleLoader 按 window.__ModuleLoader__.load 注册、app/card.js 在 iframe 内执行；
 //     CSS（app/card.css）同样只做语法级压缩。两者均为构建期工具，解析与 build.mjs 的
 //     resolveRspackEntry 同模式：优先 RSPACK_ENV 构建环境 node_modules，否则本地
@@ -64,7 +64,7 @@ function resolveTool(pkgName) {
   return require(pkgName);
 }
 
-// 收集待压缩的静态资产：assets/（递归）、routes/（顶层）、app/（顶层），按扩展名过滤
+// 收集待压缩的静态资产：dsh-plugin/（递归）、routes/（顶层）、app/（顶层），按扩展名过滤
 function collectStaticFiles(dir, recursive = true, ext = ".js") {
   const files = [];
   if (!existsSync(dir)) return files;
@@ -95,7 +95,7 @@ function isEsm(code) {
   const minify = terser.minify ?? terser.default?.minify;
   if (typeof minify !== "function") throw new Error("terser 加载失败：未找到 minify（构建环境必装 terser）");
   const staticJs = [
-    ...collectStaticFiles(join(distDir, "assets")),
+    ...collectStaticFiles(join(distDir, "dsh-plugin")),
     ...collectStaticFiles(join(distDir, "routes"), false),
     ...collectStaticFiles(join(distDir, "app"), false),
   ];
@@ -127,7 +127,7 @@ function isEsm(code) {
   const CleanCSS = cleanCssMod.default ?? cleanCssMod; // CJS 包：interop 后取构造函数
   if (typeof CleanCSS !== "function") throw new Error("clean-css 加载失败：未找到构造函数（构建环境必装 clean-css）");
   const staticCss = [
-    ...collectStaticFiles(join(distDir, "assets"), true, ".css"),
+    ...collectStaticFiles(join(distDir, "dsh-plugin"), true, ".css"),
     ...collectStaticFiles(join(distDir, "routes"), false, ".css"),
     ...collectStaticFiles(join(distDir, "app"), false, ".css"),
   ];
