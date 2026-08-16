@@ -105,12 +105,37 @@ function readDshDefaultModel(dshHome) {
       if (/^agent-default-model\s*:/.test(line)) { inBlock = true; continue }
       if (!inBlock) continue
       const m = line.match(/^(\s+)([A-Za-z]+)\s*:\s*(.*)$/)
-      if (!m || m[1].length <= 2) break // 缩进不足 = 出块
+      if (!m) break // 无缩进或非键行 = 出块（子项缩进 ≥1 空格均视为块内，2 空格标准缩进正常解析）
       const k = m[2]
       const v = m[3].trim()
       if (v) out[k] = v.replace(/^['"]|['"]$/g, "")
     }
     return out.provider ? out : null
+  } catch {
+    return null
+  }
+}
+
+// 读 dsh-home/settings.yaml 的 agent-presets.default（行级解析，零依赖）——
+// dsh 默认 agent 预设：Web UI 设置后写回 settings.yaml。返回预设字符串或 null。
+function readDshDefaultPreset(dshHome) {
+  try {
+    const f = join(dshHome, "settings.yaml");
+    if (!existsSync(f)) return null;
+    const lines = readFileSync(f, "utf8").split(/\r?\n/);
+    let inBlock = false;
+    for (const line of lines) {
+      if (/^agent-presets\s*:/.test(line)) { inBlock = true; continue }
+      if (!inBlock) continue
+      const m = line.match(/^(\s+)default\s*:\s*(.*)$/)
+      if (!m) {
+        if (!/^\s/.test(line)) break // 无缩进 = 出块（顶层键）
+        continue // 块内其他键，继续找 default
+      }
+      const v = m[2].trim().replace(/^['"]|['"]$/g, "")
+      if (v) return v
+    }
+    return null
   } catch {
     return null
   }
@@ -214,6 +239,7 @@ function getSingleton() {
   }
   const g = globalThis.__dshHanako;
   // 旧对象可能缺新字段（热更新后旧 globalThis 对象仍在）：逐字段兜底
+  // v0.10.46：g.ops 不再是任务状态注册表（jsonl 唯一事实源），仅存审批/取消运行期协调状态
   if (!g.ops) g.ops = new Map();
   g.closeProcess = closeProcess;
   // v0.8.3: 插件页连接失败自检——经单例挂载诊断收集函数（routes 不静态 import 本模块：
@@ -331,10 +357,14 @@ const approvalTimers = new Map();
 // 工具名或 model 自述（bash/pwsh 都能执行任意命令，工具名说明不了安全）。
 const toolCallCache = new Map();
 
-// ---- 操作注册表（卡片反馈）：opId → 状态快照 ----
-// 工具发起时注册 running，结束时更新终态；routes/card.js 从同一个 globalThis
-// 单例读取（跨加载实例共享），宿主卡片 iframe 轮询 /ops/status 渲染。
-const OP_KEEP = 50; // 内存保留最近 N 条（终态结果文本已进对话 content，卡片只是增强展示）
+// ---- 运行期协调状态（v0.10.46：op Map 退役，不再存任务快照）----
+// 任务状态（status/output/summary/usage/耗时）不再保存在插件内存：jsonl（dsh 会话日志）是
+// 唯一事实源，卡片经 /ops/stream 从 jsonl 重建基线 + 转发 DSH 实时事件，插件零任务状态。
+// g.ops 仅保留「审批/取消」运行期协调状态：opId → { task, sessionId, approvalPending,
+// pendingApprovals, cancelledRequested }。任务终态时在 submitTask 的 finally 删除条目。
+// 用途：① approval/requested 存审批上下文（rpcId 路由 respond），dsh_approve 工具应答；
+// ② dsh_cancel 未传 sessionId 时按 opId 反查 sessionId / 标记 cancelledRequested
+//   （防 mux 断流时事件循环把取消误判为完成）。
 
 function nextOpId() {
   const ts = Date.now().toString(36);
@@ -342,41 +372,17 @@ function nextOpId() {
   return `op_${ts}_${rand}`;
 }
 
-function startOperation({ task, cwd, timeoutMs, agentPreset, reasoningEffort, resumeSessionId }) {
+function createOpEntry(opId, { task }) {
   const g = getSingleton();
-  const opId = nextOpId();
   g.ops.set(opId, {
     opId,
     task: String(task ?? "").slice(0, 500),
-    cwd: String(cwd ?? ""),
-    agentPreset: String(agentPreset ?? ""),
-    reasoningEffort: String(reasoningEffort ?? ""),
-    resumeSessionId: resumeSessionId ?? null,
-    timeoutMs: timeoutMs ?? null,
-    status: "running",
-    startedAt: new Date().toISOString(),
-    durationMs: null,
-    output: null,
-    stopReason: null,
-    error: null,
-    sessionId: null,
-    sessionCwd: null, // 会话实际 cwd（resume 时与 op.cwd 可能不一致，session.create 时记录）
+    sessionId: null,      // session.create 后回填（dsh_cancel 按 opId 反查取消目标）
     approvalPending: false,
     pendingApprovals: [],
+    cancelledRequested: false,
   });
-  if (g.ops.size > OP_KEEP) {
-    const first = g.ops.keys().next().value;
-    if (first) g.ops.delete(first);
-  }
   return opId;
-}
-
-function endOperation(opId, patch) {
-  const g = getSingleton();
-  const op = g.ops.get(opId);
-  if (!op) return;
-  const started = new Date(op.startedAt).getTime();
-  Object.assign(op, patch, { durationMs: Date.now() - started });
 }
 
 // ---- web host 生命周期：spawn dsh web（DSH_HOME 锁进插件数据目录）----
@@ -1252,7 +1258,7 @@ function nextRpcId() {
   return `r_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-async function callUnary(base, method, payload, signal) {
+async function callUnary(base, method, payload, signal, meta) {
   const rpcId = nextRpcId();
   const res = await fetch(`${base}/api/${method}`, {
     method: "POST",
@@ -1267,6 +1273,9 @@ async function callUnary(base, method, payload, signal) {
     const e = full.result?.error || {};
     throw new Error(`dsh ${method} 失败：${e.code || "unknown"} ${e.message || ""}`);
   }
+  // meta.rpcId 回传：会话 jsonl 的 user/message 事件 data.source.rpcId 与此相同，
+  // 供 op 快照记录后用 sessionId+rpcId 从 jsonl 精确恢复（重启不丢、零映射文件）
+  if (meta && typeof meta === "object") meta.rpcId = rpcId;
   return full.result.value;
 }
 
@@ -1381,27 +1390,46 @@ function cacheToolCall(opId, payload) {
   });
 }
 
-// ---- 任务提交：同步注册 op + 后台执行（不 await）----
-// 返回 { opId, promise }：opId 立即可用（构造卡片 route / deferred taskId），
+// ---- 任务提交：注册运行期协调状态 + 后台执行（不 await）----
+// 返回 { opId, promise, ready }：opId 立即可用（构造卡片 route / deferred taskId），
 // promise 在后台跑：session.create → events.mux 订阅 → session.prompt → 事件循环 → 终态。
+// v0.10.46：任务状态零存储（op Map 退役）——collected/blocksSeq/usageTotal 仅用于回调返回，
+// 卡片状态由 /ops/stream 从 jsonl 重建 + 实时事件转发呈现。
 function submitTask(cfg, { task, cwd, timeoutMs = 600000, signal, bus, sessionPath, agentPreset, reasoningEffort, sessionId, provider, model }) {
   const taskText = String(task ?? "").trim();
   if (!taskText) throw new Error("task 不能为空");
 
-  // agent 预设解析须在 startOperation 之前完成：op 快照要带 agentPreset（卡片对账可见）
-  const preset = agentPreset || null; // 只取工具显式参数；不显式传不传 session.create 的 agentPreset 字段（dsh 用 Web UI 默认 agent 预设）
-  // reasoningEffort 同样在 startOperation 之前解析：op 快照要带该字段（卡片对账可见）。
-  // v0.9.5: 只取工具显式参数（全局配置已移除），不传为 null（由 dsh 默认处理）。
+  // agent 预设解析（卡片详情区展示 agentPreset，需在提交前解析补齐）。
+  // 显式参数优先，缺省从 settings.yaml 的 agent-presets.default 补齐（与 dsh 默认预设一致）。
+  let preset = String(agentPreset ?? "").trim() || null;
+  if (!preset) {
+    const dp = readDshDefaultPreset(join(cfg.dataDir, "dsh-home"));
+    preset = dp || null;
+  }
+  // reasoningEffort 解析：只取工具显式参数（全局配置已移除），不传为 null（由 dsh 默认处理）。
   const effort = resolveReasoningEffort(reasoningEffort);
-  // resume 会话解析同样在 startOperation 之前完成：op 快照要带 resumeSessionId（卡片对账可见，值为 null 或 sessionId）
+  // resume 会话解析：值为 null 或 sessionId
   const resumeSessionId = String(sessionId ?? "").trim() || null;
 
-  const opId = startOperation({ task: taskText, cwd, timeoutMs, agentPreset: preset, reasoningEffort: effort, resumeSessionId });
-  let settled = false;
-  // lastUsage 提升到 submitTask 作用域：事件循环收集（assistant/message 的 d.usage），
-  // ok 终态 finish 与 promise.catch 的错误终态 finish 都能读到（错误路径也要带 usage，取消/超时前已产生的消耗可对账）
-  let lastUsage = null;
-  const finish = (patch) => { if (!settled) { settled = true; endOperation(opId, patch); } };
+  // provider/model 解析补齐：显式参数优先；只传其一/都不传时从 dsh 默认模型（settings.yaml）补齐。
+  const explicitProvider = String(provider ?? "").trim();
+  const explicitModel = String(model ?? "").trim();
+  let opProvider = explicitProvider;
+  let opModel = explicitModel;
+  if (!opProvider || !opModel) {
+    const dm = readDshDefaultModel(join(cfg.dataDir, "dsh-home"));
+    opProvider = opProvider || (dm && dm.provider) || "";
+    opModel = opModel || (dm && dm.model) || "";
+  }
+  const opId = createOpEntry(nextOpId(), { task: taskText });
+  // ready：session.create + prompt 提交完成时 resolve { sessionId, rpcId }（卡片 URL 推迟到此后生成，
+  // 重启后按 sessionId+rpcId 从会话 jsonl 精确恢复 op，零映射文件）；失败 resolve null（降级 opId-only URL）
+  let resolveReady = null;
+  const ready = new Promise((r) => { resolveReady = r; });
+  // usageTotal 提升到 submitTask 作用域：事件循环累计（assistant/message 的 d.usage 是每轮 LLM 调用用量，
+  // 覆盖式只保留最后一轮、多轮任务严重偏小；按 disjoint 口径累计 = 未缓存输入/输出/缓存读取/推理之和，
+  // 与 dsh 会话投影 tokenUsage.totals 对齐）。ok 终态与 promise.catch 的错误终态都能读到。
+  let usageTotal = null;
 
   const promise = (async () => {
     const web = await ensureWebHost(cfg);
@@ -1429,9 +1457,9 @@ function submitTask(cfg, { task, cwd, timeoutMs = 600000, signal, bus, sessionPa
     }
     const session = await callUnary(base, "session.create", createPayload);
     const sessionId = session.sessionId;
-    // 记会话实际 cwd（createPayload.cwd = resume 时查到的会话已有 cwd / 新建时用户传入 cwd；
-    // op.cwd 在 resume 时可能与会话实际 cwd 不一致，sessionCwd 以这里为准）
-    endOperation(opId, { sessionId, sessionCwd: createPayload.cwd });
+    // 运行期协调状态回填 sessionId（dsh_cancel 未传 sessionId 时按 opId 反查取消目标）
+    const entryNow = getSingleton().ops.get(opId);
+    if (entryNow) entryNow.sessionId = sessionId;
 
     // 1.5 模型选择：仅当工具显式传 provider/model/effort 时才 selectModel（显式覆盖
     // dsh 默认模型）；都不传时不 selectModel，任务直接用 dsh 默认模型
@@ -1472,13 +1500,10 @@ function submitTask(cfg, { task, cwd, timeoutMs = 600000, signal, bus, sessionPa
 
     let collected = "";
     let finalMessageText = ""; // 最后一条 assistant/message 的文本（回调摘要锚点）
+    let blocksSeq = [];        // assistant/message 的 blocks（终态回调输出结构化，reasoning 可折叠）
     let sawChunk = false;
     const seen = new Set();
     let outcome = null; // { stopReason, failure? }
-    const updateOpOutput = (text) => {
-      const op = getSingleton().ops.get(opId);
-      if (op && op.status === "running") op.output = text;
-    };
 
     const consume = (async () => {
       try {
@@ -1498,18 +1523,34 @@ function submitTask(cfg, { task, cwd, timeoutMs = 600000, signal, bus, sessionPa
                 return;
               }
               const t = textFromChunk(d);
-              if (t) { collected += t; updateOpOutput(collected); }
+              if (t) collected += t; // 仅本地收集（回调输出用）；不再写 op Map
             } else if (ev.type === "assistant/message") {
               const msg = d.message;
               if (msg?.id && typeof msg.id === "string" && !seen.has(msg.id)) {
                 seen.add(msg.id);
                 const t = textFromMessageBlocks(msg.content);
                 if (!sawChunk && t) { // chunk 流已提供文本时跳过拼接，避免重复
-                  collected += t; updateOpOutput(collected);
+                  collected += t;
                 }
                 if (t) finalMessageText = t; // 每条覆盖，结束时即最终汇报（摘要锚点）
+                // 收集结构化 blocks（text/reasoning/tool-call）：终态 op.output 供卡片完整输出折叠渲染
+                const blocks = Array.isArray(msg.content) ? msg.content : [];
+                for (const b of blocks) {
+                  if (b?.type === "text" && typeof b.text === "string" && b.text) blocksSeq.push({ type: "text", text: b.text });
+                  else if (b?.type === "reasoning" && typeof b.text === "string" && b.text) blocksSeq.push({ type: "reasoning", text: b.text });
+                  else if (b?.type === "tool-call" && b.name) blocksSeq.push({ type: "tool-call", name: b.name });
+                }
               }
-              if (d.usage) lastUsage = d.usage;
+              if (d.usage) {
+                // 累计：inputTokens 已是 disjoint（不含 cacheRead），各字段求和即任务维度总量；
+                // 缺失字段不初始化（API 未返回时卡片不显示，避免 0 误报）
+                const u = d.usage;
+                usageTotal = usageTotal || {};
+                usageTotal.inputTokens = (usageTotal.inputTokens || 0) + (u.inputTokens ?? 0);
+                usageTotal.outputTokens = (usageTotal.outputTokens || 0) + (u.outputTokens ?? 0);
+                if (u.cacheReadTokens != null) usageTotal.cacheReadTokens = (usageTotal.cacheReadTokens || 0) + u.cacheReadTokens;
+                if (u.reasoningTokens != null) usageTotal.reasoningTokens = (usageTotal.reasoningTokens || 0) + u.reasoningTokens;
+              }
             } else if (ev.type === "tool/call") {
               // v0.5.9: 缓存工具调用参数原文（session/event 包裹的 tool/call 事件，
               // d = { name, arguments, callId }），审批到达时按 callId 反查做内容级匹配。
@@ -1533,8 +1574,8 @@ function submitTask(cfg, { task, cwd, timeoutMs = 600000, signal, bus, sessionPa
               return; // 一次 prompt = 一个 turn，turn/end 即终态
             }
           } else if (frame.type === "approval/requested") {
-            // 审批挂起（approval/policy=ask）：任务会等待应答。除卡片标记外，
-            // 把审批上下文（含 respond 路由所需的 rpcId）存进 op 快照，并触发
+            // 审批挂起（approval/policy=ask）：任务会等待应答。把审批上下文（含 respond
+            // 路由所需的 rpcId）存进运行期协调状态（g.ops 条目，非任务快照），并触发
             // 宿主 deferred 通知（独立 taskId，不占用任务完成通道），Agent 收到后
             // 调用 dsh_approve 工具应答；无人应答仍可在 dsh Web UI 人工处理。
             // v0.5.12：审批固定形态——挂起 → deferred 通知 Agent（附 tool/call 参数原文，
@@ -1543,7 +1584,7 @@ function submitTask(cfg, { task, cwd, timeoutMs = 600000, signal, bus, sessionPa
             // 或 manual/auto 模式切换：全部审批都交 Agent 处理。
             const g = getSingleton();
             const op = g.ops.get(opId);
-            if (op && op.status === "running") {
+            if (op) {
               op.approvalPending = true;
               const approval = {
                 approvalId: frame.approvalId,
@@ -1684,11 +1725,15 @@ function submitTask(cfg, { task, cwd, timeoutMs = 600000, signal, bus, sessionPa
 
     try {
       // 3. 提交 prompt（queue 模式：立即 accepted，agent 异步执行）
+      // promptMeta.rpcId = 会话 jsonl 的 user/message 事件 data.source.rpcId（同一 RPC id），
+      // 经 ready 返回给卡片 URL：插件重启后按 sessionId+rpcId 从 jsonl 精确恢复（无需 opId 映射）
+      const promptMeta = {};
       await callUnary(base, "session.prompt", {
         sessionId,
         mode: "queue",
         content: [{ type: "text", text: taskText }],
-      }, ac.signal);
+      }, ac.signal, promptMeta);
+      resolveReady({ sessionId, rpcId: promptMeta.rpcId || "" });
 
       // 4. 竞速：事件循环终态 / 超时 / 取消
       // 初始启动：无审批时与旧行为完全一致（一次 setTimeout(timeoutMs)）
@@ -1707,15 +1752,15 @@ function submitTask(cfg, { task, cwd, timeoutMs = 600000, signal, bus, sessionPa
       }
 
       const fullOutput = collected;
+      // 回调/返回值保持 chunk 流文本；结构化 blocks（reasoning 可折叠）由卡片端从 jsonl/实时事件重建
       const summary = buildSummary(fullOutput, finalMessageText);
-      finish({ status: "ok", output: fullOutput, summary, stopReason: outcome.stopReason, usage: lastUsage ?? null });
       return {
         opId,
         sessionId,
         output: fullOutput,
         summary,
         stopReason: outcome.stopReason,
-        usage: lastUsage ?? null,
+        usage: usageTotal ?? null,
         stderr: web.stderr ? web.stderr.slice(-2000) : null,
       };
     } catch (err) {
@@ -1737,20 +1782,16 @@ function submitTask(cfg, { task, cwd, timeoutMs = 600000, signal, bus, sessionPa
       for (const key of toolCallCache.keys()) {
         if (key.startsWith(`${opId}::`)) toolCallCache.delete(key);
       }
+      // v0.10.46: 删除运行期协调状态条目（op Map 退役：任务状态零存储，条目仅活到终态）
+      try { getSingleton().ops.delete(opId); } catch { /* 忽略 */ }
     }
   })();
 
   promise.catch((err) => {
-    finish({
-      status: "error",
-      error: (err?.message || String(err)).slice(0, 2000),
-      output: null,
-      stopReason: err?.code === "DSH_TIMEOUT" ? "timeout" : err?.code === "DSH_ABORTED" ? "aborted" : "error",
-      usage: lastUsage ?? null, // 错误终态也带 usage（若已收集到）：取消/超时前的消耗也可对账
-    });
+    resolveReady?.(null); // 提交失败：卡片降级 opId-only（错误态由 deferred fail 呈现）
   });
 
-  return { opId, promise };
+  return { opId, promise, ready };
 }
 
 // ---- 工具契约 ----
@@ -1764,7 +1805,7 @@ export const description =
   "默认异步：立即返回任务已提交（对话中渲染运行卡片，实时显示进度与输出），任务完成后宿主自动唤醒、" +
   "结果随后台消息送达。传 wait=true 可同步等待最终结果直接返回。失败时抛出错误说明原因。" +
   "任务会话在 dsh Web UI（webPort 端口，默认 3080）中可见且持久化，可随时浏览器查看/继续。" +
-  "回调压缩（PTC 式）：异步完成回调默认只带最终结论摘要（callbackMode=summary，省上下文），完整输出在卡片 op 快照与 dsh web UI 可查；设 callbackMode=full 可回传全量。" +
+  "回调压缩（PTC 式）：异步完成回调默认只带最终结论摘要（callbackMode=summary，省上下文），完整输出在卡片与 dsh web UI 可查；设 callbackMode=full 可回传全量。" +
   "审批：dsh agent 请求越界权限时任务挂起，插件经 deferred 通道发来 dsh-approval 通知（带 opId/approvalId/理由/命令参数原文），用 dsh_approve 工具应答（allowed-once/rejected）；无人应答超时自动拒绝（approvalTimeoutMs，0=禁用）；也可在 dsh Web UI 人工处理。" +
   "agentPreset：任务可指定 agent 预设模式（standard/code/cordis/minimal），缺省不指定，用 dsh 默认（dsh Web UI 可调）。" +
     "reasoningEffort：任务可显式指定推理强度（off/high/max）；不传时不指定，由 dsh 默认处理（通常 high）。" +
@@ -1860,9 +1901,15 @@ async function doExecute(input, ctx) {
   const taskParams = { task: input.task, cwd, timeoutMs, signal: ctx.signal, bus: ctx.bus ?? getSingleton().bus, sessionPath: ctx.sessionPath, agentPreset: input.agentPreset, reasoningEffort: input.reasoningEffort, sessionId: input.sessionId, provider: input.provider, model: input.model };
 
   const wait = input.wait === true;
-  const { opId, promise } = submitTask(taskCfg, taskParams);
+  const { opId, promise, ready } = submitTask(taskCfg, taskParams);
+  // 卡片 URL 推迟到 session.create + prompt 提交后生成：携带 sessionId+rpcId，
+  // 插件重启后旧卡片按这两个键从会话 jsonl 精确恢复（op Map 清空不丢数据）
+  const loc = await ready;
+  const locQuery = (loc && loc.sessionId ? `&sessionId=${encodeURIComponent(loc.sessionId)}` : "") +
+    (loc && loc.rpcId ? `&rpcId=${encodeURIComponent(loc.rpcId)}` : "") +
+    (taskCfg.timeoutMs != null ? `&timeoutMs=${encodeURIComponent(taskCfg.timeoutMs)}` : "");
   const cardBase = {
-    route: `/card/op?opId=${encodeURIComponent(opId)}`,
+    route: `/card/op?opId=${encodeURIComponent(opId)}${locQuery}`,
     title: `dsh ${wait ? "任务" : "运行中"}`,
     description: String(input.task ?? "").slice(0, 80),
     aspectRatio: "16:1",
