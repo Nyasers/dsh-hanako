@@ -12,7 +12,7 @@
 //
 // 权限：external_side_effect（调用 dsh 编码 agent 执行任务，消耗 Hana 宿主 provider 额度，Auto 模式送审）。
 import { spawn } from "node:child_process";
-import { readFileSync, existsSync, mkdirSync, writeFileSync, appendFileSync, rmSync, readdirSync, copyFileSync, symlinkSync, lstatSync, readlinkSync, unlinkSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync, writeFileSync, appendFileSync, rmSync, readdirSync, copyFileSync, symlinkSync, lstatSync, readlinkSync, unlinkSync, renameSync } from "node:fs";
 import { join, dirname, delimiter } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -87,6 +87,26 @@ const manifestDefaults = (() => {
     return {};
   }
 })();
+
+// ---- config.json 自动初始化（全新安装免「先保存一次」引导）----
+// config.json 不随包分发（宿主设置界面生成，路径 <插件数据目录>/config.json），
+// 全新安装时不存在。插件初始化（onload 拉起 web host / 首次工具调用）时按 manifest
+// 默认值自动生成 { schemaVersion: 1, global: { ...manifestDefaults }, agents: {}, sessions: {} }，
+// 用户装完即可在设置界面看到默认值，无需先手动保存一次。
+// 幂等：文件已存在直接返回，绝不覆盖用户配置/宿主生成内容。失败静默：resolve* 有
+// 配置快照兜底，不阻塞主流程（生成的只是初始默认值，被覆盖/缺失都不影响功能）。
+function ensureConfigJson(cfg) {
+  try {
+    const dataDir = cfg.dataDir || getSingleton().dataDir || join(PLUGIN_ROOT, "data");
+    const cf = join(dataDir, "config.json");
+    if (existsSync(cf)) return; // 已存在（宿主生成/用户修改）：幂等跳过
+    mkdirSync(dataDir, { recursive: true });
+    const tmp = join(dataDir, ".config.json.tmp");
+    // 先写临时文件再 rename 原子落位（中断不留半成品），对齐 scripts/pack.mjs 惯例
+    writeFileSync(tmp, JSON.stringify({ schemaVersion: 1, global: { ...manifestDefaults }, agents: {}, sessions: {} }, null, 2), "utf8");
+    renameSync(tmp, cf);
+  } catch { /* 生成失败静默：resolve* 有配置快照兜底 */ }
+}
 
 // reasoningEffort 解析（v0.9.5：全局配置已移除，只接受工具显式参数，无配置回退；
 // 不传时由 dsh 默认处理）。返回显式值或 null。
@@ -681,6 +701,8 @@ getSingleton().startWebHost = async function startWebHostFromPlugin(ctxConfig, c
     if (v !== undefined && v !== null && v !== "") cfg[k] = v;
   }
   cfg.dataDir = ctxDataDir || join(PLUGIN_ROOT, "data");
+  // v0.10.2: 插件初始化（拉起 web host）即自动生成 config.json（不存在时按 manifest 默认值）
+  ensureConfigJson(cfg);
   // v0.5.7: 单例记数据目录（落盘/恢复共用）+ 恢复 op 历史（ops.json 落盘，重启可查）
   getSingleton().dataDir = cfg.dataDir;
   loadOps();
@@ -1812,6 +1834,8 @@ async function doExecute(input, ctx) {
   // 插件数据目录（宿主注入）：DSH_HOME 数据根落在这里（账本随插件生命周期）
   const dataDir = ctx.dataDir || join(PLUGIN_ROOT, "data");
   cfg.dataDir = dataDir;
+  // v0.10.2: 首次工具调用即自动生成 config.json（不存在时按 manifest 默认值；幂等，失败静默）
+  ensureConfigJson(cfg);
   // v0.5.7: 单例记数据目录（落盘/恢复共用）+ 幂等恢复 op 历史（防 startWebHostFromPlugin 未触发场景；loadOps 内部 _opsLoaded 防重复）
   getSingleton().dataDir = dataDir;
   loadOps();

@@ -74,7 +74,7 @@ dsh agent 请求越界权限时任务挂起，插件经 deferred 通知（taskId
 
 ## 配置单一事实源（resolve* 函数）
 
-nodePath / defaultCwd / agentPreset / approvalTimeoutMs 优先直读 `<dataDir>/config.json` 的 `global.*`（设置界面或 Agent 直写都即时生效），无则回退快照 → manifest 默认。**「改完都要重启 Hana」不成立**（仅 tools 模块缓存场景需重启）。
+nodePath / defaultCwd / approvalTimeoutMs 优先直读 `<dataDir>/config.json` 的 `global.*`（设置界面或 Agent 直写都即时生效），无则回退快照 → manifest 默认。**config.json 由插件自动初始化**（ensureConfigJson：无文件时按 manifest 默认值生成，幂等不覆盖、原子写、失败静默），全新安装免手动保存。**「改完都要重启 Hana」不成立**（仅 tools 模块缓存场景需重启）。
 
 下表为 manifest 默认值（随包分发的事实）；实际生效值以 config.json 为准（未覆盖时等于默认）：
 

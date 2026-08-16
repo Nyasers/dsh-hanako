@@ -11,7 +11,7 @@ description: "dsh-hanako 插件（把 DeepSeek Harness 接进 Hana 的进程外 
 
 config.json 由宿主设置界面生成、**不随包分发**；nodePath/defaultCwd 初始为空。按序完成：
 
-**0. 先看现状**：配置在 <宿主插件数据目录>/dsh-hanako/config.json（Windows 常见 %USERPROFILE%\.hanako\plugin-data\dsh-hanako\config.json）。**找不到**（全新安装）：先引导用户在设置界面保存一次（任意改动即触发写入），不要跳过直接写文件（宿主以设置界面为准，直接写可能被覆盖）。**无需配置 API Key / 模型**（v0.9.5+）：凭据由 dsh-hana-provider 插件直读宿主 `provider-catalog.json`，模型跟随宿主 `models.json`（dsh models 页设置默认）。
+**0. 先看现状**：配置在 <宿主插件数据目录>/dsh-hanako/config.json（Windows 常见 %USERPROFILE%\.hanako\plugin-data\dsh-hanako\config.json）。**全新安装**：插件初始化自动生成默认配置（ensureConfigJson：无 config.json 时按 manifest 默认值生成 `{ schemaVersion, global, agents, sessions }`，已存在则不动，原子写 + 失败静默），无需手动保存，装完即可在设置界面看到默认值。**无需配置 API Key / 模型**（v0.9.5+）：凭据由 dsh-hana-provider 插件直读宿主 `provider-catalog.json`，模型跟随宿主 `models.json`（dsh models 页设置默认）。
 
 **1. nodePath（必改）**：未填时启动报 `node 可执行文件不存在`。探测本机 Node 24+：`where node`（cmd）/ `Get-Command node`（PowerShell）等。改法：设置界面填 node.exe 绝对路径、Agent 确认后直写 config.json `global.nodePath`，或**标签页 t1 候选列表点「采用」**（未配置时展示本机探测候选，写入 config.json）。**候选探测链按通用性排序**：PATH 最通用（任何 node 管理器/官方安装都会把 node 目录或 shim 放进 PATH）→ Program Files 官方安装 → nvm-windows/fnm/volta 等工具特定变量仅作补充（只认环境变量信号，不假设用户用特定版本管理器）；「采用」时服务端会真实校验 node --version + npm-cli.js。**生效分层**：检测层（标签页 t1）实时生效（resolveNodePath 直读 config.json 优先）；启动层同样现读——t3「手动启动」链路 startWebHostFromPlugin → ensureWebHost → resolveNodePath → spawn，无需重启即用新 node；仅旧进程存活（g.web.ready=true）时先杀进程（任务管理器/Stop-Process）再点，或重启 Hana。
 
