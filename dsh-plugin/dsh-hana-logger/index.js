@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Nyasers
+//
 // dsh-hana-logger — DSHana 统一日志服务（v0.10.8）。
 //
 // 语义：theme / provider / default-model 三个内嵌 cordis 插件原本各自内联一份几乎相同的

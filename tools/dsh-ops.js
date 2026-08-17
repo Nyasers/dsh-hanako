@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Nyasers
+//
 // tools/dsh-ops.js — dsh 会话清单查询（只读）工具
 // 直接解析 dsh web host 的会话持久化缓存 <dataDir>/dsh-home/storages/session_projcache.json
 // （dsh 官方 session-persistence 单元的 proj cache，含全部历史会话摘要：标题/cwd/创建时间/

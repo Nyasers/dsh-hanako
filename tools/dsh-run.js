@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Nyasers
+//
 // tools/dsh-run.js — dsh_run 工具（单文件自包含）
 // 把任务交给 DeepSeek Harness（dsh）的 web host（--profile web）执行：
 // 插件 spawn dsh web（DSH_HOME 指向插件数据目录，账本随插件生命周期），

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Nyasers
+//
 // dsh-hana-provider — 让 dsh 直接复用 Hana 宿主的 provider 配置并完全跟随（v0.9.3）。
 //
 // 语义：dsh 启动器 --patch 挂载本插件后，provider 目录来自宿主配置文件

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Nyasers
+//
 // dsh-hana-default-model 前端 client 模块（v0.9.5 正规化升级）：设置面板「默认模型」
 // 分页原生渲染——不再用 tapIndex DOM 注入，而是按 dsh client 插件规范注册
 // settings.section slot（ledger 驱动导航：ui-settings-general 的 useSections 直接

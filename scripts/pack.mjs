@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Nyasers
+//
 // scripts/pack.mjs — dsh-hanako v0.6.0 轻量化打包
 // 交付物 = 代码 bundle（dist/）+ 配置 + 技能 + 卡片资源 + lockfile，零依赖（Agent npm ci 装）。
 // 流程：build（rspack）→ 复制交付清单 → zip → SHA256。
@@ -33,14 +36,14 @@ execFileSync(process.execPath, [join(ROOT, "scripts", "build.mjs")], {
 // 2. 静态项复制进 dist —— dist 即完整交付目录（bundle + manifest + skills + 资源），
 //    包根结构 = 标准插件形态（根 index.js + tools/，无 dist 这层目录）
 const staticItems = [
-  "manifest.json",
+  "LICENSE",
+  "README.md",
   "package.json",
-  // "package-lock.json",
-  "skills",
+  "manifest.json",
   "app",
   "routes",
   "dsh-plugin",
-  "README.md",
+  "skills",
   "node_modules/npm",
 ];
 const distDir = join(ROOT, "dist");

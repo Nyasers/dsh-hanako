@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Nyasers
+//
 // tools/dsh-cancel.js — dsh 任务取消（止损）工具
 // dsh_run 派发任务后只能等完成或超时，本工具提供主动取消：调 dsh web host
 // POST /api/session.cancel（client-request 信封，rpcId 回显校验）中断运行中的任务会话。

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Nyasers
+//
 // card.js — dsh 任务反馈卡片前端（iframe 内执行）
 // v0.10.46 架构改造：卡片链路从「HTTP 轮询 + op Map」改为「SSE 服务端推送 + jsonl 唯一事实源」。
 // 启动即连 GET /ops/stream（EventSource，带 token，参照 apiUrl 拼接）：

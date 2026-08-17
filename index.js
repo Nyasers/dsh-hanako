@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Nyasers
+//
 // index.js — dsh-hanako 生命周期
 // 四件事：
 //  1. onload 最前初始化统一日志（插件会话边界：时间戳会话文件，旧日志 zstd 压缩保留；挂单例 logPath/appendLog，

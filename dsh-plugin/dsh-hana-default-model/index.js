@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Nyasers
+//
 // dsh-hana-default-model — 在 dsh Web UI 设置页提供「默认模型」配置分页（tab）（v0.9.5）。
 //
 // 语义：dsh 的 agent-default-model（settings.yaml）是任务默认模型的事实源，dsh_run

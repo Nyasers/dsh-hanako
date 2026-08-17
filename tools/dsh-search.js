@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Nyasers
+//
 // tools/dsh-search.js — dsh 跨会话内容搜索（只读）工具
 // 调 dsh web host POST /api/session.search（client-request 信封，rpcId 回显校验）：
 // payload { query }（trim 后 1~500 字符、不得含 NUL），响应 value { items: [{sessionId, snippet}], hasMore }。

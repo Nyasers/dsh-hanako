@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Nyasers
+//
 // tools/dsh-approve.js — dsh 审批应答工具
 // dsh 会话审批挂起（approval/policy=ask 触发 approval/requested）时，dsh_run 任务的事件
 // 循环会把审批上下文存进 op 快照（含 respond 路由所需的 rpcId），并通过宿主 deferred

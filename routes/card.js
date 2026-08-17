@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Nyasers
+//
 // routes/card.js — dsh-hanako 任务反馈卡片路由
 //   GET /card/op?opId=&sessionId=&rpcId=&timeoutMs=  卡片页面（iframe 内容）
 //   GET /ops/stream?sessionId=&rpcId=&timeoutMs=     SSE 推送源（卡片主链路：基线快照 + DSH 实时事件转发）

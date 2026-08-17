@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: MPL-2.0
+   Copyright (c) 2026 Nyasers */
 /* dsh-runner 任务反馈卡片样式（host 主题变量，跨主题可用） */
 /* iframe body 整体背景（--tool-bg 宿主注入时生效，未定义回退透明）
    flex column + max-height 600（border-box 含 padding）：内容短时 body 贴合、长时顶满 600，

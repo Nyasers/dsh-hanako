@@ -1,6 +1,6 @@
 {
   "name": "dsh-hanako",
-  "version": "0.11.7",
+  "version": "0.12.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -15,7 +15,7 @@
     "protobufjs": true
   },
   "devDependencies": {
-    "@rspack/core": "^1.3.0",
+    "@rspack/core": "^2.1.10",
     "archiver": "^8.0.0",
     "clean-css": "^5.3.3",
     "fs-extra": "^11.4.0",

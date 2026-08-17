@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Nyasers
+//
 // dsh-hana-theme — 把 Hana 宿主主题「全量配色」注入 dsh Web UI（v0.8.1）。
 //
 // 语义：嵌入场景（DSHana 标签页）下 dsh 始终使用 Hana 配色——

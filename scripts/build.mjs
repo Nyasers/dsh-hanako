@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Nyasers
+//
 // scripts/build.mjs — dsh-hanako rspack 构建（v0.6.0 轻量化分化）
 // 产物：dist/index.js + dist/tools/*.js（ESM bundle，压缩），插件本体零依赖打包。
 // 用法：
