@@ -36,7 +36,7 @@ v0.10.46（op Map 退役，任务状态零存储、jsonl 唯一事实源）：`r
 
 ## 示例：从哪拿 sessionId
 
-sessionId 优先来源（v0.11.0 起 op Map 退役，**取消一律推荐显式传 sessionId**）：
+sessionId 优先来源（op Map 已退役，**取消一律推荐显式传 sessionId**）：
 
 1. **dsh_run 异步回调**：任务完成/失败时后台消息带 `sessionId`（形如 `session-xxxx`）——直接抄用
 2. **运行卡片 URL**：卡片 iframe 地址带 `sessionId=<session-xxxx>&rpcId=<r_xxx>&opId=<op_xxx>`——从 URL 取

@@ -5,8 +5,6 @@
 //   POST /webui/start        手动启动 web host（process 卡片「手动启动」按钮；ready/starting/触发启动三态）
 //   POST /webui/install-deps 自动安装 dsh 依赖（deps 卡片「安装依赖」按钮；installing/触发安装）
 //   GET  /webui/verify-deps  运行级依赖检测（node cliBin --version；进标签页自动一次 + 手动「检测依赖」按钮）
-//   GET  /webui/verify-node  运行级 Node/npm 可用性检测（node --version + npm-cli.js；进标签页自动一次 + 手动「检测 Node」按钮）
-//   POST /webui/adopt-node   采用 Node 候选（t1 候选列表「采用」按钮；校验 + 写入 config.json 的 global.nodePath）
 //
 // 机制：与 routes/card.js 同构——宿主把 app 挂在 /api/plugins/<pluginId> 命名空间下，
 // 这里注册相对路径。渲染前服务端用 Node fetch 探测 dsh web host 的 /api/host.describe
@@ -61,7 +59,7 @@ function readDiagnostics(ctx, cfg, port) {
   const g = globalThis.__dshHanako;
   if (g && typeof g.collectDiagnostics === "function") {
     try {
-      return g.collectDiagnostics({ dataDir: ctx?.dataDir, nodePath: cfg.nodePath, webPort: port });
+      return g.collectDiagnostics({ dataDir: ctx?.dataDir, webPort: port });
     } catch (e) {
       ctx.log?.warn?.("[dsh-hanako] 收集连接自检失败:", e?.message || String(e));
       return null;
@@ -119,12 +117,6 @@ body[data-pending="1"] iframe#dsh-frame{display:none}
 .diag-progress{white-space:pre-wrap;word-break:break-all;font-family:ui-monospace,SFMono-Regular,Consolas,"Courier New",monospace;font-size:12px;color:var(--text-light,#4A433C);background:var(--accent-light,rgba(83,125,150,0.08));border-radius:4px;padding:6px 8px;margin-bottom:4px;max-height:120px;overflow:auto}
 .diag-progress-time{font-size:11px;color:var(--text-muted,#6B6158);margin-bottom:4px}
 .diag-logpath{font-family:ui-monospace,SFMono-Regular,Consolas,"Courier New",monospace;font-size:12px;color:var(--text-muted,#6B6158);word-break:break-all;margin-top:4px}
-.diag-cands{margin-top:6px;display:flex;flex-direction:column;gap:6px}
-.diag-cands-empty{font-size:12px;color:var(--text-muted,#6B6158);background:var(--accent-light,rgba(83,125,150,0.08));border-radius:4px;padding:6px 8px;margin-top:6px}
-.diag-cand{display:flex;align-items:center;gap:8px;border:1px solid var(--border,#D8CFBE);border-radius:6px;background:var(--bg-card,#FBF7EE);padding:6px 8px}
-.diag-cand-path{flex:1;min-width:0;font-family:ui-monospace,SFMono-Regular,Consolas,"Courier New",monospace;font-size:12px;color:var(--text-light,#4A433C);word-break:break-all}
-.diag-cand-src{font-size:11px;color:var(--text-muted,#6B6158);flex:none}
-.diag-cand .diag-btn{margin-top:0;padding:4px 10px;font-size:12px}
 .diag-retry{font-size:13px;color:var(--text-muted,#6B6158);text-align:center}
 </style>
 </head>
@@ -197,16 +189,13 @@ window.parent.postMessage({ type: "ready" }, "*");
   //   不开放——禁用 + msg「依赖未就绪，请先安装/重新安装依赖」。
   // deps 卡片：依赖缺失 →「安装依赖」；已装 → 常驻「检测依赖」（verify-deps，检测中禁用
   // 「检测中…」）；存在但运行级验证失败 → 另加「重新安装依赖」（install-deps action）。
-  //   v0.8.10: node 卡片——nodePath 已配置 → 常驻「检测 Node」（verify-node，检测中禁用
-  //   「检测中…」）；未配置纯提示不渲染按钮（配置都没配，检测无意义）。
-  // 门禁链（v0.8.10）：t1（Node）未通过 → t2/t3 全锁；t1 过但 t2（依赖）未通过 → t3 锁。
-  // 状态机：startRequested/depsRequested/verifyRequested/nodeVerifyRequested 只覆盖
+  // 门禁链：t1（依赖）未通过 → t2（进程）启动按钮锁（依赖未就绪，启动必失败）。
+  // 状态机：startRequested/depsRequested/verifyRequested 只覆盖
   // 「请求已发出但诊断尚未反映状态」的短暂窗口，诊断确认后一律以检查项为准。
   var startRequested = false;
   var depsRequested = false;
   var verifyRequested = false;
-  var nodeVerifyRequested = false;
-  // 卡片内操作按钮 HTML：node 等纯提示项返回空；deps 可返回多个按钮（重新安装 + 检测）
+  // 卡片内操作按钮 HTML：deps 可返回多个按钮（重新安装 + 检测）
   function actionButtonHtml(d) {
     if (!d) return "";
     if (d.key === "process") {
@@ -215,31 +204,6 @@ window.parent.postMessage({ type: "ready" }, "*");
       var running = d.alive;
       return '<button type="button" class="diag-btn" data-action="start" data-check="process"'
         + (running ? " disabled" : "") + '>' + (running ? "启动中…" : "手动启动 web host") + '</button>'
-        + '<span class="diag-btn-msg"></span>';
-    }
-    if (d.key === "node") {
-      if (!d.configured) {
-        // v0.9.1: 未配置 → 环境变量感知候选列表（服务端探测，用户点选「采用」写入 config.json）。
-        // 候选路径来自服务端探测（非用户任意输入），渲染仍走 escHtml 转义（路径可能含特殊字符）。
-        // v0.9.3: 无候选（candidates null 与空数组统一）渲染空提示，不再留白。
-        if (!d.candidates || d.candidates.length === 0) {
-          return '<div class="diag-cands-empty">未检测到本机可用 Node.js（已按 PATH / Program Files / 常见版本管理器环境变量探测）</div>'
-            + '<span class="diag-btn-msg"></span>';
-        }
-        var html = '<div class="diag-cands">';
-        for (var i = 0; i < d.candidates.length; i++) {
-          var cand = d.candidates[i];
-          html += '<div class="diag-cand">'
-            + '<span class="diag-cand-path">' + escHtml(cand.path) + '</span>'
-            + '<span class="diag-cand-src">' + escHtml(cand.source) + '</span>'
-            + '<button type="button" class="diag-btn" data-action="adopt-node" data-check="node" data-path="' + escHtml(cand.path) + '">采用</button>'
-            + '</div>';
-        }
-        return html + '<span class="diag-btn-msg"></span>';
-      }
-      // v0.8.10: nodePath 已配置 → 常驻「检测 Node」（检测中禁用「检测中…」）
-      return '<button type="button" class="diag-btn" data-action="verify-node" data-check="node"'
-        + (d.verifyRunning ? " disabled" : "") + '>' + (d.verifyRunning ? "检测中…" : "检测 Node") + '</button>'
         + '<span class="diag-btn-msg"></span>';
     }
     if (d.key === "deps") {
@@ -287,7 +251,7 @@ window.parent.postMessage({ type: "ready" }, "*");
     var p = function (n) { return (n < 10 ? "0" : "") + n; };
     return p(t.getHours()) + ":" + p(t.getMinutes()) + ":" + p(t.getSeconds());
   }
-  // v0.8.8: deps 安装中实时进度块（npm ci 输出尾部 + 更新时间，随 3s 轮询刷新滚动）
+  // v0.8.8: deps 安装中实时进度块（npm i 输出尾部 + 更新时间，随 3s 轮询刷新滚动）
   function progressHtml(d) {
     var html = '<pre class="diag-progress">' + escHtml(d.installLog || "正在准备…") + '</pre>';
     if (d.installAt) html += '<div class="diag-progress-time">更新于 ' + escHtml(fmtTime(d.installAt)) + '</div>';
@@ -299,29 +263,19 @@ window.parent.postMessage({ type: "ready" }, "*");
     if (el) el.textContent = text;
   }
   function syncActionButtons(diag) {
-    var node = null, proc = null, deps = null;
+    var proc = null, deps = null;
     if (diag && diag.checks) {
       for (var i = 0; i < diag.checks.length; i++) {
-        if (diag.checks[i].key === "node") node = diag.checks[i];
-        else if (diag.checks[i].key === "process") proc = diag.checks[i];
+        if (diag.checks[i].key === "process") proc = diag.checks[i];
         else if (diag.checks[i].key === "deps") deps = diag.checks[i];
       }
     }
-    // v0.8.10: t1（Node）未通过 → t2/t3 全锁（node 不可用，安装依赖/启动进程都没意义）：
-    // node.ok=false（未配置/路径不存在/验证失败）、检测中（verifyRunning）均视为未通过
-    var nodeBlocked = node && (node.ok === false || node.verifyRunning === true);
-    // v0.8.8: t2（依赖）未通过 → t3 启动按钮不开放（依赖未就绪，启动必失败）：
+    // 依赖未通过 → 启动按钮不开放（依赖未就绪，启动必失败）：
     // deps.ok=false（未装/验证失败）、安装中（installing）、检测中（verifyRunning）均视为未通过
     var depsBlocked = deps && (deps.ok === false || deps.installing === true || deps.verifyRunning === true);
     var pBtn = listBtn("process");
     if (pBtn) {
-      if (nodeBlocked) {
-        // t1 未过 → t3 不开放（Node 不可用，启动必失败）
-        startRequested = false;
-        pBtn.disabled = true;
-        pBtn.textContent = "手动启动 web host";
-        setBtnMsg("process", "Node.js 不可用，请先修复（设置界面配置或让 Agent 协助）");
-      } else if (depsBlocked) {
+      if (depsBlocked) {
         // 依赖未就绪：禁用 + msg 提示原因（用户先去安装/重新安装/等待检测）
         startRequested = false;
         pBtn.disabled = true;
@@ -345,13 +299,7 @@ window.parent.postMessage({ type: "ready" }, "*");
     }
     var installBtn = listBtn("deps", "install-deps");
     if (installBtn && deps) {
-      if (nodeBlocked) {
-        // v0.8.10: t1 未过 → t2「安装依赖」不开放（node/npm 不可用，npm ci 必失败）
-        depsRequested = false;
-        installBtn.disabled = true;
-        installBtn.textContent = deps.installed ? "重新安装依赖" : "安装依赖";
-        setBtnMsg("deps", "Node.js 不可用，请先修复（设置界面配置或让 Agent 协助）");
-      } else if (deps.installing) {
+      if (deps.installing) {
         depsRequested = false;
         installBtn.disabled = true;
         installBtn.textContent = "安装中…";
@@ -363,22 +311,6 @@ window.parent.postMessage({ type: "ready" }, "*");
         depsRequested = false;
         installBtn.disabled = false;
         installBtn.textContent = deps.installed ? "重新安装依赖" : "安装依赖";
-      }
-    }
-    var nodeVerifyBtn = listBtn("node", "verify-node");
-    if (nodeVerifyBtn && node) {
-      if (node.verifyRunning) {
-        nodeVerifyRequested = false;
-        nodeVerifyBtn.disabled = true;
-        nodeVerifyBtn.textContent = "检测中…";
-      } else if (nodeVerifyRequested) {
-        // 请求已发出但诊断尚未反映 running：保持禁用
-        nodeVerifyBtn.disabled = true;
-        nodeVerifyBtn.textContent = "正在检测…";
-      } else {
-        nodeVerifyRequested = false;
-        nodeVerifyBtn.disabled = false;
-        nodeVerifyBtn.textContent = "检测 Node";
       }
     }
     var verifyBtn = listBtn("deps", "verify-deps");
@@ -506,74 +438,6 @@ window.parent.postMessage({ type: "ready" }, "*");
     if (!deps || !deps.installed) return; // 未装：先安装，安装成功会自动重验
     runVerifyDeps(listBtn("deps", "verify-deps"));
   }
-  // v0.8.10: 运行级 Node/npm 可用性检测（GET /webui/verify-node，只读）——进标签页自动一次 +
-  // 手动「检测 Node」按钮。同 runVerifyDeps：服务端 await（≤10s），结果写入 g.nodeSmoke，
-  // 成功则 refreshDiag() 刷新诊断（t1 卡片显示通过/失败，门禁随之解锁/加锁）。
-  function runVerifyNode(btn) {
-    if (!btn || btn.disabled) return; // 幂等：已在检测中
-    nodeVerifyRequested = true;
-    btn.disabled = true;
-    btn.textContent = "正在检测…";
-    setBtnMsg("node", "");
-    fetch(api + "/webui/verify-node", {
-      headers: surfaceHeaders(),
-      signal: AbortSignal.timeout(15000), // 服务端 await 检测 ≤10s，留足余量
-    })
-      .then(function (r) { return r.json(); })
-      .then(function (d) {
-        nodeVerifyRequested = false;
-        if (d && d.ok) {
-          // 结果已写入服务端 g.nodeSmoke：刷新一次诊断（通过/失败状态进 t1 卡片）
-          refreshDiag();
-          return;
-        }
-        var b = listBtn("node", "verify-node");
-        if (b) { b.disabled = false; b.textContent = "检测 Node"; }
-        setBtnMsg("node", d && d.error ? d.error : "检测请求失败，请稍后重试");
-      })
-      .catch(function () {
-        nodeVerifyRequested = false;
-        var b = listBtn("node", "verify-node");
-        if (b) { b.disabled = false; b.textContent = "检测 Node"; }
-        setBtnMsg("node", "检测请求超时或网络错误，请重试");
-      });
-  }
-  function verifyNode() {
-    runVerifyNode(listBtn("node", "verify-node"));
-  }
-  // 进标签页自动检测一次（仅 nodePath 已配置时；不随轮询重复——只在这里调一次）
-  function autoVerifyNode() {
-    var node = checkByKey(initDiag, "node");
-    if (!node || !node.configured) return; // 未配置：先配置（候选列表/纯提示）
-    runVerifyNode(listBtn("node", "verify-node"));
-  }
-  // v0.9.1: 采用 Node 候选——POST /webui/adopt-node（body {path}），服务端校验 + 写入 config.json；
-  // 成功 {ok:true} 则 refreshDiag()（t1 转绿、候选列表消失、nodeBlocked 解除）；失败恢复按钮 + msg。
-  function adoptNode(btn) {
-    var path = btn ? btn.getAttribute("data-path") : "";
-    if (!btn || btn.disabled || !path) return; // 幂等：已在写入中
-    btn.disabled = true;
-    btn.textContent = "写入中…";
-    setBtnMsg("node", "");
-    fetch(api + "/webui/adopt-node", {
-      method: "POST",
-      headers: surfaceHeaders(),
-      body: JSON.stringify({ path: path }),
-      signal: AbortSignal.timeout(5000),
-    })
-      .then(function (r) { return r.json(); })
-      .then(function (d) {
-        if (d && d.ok) { refreshDiag(); return; } // 已写入：刷新诊断（t1 转绿、候选消失）
-        btn.disabled = false;
-        btn.textContent = "采用";
-        setBtnMsg("node", d && d.error ? d.error : "写入失败，请稍后重试");
-      })
-      .catch(function () {
-        btn.disabled = false;
-        btn.textContent = "采用";
-        setBtnMsg("node", "写入请求超时或网络错误，请重试");
-      });
-  }
   // 事件委托：卡片按钮点击（列表 innerHTML 每轮轮询重建，监听挂在 ul 上持久）
   function onDiagClick(e) {
     var t = e.target;
@@ -583,8 +447,6 @@ window.parent.postMessage({ type: "ready" }, "*");
     if (action === "start") startWebHost();
     else if (action === "install-deps") installDeps();
     else if (action === "verify-deps") verifyDeps();
-    else if (action === "verify-node") verifyNode();
-    else if (action === "adopt-node") adoptNode(btn);
   }
   var pollTimer = null;
   function poll() {
@@ -642,7 +504,6 @@ window.parent.postMessage({ type: "ready" }, "*");
     renderDiagList(initDiag); // 首屏即渲染服务端带回的初始自检（null 时显示占位）+ 同步卡片内按钮
     var diagList = document.getElementById("diag-list");
     if (diagList) diagList.addEventListener("click", onDiagClick); // 卡片按钮事件委托
-    autoVerifyNode(); // v0.8.10: 进标签页 Node/npm 可用性检测一次（结果经 refreshDiag 进 t1 卡片）
     autoVerifyDeps(); // v0.8.8: 进标签页依赖运行级检测一次（结果经 refreshDiag 进 deps 卡片）
     poll();
   }
@@ -737,7 +598,7 @@ export default function registerWebuiRoutes(app, ctx) {
         return c.json({ ok: false, error: "插件工具模块未加载，稍后重试" });
       }
       if (g.depsSmoke?.running) return c.json({ ok: true, running: true });
-      const smoke = await g.verifyDeps({ dataDir: ctx.dataDir || g.dataDir, nodePath: cfg.nodePath, webPort: port });
+      const smoke = await g.verifyDeps({ dataDir: ctx.dataDir || g.dataDir, webPort: port });
       return c.json({ ok: true, running: false, verified: smoke.ok, version: smoke.version, error: smoke.error || null });
     } catch (e) {
       ctx.log?.warn?.("[dsh-hanako] 运行级依赖检测失败:", e?.message || String(e));
@@ -745,79 +606,4 @@ export default function registerWebuiRoutes(app, ctx) {
     }
   });
 
-  // 运行级 Node/npm 可用性检测（v0.8.10: t1 卡片「检测 Node」按钮 + 进标签页自动一次；GET 只读）：
-  // 检测中（g.nodeSmoke.running）→ {ok:true,running:true}；否则 await verifyNodeSmoke(cfg)（≤10s）
-  // → {ok:true, verified, version, error, running:false}。结果写入 g.nodeSmoke，前端随后经
-  // health 读取诊断刷新 t1 卡片（t1 门禁随之解锁/加锁）。单例缺失/无函数/异常一律容错回 {ok:false}。
-  app.get("/webui/verify-node", async (c) => {
-    const g = globalThis.__dshHanako;
-    try {
-      if (!g || typeof g.verifyNode !== "function") {
-        return c.json({ ok: false, error: "插件工具模块未加载，稍后重试" });
-      }
-      if (g.nodeSmoke?.running) return c.json({ ok: true, running: true });
-      const smoke = await g.verifyNode({ dataDir: ctx.dataDir || g.dataDir, nodePath: cfg.nodePath, webPort: port });
-      return c.json({ ok: true, running: false, verified: smoke.ok, version: smoke.version, error: smoke.error || null });
-    } catch (e) {
-      ctx.log?.warn?.("[dsh-hanako] 运行级 Node 检测失败:", e?.message || String(e));
-      return c.json({ ok: false, error: "检测请求失败，请稍后重试" });
-    }
-  });
-
-  // 采用 Node 候选（v0.9.1: t1 候选列表「采用」按钮）——用户确认后写入 config.json：
-  // 校验候选（existsSync + await verifyNodeSmoke 语义：node --version + npm-cli.js，可复用
-  // g.verifyNode）→ 可用才写 dataDir/config.json 的 global.nodePath（读改写，只动 nodePath，
-  // 其他字段原样保留不打印），写入后置空 g.nodeSmoke（强制下次检测重验）。
-  // 返回 {ok, path, version}。单例缺失/无函数/异常一律容错回 {ok:false}，本路由不抛异常。
-  app.post("/webui/adopt-node", async (c) => {
-    const g = globalThis.__dshHanako;
-    try {
-      if (!g || typeof g.verifyNode !== "function") {
-        return c.json({ ok: false, error: "插件工具模块未加载，稍后重试" });
-      }
-      const body = (c?.req && c.req.body) || c?.body || {};
-      const path = typeof body.path === "string" ? body.path.trim() : "";
-      if (!path || !existsSync(path)) {
-        return c.json({ ok: false, error: "候选路径不存在，请刷新后重试" });
-      }
-      const dataDir = ctx.dataDir || g.dataDir || "";
-      if (!dataDir) return c.json({ ok: false, error: "插件数据目录未知，请稍后重试" });
-      const cfg2 = { dataDir, nodePath: path, webPort: port };
-      // 当前已配置值（同 resolveNodePath 语义：config.json 优先；相等则视为已采用）
-      let cur = "";
-      try {
-        const cf = join(dataDir, "config.json");
-        if (existsSync(cf)) {
-          const j = JSON.parse(readFileSync(cf, "utf8"));
-          const p = j?.global?.nodePath;
-          if (typeof p === "string" && p) cur = p;
-        }
-      } catch { /* 读配置失败忽略 */ }
-      if (cur && cur === path) return c.json({ ok: true, already: true, path });
-      // 校验候选可用（await 完成再决定写不写）
-      const smoke = await g.verifyNode(cfg2);
-      if (!smoke.ok) {
-        return c.json({ ok: false, error: "候选 Node 不可用：" + (smoke.error || "运行级校验失败") });
-      }
-      // 写入 config.json（读改写：只动 global.nodePath，其他字段原样保留）
-      const cf = join(dataDir, "config.json");
-      let conf = { global: {} };
-      try {
-        if (existsSync(cf)) {
-          const parsed = JSON.parse(readFileSync(cf, "utf8"));
-          if (parsed && typeof parsed === "object") conf = parsed;
-        }
-      } catch { /* 损坏按空配置处理 */ }
-      if (!conf.global || typeof conf.global !== "object") conf.global = {};
-      conf.global.nodePath = path;
-      mkdirSync(dataDir, { recursive: true });
-      writeFileSync(cf, JSON.stringify(conf, null, 2), "utf8");
-      // 写入后置空 nodeSmoke：强制下次检测重验（本次写入已 await 校验通过，t1 诊断将显示新值）
-      g.nodeSmoke = null;
-      return c.json({ ok: true, path, version: smoke.version || null });
-    } catch (e) {
-      ctx.log?.warn?.("[dsh-hanako] 采用 Node 候选失败:", e?.message || String(e));
-      return c.json({ ok: false, error: "写入失败，请稍后重试" });
-    }
-  });
 }

@@ -5,7 +5,7 @@ description: "dsh_run 工具调用手册（源码 tools/dsh-run.js 核对）。�
 
 # dsh_run 工具手册
 
-把任务交给 DeepSeek Harness（dsh）的常驻 web host（--profile web）执行：完整编码 agent、沙箱 bash/文件系统工具、上下文压缩、subagent 级联。权限 `external_side_effect`（external_llm_api，消耗宿主 provider 额度）。实现 `tools/dsh-run.js`（单文件自包含，1942 行）。
+把任务交给 DeepSeek Harness（dsh）的常驻 web host（--profile web）执行：完整编码 agent、沙箱 bash/文件系统工具、上下文压缩、subagent 级联。权限 `external_side_effect`（external_llm_api，消耗宿主 provider 额度）。实现 `tools/dsh-run.js`（单文件自包含，2378 行）。
 
 ## 参数契约（源码 parameters + doExecute + submitTask 核实）
 
@@ -25,7 +25,7 @@ description: "dsh_run 工具调用手册（源码 tools/dsh-run.js 核对）。�
 ## 执行链路（submitTask 内部）
 
 ```
-ensureWebHost（nodePath 现读 config.json → spawn dsh web，DSH_HOME=数据目录 dsh-home，端口就绪上限 60s）
+ensureWebHost（resolveDshPkgDir 定位依赖 → spawn dsh web，DSH_HOME=数据目录 dsh-home，端口就绪上限 60s）
 → session.create（新建：{cwd, agentPreset?}；resume：先 session.list 查会话已有 cwd）
 → 记 op.sessionId + sessionCwd
 → selectModel（仅显式传 provider/model/effort 时；model-unavailable 报错降级不带 effort 重试）
@@ -49,7 +49,7 @@ ensureWebHost（nodePath 现读 config.json → spawn dsh web，DSH_HOME=数据�
   stopReason, usage, stderr }
 ```
 
-**callbackMode 摘要压缩**（buildSummary）：默认 summary 只回传摘要。锚点 = 最后一条 assistant/message 文本（`summaryOf: "final-message"`）；无 finalText 时超长（>1500+600）head-tail 折叠（`summaryOf: "head-tail"`）；短输出原样（`summaryOf: "full"`）。full 模式回传全量。**完整输出永远在卡片（会话 jsonl 恢复，v0.11.0 起）+ dsh Web UI（sessionId 定位）可查**。
+**callbackMode 摘要压缩**（buildSummary）：默认 summary 只回传摘要。锚点 = 最后一条 assistant/message 文本（`summaryOf: "final-message"`）；无 finalText 时超长（>1500+600）head-tail 折叠（`summaryOf: "head-tail"`）；短输出原样（`summaryOf: "full"`）。full 模式回传全量。**完整输出永远在卡片（会话 jsonl 恢复）+ dsh Web UI（sessionId 定位）可查**。
 
 **同步模式（wait=true）**：content = `res.output` +（非 end_turn 附 `[stopReason: …]`）；details.dsh = `{ stopReason, usage, cwd, opId, sessionId, wait: true }`，stderr 附 `dshStderr`（截 2000）。阻塞当前回合、无卡片进度；长任务建议异步。
 
@@ -74,7 +74,7 @@ dsh agent 请求越界权限时任务挂起，插件经 deferred 通知（taskId
 
 ## 配置单一事实源（resolve* 函数）
 
-nodePath / defaultCwd / approvalTimeoutMs 优先直读 `<dataDir>/config.json` 的 `global.*`（设置界面或 Agent 直写都即时生效），无则回退快照 → manifest 默认。**config.json 由插件自动初始化**（ensureConfigJson：无文件时按 manifest 默认值生成，幂等不覆盖、原子写、失败静默），全新安装免手动保存。**「改完都要重启 Hana」不成立**（仅 tools 模块缓存场景需重启）。
+defaultCwd / approvalTimeoutMs 优先直读 `<dataDir>/config.json` 的 `global.*`（设置界面或 Agent 直写都即时生效），无则回退快照 → manifest 默认。**config.json 由插件自动初始化**（ensureConfigJson：无文件时按 manifest 默认值生成，幂等不覆盖、原子写、失败静默），全新安装免手动保存。**「改完都要重启 Hana」不成立**（仅 tools 模块缓存场景需重启）。
 
 下表为 manifest 默认值（随包分发的事实）；实际生效值以 config.json 为准（未覆盖时等于默认）：
 
