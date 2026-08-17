@@ -6,28 +6,17 @@
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import {
-  cpSync,
-  createWriteStream,
-  existsSync,
-  mkdirSync,
-  renameSync,
-  rmSync,
-  readFileSync,
-  writeFileSync,
-  readdirSync,
-  statSync,
-} from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { ZipArchive } from "archiver";
+
+import fs from "fs-extra";
 
 const require = createRequire(import.meta.url);
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 // 版本单一事实源：命令行参数优先（npm run pack -- <version>），缺省读 package.json version
 const version =
-  process.argv[2] ||
-  JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).version;
+  process.argv[2] || fs.readJsonSync(join(ROOT, "package.json")).version;
 if (!version)
   throw new Error(
     "用法：node scripts/pack.mjs [version]（缺省取 package.json 的 version）",
@@ -57,8 +46,16 @@ const staticItems = [
 const distDir = join(ROOT, "dist");
 for (const item of staticItems) {
   const src = join(ROOT, item);
-  if (!existsSync(src)) throw new Error(`静态项不存在：${item}`);
-  cpSync(src, join(distDir, item), { recursive: true, dereference: true });
+  if (!fs.pathExistsSync(src)) throw new Error(`静态项不存在：${item}`);
+  fs.copySync(src, join(distDir, item), {
+    filter: (srcPath) => {
+      // 忽略 .bin 目录（其中是软链/可执行文件，打包后通常不需要）
+      if (srcPath.includes("node_modules/.bin")) return false;
+      // 忽略测试文件、typescript 源码等减少体积
+      if (/__tests__|\.test\.|\.spec\./.test(srcPath)) return false;
+      return true;
+    },
+  });
 }
 
 // 2.5 静态资产压缩（terser JS 纯语法级 + clean-css CSS 压缩，覆盖写回 dist 副本）
@@ -86,10 +83,10 @@ function resolveTool(pkgName) {
 // 收集待压缩的静态资产：dsh-plugin/（递归）、routes/（顶层）、app/（顶层），按扩展名过滤
 function collectStaticFiles(dir, recursive = true, ext = ".js") {
   const files = [];
-  if (!existsSync(dir)) return files;
-  for (const name of readdirSync(dir)) {
+  if (!fs.pathExistsSync(dir)) return files;
+  for (const name of fs.readdirSync(dir)) {
     const p = join(dir, name);
-    const st = statSync(p);
+    const st = fs.statSync(p);
     if (st.isDirectory()) {
       if (recursive) files.push(...collectStaticFiles(p, true, ext));
     } else if (name.endsWith(ext)) {
@@ -121,7 +118,7 @@ function isEsm(code) {
   ];
   console.log(`[pack] minify static js (${staticJs.length} files)...`);
   for (const file of staticJs) {
-    const code = readFileSync(file, "utf8");
+    const code = fs.readFileSync(file, "utf8");
     const before = Buffer.byteLength(code, "utf8");
     let result;
     try {
@@ -136,7 +133,7 @@ function isEsm(code) {
     }
     if (!result?.code) throw new Error(`terser 压缩失败（${file}）：无输出`);
     const out = result.code;
-    writeFileSync(file, out, "utf8");
+    fs.writeFileSync(file, out, "utf8");
     const after = Buffer.byteLength(out, "utf8");
     const rel = file.startsWith(distDir + "\\")
       ? file.slice(distDir.length + 1)
@@ -161,7 +158,7 @@ function isEsm(code) {
   if (staticCss.length) {
     console.log(`[pack] minify static css (${staticCss.length} files)...`);
     for (const file of staticCss) {
-      const css = readFileSync(file, "utf8");
+      const css = fs.readFileSync(file, "utf8");
       const before = Buffer.byteLength(css, "utf8");
       let result;
       try {
@@ -176,7 +173,7 @@ function isEsm(code) {
       if (typeof result.styles !== "string")
         throw new Error(`clean-css 压缩失败（${file}）：无输出`);
       const out = result.styles;
-      writeFileSync(file, out, "utf8");
+      fs.writeFileSync(file, out, "utf8");
       const after = Buffer.byteLength(out, "utf8");
       const rel = file.startsWith(distDir + "\\")
         ? file.slice(distDir.length + 1)
@@ -190,19 +187,19 @@ function isEsm(code) {
 
 // 3. dist → 铺平目录（zip 中间原料，放 _tmp 可随时清空）
 const pkgDir = join(ROOT, "_tmp", "pkg", `dsh-hanako-v${version}`);
-rmSync(pkgDir, { recursive: true, force: true });
-cpSync(distDir, pkgDir, { recursive: true });
+fs.removeSync(pkgDir);
+fs.copySync(distDir, pkgDir);
 
 // 4. zip + SHA256（发布产物归档 releases/，与项目群惯例一致）
 //    archiver 纯 Node 跨平台 zip（对齐 hana-remote-dev）：不用 tar -a -cf——
 //    GNU tar（Linux）不认 .zip 后缀会静默产出 tar 伪 zip（CI ubuntu 踩坑 2026-08-14，
 //    安装端报 end of central directory record signature not found）
 const relDir = join(ROOT, "releases");
-mkdirSync(relDir, { recursive: true });
+fs.ensureDirSync(relDir);
 const zipPath = join(relDir, `dsh-hanako-v${version}.zip`);
-rmSync(zipPath, { force: true });
+fs.removeSync(zipPath);
 const tmpZip = join(relDir, `.dsh-hanako-v${version}.zip.tmp`); // 先写临时文件，rename 原子落位（中断不留半成品）
-const output = createWriteStream(tmpZip);
+const output = fs.createWriteStream(tmpZip);
 const archive = new ZipArchive({ zlib: { level: 9 } });
 const done = new Promise((resolve, reject) => {
   output.on("close", resolve);
@@ -214,10 +211,10 @@ archive.pipe(output);
 archive.directory(pkgDir, `dsh-hanako-v${version}`);
 await archive.finalize();
 await done;
-renameSync(tmpZip, zipPath);
-const buf = readFileSync(zipPath);
+fs.moveSync(tmpZip, zipPath, { overwrite: true });
+const buf = fs.readFileSync(zipPath);
 const sha = createHash("sha256").update(buf).digest("hex").toUpperCase();
 const sizeMB = (buf.length / 1048576).toFixed(1);
 console.log(`\n[pack] ${zipPath}`);
 console.log(`[pack] zip ${sizeMB} MB · SHA256 ${sha}`);
-writeFileSync(`${zipPath}.sha256`, sha, "utf8");
+fs.writeFileSync(`${zipPath}.sha256`, sha, "utf8");

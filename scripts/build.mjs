@@ -7,7 +7,8 @@
 // 构建工具放在独立构建环境或本机。
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
-import { readFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
+
+import fs from "fs-extra";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -16,18 +17,25 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 // MODULE_NOT_FOUND；改动态 import，且目录 URL 不被 ESM 支持（ERR_UNSUPPORTED_DIR_IMPORT），
 // 需按包 exports/main 解析到实际入口文件——CJS 旧版与 ESM 新版均兼容。
 function resolveRspackEntry(coreDir) {
-  const pkg = JSON.parse(readFileSync(join(coreDir, "package.json"), "utf8"));
+  const pkg = JSON.parse(
+    fs.readFileSync(join(coreDir, "package.json"), "utf8"),
+  );
   const dot = pkg.exports?.["."];
   let entry = null;
   if (typeof dot === "string") entry = dot;
-  else if (dot && typeof dot === "object") entry = dot.default ?? dot.import ?? dot.require;
+  else if (dot && typeof dot === "object")
+    entry = dot.default ?? dot.import ?? dot.require;
   if (!entry) entry = pkg.main ?? "dist/index.js";
   return join(coreDir, entry);
 }
 let rspackPkg;
 const envDir = process.env.RSPACK_ENV;
 if (envDir) {
-  rspackPkg = await import(pathToFileURL(resolveRspackEntry(join(envDir, "node_modules", "@rspack", "core"))).href);
+  rspackPkg = await import(
+    pathToFileURL(
+      resolveRspackEntry(join(envDir, "node_modules", "@rspack", "core")),
+    ).href
+  );
 } else {
   rspackPkg = await import("@rspack/core");
 }
@@ -35,8 +43,17 @@ if (envDir) {
 const rspack = rspackPkg.rspack ?? rspackPkg.default?.rspack;
 
 // 入口：生命周期 index.js + 5 个工具文件（宿主按 manifest 路径加载，保持子目录结构）
-const entryNames = ["index", "tools/dsh-run", "tools/dsh-approve", "tools/dsh-cancel", "tools/dsh-ops", "tools/dsh-search"];
-const entries = Object.fromEntries(entryNames.map((n) => [n, join(ROOT, `${n}.js`)]));
+const entryNames = [
+  "index",
+  "tools/dsh-run",
+  "tools/dsh-approve",
+  "tools/dsh-cancel",
+  "tools/dsh-ops",
+  "tools/dsh-search",
+];
+const entries = Object.fromEntries(
+  entryNames.map((n) => [n, join(ROOT, `${n}.js`)]),
+);
 
 // 构建前收集各入口源码的 file:// URL —— 构建后产物里出现的这些字面量要替换回
 // import.meta.url（rspack 会把 import.meta.url 静态化为源码绝对路径，分发到对方机器
@@ -73,19 +90,27 @@ await new Promise((resolvePromise, reject) => {
   compiler.run((err, stats) => {
     compiler.close(() => {});
     if (err) return reject(err);
-    if (stats?.hasErrors()) return reject(new Error(stats.toString({ errors: true })));
-    console.log(stats?.toString({ colors: true, chunks: false, modules: false, assets: true }));
+    if (stats?.hasErrors())
+      return reject(new Error(stats.toString({ errors: true })));
+    console.log(
+      stats?.toString({
+        colors: true,
+        chunks: false,
+        modules: false,
+        assets: true,
+      }),
+    );
     resolvePromise();
   });
 });
 
 // 构建后处理：静态化路径字面量 → import.meta.url（运行时语义）
 function walk(dir) {
-  for (const name of readdirSync(dir)) {
+  for (const name of fs.readdirSync(dir)) {
     const p = join(dir, name);
-    if (statSync(p).isDirectory()) walk(p);
+    if (fs.statSync(p).isDirectory()) walk(p);
     else if (p.endsWith(".js")) {
-      let code = readFileSync(p, "utf8");
+      let code = fs.readFileSync(p, "utf8");
       let changed = false;
       for (const [url, entryName] of staticUrlToMeta) {
         // 替换带引号的完整字面量（压缩产物里是 "file:///..." 或 'file:///...'）→ 无引号表达式
@@ -97,7 +122,7 @@ function walk(dir) {
           }
         }
       }
-      if (changed) writeFileSync(p, code, "utf8");
+      if (changed) fs.writeFileSync(p, code, "utf8");
     }
   }
 }
