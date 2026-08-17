@@ -2,29 +2,19 @@
   "manifestVersion": 1,
   "id": "dsh-hanako",
   "name": "DSHana",
-  "version": "0.11.2",
+  "version": "0.11.3",
   "description": "常驻 DeepSeek Harness（dsh）web host（--profile web），向 Agent 提供进程外 subagent 能力：任务经 dsh /api 网关提交（Hana 宿主 provider、沙箱 bash/文件系统、compaction、subagent 级联），DSH_HOME 锁进插件数据目录（账本随插件生命周期），dsh Web UI 天然可见全部任务（可浏览器查看/继续）。默认异步：提交即渲染实时卡片（状态 / 耗时 / 摘要 + 完整输出懒加载），完成后宿主唤醒结果后台送达（PTC 式回调压缩：默认只带最终结论摘要，省上下文）；可 wait=true 同步返回。",
   "author": "Nyaser",
   "minAppVersion": "0.82.0",
   "trust": "full-access",
-  "capabilities": [
-    "resource.watch",
-    "network.fetch"
-  ],
+  "capabilities": ["resource.watch", "network.fetch"],
   "network": {
-    "allowedHosts": [
-      "127.0.0.1",
-      "localhost"
-    ],
-    "methods": [
-      "POST"
-    ],
+    "allowedHosts": ["127.0.0.1", "localhost"],
+    "methods": ["POST"],
     "defaultTimeoutMs": 5000,
     "maxResponseBytes": 1024
   },
-  "activationEvents": [
-    "onStartup"
-  ],
+  "activationEvents": ["onStartup"],
   "entry": "index.js",
   "contributes": {
     "tools": [
@@ -37,17 +27,11 @@
     "configuration": {
       "title": "DSHana 设置",
       "properties": {
-        "nodePath": {
-          "type": "string",
-          "default": "",
-          "title": "Node.js 可执行文件路径",
-          "description": "必填：用于启动 dsh web host 的 node.exe 绝对路径（需 Node 24+）。初始为空（config.json 由宿主在设置界面填写后生成，插件包不携带配置、不预设路径），未填时 web host 启动报错，请在设置中填写本机 node 路径（改后重启 Hana 生效）。"
-        },
-        "approvalTimeoutMs": {
+        "webPort": {
           "type": "number",
-          "default": 30000,
-          "title": "审批超时自动拒绝（毫秒）",
-          "description": "审批唯一配置。dsh agent 请求越界权限时任务挂起，插件通知 Agent 应答（附命令/路径原文）；挂起超过该时长无人应答自动 rejected（默认 30s：应答方失联检测，正常应答几秒内完成；宿主重启场景由会话中断兜底，不走超时拒绝）；0=禁用超时拒绝。改后对新审批立即生效。"
+          "default": 3080,
+          "title": "dsh Web UI 端口",
+          "description": "dsh web host 监听端口（执行后端 + 浏览器观察面，默认 3080）。"
         },
         "defaultCwd": {
           "type": "string",
@@ -55,24 +39,21 @@
           "title": "默认工作目录",
           "description": "dsh agent 的沙箱工作目录（bash 与文件系统工具的活动范围）。初始为空（不预设路径），建议安装后设置为你自己的项目工作目录；工具调用显式传 cwd 时优先。"
         },
+        "approvalTimeoutMs": {
+          "type": "number",
+          "default": 30000,
+          "title": "审批超时自动拒绝（毫秒）",
+          "description": "审批唯一配置。dsh agent 请求越界权限时任务挂起，插件通知 Agent 应答（附命令/路径原文）；挂起超过该时长无人应答自动 rejected（默认 30s：应答方失联检测，正常应答几秒内完成；宿主重启场景由会话中断兜底，不走超时拒绝）；0=禁用超时拒绝。改后对新审批立即生效。"
+        },
         "defaultTimeoutMs": {
           "type": "number",
           "default": 1800000,
           "title": "默认超时（毫秒）",
           "description": "单次任务默认超时，工具调用未显式传 timeout 时使用。默认 30 分钟。"
         },
-        "webPort": {
-          "type": "number",
-          "default": 3080,
-          "title": "dsh Web UI 端口",
-          "description": "dsh web host 监听端口（执行后端 + 浏览器观察面，默认 3080）。"
-        },
         "callbackMode": {
           "type": "string",
-          "enum": [
-            "summary",
-            "full"
-          ],
+          "enum": ["summary", "full"],
           "default": "summary",
           "title": "回调输出模式",
           "description": "异步任务完成后回调给 Agent 的输出体量：summary=只回传最终结论摘要（默认，省上下文；完整输出在卡片 op 快照与 dsh web UI 可查）；full=回传完整输出（上下文占用大）。"

@@ -6,7 +6,18 @@
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { cpSync, createWriteStream, existsSync, mkdirSync, renameSync, rmSync, readFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
+import {
+  cpSync,
+  createWriteStream,
+  existsSync,
+  mkdirSync,
+  renameSync,
+  rmSync,
+  readFileSync,
+  writeFileSync,
+  readdirSync,
+  statSync,
+} from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { ZipArchive } from "archiver";
@@ -14,8 +25,13 @@ import { ZipArchive } from "archiver";
 const require = createRequire(import.meta.url);
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 // 版本单一事实源：命令行参数优先（npm run pack -- <version>），缺省读 package.json version
-const version = process.argv[2] || JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).version;
-if (!version) throw new Error("用法：node scripts/pack.mjs [version]（缺省取 package.json 的 version）");
+const version =
+  process.argv[2] ||
+  JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).version;
+if (!version)
+  throw new Error(
+    "用法：node scripts/pack.mjs [version]（缺省取 package.json 的 version）",
+  );
 
 // 1. 构建 bundle
 console.log("[pack] build...");
@@ -42,7 +58,7 @@ const distDir = join(ROOT, "dist");
 for (const item of staticItems) {
   const src = join(ROOT, item);
   if (!existsSync(src)) throw new Error(`静态项不存在：${item}`);
-  cpSync(src, join(distDir, item), { recursive: true });
+  cpSync(src, join(distDir, item), { recursive: true, dereference: true });
 }
 
 // 2.5 静态资产压缩（terser JS 纯语法级 + clean-css CSS 压缩，覆盖写回 dist 副本）
@@ -59,7 +75,9 @@ function resolveTool(pkgName) {
     try {
       return envRequire(pkgName);
     } catch {
-      console.log(`[pack] RSPACK_ENV 下未找到 ${pkgName}，回退本地 node_modules`);
+      console.log(
+        `[pack] RSPACK_ENV 下未找到 ${pkgName}，回退本地 node_modules`,
+      );
     }
   }
   return require(pkgName);
@@ -94,7 +112,8 @@ function isEsm(code) {
   // --- JS 压缩（terser 纯语法级：保留模块格式/import 语句，只做语法压缩/去注释/改名）---
   const terser = resolveTool("terser");
   const minify = terser.minify ?? terser.default?.minify;
-  if (typeof minify !== "function") throw new Error("terser 加载失败：未找到 minify（构建环境必装 terser）");
+  if (typeof minify !== "function")
+    throw new Error("terser 加载失败：未找到 minify（构建环境必装 terser）");
   const staticJs = [
     ...collectStaticFiles(join(distDir, "dsh-plugin")),
     ...collectStaticFiles(join(distDir, "routes"), false),
@@ -119,14 +138,21 @@ function isEsm(code) {
     const out = result.code;
     writeFileSync(file, out, "utf8");
     const after = Buffer.byteLength(out, "utf8");
-    const rel = file.startsWith(distDir + "\\") ? file.slice(distDir.length + 1) : file;
-    console.log(`[pack]   ${rel}: ${before} -> ${after} bytes (${((1 - after / before) * 100).toFixed(1)}% 缩减)`);
+    const rel = file.startsWith(distDir + "\\")
+      ? file.slice(distDir.length + 1)
+      : file;
+    console.log(
+      `[pack]   ${rel}: ${before} -> ${after} bytes (${((1 - after / before) * 100).toFixed(1)}% 缩减)`,
+    );
   }
 
   // --- CSS 压缩（clean-css level 2：合并/去空白/优化颜色，普通样式安全）---
   const cleanCssMod = resolveTool("clean-css");
   const CleanCSS = cleanCssMod.default ?? cleanCssMod; // CJS 包：interop 后取构造函数
-  if (typeof CleanCSS !== "function") throw new Error("clean-css 加载失败：未找到构造函数（构建环境必装 clean-css）");
+  if (typeof CleanCSS !== "function")
+    throw new Error(
+      "clean-css 加载失败：未找到构造函数（构建环境必装 clean-css）",
+    );
   const staticCss = [
     ...collectStaticFiles(join(distDir, "dsh-plugin"), true, ".css"),
     ...collectStaticFiles(join(distDir, "routes"), false, ".css"),
@@ -143,13 +169,21 @@ function isEsm(code) {
       } catch (err) {
         throw new Error(`clean-css 压缩失败（${file}）：${err.message}`);
       }
-      if (result.errors?.length) throw new Error(`clean-css 压缩失败（${file}）：${result.errors.join("; ")}`);
-      if (typeof result.styles !== "string") throw new Error(`clean-css 压缩失败（${file}）：无输出`);
+      if (result.errors?.length)
+        throw new Error(
+          `clean-css 压缩失败（${file}）：${result.errors.join("; ")}`,
+        );
+      if (typeof result.styles !== "string")
+        throw new Error(`clean-css 压缩失败（${file}）：无输出`);
       const out = result.styles;
       writeFileSync(file, out, "utf8");
       const after = Buffer.byteLength(out, "utf8");
-      const rel = file.startsWith(distDir + "\\") ? file.slice(distDir.length + 1) : file;
-      console.log(`[pack]   ${rel}: ${before} -> ${after} bytes (${((1 - after / before) * 100).toFixed(1)}% 缩减)`);
+      const rel = file.startsWith(distDir + "\\")
+        ? file.slice(distDir.length + 1)
+        : file;
+      console.log(
+        `[pack]   ${rel}: ${before} -> ${after} bytes (${((1 - after / before) * 100).toFixed(1)}% 缩减)`,
+      );
     }
   }
 }
