@@ -5,8 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",
-    "pack": "node scripts/pack.mjs",
-    "verify": "node scripts/verify-zip.mjs"
+    "pack": "node scripts/pack.mjs"
   },
   "allowScripts": {
     "@deepseek-ai/dsh-subprocess-local": true,

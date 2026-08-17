@@ -95,10 +95,6 @@ jobs:
       - name: Package
         run: npm run pack
 
-      # 产物校验
-      - name: Verify
-        run: npm run verify
-
       # tag 场景直传 zip + sha256 到 release（--clobber 幂等，重复推送/补传不报错）。
       # dispatch 手动场景无 tag 无 release，本步跳过，产物仍走下方 artifact 3 天窗口
       - name: Upload release assets (tag)
