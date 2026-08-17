@@ -30,12 +30,13 @@ execFileSync(process.execPath, [join(ROOT, "scripts", "build.mjs")], {
 const staticItems = [
   "manifest.json",
   "package.json",
-  "package-lock.json",
+  // "package-lock.json",
   "skills",
   "app",
   "routes",
   "dsh-plugin",
   "README.md",
+  "node_modules/npm",
 ];
 const distDir = join(ROOT, "dist");
 for (const item of staticItems) {

@@ -12,10 +12,27 @@
 //
 // 权限：external_side_effect（调用 dsh 编码 agent 执行任务，消耗 Hana 宿主 provider 额度，Auto 模式送审）。
 import { spawn } from "node:child_process";
-import { readFileSync, existsSync, mkdirSync, writeFileSync, copyFileSync, symlinkSync, lstatSync, readlinkSync, unlinkSync, renameSync, appendFileSync } from "node:fs";
+import {
+  readFileSync,
+  existsSync,
+  mkdirSync,
+  writeFileSync,
+  copyFileSync,
+  symlinkSync,
+  lstatSync,
+  readlinkSync,
+  unlinkSync,
+  renameSync,
+  appendFileSync,
+} from "node:fs";
 import { join, dirname, delimiter } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
+
+const IS_WIN = process.platform === "win32";
+
+const ELECTRON_NODE = process.execPath;
+const ELECTRON_NODE_ENV = { ...process.env, ELECTRON_RUN_AS_NODE: 1 };
 
 const __here = dirname(fileURLToPath(import.meta.url));
 // v0.6.0: PLUGIN_ROOT 向上查找含 manifest.json 的目录——源码形态（tools/ 下）与
@@ -23,7 +40,8 @@ const __here = dirname(fileURLToPath(import.meta.url));
 let PLUGIN_ROOT = __here;
 while (!existsSync(join(PLUGIN_ROOT, "manifest.json"))) {
   const parent = dirname(PLUGIN_ROOT);
-  if (parent === PLUGIN_ROOT) throw new Error("无法定位插件根：向上未找到 manifest.json");
+  if (parent === PLUGIN_ROOT)
+    throw new Error("无法定位插件根：向上未找到 manifest.json");
   PLUGIN_ROOT = parent;
 }
 const STDERR_CAP = 8192;
@@ -45,9 +63,13 @@ function appendLog(logPath, src, chunk) {
   try {
     if (!logPath) return;
     mkdirSync(dirname(logPath), { recursive: true });
-    const text = String(chunk ?? "").replace(/\r\n/g, "\n").replace(/\n+$/, "");
+    const text = String(chunk ?? "")
+      .replace(/\r\n/g, "\n")
+      .replace(/\n+$/, "");
     appendFileSync(logPath, `[${logTs()}] [${src}] ${text}\n`, "utf8");
-  } catch { /* 日志失败不阻断 */ }
+  } catch {
+    /* 日志失败不阻断 */
+  }
 }
 function logFileStamp(d) {
   const p = (n) => String(n).padStart(2, "0");
@@ -67,7 +89,11 @@ function newWebLogPath(dataDir) {
     i += 1;
     target = join(logsDir, stamp + "-" + i + ".log");
   }
-  try { writeFileSync(target, "", "utf8"); } catch { /* 建文件失败不阻断 */ }
+  try {
+    writeFileSync(target, "", "utf8");
+  } catch {
+    /* 建文件失败不阻断 */
+  }
   return target;
 }
 // 宿主 provider 路径探测：不再暴露 hostProvider 配置项，直接探测宿主数据目录。
@@ -77,12 +103,18 @@ function newWebLogPath(dataDir) {
 // 构造（dsh-hana-provider 读不到会 warn 停用，不影响主流程）。
 function detectHostProviderPaths() {
   const fromPlugin = dirname(dirname(PLUGIN_ROOT));
-  const candidates = [process.env.HANA_HOME, fromPlugin, join(homedir(), ".hanako")].filter(Boolean);
+  const candidates = [
+    process.env.HANA_HOME,
+    fromPlugin,
+    join(homedir(), ".hanako"),
+  ].filter(Boolean);
   let modelsPath = null;
   let catalogPath = null;
   for (const dir of candidates) {
-    if (!modelsPath && existsSync(join(dir, "models.json"))) modelsPath = join(dir, "models.json");
-    if (!catalogPath && existsSync(join(dir, "provider-catalog.json"))) catalogPath = join(dir, "provider-catalog.json");
+    if (!modelsPath && existsSync(join(dir, "models.json")))
+      modelsPath = join(dir, "models.json");
+    if (!catalogPath && existsSync(join(dir, "provider-catalog.json")))
+      catalogPath = join(dir, "provider-catalog.json");
     if (modelsPath && catalogPath) break;
   }
   return {
@@ -102,17 +134,20 @@ function readDshDefaultModel(dshHome) {
     let inBlock = false;
     const out = {};
     for (const line of lines) {
-      if (/^agent-default-model\s*:/.test(line)) { inBlock = true; continue }
-      if (!inBlock) continue
-      const m = line.match(/^(\s+)([A-Za-z]+)\s*:\s*(.*)$/)
-      if (!m) break // 无缩进或非键行 = 出块（子项缩进 ≥1 空格均视为块内，2 空格标准缩进正常解析）
-      const k = m[2]
-      const v = m[3].trim()
-      if (v) out[k] = v.replace(/^['"]|['"]$/g, "")
+      if (/^agent-default-model\s*:/.test(line)) {
+        inBlock = true;
+        continue;
+      }
+      if (!inBlock) continue;
+      const m = line.match(/^(\s+)([A-Za-z]+)\s*:\s*(.*)$/);
+      if (!m) break; // 无缩进或非键行 = 出块（子项缩进 ≥1 空格均视为块内，2 空格标准缩进正常解析）
+      const k = m[2];
+      const v = m[3].trim();
+      if (v) out[k] = v.replace(/^['"]|['"]$/g, "");
     }
-    return out.provider ? out : null
+    return out.provider ? out : null;
   } catch {
-    return null
+    return null;
   }
 }
 
@@ -125,19 +160,22 @@ function readDshDefaultPreset(dshHome) {
     const lines = readFileSync(f, "utf8").split(/\r?\n/);
     let inBlock = false;
     for (const line of lines) {
-      if (/^agent-presets\s*:/.test(line)) { inBlock = true; continue }
-      if (!inBlock) continue
-      const m = line.match(/^(\s+)default\s*:\s*(.*)$/)
-      if (!m) {
-        if (!/^\s/.test(line)) break // 无缩进 = 出块（顶层键）
-        continue // 块内其他键，继续找 default
+      if (/^agent-presets\s*:/.test(line)) {
+        inBlock = true;
+        continue;
       }
-      const v = m[2].trim().replace(/^['"]|['"]$/g, "")
-      if (v) return v
+      if (!inBlock) continue;
+      const m = line.match(/^(\s+)default\s*:\s*(.*)$/);
+      if (!m) {
+        if (!/^\s/.test(line)) break; // 无缩进 = 出块（顶层键）
+        continue; // 块内其他键，继续找 default
+      }
+      const v = m[2].trim().replace(/^['"]|['"]$/g, "");
+      if (v) return v;
     }
-    return null
+    return null;
   } catch {
-    return null
+    return null;
   }
 }
 
@@ -145,10 +183,13 @@ function readDshDefaultPreset(dshHome) {
 // dev invoke 等场景 ctx.config 可能未注入默认值或带 undefined 键，这里静态读取保证配置可用。
 const manifestDefaults = (() => {
   try {
-    const m = JSON.parse(readFileSync(join(PLUGIN_ROOT, "manifest.json"), "utf8"));
+    const m = JSON.parse(
+      readFileSync(join(PLUGIN_ROOT, "manifest.json"), "utf8"),
+    );
     const props = m?.contributes?.configuration?.properties || {};
     const out = {};
-    for (const [k, v] of Object.entries(props)) if (v && "default" in v) out[k] = v.default;
+    for (const [k, v] of Object.entries(props))
+      if (v && "default" in v) out[k] = v.default;
     return out;
   } catch {
     return {};
@@ -164,15 +205,31 @@ const manifestDefaults = (() => {
 // 配置快照兜底，不阻塞主流程（生成的只是初始默认值，被覆盖/缺失都不影响功能）。
 function ensureConfigJson(cfg) {
   try {
-    const dataDir = cfg.dataDir || getSingleton().dataDir || join(PLUGIN_ROOT, "data");
+    const dataDir =
+      cfg.dataDir || getSingleton().dataDir || join(PLUGIN_ROOT, "data");
     const cf = join(dataDir, "config.json");
     if (existsSync(cf)) return; // 已存在（宿主生成/用户修改）：幂等跳过
     mkdirSync(dataDir, { recursive: true });
     const tmp = join(dataDir, ".config.json.tmp");
     // 先写临时文件再 rename 原子落位（中断不留半成品），对齐 scripts/pack.mjs 惯例
-    writeFileSync(tmp, JSON.stringify({ schemaVersion: 1, global: { ...manifestDefaults }, agents: {}, sessions: {} }, null, 2), "utf8");
+    writeFileSync(
+      tmp,
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          global: { ...manifestDefaults },
+          agents: {},
+          sessions: {},
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
     renameSync(tmp, cf);
-  } catch { /* 生成失败静默：resolve* 有配置快照兜底 */ }
+  } catch {
+    /* 生成失败静默：resolve* 有配置快照兜底 */
+  }
 }
 
 // reasoningEffort 解析（v0.9.5：全局配置已移除，只接受工具显式参数，无配置回退；
@@ -196,7 +253,9 @@ function resolveApprovalTimeoutMs(cfg) {
         return v > 0 ? v : 0; // 数字合法即采用（0/负数=禁用，不回退快照复活超时）
       }
     }
-  } catch { /* 读配置失败忽略 */ }
+  } catch {
+    /* 读配置失败忽略 */
+  }
   const v = Number(cfg.approvalTimeoutMs);
   if (Number.isFinite(v) && v > 0) return v;
   return 0; // 快照缺失/非数字/0/负数：禁用超时拒绝（0，调用方判断）
@@ -205,17 +264,17 @@ function resolveApprovalTimeoutMs(cfg) {
 // nodePath 解析（「配置单一事实源」哲学，补齐直读兜底）：优先直读
 // dataDir/config.json 的 global.nodePath（设置界面改动即时生效；Agent 直改文件同样生效），
 // 无则回退配置快照/空。未配置时报「node 可执行文件不存在」引导填写。
-function resolveNodePath(cfg) {
-  try {
-    const cf = join(cfg.dataDir, "config.json");
-    if (existsSync(cf)) {
-      const j = JSON.parse(readFileSync(cf, "utf8"));
-      const p = j?.global?.nodePath;
-      if (typeof p === "string" && p.trim()) return p.trim();
-    }
-  } catch { /* 读配置失败忽略 */ }
-  return String(cfg.nodePath || "");
-}
+// function resolveNodePath(cfg) {
+//   try {
+//     const cf = join(cfg.dataDir, "config.json");
+//     if (existsSync(cf)) {
+//       const j = JSON.parse(readFileSync(cf, "utf8"));
+//       const p = j?.global?.nodePath;
+//       if (typeof p === "string" && p.trim()) return p.trim();
+//     }
+//   } catch { /* 读配置失败忽略 */ }
+//   return String(cfg.nodePath || "");
+// }
 
 // defaultCwd 解析（同 resolveNodePath 的「配置单一事实源」哲学，补齐直读兜底）：优先直读
 // dataDir/config.json 的 global.defaultCwd（设置界面改动即时生效；Agent 直改文件同样生效），
@@ -228,7 +287,9 @@ function resolveDefaultCwd(cfg) {
       const d = j?.global?.defaultCwd;
       if (typeof d === "string" && d.trim()) return d.trim();
     }
-  } catch { /* 读配置失败忽略 */ }
+  } catch {
+    /* 读配置失败忽略 */
+  }
   return String(cfg.defaultCwd || "");
 }
 
@@ -250,9 +311,9 @@ function getSingleton() {
   // v0.8.7: 依赖运行级完整性验证（node cliBin --version 冒烟，结果缓存 g.depsSmoke）
   g.verifyDeps = verifyDepsSmoke;
   // v0.8.10: Node/npm 运行级可用性检测（node --version + npm-cli.js，结果缓存 g.nodeSmoke）
-  g.verifyNode = verifyNodeSmoke;
+  // g.verifyNode = verifyNodeSmoke;
   // v0.9.1: Node 候选探测（t1 未配置时的环境变量感知候选，纯 fs existsSync）
-  g.detectNodeCandidates = detectNodeCandidates;
+  // g.detectNodeCandidates = detectNodeCandidates;
   return g;
 }
 
@@ -274,17 +335,29 @@ async function registerDeferredWake({ bus, sessionPath, taskId, label }) {
       },
     });
     return true;
-  } catch { return false; }
+  } catch {
+    return false;
+  }
 }
 
 async function resolveDeferredWake({ bus, taskId, result }) {
   if (!bus?.request || !taskId) return false;
-  try { await bus.request("deferred:resolve", { taskId, result }); return true; } catch { return false; }
+  try {
+    await bus.request("deferred:resolve", { taskId, result });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function failDeferredWake({ bus, taskId, error }) {
   if (!bus?.request || !taskId) return false;
-  try { await bus.request("deferred:fail", { taskId, error }); return true; } catch { return false; }
+  try {
+    await bus.request("deferred:fail", { taskId, error });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // ---- 审批挂起通知（宿主 deferred 通道，独立 taskId 不占用任务完成通道）----
@@ -317,7 +390,9 @@ async function notifyApprovalWake({ bus, sessionPath, opId, approval, task }) {
         taskPreview: String(task ?? "").slice(0, 120),
       },
     });
-  } catch { /* 通知失败忽略（审批仍可在 web UI 处理）*/ }
+  } catch {
+    /* 通知失败忽略（审批仍可在 web UI 处理）*/
+  }
 }
 
 // ---- 本地审批应答（自动放行/超时拒绝共用；信封构造同 tools/dsh-approve.js，不 import 避免模块耦合）----
@@ -329,7 +404,11 @@ async function respondApprovalLocal(base, approval, outcome) {
     rpcId: approval.rpcId,
     result: {
       ok: true,
-      value: { sessionId: approval.sessionId, approvalId: approval.approvalId, outcome },
+      value: {
+        sessionId: approval.sessionId,
+        approvalId: approval.approvalId,
+        outcome,
+      },
     },
   };
   const res = await fetch(`${base}/api/respond`, {
@@ -340,7 +419,9 @@ async function respondApprovalLocal(base, approval, outcome) {
   if (!res.ok) throw new Error(`/api/respond HTTP ${res.status}`);
   const j = await res.json();
   if (!j.accepted) {
-    throw new Error(`审批应答未接受（${j.reason || "unknown"}）：可能已超时或被其他方处理`);
+    throw new Error(
+      `审批应答未接受（${j.reason || "unknown"}）：可能已超时或被其他方处理`,
+    );
   }
   return true;
 }
@@ -377,7 +458,7 @@ function createOpEntry(opId, { task }) {
   g.ops.set(opId, {
     opId,
     task: String(task ?? "").slice(0, 500),
-    sessionId: null,      // session.create 后回填（dsh_cancel 按 opId 反查取消目标）
+    sessionId: null, // session.create 后回填（dsh_cancel 按 opId 反查取消目标）
     approvalPending: false,
     pendingApprovals: [],
     cancelledRequested: false,
@@ -391,7 +472,11 @@ function createOpEntry(opId, { task }) {
 function resolveDshPkgDir(cfg) {
   if (cfg?.dataDir) {
     const candidate = join(cfg.dataDir, "dsh-pkg");
-    if (existsSync(join(candidate, "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js"))) {
+    if (
+      existsSync(
+        join(candidate, "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js"),
+      )
+    ) {
       return candidate;
     }
   }
@@ -402,23 +487,40 @@ async function ensureWebHost(cfg) {
   const g = getSingleton();
   if (g.web?.ready) return g.web;
   if (g.web?.readyPromise) {
-    try { return await g.web.readyPromise; } catch { /* 启动失败：清掉允许重试 */ g.web = null; }
+    try {
+      return await g.web.readyPromise;
+    } catch {
+      /* 启动失败：清掉允许重试 */ g.web = null;
+    }
   }
   if (g.web?.child) {
     // 旧实例启动失败过：清掉重建
-    try { g.web.child.kill(); } catch { /* 已退出 */ }
+    try {
+      g.web.child.kill();
+    } catch {
+      /* 已退出 */
+    }
     g.web = null;
   }
   if (!cfg.dshPkgDir) cfg.dshPkgDir = resolveDshPkgDir(cfg);
 
-  const nodePath = resolveNodePath(cfg);
+  // const nodePath = resolveNodePath(cfg);
   const pkgDir = cfg.dshPkgDir;
-  const cliBin = join(pkgDir, "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js");
-  if (!nodePath || !existsSync(nodePath)) {
-    throw new Error(`node 可执行文件不存在：${nodePath}，请在插件设置中配置 nodePath`);
-  }
+  const cliBin = join(
+    pkgDir,
+    "node_modules",
+    "@deepseek-ai",
+    "dsh",
+    "lib",
+    "bin.js",
+  );
+  // if (!nodePath || !existsSync(nodePath)) {
+  //   throw new Error(`node 可执行文件不存在：${nodePath}，请在插件设置中配置 nodePath`);
+  // }
   if (!existsSync(cliBin)) {
-    throw new Error(`dsh 包未就绪：${cliBin} 不存在。轻量分发形态请在插件数据目录 dsh-pkg 执行 npm ci（部署目录需含 package.json + package-lock.json，详见技能 dsh-hanako/SKILL.md 依赖自主部署章节）；现役 zip 形态请确认插件目录（${pkgDir}）node_modules 解压完整`);
+    throw new Error(
+      `dsh 包未就绪：${cliBin} 不存在。请在插件数据目录 dsh-pkg 执行 npm i -P @deepseek-ai/dsh`,
+    );
   }
   const hostProvider = detectHostProviderPaths();
 
@@ -455,7 +557,12 @@ async function ensureWebHost(cfg) {
   // 悬空 junction 会误判不存在，导致 symlinkSync EEXIST。非 junction 同名实体报错
   // 不静默覆盖。
   const ensureCordisJunctions = (dshHome) => {
-    const packages = ["dsh-hana-theme", "dsh-hana-provider", "dsh-hana-default-model", "dsh-hana-logger"];
+    const packages = [
+      "dsh-hana-theme",
+      "dsh-hana-provider",
+      "dsh-hana-default-model",
+      "dsh-hana-logger",
+    ];
     for (const pkg of packages) {
       const link = join(dshHome, "profiles", "node_modules", pkg);
       const target = join(PLUGIN_ROOT, "dsh-plugin", pkg);
@@ -465,15 +572,20 @@ async function ensureWebHost(cfg) {
         try {
           isLink = lstatSync(link).isSymbolicLink();
           existed = true;
-        } catch { /* 不存在（含 lstat 失败） */ }
-        if (existed && !isLink) throw new Error(link + " 已存在且不是 junction；请移除后重试");
+        } catch {
+          /* 不存在（含 lstat 失败） */
+        }
+        if (existed && !isLink)
+          throw new Error(link + " 已存在且不是符号链接请移除后重试");
         if (existed) unlinkSync(link);
         mkdirSync(dirname(link), { recursive: true });
-        symlinkSync(target, link, "junction");
+        symlinkSync(target, link, IS_WIN ? "junction" : null);
       } catch (e) {
-        // junction 创建失败降级：仅记 warn，不阻断 dsh 启动——对应插件会退化为
+        // 符号链接创建失败降级：仅记 warn，不阻断 dsh 启动——对应插件会退化为
         // 不可用（client 模块未发现），后端路由与其余插件不受影响
-        console.warn(`[dsh-run] ${pkg} junction 创建失败（${e?.message || e}），该插件将不可用`);
+        console.warn(
+          `[dsh-run] ${pkg} junction 创建失败（${e?.message || e}），该插件将不可用`,
+        );
       }
     }
   };
@@ -488,10 +600,14 @@ async function ensureWebHost(cfg) {
   const renderPatchTpl = () => {
     const gen = join(cfg.dataDir, "dsh-hanako.patch.generated.yml");
     let content = readFileSync(patchTpl, "utf8")
-      .split("{{MODELS_PATH}}").join(hostProvider.modelsPath)
-      .split("{{CATALOG_PATH}}").join(hostProvider.catalogPath)
-      .split("{{DSH_PKG_DIR}}").join(cfg.dshPkgDir || resolveDshPkgDir(cfg))
-      .split("{{LOG_PATH}}").join(logPath);
+      .split("{{MODELS_PATH}}")
+      .join(hostProvider.modelsPath)
+      .split("{{CATALOG_PATH}}")
+      .join(hostProvider.catalogPath)
+      .split("{{DSH_PKG_DIR}}")
+      .join(cfg.dshPkgDir || resolveDshPkgDir(cfg))
+      .split("{{LOG_PATH}}")
+      .join(logPath);
     writeFileSync(gen, content, "utf8");
     return gen;
   };
@@ -501,29 +617,45 @@ async function ensureWebHost(cfg) {
     } catch (e) {
       // 渲染失败（读模板/写数据目录异常）：不挂任何 patch 记 warn（dsh 启动不受影响，
       // 会话全文搜索保持上游默认禁用）
-      console.warn(`[dsh-run] patch 模板渲染失败（${e?.message || e}）：不挂任何 patch（dsh 启动不受影响，会话全文搜索保持上游默认禁用）`);
+      console.warn(
+        `[dsh-run] patch 模板渲染失败（${e?.message || e}）：不挂任何 patch（dsh 启动不受影响，会话全文搜索保持上游默认禁用）`,
+      );
     }
   } else {
     // 模板缺失：不挂任何 patch 记 warn（dsh 启动不受影响，会话全文搜索保持上游默认禁用）
-    console.warn("[dsh-run] dsh-plugin/dsh-hanako.patch.yml.tpl 缺失：不挂任何 patch（dsh 启动不受影响，会话全文搜索保持上游默认禁用）");
+    console.warn(
+      "[dsh-run] dsh-plugin/dsh-hanako.patch.yml.tpl 缺失：不挂任何 patch（dsh 启动不受影响，会话全文搜索保持上游默认禁用）",
+    );
   }
   const patchArgs = patchFiles.flatMap((p) => ["--patch", p]);
   // 四段 cordis 插件均以包名注册，spawn 前确保 junction 就绪（幂等）
   ensureCordisJunctions(dshHome);
-  const child = spawn(nodePath, [cliBin, "--profile", "web", ...patchArgs, "--port", String(port)], {
-    cwd: cfg.dataDir,
-    stdio: ["ignore", "pipe", "pipe"],
-    // v0.9.5: 恒不注入 API Key 环境变量——凭据由 dsh-hana-provider 插件直读
-    // 宿主 provider-catalog.json（dsh models 页/任务均走 Hana 宿主 provider）
-    env: {
-      ...process.env,
-      DSH_HOME: dshHome,
-      DSH_TELEMETRY_DISABLED: "1",
+  const child = spawn(
+    ELECTRON_NODE,
+    [cliBin, "--profile", "web", ...patchArgs, "--port", String(port)],
+    {
+      cwd: cfg.dataDir,
+      stdio: ["ignore", "pipe", "pipe"],
+      // v0.9.5: 恒不注入 API Key 环境变量——凭据由 dsh-hana-provider 插件直读
+      // 宿主 provider-catalog.json（dsh models 页/任务均走 Hana 宿主 provider）
+      env: {
+        ...ELECTRON_NODE_ENV,
+        DSH_HOME: dshHome,
+        DSH_TELEMETRY_DISABLED: "1",
+      },
+      windowsHide: true,
     },
-    windowsHide: true,
-  });
+  );
 
-  const web = { child, port, dshHome, logPath, ready: false, stderr: "", readyPromise: null };
+  const web = {
+    child,
+    port,
+    dshHome,
+    logPath,
+    ready: false,
+    stderr: "",
+    readyPromise: null,
+  };
   // v0.10.7: stdout/stderr 全量落盘（src=out/err；stderr 另保留内存尾部供诊断界面）。
   // 写入优先用单例 appendLog（index.js 提供，行格式一致 [ts] [src] 内容），
   // 无单例时回退本模块 appendLog（两者写同一 logPath）
@@ -544,7 +676,13 @@ async function ensureWebHost(cfg) {
     emitLog("hana", `dsh web 退出 code=${code} signal=${signal}`);
     // v0.8.5: 退出信息记入单例持久字段（随后 g.web 摘除，局部 web.stderr 会丢）——
     // 进程被外部杀掉（kill / Stop-Process）时诊断仍能区分「已退出」而非误报「尚未启动」
-    g.webLastExit = { code, signal, at: new Date().toISOString(), stderr: web.stderr.slice(-800), logPath };
+    g.webLastExit = {
+      code,
+      signal,
+      at: new Date().toISOString(),
+      stderr: web.stderr.slice(-800),
+      logPath,
+    };
     if (g.web === web) g.web = null;
   });
 
@@ -553,13 +691,20 @@ async function ensureWebHost(cfg) {
     const deadline = Date.now() + PORT_READY_TIMEOUT_MS;
     while (Date.now() < deadline) {
       if (child.exitCode !== null) {
-        throw new Error(`dsh web 进程提前退出 (code=${child.exitCode})：${web.stderr.slice(-1200) || "无 stderr"}（完整日志：${logPath}）`);
+        throw new Error(
+          `dsh web 进程提前退出 (code=${child.exitCode})：${web.stderr.slice(-1200) || "无 stderr"}（完整日志：${logPath}）`,
+        );
       }
       try {
         const r = await fetch(`http://127.0.0.1:${port}/api/host.describe`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ type: "client-request", rpcId: "probe", method: "host.describe", payload: {} }),
+          body: JSON.stringify({
+            type: "client-request",
+            rpcId: "probe",
+            method: "host.describe",
+            payload: {},
+          }),
           signal: AbortSignal.timeout(2000),
         });
         if (r.ok) {
@@ -568,10 +713,14 @@ async function ensureWebHost(cfg) {
           g.webLastExit = null;
           return web;
         }
-      } catch { /* 未就绪，继续等 */ }
+      } catch {
+        /* 未就绪，继续等 */
+      }
       await new Promise((r) => setTimeout(r, 500));
     }
-    throw new Error(`dsh web 启动超时（${Math.round(PORT_READY_TIMEOUT_MS / 1000)}s 内端口 ${port} 未就绪）：${web.stderr.slice(-1200) || "无 stderr"}（完整日志：${logPath}）`);
+    throw new Error(
+      `dsh web 启动超时（${Math.round(PORT_READY_TIMEOUT_MS / 1000)}s 内端口 ${port} 未就绪）：${web.stderr.slice(-1200) || "无 stderr"}（完整日志：${logPath}）`,
+    );
   })();
   web.readyPromise = readyPromise;
   g.web = web;
@@ -592,22 +741,32 @@ function ensureProviderPushWatch(cfg) {
   const g = getSingleton();
   // 幂等：先清理旧 watch + 退订（startWebHost 重复调用 / web host 重建时）
   if (typeof g.providerPushCleanup === "function") {
-    try { g.providerPushCleanup(); } catch { /* 清理失败不阻断 */ }
+    try {
+      g.providerPushCleanup();
+    } catch {
+      /* 清理失败不阻断 */
+    }
     g.providerPushCleanup = null;
   }
   const resources = g.resources;
   const bus = g.bus;
   // resources/bus 缺失（旧宿主无此服务 / onload 未注入）：降级不阻断
   if (!resources || typeof resources.watch !== "function") {
-    console.warn("[dsh-run] 宿主 resources 不可用，provider 热跟随 watch 未建立（dsh 侧启动时仍会 refresh 一次）");
+    console.warn(
+      "[dsh-run] 宿主 resources 不可用，provider 热跟随 watch 未建立（dsh 侧启动时仍会 refresh 一次）",
+    );
     return;
   }
   if (!bus || typeof bus.subscribe !== "function") {
-    console.warn("[dsh-run] 宿主 bus 不可用，provider 热跟随订阅未建立（dsh 侧启动时仍会 refresh 一次）");
+    console.warn(
+      "[dsh-run] 宿主 bus 不可用，provider 热跟随订阅未建立（dsh 侧启动时仍会 refresh 一次）",
+    );
     return;
   }
   const hostProvider = detectHostProviderPaths();
-  const paths = [hostProvider.modelsPath, hostProvider.catalogPath].filter(Boolean);
+  const paths = [hostProvider.modelsPath, hostProvider.catalogPath].filter(
+    Boolean,
+  );
   const port = Number(cfg.webPort) || 3080;
   const handles = [];
   const resourceKeys = new Set();
@@ -621,22 +780,32 @@ function ensureProviderPushWatch(cfg) {
   };
   for (const path of paths) {
     try {
-      const handle = resources.watch({ kind: "local-file", path }, { purpose: "dsh-hana-provider-sync" });
+      const handle = resources.watch(
+        { kind: "local-file", path },
+        { purpose: "dsh-hana-provider-sync" },
+      );
       handles.push(handle);
       // watch 返回 { subscriptionId, resourceKeys, unsubscribe, close }：resourceKeys 即
       // 事件过滤键（格式 local_fs:<path>）；无 resourceKeys 时按约定格式兜底
-      if (Array.isArray(handle?.resourceKeys) && handle.resourceKeys.length > 0) {
+      if (
+        Array.isArray(handle?.resourceKeys) &&
+        handle.resourceKeys.length > 0
+      ) {
         for (const key of handle.resourceKeys) resourceKeys.add(key);
       } else {
         resourceKeys.add(`local_fs:${path}`);
       }
     } catch (e) {
       // watch 建立失败：降级不阻断（dsh 侧启动时仍会 refresh 一次）
-      console.warn(`[dsh-run] provider 热跟随 watch 建立失败 ${path}（${e?.message || e}），该文件变化将不触发 push`);
+      console.warn(
+        `[dsh-run] provider 热跟随 watch 建立失败 ${path}（${e?.message || e}），该文件变化将不触发 push`,
+      );
     }
   }
   if (handles.length === 0) {
-    console.warn("[dsh-run] provider 热跟随 watch 全部建立失败（dsh 侧启动时仍会 refresh 一次）");
+    console.warn(
+      "[dsh-run] provider 热跟随 watch 全部建立失败（dsh 侧启动时仍会 refresh 一次）",
+    );
     return;
   }
   // bus.subscribe 返回 unsubscribe 函数（SDK 类型 () => void）；防御性兼容 { unsubscribe } 形状
@@ -653,18 +822,32 @@ function ensureProviderPushWatch(cfg) {
     if (timer) clearTimeout(timer);
     timer = null;
     for (const handle of handles) {
-      try { handle?.unsubscribe?.(); } catch { /* 已关闭 */ }
+      try {
+        handle?.unsubscribe?.();
+      } catch {
+        /* 已关闭 */
+      }
     }
     handles.length = 0;
     resourceKeys.clear();
     if (typeof unsub === "function") {
-      try { unsub(); } catch { /* 退订失败忽略 */ }
+      try {
+        unsub();
+      } catch {
+        /* 退订失败忽略 */
+      }
     } else if (unsub && typeof unsub.unsubscribe === "function") {
-      try { unsub.unsubscribe(); } catch { /* 退订失败忽略 */ }
+      try {
+        unsub.unsubscribe();
+      } catch {
+        /* 退订失败忽略 */
+      }
     }
     g.providerPushCleanup = null;
   };
-  console.log(`[dsh-run] provider 热跟随 watch 已建立（${paths.length} 文件），宿主配置变化将 push dsh 刷新`);
+  console.log(
+    `[dsh-run] provider 热跟随 watch 已建立（${paths.length} 文件），宿主配置变化将 push dsh 刷新`,
+  );
 }
 
 // push dsh web host 刷新（回环调用 127.0.0.1:{port}，5s 超时；成功/失败都 console.log 简记，
@@ -672,7 +855,10 @@ function ensureProviderPushWatch(cfg) {
 async function pushProviderRefresh(port) {
   const g = getSingleton();
   const network = g.network;
-  const doFetch = network && typeof network.fetch === "function" ? network.fetch.bind(network) : fetch;
+  const doFetch =
+    network && typeof network.fetch === "function"
+      ? network.fetch.bind(network)
+      : fetch;
   const url = `http://127.0.0.1:${port}/api/hana-provider.refresh`;
   try {
     const res = await doFetch(url, {
@@ -681,7 +867,9 @@ async function pushProviderRefresh(port) {
       body: "{}",
       signal: AbortSignal.timeout(5000),
     });
-    console.log(`[dsh-run] provider push ${res.ok ? "成功" : `失败（HTTP ${res.status}）`}：${url}`);
+    console.log(
+      `[dsh-run] provider push ${res.ok ? "成功" : `失败（HTTP ${res.status}）`}：${url}`,
+    );
   } catch (e) {
     // web host 未起 / 端口未就绪：静默忽略（dsh 侧启动时已 refresh 一次，功能不受影响）
     console.log(`[dsh-run] provider push 未送达（${e?.message || e}）：${url}`);
@@ -691,7 +879,10 @@ async function pushProviderRefresh(port) {
 // 单例挂载：index.js 不 import 本文件（避免模块缓存），onload 时通过单例拉起 web host。
 // 构建 cfg（manifest 默认 + 用户配置 + dataDir/dshPkgDir fallback）后调 ensureWebHost。
 // 失败不抛出（onload 不能被 dsh 启动失败阻塞），由工具调用时的 ensureWebHost 重试。
-getSingleton().startWebHost = async function startWebHostFromPlugin(ctxConfig, ctxDataDir) {
+getSingleton().startWebHost = async function startWebHostFromPlugin(
+  ctxConfig,
+  ctxDataDir,
+) {
   const cfg = { ...manifestDefaults };
   for (const [k, v] of Object.entries(ctxConfig || {})) {
     if (v !== undefined && v !== null && v !== "") cfg[k] = v;
@@ -711,7 +902,8 @@ getSingleton().startWebHost = async function startWebHostFromPlugin(ctxConfig, c
     // 记录失败原因供诊断（onload 侧只能看到布尔）；后续工具调用重试
     const g = getSingleton();
     g.webLastError = String(e?.message || e).slice(0, 1500);
-    if (g.web?.stderr) g.webLastError += `\n[dsh web stderr] ${g.web.stderr.slice(-800)}`;
+    if (g.web?.stderr)
+      g.webLastError += `\n[dsh web stderr] ${g.web.stderr.slice(-800)}`;
     // v0.10.7: 失败也记日志路径（诊断界面可跳完整日志；g.web 在启动失败后可能已摘除，
     // 从 webLastExit 取兜底）
     const logPath = g.web?.logPath || g.webLastExit?.logPath || null;
@@ -754,44 +946,75 @@ async function installDepsFromPlugin(ctxConfig, ctxDataDir) {
     // 1. 部署目录 = 数据目录 dsh-pkg（mkdir recursive，不存在则建）
     const pkgDir = join(dataDir, "dsh-pkg");
     mkdirSync(pkgDir, { recursive: true });
-    // 2. 复制插件根 package.json + package-lock.json（npm ci 前置，缺 lockfile 会失败）
+    // 2. 复制插件根 package.json
     const srcPkg = join(PLUGIN_ROOT, "package.json");
-    const srcLock = join(PLUGIN_ROOT, "package-lock.json");
-    if (!existsSync(srcPkg)) throw new Error("插件根缺少 package.json：" + srcPkg);
-    if (!existsSync(srcLock)) throw new Error("插件根缺少 package-lock.json：" + srcLock);
+    if (!existsSync(srcPkg))
+      throw new Error("插件根缺少 package.json：" + srcPkg);
     copyFileSync(srcPkg, join(pkgDir, "package.json"));
-    copyFileSync(srcLock, join(pkgDir, "package-lock.json"));
-    log("已复制 package.json + package-lock.json 到 " + pkgDir);
-    // 3. 定位 node 与 npm-cli.js（node 同目录 node_modules/npm/bin/npm-cli.js）
-    const nodePath = resolveNodePath(cfg);
-    if (!nodePath || !existsSync(nodePath)) {
-      throw new Error("node 可执行文件不存在：" + nodePath + "，请在插件设置中配置 nodePath");
+    log("Copied package.json to " + pkgDir);
+    // 3. 创建 node 代理，定位 npm-cli.js
+    if (IS_WIN) {
+      const script = join(pkgDir, "node.cmd");
+      const content = `@"${ELECTRON_NODE}" %*\n`;
+      writeFileSync(script, content);
+    } else {
+      const script = join(pkgDir, "node");
+      const content = `#!/bin/sh\nexec "${ELECTRON_NODE}" "$@"\n`;
+      writeFileSync(script, content, { mode: 0o755 });
     }
-    const nodeDir = dirname(nodePath);
-    const npmCli = join(nodeDir, "node_modules", "npm", "bin", "npm-cli.js");
+    log("Created proxy node at" + pkgDir);
+    const npmCli = join(
+      PLUGIN_ROOT,
+      "node_modules",
+      "npm",
+      "bin",
+      "npm-cli.js",
+    );
     if (!existsSync(npmCli)) {
-      throw new Error("npm-cli.js 不存在：" + npmCli + "（node 目录 " + nodeDir + " 未带 npm 分发）");
+      throw new Error("npm-cli.js 不存在：" + npmCli);
     }
     // 4. npm ci：--omit=dev 剔除构建树；先把 node 目录加进 PATH（install script 子进程需 node）
     const run = async (registryArgs) => {
-      const child = spawn(nodePath, [npmCli, "ci", "--omit=dev", "--no-audit", "--no-fund", ...registryArgs], {
-        cwd: pkgDir,
-        stdio: ["ignore", "pipe", "pipe"],
-        env: { ...process.env, PATH: nodeDir + delimiter + (process.env.PATH || "") },
-        windowsHide: true,
-      });
+      // const child = spawn(ELECTRON_NODE, [npmCli, "ci", "--omit=dev", "--no-audit", "--no-fund", "--verbose", ...registryArgs], {
+      const child = spawn(
+        ELECTRON_NODE,
+        [
+          npmCli,
+          "i",
+          "@deepseek-ai/dsh",
+          "--omit=dev",
+          "--loglevel=http",
+          ...registryArgs,
+        ],
+        {
+          cwd: pkgDir,
+          stdio: ["ignore", "pipe", "pipe"],
+          env: {
+            ...ELECTRON_NODE_ENV,
+            PATH: pkgDir + delimiter + (process.env.PATH || ""),
+          },
+          windowsHide: true,
+        },
+      );
       let out = ""; // 仅用于错误信息提取（失败时拼进错误文本）
       // v0.8.8: npm ci 输出流式累积到 depsInstallLog（≤800 截断）+ 每次 data 刷新
       // depsInstallAt——前端 3s 轮询 health 会随诊断刷新 installLog 尾部，呈现实时进度
       const cap = (d) => {
-        out = (out + String(d)).slice(-800);
-        g.depsInstallLog = (g.depsInstallLog + String(d)).slice(-800);
+        out += String(d);
+        g.depsInstallLog += String(d);
         g.depsInstallAt = new Date().toISOString();
       };
       child.stdout.on("data", cap);
       child.stderr.on("data", cap);
       const code = await new Promise((res) => child.once("close", res));
-      if (code !== 0) throw new Error("npm ci 失败（exit " + code + "）：" + (out.slice(-300) || "无输出"));
+      g.appendLog("npm", out);
+      if (code !== 0)
+        throw new Error(
+          "npm i 失败 @deepseek-ai/dsh（exit " +
+            code +
+            "）：" +
+            (out.slice(-300) || "无输出"),
+        );
       return out;
     };
     try {
@@ -801,9 +1024,22 @@ async function installDepsFromPlugin(ctxConfig, ctxDataDir) {
       await run(["--registry=https://registry.npmmirror.com"]);
     }
     // 5. 校验 dsh 包就位（resolveDshPkgDir 优先 dsh-pkg，这里 cliBin 即部署产物）
-    const cliBin = join(pkgDir, "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js");
+    const cliBin = join(
+      pkgDir,
+      "node_modules",
+      "@deepseek-ai",
+      "dsh",
+      "lib",
+      "bin.js",
+    );
     if (!existsSync(cliBin)) {
-      throw new Error("npm ci 完成但未找到 dsh 包：" + cliBin + " 不存在（部署目录 " + pkgDir + "）");
+      throw new Error(
+        "npm ci 完成但未找到 dsh 包：" +
+          cliBin +
+          " 不存在（部署目录 " +
+          pkgDir +
+          "）",
+      );
     }
     g.depsInstallError = null;
     log("[完成] " + cliBin);
@@ -837,28 +1073,53 @@ async function verifyDepsSmoke(cfg) {
   const g = getSingleton();
   // 防并发：验证进行中直接返回当前缓存（不重复 spawn）
   if (g.depsSmoke?.running) return g.depsSmoke;
-  const dataDir = cfg.dataDir || g.dataDir || (g.web?.dshHome ? dirname(g.web.dshHome) : "");
+  const dataDir =
+    cfg.dataDir || g.dataDir || (g.web?.dshHome ? dirname(g.web.dshHome) : "");
   const diagCfg = { ...cfg, dataDir };
   const pkgDir = resolveDshPkgDir(diagCfg);
-  const cliBin = join(pkgDir, "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js");
-  const nodePath = resolveNodePath(diagCfg);
-  const smoke = { ok: false, version: null, error: "", stderr: "", at: "", running: true };
+  const cliBin = join(
+    pkgDir,
+    "node_modules",
+    "@deepseek-ai",
+    "dsh",
+    "lib",
+    "bin.js",
+  );
+  // const nodePath = resolveNodePath(diagCfg);
+  const smoke = {
+    ok: false,
+    version: null,
+    error: "",
+    stderr: "",
+    at: "",
+    running: true,
+  };
   g.depsSmoke = smoke;
   try {
     if (!existsSync(cliBin)) throw new Error("cliBin 不存在：" + cliBin);
-    if (!nodePath || !existsSync(nodePath)) throw new Error("node 可执行文件不存在：" + nodePath);
+    // if (!nodePath || !existsSync(nodePath)) throw new Error("node 可执行文件不存在：" + nodePath);
     // spawn node cliBin --version，10s 超时兜底（child.kill）；capture stdout+stderr
-    const child = spawn(nodePath, [cliBin, "--version"], {
+    const child = spawn(ELECTRON_NODE, [cliBin, "--version"], {
       cwd: dirname(cliBin),
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env },
+      env: ELECTRON_NODE_ENV,
       windowsHide: true,
     });
     let out = "";
     let err = "";
-    child.stdout.on("data", (d) => { out = (out + String(d)).slice(-800); });
-    child.stderr.on("data", (d) => { err = (err + String(d)).slice(-800); });
-    const timer = setTimeout(() => { try { child.kill(); } catch { /* 已退出 */ } }, 10000);
+    child.stdout.on("data", (d) => {
+      out = (out + String(d)).slice(-800);
+    });
+    child.stderr.on("data", (d) => {
+      err = (err + String(d)).slice(-800);
+    });
+    const timer = setTimeout(() => {
+      try {
+        child.kill();
+      } catch {
+        /* 已退出 */
+      }
+    }, 10000);
     const code = await new Promise((res) => child.once("close", res));
     clearTimeout(timer);
     const stdout = out.trim();
@@ -893,58 +1154,58 @@ getSingleton().verifyDeps = verifyDepsSmoke;
 // 同 verifyDepsSmoke 纪律：结果缓存 g.nodeSmoke = { ok, version, error, at, running }，
 // running 防并发；不随轮询触发——由页面「进标签页自动一次 / 手动「检测 Node」按钮」
 // 经 GET /webui/verify-node 驱动。
-async function verifyNodeSmoke(cfg) {
-  const g = getSingleton();
-  // 防并发：验证进行中直接返回当前缓存（不重复 spawn）
-  if (g.nodeSmoke?.running) return g.nodeSmoke;
-  const dataDir = cfg.dataDir || g.dataDir || (g.web?.dshHome ? dirname(g.web.dshHome) : "");
-  const diagCfg = { ...cfg, dataDir };
-  const nodePath = resolveNodePath(diagCfg);
-  const smoke = { ok: false, version: null, error: "", at: "", running: true };
-  g.nodeSmoke = smoke;
-  try {
-    if (!nodePath || !existsSync(nodePath)) {
-      throw new Error("node 可执行文件不存在：" + nodePath + "，请在插件设置中配置 nodePath");
-    }
-    const nodeDir = dirname(nodePath);
-    // npm 可用性：node 同目录 node_modules/npm/bin/npm-cli.js（installDepsFromPlugin 同款定位）
-    const npmCli = join(nodeDir, "node_modules", "npm", "bin", "npm-cli.js");
-    // spawn node --version，10s 超时兜底（child.kill）；capture stdout+stderr
-    const child = spawn(nodePath, ["--version"], {
-      cwd: nodeDir,
-      stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env },
-      windowsHide: true,
-    });
-    let out = "";
-    let err = "";
-    child.stdout.on("data", (d) => { out = (out + String(d)).slice(-800); });
-    child.stderr.on("data", (d) => { err = (err + String(d)).slice(-800); });
-    const timer = setTimeout(() => { try { child.kill(); } catch { /* 已退出 */ } }, 10000);
-    const code = await new Promise((res) => child.once("close", res));
-    clearTimeout(timer);
-    const stdout = out.trim();
-    const version = (stdout.match(/^\s*v?(\d+\.\d+\.\d+)/) || [])[1] || null;
-    if (code !== 0 || !version) {
-      throw new Error(String(err || out || "退出码 " + code).slice(0, 400) || "node --version 无有效输出");
-    }
-    if (!existsSync(npmCli)) {
-      throw new Error("node 目录未带 npm 分发（npm-cli.js 不存在：" + npmCli + "）——安装依赖与启动 web host 需要 npm，请更换完整 node 安装（官方安装包或 fnm 等）");
-    }
-    smoke.ok = true;
-    smoke.version = version;
-    smoke.error = "";
-  } catch (e) {
-    smoke.ok = false;
-    smoke.error = String(e?.message || e).slice(0, 400);
-  } finally {
-    smoke.at = new Date().toISOString();
-    smoke.running = false;
-  }
-  return smoke;
-}
+// async function verifyNodeSmoke(cfg) {
+//   const g = getSingleton();
+//   // 防并发：验证进行中直接返回当前缓存（不重复 spawn）
+//   if (g.nodeSmoke?.running) return g.nodeSmoke;
+//   const dataDir = cfg.dataDir || g.dataDir || (g.web?.dshHome ? dirname(g.web.dshHome) : "");
+//   const diagCfg = { ...cfg, dataDir };
+//   // const nodePath = resolveNodePath(diagCfg);
+//   const smoke = { ok: false, version: null, error: "", at: "", running: true };
+//   g.nodeSmoke = smoke;
+//   try {
+//     // if (!nodePath || !existsSync(nodePath)) {
+//     //   throw new Error("node 可执行文件不存在：" + nodePath + "，请在插件设置中配置 nodePath");
+//     // }
+//     // const nodeDir = dirname(nodePath);
+//     // // npm 可用性：node 同目录 node_modules/npm/bin/npm-cli.js（installDepsFromPlugin 同款定位）
+//     // const npmCli = join(nodeDir, "node_modules", "npm", "bin", "npm-cli.js");
+//     // spawn node --version，10s 超时兜底（child.kill）；capture stdout+stderr
+//     const child = spawn(ELECTRON_NODE, ["--version"], {
+//       cwd: nodeDir,
+//       stdio: ["ignore", "pipe", "pipe"],
+//       env: ELECTRON_NODE_ENV,
+//       windowsHide: true,
+//     });
+//     let out = "";
+//     let err = "";
+//     child.stdout.on("data", (d) => { out = (out + String(d)).slice(-800); });
+//     child.stderr.on("data", (d) => { err = (err + String(d)).slice(-800); });
+//     const timer = setTimeout(() => { try { child.kill(); } catch { /* 已退出 */ } }, 10000);
+//     const code = await new Promise((res) => child.once("close", res));
+//     clearTimeout(timer);
+//     const stdout = out.trim();
+//     const version = (stdout.match(/^\s*v?(\d+\.\d+\.\d+)/) || [])[1] || null;
+//     if (code !== 0 || !version) {
+//       throw new Error(String(err || out || "退出码 " + code).slice(0, 400) || "node --version 无有效输出");
+//     }
+//     // if (!existsSync(npmCli)) {
+//     //   throw new Error("node 目录未带 npm 分发（npm-cli.js 不存在：" + npmCli + "）——安装依赖与启动 web host 需要 npm，请更换完整 node 安装（官方安装包或 fnm 等）");
+//     // }
+//     smoke.ok = true;
+//     smoke.version = version;
+//     smoke.error = "";
+//   } catch (e) {
+//     smoke.ok = false;
+//     smoke.error = String(e?.message || e).slice(0, 400);
+//   } finally {
+//     smoke.at = new Date().toISOString();
+//     smoke.running = false;
+//   }
+//   return smoke;
+// }
 // 挂单例（getSingleton() 内也有同款赋值，这里显式建立一次）
-getSingleton().verifyNode = verifyNodeSmoke;
+// getSingleton().verifyNode = verifyNodeSmoke;
 
 // ---- Node 候选探测（v0.9.1: t1 未配置时的环境变量感知候选）----
 // 纯 fs 探测（existsSync），同步、无子进程无网络，可放进诊断轮询。探测链按「通用性」排序，
@@ -956,44 +1217,44 @@ getSingleton().verifyNode = verifyNodeSmoke;
 // 保持轻量不猜、不过度设计）。工具层内按常见程度排列：nvm-windows → fnm → volta。
 // 不做 spawn 校验（版本/可用性推迟到「采用」动作时 await verifyNodeSmoke 校验），
 // 避免诊断轮询时批量 spawn 子进程。返回 [{ path, source }]，全空返回 []。
-function detectNodeCandidates(cfg) {
-  const out = [];
-  const push = (p, source) => {
-    if (!p) return;
-    p = String(p);
-    if (!existsSync(p)) return;
-    if (out.some((c) => c.path === p)) return; // 去重（工具特定变量常已含于 PATH，先到先得）
-    out.push({ path: p, source });
-  };
-  // 1. PATH 解析（最通用：任何 node 管理器/官方安装都会把 node 目录或 shim 放进 PATH）
-  const seen = new Set();
-  for (const dir of String(process.env.PATH || "").split(delimiter)) {
-    if (!dir || seen.has(dir)) continue;
-    seen.add(dir);
-    push(join(dir, "node.exe"), "PATH");
-  }
-  // 2. ProgramFiles 官方安装（官方安装包默认路径，npm 随官方安装包分发，跨工具通用）
-  push(join(process.env.ProgramFiles || "C:\\Program Files", "nodejs", "node.exe"), "Program Files");
-  // 3. 工具特定补充层（v0.9.2：nvm-windows → fnm → volta，只认环境变量信号）
-  // 3a. nvm-windows：NVM_HOME（安装目录内 node.exe）+ NVM_SYMLINK（当前版本 symlink）
-  const nvmHome = process.env.NVM_HOME || "";
-  if (nvmHome) push(join(nvmHome, "node.exe"), "nvm-windows");
-  const nvmSym = process.env.NVM_SYMLINK || "";
-  if (nvmSym) push(join(nvmSym, "node.exe"), "nvm-windows");
-  // 3b. fnm：FNM_MULTISHELL_PATH（当前激活版本 shim 目录）。
-  //     FNM_DIR 下的多版本目录遍历（node-versions/<v>/installation/node.exe 取最新）刻意不实现——
-  //     按「轻量、不猜」原则：多版本遍历需读目录，且 PATH 通常已含 fnm shim（3a 前 PATH 层已覆盖）。
-  const fnmShell = process.env.FNM_MULTISHELL_PATH || "";
-  if (fnmShell) push(join(fnmShell, "node.exe"), "fnm 当前版本");
-  // 3c. volta：VOLTA_HOME/bin/node.exe
-  const voltaHome = process.env.VOLTA_HOME || "";
-  if (voltaHome) push(join(voltaHome, "bin", "node.exe"), "volta");
-  // 未实现（注释说明，非 Windows/小众）：nvm-sh 的 NVM_DIR 是 Unix 路径（Windows 场景忽略）；
-  // asdf 等小众管理器无稳定 Windows 环境变量约定，暂不探测。
-  return out;
-}
+// function detectNodeCandidates(cfg) {
+//   const out = [];
+//   const push = (p, source) => {
+//     if (!p) return;
+//     p = String(p);
+//     if (!existsSync(p)) return;
+//     if (out.some((c) => c.path === p)) return; // 去重（工具特定变量常已含于 PATH，先到先得）
+//     out.push({ path: p, source });
+//   };
+//   // 1. PATH 解析（最通用：任何 node 管理器/官方安装都会把 node 目录或 shim 放进 PATH）
+//   const seen = new Set();
+//   for (const dir of String(process.env.PATH || "").split(delimiter)) {
+//     if (!dir || seen.has(dir)) continue;
+//     seen.add(dir);
+//     push(join(dir, "node.exe"), "PATH");
+//   }
+//   // 2. ProgramFiles 官方安装（官方安装包默认路径，npm 随官方安装包分发，跨工具通用）
+//   push(join(process.env.ProgramFiles || "C:\\Program Files", "nodejs", "node.exe"), "Program Files");
+//   // 3. 工具特定补充层（v0.9.2：nvm-windows → fnm → volta，只认环境变量信号）
+//   // 3a. nvm-windows：NVM_HOME（安装目录内 node.exe）+ NVM_SYMLINK（当前版本 symlink）
+//   const nvmHome = process.env.NVM_HOME || "";
+//   if (nvmHome) push(join(nvmHome, "node.exe"), "nvm-windows");
+//   const nvmSym = process.env.NVM_SYMLINK || "";
+//   if (nvmSym) push(join(nvmSym, "node.exe"), "nvm-windows");
+//   // 3b. fnm：FNM_MULTISHELL_PATH（当前激活版本 shim 目录）。
+//   //     FNM_DIR 下的多版本目录遍历（node-versions/<v>/installation/node.exe 取最新）刻意不实现——
+//   //     按「轻量、不猜」原则：多版本遍历需读目录，且 PATH 通常已含 fnm shim（3a 前 PATH 层已覆盖）。
+//   const fnmShell = process.env.FNM_MULTISHELL_PATH || "";
+//   if (fnmShell) push(join(fnmShell, "node.exe"), "fnm 当前版本");
+//   // 3c. volta：VOLTA_HOME/bin/node.exe
+//   const voltaHome = process.env.VOLTA_HOME || "";
+//   if (voltaHome) push(join(voltaHome, "bin", "node.exe"), "volta");
+//   // 未实现（注释说明，非 Windows/小众）：nvm-sh 的 NVM_DIR 是 Unix 路径（Windows 场景忽略）；
+//   // asdf 等小众管理器无稳定 Windows 环境变量约定，暂不探测。
+//   return out;
+// }
 // 挂单例（getSingleton() 内也有同款赋值，这里显式建立一次）
-getSingleton().detectNodeCandidates = detectNodeCandidates;
+// getSingleton().detectNodeCandidates = detectNodeCandidates;
 
 // ---- 连接失败自检（v0.8.3: 插件页 web host 未就绪时的诊断数据源）----
 // 供 routes/webui.js 使用（经单例 globalThis.__dshHanako.collectDiagnostics 挂载，
@@ -1011,17 +1272,26 @@ export function collectWebDiagnostics(cfg = {}) {
   try {
     // 数据目录解析链：显式传入 → 单例记录（onload/工具已写入）→ 从 web.dshHome 反推
     const g = getSingleton();
-    const dataDir = cfg.dataDir || g.dataDir || (g.web?.dshHome ? dirname(g.web.dshHome) : "");
+    const dataDir =
+      cfg.dataDir ||
+      g.dataDir ||
+      (g.web?.dshHome ? dirname(g.web.dshHome) : "");
     const diagCfg = { ...cfg, dataDir };
     // v0.8.8: 不再自动触发运行级检测（去掉 maybeTriggerDepsSmoke）——检测改为「进标签页
     // 自动一次 + 手动「检测依赖」按钮」，经 GET /webui/verify-deps 路由驱动；g.depsSmoke
     // 只存最近一次检测结果供诊断展示（不随 3s 轮询重复 spawn）。
-    out.checks.push(buildNodeDiagCheck(g, diagCfg));
+    // out.checks.push(buildNodeDiagCheck(g, diagCfg));
     out.checks.push(buildDepsDiagCheck(g, diagCfg));
     out.checks.push(buildProcessDiagCheck(g, out));
   } catch (e) {
     // 顶层兜底：诊断读取本身异常时回退成「未知」项，接口不抛
-    out.checks.push({ key: "unknown", name: "自检异常", ok: false, detail: String(e?.message || e).slice(0, 400), fix: "请查看 Hana 日志或重启 Hana 后重试" });
+    out.checks.push({
+      key: "unknown",
+      name: "自检异常",
+      ok: false,
+      detail: String(e?.message || e).slice(0, 400),
+      fix: "请查看 Hana 日志或重启 Hana 后重试",
+    });
   }
   return out;
 }
@@ -1029,60 +1299,60 @@ export function collectWebDiagnostics(cfg = {}) {
 /** ① Node.js 配置：nodePath 配置 + 路径存在 + 运行级可用性（node --version + npm-cli.js）
  * v0.8.10: 叠加 nodeSmoke（verifyNodeSmoke 缓存 { ok, version, error, at, running }）。
  * ok：configured && exists 且（未验证/验证中暂通过；验证过必须通过）——路径存在 ≠ 能跑。 */
-function buildNodeDiagCheck(g, cfg) {
-  const nodePath = resolveNodePath(cfg);
-  const configured = Boolean(nodePath);
-  const exists = configured && existsSync(nodePath);
-  // 运行级可用性状态（verifyNodeSmoke 缓存；非敏感：布尔/版本号/截断错误文本）
-  const smoke = g.nodeSmoke || null;
-  const verifyRunning = Boolean(smoke?.running);
-  const verified = configured && exists && smoke ? Boolean(smoke.ok) : null; // null = 未配置/未验证（暂通过）
-  const verifyError = smoke && !smoke.ok && !smoke.running ? String(smoke.error || "").slice(0, 400) : null;
-  const verifyVersion = smoke?.version ?? null;
-  const verifyAt = smoke?.at ?? null;
-  const ok = configured && exists && (!smoke || smoke.ok || smoke.running);
-  const check = {
-    key: "node",
-    name: "Node.js 配置",
-    ok,
-    configured,
-    exists: configured ? exists : null,
-    path: nodePath,
-    verified,
-    verifyRunning,
-    verifyError,
-    verifyVersion,
-    verifyAt,
-    candidates: null, // v0.9.1: 未配置时的环境变量感知候选 [{ path, source }]（空则不渲染）
-    detail: "",
-    fix: "",
-  };
-  if (!configured) {
-    check.detail = "nodePath 未配置（插件设置「Node.js 可执行文件路径」为空）";
-    check.fix = "双路径修复：在插件设置中配置 Node.js 可执行文件路径（node.exe 绝对路径）；或让 Agent 协助（探测本机 node → 引导确认 → 写 config.json 的 global.nodePath → 立即生效，无需重启）；或点下方候选列表「采用」";
-    // v0.9.1: 环境变量感知候选探测（纯 fs existsSync 同步；探测失败/全空则保持纯提示）
-    try {
-      const cands = detectNodeCandidates(cfg);
-      if (cands.length) check.candidates = cands;
-    } catch { /* 探测失败静默 */ }
-  } else if (!exists) {
-    check.detail = "配置的路径不存在：" + nodePath;
-    check.fix = "双路径修复：在插件设置中修正 Node.js 可执行文件路径（当前路径无效）；或让 Agent 协助（探测本机 node → 引导确认 → 写 config.json → 立即生效，无需重启）";
-  } else if (!smoke) {
-    // 未验证过（进标签页自动检测一次 / 手动「检测 Node」；ok 暂 true）
-    check.detail = "已配置且路径存在，点击「检测 Node」验证可用性";
-  } else if (verifyRunning) {
-    // 检测进行中：ok 暂 true，结果由检测接口返回后刷新
-    check.detail = "已配置，正在检测 Node/npm 可用性…";
-  } else if (!smoke.ok) {
-    // 配置存在但不可用：node 跑不起来或未带 npm
-    check.detail = "nodePath 配置存在但不可用：" + (verifyError ? "\n" + verifyError : "运行级检测失败");
-    check.fix = "修正 Node.js 可执行文件路径（配置的 node 无法运行或未带 npm），修正后立即生效无需重启；或让 Agent 协助（探测本机 node → 引导确认 → 写 config.json → 立即生效）";
-  } else {
-    check.detail = "已配置且可用（node v" + smoke.version + "，npm 可用）：" + nodePath;
-  }
-  return check;
-}
+// function buildNodeDiagCheck(g, cfg) {
+//   const nodePath = resolveNodePath(cfg);
+//   const configured = Boolean(nodePath);
+//   const exists = configured && existsSync(nodePath);
+//   // 运行级可用性状态（verifyNodeSmoke 缓存；非敏感：布尔/版本号/截断错误文本）
+//   const smoke = g.nodeSmoke || null;
+//   const verifyRunning = Boolean(smoke?.running);
+//   const verified = configured && exists && smoke ? Boolean(smoke.ok) : null; // null = 未配置/未验证（暂通过）
+//   const verifyError = smoke && !smoke.ok && !smoke.running ? String(smoke.error || "").slice(0, 400) : null;
+//   const verifyVersion = smoke?.version ?? null;
+//   const verifyAt = smoke?.at ?? null;
+//   const ok = configured && exists && (!smoke || smoke.ok || smoke.running);
+//   const check = {
+//     key: "node",
+//     name: "Node.js 配置",
+//     ok,
+//     configured,
+//     exists: configured ? exists : null,
+//     path: nodePath,
+//     verified,
+//     verifyRunning,
+//     verifyError,
+//     verifyVersion,
+//     verifyAt,
+//     candidates: null, // v0.9.1: 未配置时的环境变量感知候选 [{ path, source }]（空则不渲染）
+//     detail: "",
+//     fix: "",
+//   };
+//   if (!configured) {
+//     check.detail = "nodePath 未配置（插件设置「Node.js 可执行文件路径」为空）";
+//     check.fix = "双路径修复：在插件设置中配置 Node.js 可执行文件路径（node.exe 绝对路径）；或让 Agent 协助（探测本机 node → 引导确认 → 写 config.json 的 global.nodePath → 立即生效，无需重启）；或点下方候选列表「采用」";
+//     // v0.9.1: 环境变量感知候选探测（纯 fs existsSync 同步；探测失败/全空则保持纯提示）
+//     try {
+//       const cands = detectNodeCandidates(cfg);
+//       if (cands.length) check.candidates = cands;
+//     } catch { /* 探测失败静默 */ }
+//   } else if (!exists) {
+//     check.detail = "配置的路径不存在：" + nodePath;
+//     check.fix = "双路径修复：在插件设置中修正 Node.js 可执行文件路径（当前路径无效）；或让 Agent 协助（探测本机 node → 引导确认 → 写 config.json → 立即生效，无需重启）";
+//   } else if (!smoke) {
+//     // 未验证过（进标签页自动检测一次 / 手动「检测 Node」；ok 暂 true）
+//     check.detail = "已配置且路径存在，点击「检测 Node」验证可用性";
+//   } else if (verifyRunning) {
+//     // 检测进行中：ok 暂 true，结果由检测接口返回后刷新
+//     check.detail = "已配置，正在检测 Node/npm 可用性…";
+//   } else if (!smoke.ok) {
+//     // 配置存在但不可用：node 跑不起来或未带 npm
+//     check.detail = "nodePath 配置存在但不可用：" + (verifyError ? "\n" + verifyError : "运行级检测失败");
+//     check.fix = "修正 Node.js 可执行文件路径（配置的 node 无法运行或未带 npm），修正后立即生效无需重启；或让 Agent 协助（探测本机 node → 引导确认 → 写 config.json → 立即生效）";
+//   } else {
+//     check.detail = "已配置且可用（node v" + smoke.version + "，npm 可用）：" + nodePath;
+//   }
+//   return check;
+// }
 
 /** ② dsh 依赖：cliBin 存在性（resolveDshPkgDir 同款：数据目录 dsh-pkg 优先，插件根兑底）
  * v0.8.6: 叠加部署状态——g.depsInstalling（npm ci 进行中）/ g.depsInstallError（上次失败）/ g.depsInstallLog
@@ -1090,12 +1360,25 @@ function buildNodeDiagCheck(g, cfg) {
  * ok 判定升级：存在 且（未验证/验证中视为暂通过，验证过必须通过）——文件存在 ≠ 依赖完整。 */
 function buildDepsDiagCheck(g, cfg) {
   const pkgDir = resolveDshPkgDir(cfg);
-  const cliBin = join(pkgDir, "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js");
+  const cliBin = join(
+    pkgDir,
+    "node_modules",
+    "@deepseek-ai",
+    "dsh",
+    "lib",
+    "bin.js",
+  );
   // 候选位置全列出，未命中时讲清「查了哪些位置」（resolveDshPkgDir 只回命中/兑底那一个）
   const candidates = [];
   if (cfg.dataDir) candidates.push(join(cfg.dataDir, "dsh-pkg"));
   candidates.push(PLUGIN_ROOT);
-  const checked = [...new Set(candidates.map((p) => join(p, "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js")))];
+  const checked = [
+    ...new Set(
+      candidates.map((p) =>
+        join(p, "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js"),
+      ),
+    ),
+  ];
   const installed = existsSync(cliBin);
   // 部署状态（installDeps 写入单例；只回非敏感布尔与截断文本）
   const installing = Boolean(g.depsInstalling);
@@ -1106,7 +1389,10 @@ function buildDepsDiagCheck(g, cfg) {
   const smoke = g.depsSmoke || null;
   const verifyRunning = Boolean(smoke?.running);
   const verified = installed && smoke ? Boolean(smoke.ok) : null; // null = 未安装/未验证过（暂通过）
-  const verifyError = smoke && !smoke.ok && !smoke.running ? String(smoke.error || smoke.stderr || "").slice(0, 400) : null;
+  const verifyError =
+    smoke && !smoke.ok && !smoke.running
+      ? String(smoke.error || smoke.stderr || "").slice(0, 400)
+      : null;
   const verifyVersion = smoke?.version ?? null;
   const verifyAt = smoke?.at ?? null;
   // ok：存在 且（未验证/验证中暂通过；验证过必须通过）——验证失败 → ok=false
@@ -1137,9 +1423,14 @@ function buildDepsDiagCheck(g, cfg) {
     check.fix = "";
   } else if (!installed) {
     // 未安装：保持现有文案
-    check.detail = "未找到 dsh 包：" + cliBin + " 不存在" + (checked.length > 1 ? "（已检查 " + checked.join("、") + "）" : "");
+    check.detail =
+      "未找到 dsh 包：" +
+      cliBin +
+      " 不存在" +
+      (checked.length > 1 ? "（已检查 " + checked.join("、") + "）" : "");
     if (installError) check.detail += "\n[上次安装失败] " + installError;
-    check.fix = "依赖缺失：点击本卡片「安装依赖」按钮自动在插件数据目录 dsh-pkg 执行 npm ci（约 30-40s，完成后自动验证）；或确认插件目录 node_modules 解压完整";
+    check.fix =
+      "依赖缺失：点击本卡片「安装依赖」按钮自动在插件数据目录 dsh-pkg 执行 npm ci（约 30-40s，完成后自动验证）；或确认插件目录 node_modules 解压完整";
   } else if (!smoke) {
     // v0.8.8: 未检测过（进标签页自动检测一次 / 手动「检测依赖」；ok 暂算 installed）
     check.detail = "dsh 包已就绪，点击「检测依赖」验证依赖完整性";
@@ -1148,11 +1439,15 @@ function buildDepsDiagCheck(g, cfg) {
     check.detail = "正在检测依赖完整性…";
   } else if (!smoke.ok) {
     // 存在但验证失败：依赖图不完整（ERR_MODULE_NOT_FOUND 等真实错误）
-    check.detail = "dsh 包存在但依赖不完整：" + (verifyError ? "\n" + verifyError : "运行级验证失败");
-    check.fix = "点击本卡片「重新安装依赖」按钮重新执行 npm ci（自动部署到 dsh-pkg，完成后自动验证）";
+    check.detail =
+      "dsh 包存在但依赖不完整：" +
+      (verifyError ? "\n" + verifyError : "运行级验证失败");
+    check.fix =
+      "点击本卡片「重新安装依赖」按钮重新执行 npm ci（自动部署到 dsh-pkg，完成后自动验证）";
   } else {
     // 存在 + 验证通过：能跑 = 依赖图完整
-    check.detail = "dsh 包已就绪（运行级验证通过，版本 v" + smoke.version + "）：" + cliBin;
+    check.detail =
+      "dsh 包已就绪（运行级验证通过，版本 v" + smoke.version + "）：" + cliBin;
   }
   return check;
 }
@@ -1192,29 +1487,54 @@ function buildProcessDiagCheck(g, out) {
   const port = out.port;
   if (!started) {
     // 从未启动：无 web / webLastError / webLastExit（冷启动或从未拉起过）
-    check.detail = "web host 尚未启动（插件加载即拉起，可能仍在初始化，或从未成功启动过）";
-    check.fix = "稍候自动重试；若持续未就绪，可点击本卡片「手动启动 web host」按钮重新拉起，或检查上方 Node.js 配置与依赖项";
+    check.detail =
+      "web host 尚未启动（插件加载即拉起，可能仍在初始化，或从未成功启动过）";
+    check.fix =
+      "稍候自动重试；若持续未就绪，可点击本卡片「手动启动 web host」按钮重新拉起，或检查上方 Node.js 配置与依赖项";
   } else if (ready && alive) {
     // 进程侧已就绪但探测未命中（端口短暂不可达等）：仍提示重试
-    check.detail = "进程运行中且已就绪，但端口 " + port + " 探测未命中（可能短暂不可达）";
+    check.detail =
+      "进程运行中且已就绪，但端口 " + port + " 探测未命中（可能短暂不可达）";
     check.fix = "稍候自动重试；若持续未就绪，检查端口是否被其他程序占用";
   } else if (alive) {
-    check.detail = "进程运行中，端口 " + port + " 尚未就绪" + (stderr ? "\n[stderr 尾部] " + stderr : "");
-    check.fix = "正在启动，请稍候自动重试；若长时间未就绪，检查端口是否被占用，或重启 Hana";
+    check.detail =
+      "进程运行中，端口 " +
+      port +
+      " 尚未就绪" +
+      (stderr ? "\n[stderr 尾部] " + stderr : "");
+    check.fix =
+      "正在启动，请稍候自动重试；若长时间未就绪，检查端口是否被占用，或重启 Hana";
   } else if (lastExit) {
     // 进程曾运行后退出/被外部杀掉：展示持久退出记录（g.web 已摘除，stderr 从 lastExit 取）。
     // code/signal 可能为 null（Windows 杀进程无 signal、信号杀进程无 code）：只列非空项
-    const codeTxt = lastExit.code !== null && lastExit.code !== undefined ? "code=" + lastExit.code : null;
-    const sigTxt = lastExit.signal !== null && lastExit.signal !== undefined ? "signal=" + lastExit.signal : null;
-    const exitTxt = codeTxt || sigTxt ? [codeTxt, sigTxt].filter(Boolean).join(" ") : "code=? signal=?";
-    check.detail = "进程已退出（" + exitTxt + "，时间 " + lastExit.at + "）"
-      + (lastExit.stderr ? "\n[stderr 尾部] " + lastExit.stderr : "");
+    const codeTxt =
+      lastExit.code !== null && lastExit.code !== undefined
+        ? "code=" + lastExit.code
+        : null;
+    const sigTxt =
+      lastExit.signal !== null && lastExit.signal !== undefined
+        ? "signal=" + lastExit.signal
+        : null;
+    const exitTxt =
+      codeTxt || sigTxt
+        ? [codeTxt, sigTxt].filter(Boolean).join(" ")
+        : "code=? signal=?";
+    check.detail =
+      "进程已退出（" +
+      exitTxt +
+      "，时间 " +
+      lastExit.at +
+      "）" +
+      (lastExit.stderr ? "\n[stderr 尾部] " + lastExit.stderr : "");
     check.fix = "点击本卡片「手动启动 web host」按钮重新拉起，或重启 Hana";
   } else {
     // 启动失败（webLastError）：展示失败原因（其已含 stderr 尾部）+ 修复指引
     check.detail = lastError
       ? "启动失败：" + lastError
-      : "进程已退出（code=" + (exitCode ?? "?") + "）" + (stderr ? "\n[stderr 尾部] " + stderr : "");
+      : "进程已退出（code=" +
+        (exitCode ?? "?") +
+        "）" +
+        (stderr ? "\n[stderr 尾部] " + stderr : "");
     check.fix = pickProcessFix(lastError, stderr, port);
   }
   return check;
@@ -1225,9 +1545,9 @@ function buildProcessDiagCheck(g, out) {
  * webLastError 可能未携带 stderr 尾部，见「进程已退出」分支）。 */
 function pickProcessFix(lastError, stderr, port) {
   const text = (lastError || "") + "\n" + (stderr || "");
-  if (/node 可执行文件不存在|nodePath/i.test(text)) {
-    return "按上方「Node.js 配置」项修复（在插件设置中配置 node.exe 路径），改后重启 Hana";
-  }
+  // if (/node 可执行文件不存在|nodePath/i.test(text)) {
+  //   return "按上方「Node.js 配置」项修复（在插件设置中配置 node.exe 路径），改后重启 Hana";
+  // }
   if (/dsh 包未就绪|cliBin|npm ci/i.test(text)) {
     return "按上方「dsh 依赖安装」项修复（数据目录 dsh-pkg 执行 npm ci，完成后自动验证）";
   }
@@ -1241,12 +1561,20 @@ export async function closeProcess() {
   const g = getSingleton();
   // 先清理 provider 热跟随 watch（退订 bus + 关 watchers），再回收 web host 进程
   if (typeof g.providerPushCleanup === "function") {
-    try { g.providerPushCleanup(); } catch { /* 清理失败不阻断 */ }
+    try {
+      g.providerPushCleanup();
+    } catch {
+      /* 清理失败不阻断 */
+    }
   }
   const web = g.web;
   g.web = null;
   if (web?.child) {
-    try { web.child.kill(); } catch { /* 已退出 */ }
+    try {
+      web.child.kill();
+    } catch {
+      /* 已退出 */
+    }
     await new Promise((r) => setTimeout(r, 200));
   }
 }
@@ -1268,10 +1596,13 @@ async function callUnary(base, method, payload, signal, meta) {
   });
   if (!res.ok) throw new Error(`dsh /api/${method} HTTP ${res.status}`);
   const full = await res.json();
-  if (!full || full.rpcId !== rpcId) throw new Error(`dsh /api/${method} rpcId 不匹配`);
+  if (!full || full.rpcId !== rpcId)
+    throw new Error(`dsh /api/${method} rpcId 不匹配`);
   if (!full.result || !full.result.ok) {
     const e = full.result?.error || {};
-    throw new Error(`dsh ${method} 失败：${e.code || "unknown"} ${e.message || ""}`);
+    throw new Error(
+      `dsh ${method} 失败：${e.code || "unknown"} ${e.message || ""}`,
+    );
   }
   // meta.rpcId 回传：会话 jsonl 的 user/message 事件 data.source.rpcId 与此相同，
   // 供 op 快照记录后用 sessionId+rpcId 从 jsonl 精确恢复（重启不丢、零映射文件）
@@ -1295,21 +1626,45 @@ async function* openMux(base, signal) {
   ws.onmessage = (ev) => {
     let frame = {};
     let envelope = null;
-    try { envelope = JSON.parse(ev.data); frame = envelope?.payload || envelope || {}; } catch { return; }
+    try {
+      envelope = JSON.parse(ev.data);
+      frame = envelope?.payload || envelope || {};
+    } catch {
+      return;
+    }
     // server-request 信封（approval/requested 等应答类帧）：外层 rpcId 补进 frame——
     // dsh web host 的 /api/respond 靠 client-response 信封的 rpcId 路由 pending 表，
     // 审批帧的 rpcId 只在外层，只取 payload 会丢（审批应答就断链）。
-    if (envelope && typeof envelope === "object" && typeof envelope.rpcId === "string" && typeof frame.rpcId !== "string") {
+    if (
+      envelope &&
+      typeof envelope === "object" &&
+      typeof envelope.rpcId === "string" &&
+      typeof frame.rpcId !== "string"
+    ) {
       frame.rpcId = envelope.rpcId;
     }
     if (!frame || typeof frame.type !== "string") return;
     if (waiters.length) waiters.shift()(frame);
     else queue.push(frame);
   };
-  ws.onerror = () => { wsError = new Error("dsh events.mux WebSocket 错误"); };
-  ws.onclose = () => { wsClosed = true; while (waiters.length) waiters.shift()(null); };
-  if (signal?.aborted) { try { ws.close(); } catch {} throw Object.assign(new Error("dsh_run 已取消"), { code: "DSH_ABORTED" }); }
-  const onAbort = () => { try { ws.close(); } catch {} };
+  ws.onerror = () => {
+    wsError = new Error("dsh events.mux WebSocket 错误");
+  };
+  ws.onclose = () => {
+    wsClosed = true;
+    while (waiters.length) waiters.shift()(null);
+  };
+  if (signal?.aborted) {
+    try {
+      ws.close();
+    } catch {}
+    throw Object.assign(new Error("dsh_run 已取消"), { code: "DSH_ABORTED" });
+  }
+  const onAbort = () => {
+    try {
+      ws.close();
+    } catch {}
+  };
   signal?.addEventListener("abort", onAbort, { once: true });
   await new Promise((resolve, reject) => {
     ws.onopen = resolve;
@@ -1317,7 +1672,10 @@ async function* openMux(base, signal) {
   });
   try {
     while (true) {
-      if (queue.length) { yield queue.shift(); continue; }
+      if (queue.length) {
+        yield queue.shift();
+        continue;
+      }
       if (wsError) throw wsError;
       if (wsClosed) return;
       const frame = await new Promise((resolve) => waiters.push(resolve));
@@ -1326,7 +1684,11 @@ async function* openMux(base, signal) {
     }
   } finally {
     signal?.removeEventListener("abort", onAbort);
-    try { ws.close(); } catch { /* 已关闭 */ }
+    try {
+      ws.close();
+    } catch {
+      /* 已关闭 */
+    }
   }
 }
 
@@ -1359,7 +1721,11 @@ function buildSummary(output, finalText) {
   const full = String(output ?? "");
   const candidate = String(finalText ?? "").trim();
   if (candidate) {
-    return { text: candidate, summaryOf: "final-message", fullLength: full.length };
+    return {
+      text: candidate,
+      summaryOf: "final-message",
+      fullLength: full.length,
+    };
   }
   if (full.length > SUMMARY_HEAD + SUMMARY_TAIL) {
     const hidden = full.length - SUMMARY_HEAD - SUMMARY_TAIL;
@@ -1382,7 +1748,11 @@ function cacheToolCall(opId, payload) {
   if (typeof callId !== "string" || !callId) return;
   let args = payload.arguments;
   if (typeof args !== "string") {
-    try { args = args === undefined || args === null ? "" : JSON.stringify(args); } catch { args = String(args ?? ""); }
+    try {
+      args = args === undefined || args === null ? "" : JSON.stringify(args);
+    } catch {
+      args = String(args ?? "");
+    }
   }
   toolCallCache.set(`${opId}::${callId}`, {
     name: typeof payload.name === "string" ? payload.name : "",
@@ -1395,7 +1765,22 @@ function cacheToolCall(opId, payload) {
 // promise 在后台跑：session.create → events.mux 订阅 → session.prompt → 事件循环 → 终态。
 // v0.10.46：任务状态零存储（op Map 退役）——collected/blocksSeq/usageTotal 仅用于回调返回，
 // 卡片状态由 /ops/stream 从 jsonl 重建 + 实时事件转发呈现。
-function submitTask(cfg, { task, cwd, timeoutMs = 600000, signal, bus, sessionPath, agentPreset, reasoningEffort, sessionId, provider, model }) {
+function submitTask(
+  cfg,
+  {
+    task,
+    cwd,
+    timeoutMs = 600000,
+    signal,
+    bus,
+    sessionPath,
+    agentPreset,
+    reasoningEffort,
+    sessionId,
+    provider,
+    model,
+  },
+) {
   const taskText = String(task ?? "").trim();
   if (!taskText) throw new Error("task 不能为空");
 
@@ -1425,7 +1810,9 @@ function submitTask(cfg, { task, cwd, timeoutMs = 600000, signal, bus, sessionPa
   // ready：session.create + prompt 提交完成时 resolve { sessionId, rpcId }（卡片 URL 推迟到此后生成，
   // 重启后按 sessionId+rpcId 从会话 jsonl 精确恢复 op，零映射文件）；失败 resolve null（降级 opId-only URL）
   let resolveReady = null;
-  const ready = new Promise((r) => { resolveReady = r; });
+  const ready = new Promise((r) => {
+    resolveReady = r;
+  });
   // usageTotal 提升到 submitTask 作用域：事件循环累计（assistant/message 的 d.usage 是每轮 LLM 调用用量，
   // 覆盖式只保留最后一轮、多轮任务严重偏小；按 disjoint 口径累计 = 未缓存输入/输出/缓存读取/推理之和，
   // 与 dsh 会话投影 tokenUsage.totals 对齐）。ok 终态与 promise.catch 的错误终态都能读到。
@@ -1444,14 +1831,26 @@ function submitTask(cfg, { task, cwd, timeoutMs = 600000, signal, bus, sessionPa
     // agentPreset 无值不传（缺省走 web host 默认，Web UI 可调）
     let createPayload;
     if (resumeSessionId) {
-      const list = await callUnary(base, "session.list", { projections: ["id", "cwd"] });
+      const list = await callUnary(base, "session.list", {
+        projections: ["id", "cwd"],
+      });
       const items = list.items || [];
       const existing = items.find((it) => it.sessionId === resumeSessionId);
-      if (!existing) throw new Error(`目标会话不存在或已归档，无法 resume：${resumeSessionId}`);
+      if (!existing)
+        throw new Error(
+          `目标会话不存在或已归档，无法 resume：${resumeSessionId}`,
+        );
       // 异常会话（cwd 为空/缺失）回退用户传的 cwd 或 defaultCwd，再不行才报错
       const resumeCwd = String(existing.cwd ?? "").trim() || cwd;
-      if (!resumeCwd) throw new Error(`目标会话 ${resumeSessionId} 无 cwd 且无可用回退 cwd，无法 resume`);
-      createPayload = { sessionId: resumeSessionId, cwd: resumeCwd, ...(preset && { agentPreset: preset }) };
+      if (!resumeCwd)
+        throw new Error(
+          `目标会话 ${resumeSessionId} 无 cwd 且无可用回退 cwd，无法 resume`,
+        );
+      createPayload = {
+        sessionId: resumeSessionId,
+        cwd: resumeCwd,
+        ...(preset && { agentPreset: preset }),
+      };
     } else {
       createPayload = { cwd, ...(preset && { agentPreset: preset }) };
     }
@@ -1478,15 +1877,29 @@ function submitTask(cfg, { task, cwd, timeoutMs = 600000, signal, bus, sessionPa
         sm = sm || (dm && dm.model) || "";
       }
       if (!sp || !sm) {
-        throw new Error("dsh_run 需要 provider/model：请显式传 provider/model，或先在 dsh models 页设置默认模型（settings.yaml agent-default-model）");
+        throw new Error(
+          "dsh_run 需要 provider/model：请显式传 provider/model，或先在 dsh models 页设置默认模型（settings.yaml agent-default-model）",
+        );
       }
-      const selectModelPayload = { sessionId, provider: sp, model: sm, ...(effort ? { reasoningEffort: effort } : {}) };
+      const selectModelPayload = {
+        sessionId,
+        provider: sp,
+        model: sm,
+        ...(effort ? { reasoningEffort: effort } : {}),
+      };
       try {
         await callUnary(base, "session.selectModel", selectModelPayload);
       } catch (err) {
         // 显式 effort 被拒（如 reasoning:false 模型不接受 effort）：降级不带 effort 重试
-        if (effort && String(err?.message || "").includes("model-unavailable")) {
-          await callUnary(base, "session.selectModel", { sessionId, provider: sp, model: sm });
+        if (
+          effort &&
+          String(err?.message || "").includes("model-unavailable")
+        ) {
+          await callUnary(base, "session.selectModel", {
+            sessionId,
+            provider: sp,
+            model: sm,
+          });
         } else {
           throw err;
         }
@@ -1500,7 +1913,7 @@ function submitTask(cfg, { task, cwd, timeoutMs = 600000, signal, bus, sessionPa
 
     let collected = "";
     let finalMessageText = ""; // 最后一条 assistant/message 的文本（回调摘要锚点）
-    let blocksSeq = [];        // assistant/message 的 blocks（终态回调输出结构化，reasoning 可折叠）
+    let blocksSeq = []; // assistant/message 的 blocks（终态回调输出结构化，reasoning 可折叠）
     let sawChunk = false;
     const seen = new Set();
     let outcome = null; // { stopReason, failure? }
@@ -1519,7 +1932,13 @@ function submitTask(cfg, { task, cwd, timeoutMs = 600000, signal, bus, sessionPa
               const c = d?.chunk;
               if (c?.type === "finish" && c.reason?.kind === "error") {
                 const f = c.reason.failure || c.reason.error || {};
-                outcome = { stopReason: "error", failure: { message: f.message || c.reason.message || "模型调用失败（无详情）" } };
+                outcome = {
+                  stopReason: "error",
+                  failure: {
+                    message:
+                      f.message || c.reason.message || "模型调用失败（无详情）",
+                  },
+                };
                 return;
               }
               const t = textFromChunk(d);
@@ -1529,16 +1948,28 @@ function submitTask(cfg, { task, cwd, timeoutMs = 600000, signal, bus, sessionPa
               if (msg?.id && typeof msg.id === "string" && !seen.has(msg.id)) {
                 seen.add(msg.id);
                 const t = textFromMessageBlocks(msg.content);
-                if (!sawChunk && t) { // chunk 流已提供文本时跳过拼接，避免重复
+                if (!sawChunk && t) {
+                  // chunk 流已提供文本时跳过拼接，避免重复
                   collected += t;
                 }
                 if (t) finalMessageText = t; // 每条覆盖，结束时即最终汇报（摘要锚点）
                 // 收集结构化 blocks（text/reasoning/tool-call）：终态 op.output 供卡片完整输出折叠渲染
                 const blocks = Array.isArray(msg.content) ? msg.content : [];
                 for (const b of blocks) {
-                  if (b?.type === "text" && typeof b.text === "string" && b.text) blocksSeq.push({ type: "text", text: b.text });
-                  else if (b?.type === "reasoning" && typeof b.text === "string" && b.text) blocksSeq.push({ type: "reasoning", text: b.text });
-                  else if (b?.type === "tool-call" && b.name) blocksSeq.push({ type: "tool-call", name: b.name });
+                  if (
+                    b?.type === "text" &&
+                    typeof b.text === "string" &&
+                    b.text
+                  )
+                    blocksSeq.push({ type: "text", text: b.text });
+                  else if (
+                    b?.type === "reasoning" &&
+                    typeof b.text === "string" &&
+                    b.text
+                  )
+                    blocksSeq.push({ type: "reasoning", text: b.text });
+                  else if (b?.type === "tool-call" && b.name)
+                    blocksSeq.push({ type: "tool-call", name: b.name });
                 }
               }
               if (d.usage) {
@@ -1546,10 +1977,16 @@ function submitTask(cfg, { task, cwd, timeoutMs = 600000, signal, bus, sessionPa
                 // 缺失字段不初始化（API 未返回时卡片不显示，避免 0 误报）
                 const u = d.usage;
                 usageTotal = usageTotal || {};
-                usageTotal.inputTokens = (usageTotal.inputTokens || 0) + (u.inputTokens ?? 0);
-                usageTotal.outputTokens = (usageTotal.outputTokens || 0) + (u.outputTokens ?? 0);
-                if (u.cacheReadTokens != null) usageTotal.cacheReadTokens = (usageTotal.cacheReadTokens || 0) + u.cacheReadTokens;
-                if (u.reasoningTokens != null) usageTotal.reasoningTokens = (usageTotal.reasoningTokens || 0) + u.reasoningTokens;
+                usageTotal.inputTokens =
+                  (usageTotal.inputTokens || 0) + (u.inputTokens ?? 0);
+                usageTotal.outputTokens =
+                  (usageTotal.outputTokens || 0) + (u.outputTokens ?? 0);
+                if (u.cacheReadTokens != null)
+                  usageTotal.cacheReadTokens =
+                    (usageTotal.cacheReadTokens || 0) + u.cacheReadTokens;
+                if (u.reasoningTokens != null)
+                  usageTotal.reasoningTokens =
+                    (usageTotal.reasoningTokens || 0) + u.reasoningTokens;
               }
             } else if (ev.type === "tool/call") {
               // v0.5.9: 缓存工具调用参数原文（session/event 包裹的 tool/call 事件，
@@ -1560,16 +1997,32 @@ function submitTask(cfg, { task, cwd, timeoutMs = 600000, signal, bus, sessionPa
               // subCallId, name, arguments }）：run_code 内联的工具调用（如 write）以子调用
               // 形式派发，参数不产生独立 tool/call 帧；按 subCallId 缓存（形如 `root:code:N`），
               // 审批帧 callId 即该 subCallId，可精确反查到命令/路径原文。
-              cacheToolCall(opId, { callId: d.subCallId, name: d.name, arguments: d.arguments });
+              cacheToolCall(opId, {
+                callId: d.subCallId,
+                name: d.name,
+                arguments: d.arguments,
+              });
             } else if (ev.type === "turn/end") {
               const reason = d.reason;
               const kind = reason?.kind;
               if (kind === "completed") outcome = { stopReason: "end_turn" };
-              else if (kind === "max-tokens") outcome = { stopReason: "max_tokens" };
+              else if (kind === "max-tokens")
+                outcome = { stopReason: "max_tokens" };
               else if (kind === "aborted") outcome = { stopReason: "aborted" };
-              else if (reason?.failure) outcome = { stopReason: "error", failure: reason.failure };
-              else if (reason?.error) outcome = { stopReason: "error", failure: { message: reason.error.message || "模型调用失败（无详情）" } };
-              else if (kind === "error") outcome = { stopReason: "error", failure: { message: "dsh 任务失败（无错误详情）" } };
+              else if (reason?.failure)
+                outcome = { stopReason: "error", failure: reason.failure };
+              else if (reason?.error)
+                outcome = {
+                  stopReason: "error",
+                  failure: {
+                    message: reason.error.message || "模型调用失败（无详情）",
+                  },
+                };
+              else if (kind === "error")
+                outcome = {
+                  stopReason: "error",
+                  failure: { message: "dsh 任务失败（无错误详情）" },
+                };
               else outcome = { stopReason: kind || "end_turn" };
               return; // 一次 prompt = 一个 turn，turn/end 即终态
             }
@@ -1608,38 +2061,61 @@ function submitTask(cfg, { task, cwd, timeoutMs = 600000, signal, bus, sessionPa
                 if (stripped !== frame.callId) {
                   const root = toolCallCache.get(`${opId}::${stripped}`);
                   if (root && root.name === "run_code") {
-                    cachedCall = { name: "run_code(code-dispatch)", args: root.args };
+                    cachedCall = {
+                      name: "run_code(code-dispatch)",
+                      args: root.args,
+                    };
                   }
                 }
               }
               approval.args = cachedCall?.args ?? null;
               if (!Array.isArray(op.pendingApprovals)) op.pendingApprovals = [];
-              if (!op.pendingApprovals.some((a) => a.approvalId === approval.approvalId)) {
+              if (
+                !op.pendingApprovals.some(
+                  (a) => a.approvalId === approval.approvalId,
+                )
+              ) {
                 op.pendingApprovals.push(approval);
                 // v0.5.12 统一流程：所有审批都通知 Agent 应答（不区分 manual/auto，无白名单）。
                 // 通知附带命令/路径原文（approval.args）；挂起后暂停执行超时计时（外部决策等待
                 // 不计入执行时间），并挂审批超时拒绝计时器（approvalTimeoutMs，0=禁用）。
-                notifyApprovalWake({ bus: bus ?? getSingleton().bus, sessionPath, opId, approval, task: op.task });
+                notifyApprovalWake({
+                  bus: bus ?? getSingleton().bus,
+                  sessionPath,
+                  opId,
+                  approval,
+                  task: op.task,
+                });
                 pauseTimeout(); // 审批挂起：暂停执行超时计时（外部决策等待不计入执行时间）
                 const timeoutMs = resolveApprovalTimeoutMs(cfg);
                 if (timeoutMs > 0) {
                   const timerKey = `${opId}::${approval.approvalId}`;
                   const t = setTimeout(() => {
                     approvalTimers.delete(timerKey); // 计时器已触发：从表移除
-                    const ap2 = op.pendingApprovals?.find((a) => a.approvalId === approval.approvalId);
+                    const ap2 = op.pendingApprovals?.find(
+                      (a) => a.approvalId === approval.approvalId,
+                    );
                     if (ap2 && ap2.status === "pending") {
-                      respondApprovalLocal(base, ap2, "rejected").then(() => {
-                        if (ap2.status === "pending") {
-                          ap2.status = "answered";
-                          ap2.outcome = "rejected";
-                          ap2.answeredAt = new Date().toISOString();
-                          ap2.auto = "expired";
-                          if (!op.pendingApprovals.some((a) => a.status === "pending")) {
-                            op.approvalPending = false;
-                            resumeTimeout(); // 无挂起审批：恢复计时（同 approval/resolved 语义）
+                      respondApprovalLocal(base, ap2, "rejected")
+                        .then(() => {
+                          if (ap2.status === "pending") {
+                            ap2.status = "answered";
+                            ap2.outcome = "rejected";
+                            ap2.answeredAt = new Date().toISOString();
+                            ap2.auto = "expired";
+                            if (
+                              !op.pendingApprovals.some(
+                                (a) => a.status === "pending",
+                              )
+                            ) {
+                              op.approvalPending = false;
+                              resumeTimeout(); // 无挂起审批：恢复计时（同 approval/resolved 语义）
+                            }
                           }
-                        }
-                      }).catch(() => { /* 拒绝失败忽略：审批保持 pending，等人工或 web UI */ });
+                        })
+                        .catch(() => {
+                          /* 拒绝失败忽略：审批保持 pending，等人工或 web UI */
+                        });
                     }
                   }, timeoutMs);
                   approvalTimers.set(timerKey, t);
@@ -1655,7 +2131,9 @@ function submitTask(cfg, { task, cwd, timeoutMs = 600000, signal, bus, sessionPa
             const g = getSingleton();
             const op = g.ops.get(opId);
             if (op?.pendingApprovals) {
-              const item = op.pendingApprovals.find((a) => a.approvalId === frame.approvalId);
+              const item = op.pendingApprovals.find(
+                (a) => a.approvalId === frame.approvalId,
+              );
               if (item && item.status === "pending") {
                 item.status = "resolved";
                 item.outcome = frame.outcome ?? "resolved";
@@ -1663,7 +2141,10 @@ function submitTask(cfg, { task, cwd, timeoutMs = 600000, signal, bus, sessionPa
               }
               const timerKey = `${opId}::${frame.approvalId}`;
               const t = approvalTimers.get(timerKey);
-              if (t) { clearTimeout(t); approvalTimers.delete(timerKey); }
+              if (t) {
+                clearTimeout(t);
+                approvalTimers.delete(timerKey);
+              }
               if (!op.pendingApprovals.some((a) => a.status === "pending")) {
                 op.approvalPending = false;
                 resumeTimeout(); // 无挂起审批：恢复计时，剩余时间续算
@@ -1674,18 +2155,25 @@ function submitTask(cfg, { task, cwd, timeoutMs = 600000, signal, bus, sessionPa
             // 宿主 backscanArgs 同款字段结构）：同样缓存参数原文（frame.data 缺失时回退帧字段）。
             cacheToolCall(opId, frame.data ?? frame);
           } else if (frame.type === "stream/error") {
-            outcome = { stopReason: "error", failure: { message: frame.error?.message || "事件流错误" } };
+            outcome = {
+              stopReason: "error",
+              failure: { message: frame.error?.message || "事件流错误" },
+            };
             return;
           }
         }
         // 取消兜底：dsh_cancel 已标记 cancelledRequested 时，若 cancel 导致 mux 断流且
         // 未收到 turn/end，把无终态收尾判为 aborted 而非 end_turn（防误报完成）
         const opNow = getSingleton().ops.get(opId);
-        if (opNow?.cancelledRequested && !outcome) outcome = { stopReason: "aborted" };
+        if (opNow?.cancelledRequested && !outcome)
+          outcome = { stopReason: "aborted" };
         // 流正常结束但无终态：视为完成（end_turn 可能已发但流先关）
         if (!outcome) outcome = { stopReason: "end_turn" };
       } catch (err) {
-        if (err?.name === "AbortError") throw Object.assign(new Error("dsh_run 已取消"), { code: "DSH_ABORTED" });
+        if (err?.name === "AbortError")
+          throw Object.assign(new Error("dsh_run 已取消"), {
+            code: "DSH_ABORTED",
+          });
         throw err;
       }
     })();
@@ -1696,7 +2184,9 @@ function submitTask(cfg, { task, cwd, timeoutMs = 600000, signal, bus, sessionPa
     let remaining = timeoutMs; // 剩余超时毫秒（初始 = 完整超时窗口）
     let startedAt = null; // 当前计时段起点（Date.now()）
     let rejectTimeout = null;
-    const timeoutPromise = new Promise((_, reject) => { rejectTimeout = reject; });
+    const timeoutPromise = new Promise((_, reject) => {
+      rejectTimeout = reject;
+    });
     const pauseTimeout = () => {
       if (!timer) return; // 未启动或已暂停：幂等
       remaining -= Date.now() - startedAt;
@@ -1705,22 +2195,39 @@ function submitTask(cfg, { task, cwd, timeoutMs = 600000, signal, bus, sessionPa
     };
     const resumeTimeout = () => {
       if (timer) return; // 运行中：幂等
-      if (remaining <= 0) { // 剩余已耗尽（暂停前已贴近超时）：立即判超时
-        rejectTimeout(Object.assign(new Error(`dsh_run 超时（${Math.round(timeoutMs / 1000)}s）`), { code: "DSH_TIMEOUT" }));
+      if (remaining <= 0) {
+        // 剩余已耗尽（暂停前已贴近超时）：立即判超时
+        rejectTimeout(
+          Object.assign(
+            new Error(`dsh_run 超时（${Math.round(timeoutMs / 1000)}s）`),
+            { code: "DSH_TIMEOUT" },
+          ),
+        );
         return;
       }
       startedAt = Date.now();
       timer = setTimeout(() => {
-        rejectTimeout(Object.assign(new Error(`dsh_run 超时（${Math.round(timeoutMs / 1000)}s）`), { code: "DSH_TIMEOUT" }));
+        rejectTimeout(
+          Object.assign(
+            new Error(`dsh_run 超时（${Math.round(timeoutMs / 1000)}s）`),
+            { code: "DSH_TIMEOUT" },
+          ),
+        );
       }, remaining);
     };
     let rejectAbort = null;
     const abortPromise = new Promise((_, reject) => {
       if (signal?.aborted) {
-        reject(Object.assign(new Error("dsh_run 已取消"), { code: "DSH_ABORTED" }));
+        reject(
+          Object.assign(new Error("dsh_run 已取消"), { code: "DSH_ABORTED" }),
+        );
         return;
       }
-      if (signal) rejectAbort = () => reject(Object.assign(new Error("dsh_run 已取消"), { code: "DSH_ABORTED" }));
+      if (signal)
+        rejectAbort = () =>
+          reject(
+            Object.assign(new Error("dsh_run 已取消"), { code: "DSH_ABORTED" }),
+          );
     });
 
     try {
@@ -1728,11 +2235,17 @@ function submitTask(cfg, { task, cwd, timeoutMs = 600000, signal, bus, sessionPa
       // promptMeta.rpcId = 会话 jsonl 的 user/message 事件 data.source.rpcId（同一 RPC id），
       // 经 ready 返回给卡片 URL：插件重启后按 sessionId+rpcId 从 jsonl 精确恢复（无需 opId 映射）
       const promptMeta = {};
-      await callUnary(base, "session.prompt", {
-        sessionId,
-        mode: "queue",
-        content: [{ type: "text", text: taskText }],
-      }, ac.signal, promptMeta);
+      await callUnary(
+        base,
+        "session.prompt",
+        {
+          sessionId,
+          mode: "queue",
+          content: [{ type: "text", text: taskText }],
+        },
+        ac.signal,
+        promptMeta,
+      );
       resolveReady({ sessionId, rpcId: promptMeta.rpcId || "" });
 
       // 4. 竞速：事件循环终态 / 超时 / 取消
@@ -1748,7 +2261,9 @@ function submitTask(cfg, { task, cwd, timeoutMs = 600000, signal, bus, sessionPa
         throw Object.assign(new Error(msg), { code: "DSH_ERROR" });
       }
       if (outcome.stopReason === "aborted") {
-        throw Object.assign(new Error("dsh_run 已取消"), { code: "DSH_ABORTED" });
+        throw Object.assign(new Error("dsh_run 已取消"), {
+          code: "DSH_ABORTED",
+        });
       }
 
       const fullOutput = collected;
@@ -1766,7 +2281,11 @@ function submitTask(cfg, { task, cwd, timeoutMs = 600000, signal, bus, sessionPa
     } catch (err) {
       // 超时/取消：通知 web host 取消该会话的任务（best effort，agent 在 web 里仍可见）
       if (err?.code === "DSH_TIMEOUT" || err?.code === "DSH_ABORTED") {
-        try { await callUnary(base, "session.cancel", { sessionId }); } catch { /* 忽略 */ }
+        try {
+          await callUnary(base, "session.cancel", { sessionId });
+        } catch {
+          /* 忽略 */
+        }
       }
       throw err;
     } finally {
@@ -1776,14 +2295,21 @@ function submitTask(cfg, { task, cwd, timeoutMs = 600000, signal, bus, sessionPa
       // v0.5.8: 任务终态清理本 op 的审批超时拒绝计时器（防泄漏）。任务已结束（正常
       // 终态/取消/超时），挂起的审批由 web host 侧会话收尾自然失效，无需再自动拒绝。
       for (const [key, t] of approvalTimers) {
-        if (key.startsWith(`${opId}::`)) { clearTimeout(t); approvalTimers.delete(key); }
+        if (key.startsWith(`${opId}::`)) {
+          clearTimeout(t);
+          approvalTimers.delete(key);
+        }
       }
       // v0.5.9: 同样清理本 op 的 tool/call 参数缓存（运行期缓存只活到任务终态，防泄漏）
       for (const key of toolCallCache.keys()) {
         if (key.startsWith(`${opId}::`)) toolCallCache.delete(key);
       }
       // v0.10.46: 删除运行期协调状态条目（op Map 退役：任务状态零存储，条目仅活到终态）
-      try { getSingleton().ops.delete(opId); } catch { /* 忽略 */ }
+      try {
+        getSingleton().ops.delete(opId);
+      } catch {
+        /* 忽略 */
+      }
     }
   })();
 
@@ -1808,53 +2334,62 @@ export const description =
   "回调压缩（PTC 式）：异步完成回调默认只带最终结论摘要（callbackMode=summary，省上下文），完整输出在卡片与 dsh web UI 可查；设 callbackMode=full 可回传全量。" +
   "审批：dsh agent 请求越界权限时任务挂起，插件经 deferred 通道发来 dsh-approval 通知（带 opId/approvalId/理由/命令参数原文），用 dsh_approve 工具应答（allowed-once/rejected）；无人应答超时自动拒绝（approvalTimeoutMs，0=禁用）；也可在 dsh Web UI 人工处理。" +
   "agentPreset：任务可指定 agent 预设模式（standard/code/cordis/minimal），缺省不指定，用 dsh 默认（dsh Web UI 可调）。" +
-    "reasoningEffort：任务可显式指定推理强度（off/high/max）；不传时不指定，由 dsh 默认处理（通常 high）。" +
-    "provider/model：任务可显式指定模型（如 provider=deepseek model=deepseek-v4-flash），" +
-    "传了则 selectModel 覆盖 dsh 默认（dsh 会把所选模型写回全局默认 settings.yaml，显式指定即成为新默认）；" +
-    "都不传则任务直接用 dsh 默认模型（settings.yaml agent-default-model），不 selectModel。" +
-    "resume：传 sessionId 复用已有会话继续任务（agent 保留上文），省上下文重建。resume 时以会话已有 cwd 为准（自动查询沿用，无需传 cwd）。";
+  "reasoningEffort：任务可显式指定推理强度（off/high/max）；不传时不指定，由 dsh 默认处理（通常 high）。" +
+  "provider/model：任务可显式指定模型（如 provider=deepseek model=deepseek-v4-flash），" +
+  "传了则 selectModel 覆盖 dsh 默认（dsh 会把所选模型写回全局默认 settings.yaml，显式指定即成为新默认）；" +
+  "都不传则任务直接用 dsh 默认模型（settings.yaml agent-default-model），不 selectModel。" +
+  "resume：传 sessionId 复用已有会话继续任务（agent 保留上文），省上下文重建。resume 时以会话已有 cwd 为准（自动查询沿用，无需传 cwd）。";
 
 export const parameters = {
   type: "object",
   properties: {
     task: {
       type: "string",
-      description: "要 dsh 执行的任务描述（会作为用户消息发给编码 agent，应包含完整上下文与明确交付物）",
+      description:
+        "要 dsh 执行的任务描述（会作为用户消息发给编码 agent，应包含完整上下文与明确交付物）",
     },
     cwd: {
       type: "string",
-      description: "dsh agent 的沙箱工作目录（bash 与文件系统工具的活动范围，绝对路径）。缺省用插件配置 defaultCwd。resume（传 sessionId）时以会话已有 cwd 为准，该值被忽略。",
+      description:
+        "dsh agent 的沙箱工作目录（bash 与文件系统工具的活动范围，绝对路径）。缺省用插件配置 defaultCwd。resume（传 sessionId）时以会话已有 cwd 为准，该值被忽略。",
     },
     timeout: {
       type: "number",
-      description: "超时秒数，缺省用插件配置 defaultTimeoutMs。长任务建议显式调大。",
+      description:
+        "超时秒数，缺省用插件配置 defaultTimeoutMs。长任务建议显式调大。",
     },
     wait: {
       type: "boolean",
-      description: "false（默认）= 异步：立即返回，进度见卡片，完成后宿主唤醒、结果后台送达；true = 同步：等任务跑完直接返回最终结果（注意：长任务会阻塞当前回合）",
+      description:
+        "false（默认）= 异步：立即返回，进度见卡片，完成后宿主唤醒、结果后台送达；true = 同步：等任务跑完直接返回最终结果（注意：长任务会阻塞当前回合）",
     },
     agentPreset: {
       type: "string",
       enum: ["standard", "code", "cordis", "minimal"],
-      description: "agent 预设模式：standard=完整编码 agent（默认）/ code=工具呈现批量调用（适合大型编码任务）/ cordis=可读写运行时的 agent / minimal=固定提示词精简 agent。缺省不传，用 dsh 默认（dsh Web UI 可调）。",
+      description:
+        "agent 预设模式：standard=完整编码 agent（默认）/ code=工具呈现批量调用（适合大型编码任务）/ cordis=可读写运行时的 agent / minimal=固定提示词精简 agent。缺省不传，用 dsh 默认（dsh Web UI 可调）。",
     },
-      reasoningEffort: {
-        type: "string",
-        enum: ["off", "high", "max"],
-        description: "推理强度（DeepSeek adapter）：off=关闭思考 / high=高 / max=最高。工具显式传时才指定（v0.9.5 起无全局配置）；不传时由 dsh 默认处理（通常 high）。",
-      },
-      provider: {
-        type: "string",
-        description: "显式指定任务 provider（如 deepseek/sensenova/agnes）。与 model 一起传时 selectModel 覆盖 dsh 默认模型；只传一个时另一侧从 settings.yaml 默认模型补齐。都不传时不 selectModel，任务用 dsh 默认。",
-      },
-      model: {
-        type: "string",
-        description: "显式指定任务模型 id（如 deepseek-v4-flash）。与 provider 一起传时 selectModel 覆盖 dsh 默认模型；都不传时不 selectModel，任务用 dsh 默认。",
-      },
-      sessionId: {
-        type: "string",
-        description: "复用已有 dsh 会话（resume）：传上次任务的 sessionId（dsh_run 回调/卡片里带，或 dsh web UI 会话列表）则在该会话上继续，agent 保留上文（省上下文重建）。resume 时以会话已有 cwd 为准（自动查询沿用，无需传 cwd）；目标会话应已空闲（上次任务已结束）。",
-      },
+    reasoningEffort: {
+      type: "string",
+      enum: ["off", "high", "max"],
+      description:
+        "推理强度（DeepSeek adapter）：off=关闭思考 / high=高 / max=最高。工具显式传时才指定（v0.9.5 起无全局配置）；不传时由 dsh 默认处理（通常 high）。",
+    },
+    provider: {
+      type: "string",
+      description:
+        "显式指定任务 provider（如 deepseek/sensenova/agnes）。与 model 一起传时 selectModel 覆盖 dsh 默认模型；只传一个时另一侧从 settings.yaml 默认模型补齐。都不传时不 selectModel，任务用 dsh 默认。",
+    },
+    model: {
+      type: "string",
+      description:
+        "显式指定任务模型 id（如 deepseek-v4-flash）。与 provider 一起传时 selectModel 覆盖 dsh 默认模型；都不传时不 selectModel，任务用 dsh 默认。",
+    },
+    sessionId: {
+      type: "string",
+      description:
+        "复用已有 dsh 会话（resume）：传上次任务的 sessionId（dsh_run 回调/卡片里带，或 dsh web UI 会话列表）则在该会话上继续，agent 保留上文（省上下文重建）。resume 时以会话已有 cwd 为准（自动查询沿用，无需传 cwd）；目标会话应已空闲（上次任务已结束）。",
+    },
   },
   required: ["task"],
 };
@@ -1863,7 +2398,8 @@ export const sessionPermission = {
   kind: "external_side_effect",
   describeSideEffect: () => ({
     kind: "external_llm_api",
-    summary: "把任务交给 DeepSeek Harness（dsh web host）执行：经 Hana 宿主 provider（sensenova/agnes/deepseek）消耗模型额度，dsh agent 可能在指定 cwd 内读写文件、运行沙箱命令",
+    summary:
+      "把任务交给 DeepSeek Harness（dsh web host）执行：经 Hana 宿主 provider（sensenova/agnes/deepseek）消耗模型额度，dsh agent 可能在指定 cwd 内读写文件、运行沙箱命令",
     ruleId: "dsh-hanako-external-llm",
   }),
 };
@@ -1886,11 +2422,15 @@ async function doExecute(input, ctx) {
 
   // resume 时 cwd 可空：会话的 cwd 已在创建时定死，复用会话沿用其已有 cwd（提交层 resume 自动查询会话已有 cwd 并显式传入）
   const cwd = String(input.cwd || resolveDefaultCwd(cfg) || "").trim();
-  if (!cwd && !input.sessionId) throw new Error("cwd 不能为空（工具参数或插件配置 defaultCwd 至少给一个）");
-  const timeoutMs = Number(input.timeout) > 0 ? Number(input.timeout) * 1000 : Number(cfg.defaultTimeoutMs || 600000);
+  if (!cwd && !input.sessionId)
+    throw new Error("cwd 不能为空（工具参数或插件配置 defaultCwd 至少给一个）");
+  const timeoutMs =
+    Number(input.timeout) > 0
+      ? Number(input.timeout) * 1000
+      : Number(cfg.defaultTimeoutMs || 600000);
 
   const taskCfg = {
-    nodePath: resolveNodePath(cfg),
+    // nodePath: resolveNodePath(cfg),
     dshPkgDir: cfg.dshPkgDir,
     dataDir: cfg.dataDir,
     reasoningEffort: cfg.reasoningEffort,
@@ -1898,16 +2438,33 @@ async function doExecute(input, ctx) {
     // v0.5.12: 审批配置收敛为唯一键 approvalTimeoutMs（超时兜底，0=禁用；manifest 默认 30000）
     approvalTimeoutMs: cfg.approvalTimeoutMs,
   };
-  const taskParams = { task: input.task, cwd, timeoutMs, signal: ctx.signal, bus: ctx.bus ?? getSingleton().bus, sessionPath: ctx.sessionPath, agentPreset: input.agentPreset, reasoningEffort: input.reasoningEffort, sessionId: input.sessionId, provider: input.provider, model: input.model };
+  const taskParams = {
+    task: input.task,
+    cwd,
+    timeoutMs,
+    signal: ctx.signal,
+    bus: ctx.bus ?? getSingleton().bus,
+    sessionPath: ctx.sessionPath,
+    agentPreset: input.agentPreset,
+    reasoningEffort: input.reasoningEffort,
+    sessionId: input.sessionId,
+    provider: input.provider,
+    model: input.model,
+  };
 
   const wait = input.wait === true;
   const { opId, promise, ready } = submitTask(taskCfg, taskParams);
   // 卡片 URL 推迟到 session.create + prompt 提交后生成：携带 sessionId+rpcId，
   // 插件重启后旧卡片按这两个键从会话 jsonl 精确恢复（op Map 清空不丢数据）
   const loc = await ready;
-  const locQuery = (loc && loc.sessionId ? `&sessionId=${encodeURIComponent(loc.sessionId)}` : "") +
+  const locQuery =
+    (loc && loc.sessionId
+      ? `&sessionId=${encodeURIComponent(loc.sessionId)}`
+      : "") +
     (loc && loc.rpcId ? `&rpcId=${encodeURIComponent(loc.rpcId)}` : "") +
-    (taskCfg.timeoutMs != null ? `&timeoutMs=${encodeURIComponent(taskCfg.timeoutMs)}` : "");
+    (taskCfg.timeoutMs != null
+      ? `&timeoutMs=${encodeURIComponent(taskCfg.timeoutMs)}`
+      : "");
   const cardBase = {
     route: `/card/op?opId=${encodeURIComponent(opId)}${locQuery}`,
     title: `dsh ${wait ? "任务" : "运行中"}`,
@@ -1919,14 +2476,22 @@ async function doExecute(input, ctx) {
   if (!wait) {
     const bus = ctx.bus ?? getSingleton().bus;
     const sessionPath = ctx.sessionPath;
-    await registerDeferredWake({ bus, sessionPath, taskId: opId, label: String(input.task ?? "").slice(0, 120) });
+    await registerDeferredWake({
+      bus,
+      sessionPath,
+      taskId: opId,
+      label: String(input.task ?? "").slice(0, 120),
+    });
 
     promise.then(
       (res) => {
         // PTC 式回调压缩：默认只带最终结论摘要（callbackMode=summary），
         // 完整输出在 op 快照（卡片）与 dsh web UI（sessionId）可查，不进 Agent 上下文。
         const outputMode = cfg.callbackMode === "full" ? "full" : "summary";
-        const payloadOutput = outputMode === "full" ? res.output : (res.summary?.text ?? res.output);
+        const payloadOutput =
+          outputMode === "full"
+            ? res.output
+            : (res.summary?.text ?? res.output);
         resolveDeferredWake({
           bus,
           taskId: opId,
@@ -1950,7 +2515,11 @@ async function doExecute(input, ctx) {
         });
       },
       (err) => {
-        failDeferredWake({ bus, taskId: opId, error: { message: String(err?.message || err).slice(0, 300) } });
+        failDeferredWake({
+          bus,
+          taskId: opId,
+          error: { message: String(err?.message || err).slice(0, 300) },
+        });
       },
     );
 
@@ -1970,7 +2539,8 @@ async function doExecute(input, ctx) {
 
   // 同步模式：等结果直接返回
   const res = await promise;
-  const note = res.stopReason === "end_turn" ? "" : `\n\n[stopReason: ${res.stopReason}]`;
+  const note =
+    res.stopReason === "end_turn" ? "" : `\n\n[stopReason: ${res.stopReason}]`;
   const text = `${res.output || "（dsh 未返回文本）"}${note}`;
   return {
     content: [{ type: "text", text }],
@@ -1996,7 +2566,10 @@ export async function execute(input, ctx) {
   try {
     return await doExecute(input, ctx);
   } catch (e) {
-    ctx.log?.error?.("[dsh-hanako] execute failed:", e?.stack || e?.message || String(e));
+    ctx.log?.error?.(
+      "[dsh-hanako] execute failed:",
+      e?.stack || e?.message || String(e),
+    );
     throw e;
   }
 }
