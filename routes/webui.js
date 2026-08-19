@@ -164,6 +164,46 @@ window.parent.postMessage({ type: "ready" }, "*");
   var api = ${JSON.stringify(api)};
   var initDiag = ${initDiag};
   var frame = document.getElementById("dsh-frame");
+  // v0.13.3: dsh WebUI 剪贴板桥——dsh 前端复制被宿主插件 iframe 权限链拦截时
+  // （navigator.clipboard 抛 NotAllowedError，跨源继承 deny，详见 CHANGELOG v0.13.2/0.13.3），
+  // dsh 页面（跨源 iframe）postMessage 到这里，壳页面经宿主 capability clipboard.writeText
+  // 写剪贴板（参照 hana-remote-dev 卡片实现；manifest ui.hostCapabilities 声明后宿主才放行）。
+  // 宿主主窗口上下文执行 navigator.clipboard，不受插件 iframe Permissions-Policy 链限制。
+  var HOST_ORIGIN = "*";
+  var cbSeq = 0;
+  function hostRequest(type, payload) {
+    var id = "dsh-cb-" + (++cbSeq);
+    return new Promise(function (resolve, reject) {
+      var timer = setTimeout(function () { cleanup(); reject(new Error("host 请求超时: " + type)); }, 8000);
+      function onMsg(e) {
+        if (e.source !== window.parent) return;
+        var m = e.data;
+        if (!m || m.id !== id || m.type !== type) return;
+        cleanup();
+        if (m.kind === "response") resolve(m.payload);
+        else if (m.kind === "error") reject(new Error((m.error && m.error.message) || "host error"));
+      }
+      function cleanup() {
+        window.removeEventListener("message", onMsg);
+        clearTimeout(timer);
+      }
+      window.addEventListener("message", onMsg);
+      window.parent.postMessage(
+        { protocol: "hana.plugin.ui", version: 1, id: id, kind: "request", type: type, payload: payload },
+        HOST_ORIGIN
+      );
+    });
+  }
+  // 监听 dsh iframe（跨源）发来的复制请求（patch 后的 dsh 前端 __dshCopyBridge）→ 宿主能力 → 回执
+  window.addEventListener("message", function (e) {
+    var m = e.data;
+    if (!m || m.__dshCopy !== true) return;
+    if (!frame || e.source !== frame.contentWindow) return;
+    var req = m;
+    hostRequest("clipboard.writeText", { text: req.text })
+      .then(function () { e.source.postMessage({ __dshCopyResult: { id: req.id, ok: true } }, "*"); })
+      .catch(function () { e.source.postMessage({ __dshCopyResult: { id: req.id, ok: false } }, "*"); });
+  });
   function attach() {
     // 就绪即停轮询：显式清掉 pending 定时器（不依赖递归链隐式断开）
     if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }

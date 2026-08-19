@@ -7,6 +7,9 @@
   "author": "Nyaser",
   "minAppVersion": "0.82.0",
   "trust": "full-access",
+  "ui": {
+    "hostCapabilities": ["clipboard.writeText"]
+  },
   "capabilities": ["resource.watch", "network.fetch"],
   "network": {
     "allowedHosts": ["127.0.0.1", "localhost"],

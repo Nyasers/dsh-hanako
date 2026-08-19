@@ -541,6 +541,7 @@ async function ensureWebHost(cfg) {
       "dsh-hana-provider",
       "dsh-hana-settings",
       "dsh-hana-logger",
+      "dsh-hana-clipboard",
     ];
     for (const pkg of packages) {
       const link = join(dshHome, "profiles", "node_modules", pkg);

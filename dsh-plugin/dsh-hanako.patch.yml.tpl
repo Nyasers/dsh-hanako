@@ -8,6 +8,9 @@
       config:
         logPath: '{{LOG_PATH}}'
 - insert:
+    - id: dsh-hana-clipboard
+      name: 'dsh-hana-clipboard'
+- insert:
     - id: dsh-hana-theme
       name: 'dsh-hana-theme'
 - insert:
