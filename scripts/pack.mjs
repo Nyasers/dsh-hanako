@@ -17,12 +17,22 @@ import fs from "fs-extra";
 
 const require = createRequire(import.meta.url);
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-// 版本单一事实源：命令行参数优先（npm run pack -- <version>），缺省读 package.json version
-const version =
-  process.argv[2] || fs.readJsonSync(join(ROOT, "package.json")).version;
+// 版本单一事实源：package.json（唯一来源，不支持命令行传版本——显式传版本容易与
+// manifest 不同步，见 v0.13.1~0.13.3 教训；版本同步用 scripts/version.mjs 自动化）
+const version = fs.readJsonSync(join(ROOT, "package.json")).version;
 if (!version)
   throw new Error(
-    "用法：node scripts/pack.mjs [version]（缺省取 package.json 的 version）",
+    "package.json version 缺失",
+  );
+
+// v0.13.4 防回归：版本一致性强制校验（v0.13.1~0.13.3 手改只 bump package.json，
+// manifest.json version 停在 0.13.0，发布包内版本与 tag 不一致）。
+// 打包版本必须同时等于 manifest.json 的 version，否则拒绝出包——
+// 版本同步是发版契约，手改漏同步在这里被拦截（建议用 scripts/version.mjs 自动化 bump）。
+const manifestVersion = fs.readJsonSync(join(ROOT, "manifest.json")).version;
+if (version !== manifestVersion)
+  throw new Error(
+    `版本不一致：package.json ${version} ≠ manifest.json ${manifestVersion}（manifest 未同步，跑 scripts/version.mjs 或手动同步后再打包）`,
   );
 
 // 1. 构建 bundle
