@@ -192,15 +192,23 @@ window.parent.postMessage({ type: "ready" }, "*");
       );
     });
   }
-  // 监听 dsh iframe（跨源）发来的复制请求（patch 后的 dsh 前端 __dshCopyBridge）→ 宿主能力 → 回执
+  // 监听 dsh iframe（跨源）发来的复制请求（dsh-hana-clipboard 桥 __dshCopyBridge）→
+  // 宿主能力 → 回执。回执优先走桥随消息传来的 MessagePort（e.ports[0]，桥端
+  // port1.onmessage 等它）；老桥/无 port 时 fallback window postMessage。
   window.addEventListener("message", function (e) {
     var m = e.data;
     if (!m || m.__dshCopy !== true) return;
     if (!frame || e.source !== frame.contentWindow) return;
     var req = m;
+    var port = e.ports && e.ports[0];
+    function ack(ok) {
+      var payload = { __dshCopyResult: { id: req.id, ok: ok } };
+      if (port) { try { port.postMessage(payload); port.close(); } catch (err) { /* port 已关闭 */ } }
+      else { try { e.source.postMessage(payload, "*"); } catch (err) { /* 忽略 */ } }
+    }
     hostRequest("clipboard.writeText", { text: req.text })
-      .then(function () { e.source.postMessage({ __dshCopyResult: { id: req.id, ok: true } }, "*"); })
-      .catch(function () { e.source.postMessage({ __dshCopyResult: { id: req.id, ok: false } }, "*"); });
+      .then(function () { ack(true); })
+      .catch(function () { ack(false); });
   });
   function attach() {
     // 就绪即停轮询：显式清掉 pending 定时器（不依赖递归链隐式断开）
