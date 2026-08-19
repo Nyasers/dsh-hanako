@@ -94,16 +94,14 @@ function buildShell({
   colorScheme,
   diagnostics,
 }) {
-  // v0.13.2：dsh WebUI iframe 权限显式声明。宿主插件 iframe 的 sandbox 仅含
-  // allow-scripts/allow-forms/allow-popups/allow-same-origin 且无 allow 属性；
-  // 内层裸嵌 iframe 未声明时继承该受限集合（downloads/modals/pointer-lock 被连坐），
-  // 且跨源（127.0.0.1:<port> ≠ 宿主 origin）时 permissions policy 默认 self
-  // 对 clipboard/fullscreen/autoplay 一律 deny。显式声明 sandbox + allow 覆盖继承。
-  const IFRAME_SANDBOX = "allow-scripts allow-same-origin allow-forms allow-popups allow-downloads allow-modals allow-pointer-lock";
-  const IFRAME_ALLOW = "clipboard-read; clipboard-write; fullscreen; autoplay";
+  // v0.13.2 曾给 dsh-frame 显式声明 sandbox/allow（allow-downloads 等 token + clipboard/fullscreen
+  // 权限），期望绕过宿主沙箱限制；实测证明跨源继承链（宿主插件 iframe 与主窗口跨源且无 allow）
+  // 下内层声明无法生效，属无效方案，v0.13.3 整体回滚为裸嵌（见 CHANGELOG）。
+  // 剪贴板问题的正规解法是 dsh-hana-clipboard 插件（tapIndex 注入桥 → 宿主 capability）
+  // + 下方壳页面桥（hostRequest + __dshCopy 监听）。
   const iframe = ready
-    ? `<iframe id="dsh-frame" src="http://127.0.0.1:${port}/" sandbox="${IFRAME_SANDBOX}" allow="${IFRAME_ALLOW}"></iframe>`
-    : `<iframe id="dsh-frame" sandbox="${IFRAME_SANDBOX}" allow="${IFRAME_ALLOW}"></iframe>`;
+    ? `<iframe id="dsh-frame" src="http://127.0.0.1:${port}/"></iframe>`
+    : `<iframe id="dsh-frame"></iframe>`;
   // 嵌入首帧自检 JSON：把 </ 转义成 <\/，防诊断文本（路径/stderr）里的 </script> 提前闭合脚本
   const initDiag = diagnostics
     ? JSON.stringify(diagnostics).replace(/<\//g, "<\\/")
