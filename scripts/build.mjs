@@ -61,12 +61,30 @@ const entries = Object.fromEntries(
   entryNames.map((n) => [n, join(ROOT, `${n}.js`)]),
 );
 
-// 构建前收集各入口源码的 file:// URL —— 构建后产物里出现的这些字面量要替换回
-// import.meta.url（rspack 会把 import.meta.url 静态化为源码绝对路径，分发到对方机器
-// 后路径失效；替换后 bundle 保留运行时语义）。
-const staticUrlToMeta = new Map(
-  entryNames.map((n) => [pathToFileURL(join(ROOT, `${n}.js`)).href, n]),
-);
+// 构建前收集会被 rspack 内联进 bundle 的全部源码 file:// URL（entry + tools/lib/* 等
+// 相对 import 的内联模块），构建后产物里出现的这些字面量一律替换回 import.meta.url：
+// rspack 会把 import.meta.url 静态化为「构建机」上的源码绝对路径，分发到对方机器后
+// 路径失效。v0.13.0 lib 提取回归：tools/lib/state.js 的路径未被替换（此前仅收集 entry
+// URL），CI 出包后产物残留 /home/runner/... 构建机路径，Windows 上模块顶层
+// fileURLToPath 直接抛错、能力层挂载不执行。替换后 import.meta.url 指向 bundle 自身
+// 位置（dist/tools/xxx.js），向上找 manifest.json 的定位逻辑从 tools/ 一步即达插件根，
+// 语义不变。
+const staticUrlToMeta = new Map();
+(function collectSource(urlRoot) {
+  for (const name of fs.readdirSync(urlRoot)) {
+    if (
+      name === "dist" ||
+      name === "node_modules" ||
+      name === "releases" ||
+      name === "_tmp" ||
+      name === ".git"
+    )
+      continue;
+    const p = join(urlRoot, name);
+    if (fs.statSync(p).isDirectory()) collectSource(p);
+    else if (p.endsWith(".js")) staticUrlToMeta.set(pathToFileURL(p).href, p);
+  }
+})(ROOT);
 
 const compiler = rspack({
   name: "dsh-hanako",
@@ -133,5 +151,34 @@ function walk(dir) {
   }
 }
 walk(join(ROOT, "dist"));
+
+// 构建后强制校验：产物中不得残留任何带引号的 file:// 字面量（rspack 把内联模块的
+// import.meta.url 静态化为构建机绝对路径即泄漏成此形态，分发后路径失效）。
+// v0.13.1 回归防护：收集范围再全也有漏网可能，这里兜底——CI 出包残留即构建失败。
+function assertNoStaticFileUrl(root) {
+  const offenders = [];
+  const scan = (dir) => {
+    for (const name of fs.readdirSync(dir)) {
+      const p = join(dir, name);
+      if (fs.statSync(p).isDirectory()) scan(p);
+      else if (p.endsWith(".js")) {
+        const code = fs.readFileSync(p, "utf8");
+        for (const m of code.matchAll(/["']file:\/\/[^"']+["']/g)) {
+          offenders.push(`${p}: ${m[0].slice(0, 120)}`);
+        }
+      }
+    }
+  };
+  scan(root);
+  if (offenders.length) {
+    throw new Error(
+      `构建产物残留静态 file:// 字面量（构建机路径泄漏）：\n${offenders
+        .slice(0, 10)
+        .join("\n")}`,
+    );
+  }
+  console.log("assert no static file:// literal -> ok");
+}
+assertNoStaticFileUrl(join(ROOT, "dist"));
 
 console.log("build done ->", join(ROOT, "dist"));
