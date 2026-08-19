@@ -10,17 +10,16 @@
 function hostBase() {
   const g = globalThis.__dshHanako;
   const web = g?.web;
-  if (!web?.ready || !web.port) throw new Error("dsh web host 未就绪（请先通过 dsh_run 提交任务拉起）");
+  if (!web?.ready || !web.port)
+    throw new Error("dsh web host 未就绪（请先通过 dsh_run 提交任务拉起）");
   return `http://127.0.0.1:${web.port}`;
 }
 
 export const name = "dsh_search";
 
 export const description =
-  "跨会话搜索历史会话内容（session.search RPC）：给 query 关键词（1~500 字符，自动 trim），" +
-  "返回命中的历史会话（sessionId + 内容摘要 snippet ≤240 字符，最多 20 条 + hasMore 指示是否还有更多）。" +
-  "命中后可用 dsh_run 的 sessionId 参数 resume 该会话继续（上下文继承，知识复用）。" +
-  "只读查询，不改变任何会话。";
+  "跨会话搜索 dsh 历史会话内容（只读）：给 query 关键词，返回命中的 sessionId + 摘要 snippet，命中后可用 dsh_run 的 sessionId resume 继续。" +
+  "完整调用手册见 SKILL: skills/dsh-search/SKILL.md";
 
 export const parameters = {
   type: "object",
@@ -37,7 +36,8 @@ export const sessionPermission = {
   kind: "external_side_effect",
   describeSideEffect: () => ({
     kind: "external_api",
-    summary: "向 dsh web host 发起只读的跨会话内容搜索（session.search），查询 dsh 历史会话，不改变任何会话",
+    summary:
+      "向 dsh web host 发起只读的跨会话内容搜索（session.search），查询 dsh 历史会话，不改变任何会话",
     ruleId: "dsh-hanako-search",
   }),
 };
@@ -45,7 +45,8 @@ export const sessionPermission = {
 async function doExecute(input, ctx) {
   const query = String(input.query ?? "").trim();
   if (!query) throw new Error("query 必填（1~500 字符）");
-  if (query.length > 500) throw new Error(`query 过长（${query.length} 字符，最多 500）`);
+  if (query.length > 500)
+    throw new Error(`query 过长（${query.length} 字符，最多 500）`);
   if (query.includes("\0")) throw new Error("query 不得包含 NUL 字符");
 
   const base = hostBase();
@@ -62,10 +63,13 @@ async function doExecute(input, ctx) {
   });
   if (!res.ok) throw new Error(`/api/session.search HTTP ${res.status}`);
   const full = await res.json();
-  if (!full || full.rpcId !== rpcId) throw new Error("/api/session.search rpcId 不匹配");
+  if (!full || full.rpcId !== rpcId)
+    throw new Error("/api/session.search rpcId 不匹配");
   if (!full.result?.ok) {
     const e = full.result?.error || {};
-    throw new Error(`dsh session.search 失败：${e.code || "unknown"} ${e.message || ""}`);
+    throw new Error(
+      `dsh session.search 失败：${e.code || "unknown"} ${e.message || ""}`,
+    );
   }
 
   const value = full.result.value || {};
@@ -85,7 +89,8 @@ async function doExecute(input, ctx) {
     const sessionId = String(item.sessionId ?? "").trim();
     let snippet = String(item.snippet ?? "");
     const chars = [...snippet];
-    if (chars.length > maxSnippet) snippet = chars.slice(0, maxSnippet).join("") + "…";
+    if (chars.length > maxSnippet)
+      snippet = chars.slice(0, maxSnippet).join("") + "…";
     return `- ${sessionId}\n  ${snippet}`;
   });
 
@@ -107,7 +112,10 @@ export async function execute(input, ctx) {
   try {
     return await doExecute(input, ctx);
   } catch (e) {
-    ctx.log?.error?.("[dsh-hanako] dsh_search failed:", e?.stack || e?.message || String(e));
+    ctx.log?.error?.(
+      "[dsh-hanako] dsh_search failed:",
+      e?.stack || e?.message || String(e),
+    );
     throw e;
   }
 }

@@ -8,6 +8,9 @@
 //   POST /webui/start        手动启动 web host（process 卡片「手动启动」按钮；ready/starting/触发启动三态）
 //   POST /webui/install-deps 自动安装 dsh 依赖（deps 卡片「安装依赖」按钮；installing/触发安装）
 //   GET  /webui/verify-deps  运行级依赖检测（node cliBin --version；进标签页自动一次 + 手动「检测依赖」按钮）
+//   GET  /webui/check-update 版本检查（v0.13.0: deps 卡片「检查更新」按钮；经宿主能力层 g.checkDshUpdate）
+//   POST /webui/update-dsh   更新 DSH（v0.13.0: deps 卡片「更新 DSH」按钮；经宿主能力层 g.updateDsh，
+//                            异步触发，更新会重启 web host、正在执行的任务中断）
 //
 // 机制：与 routes/card.js 同构——宿主把 app 挂在 /api/plugins/<pluginId> 命名空间下，
 // 这里注册相对路径。渲染前服务端用 Node fetch 探测 dsh web host 的 /api/host.describe
@@ -50,7 +53,9 @@ async function probeHost(port, log) {
     });
     return res.ok;
   } catch (e) {
-    log?.warn?.(`[dsh-hanako] probeHost 失败（port ${port}）：${e?.message || e}`);
+    log?.warn?.(
+      `[dsh-hanako] probeHost 失败（port ${port}）：${e?.message || e}`,
+    );
     return false;
   }
 }
@@ -64,7 +69,10 @@ function readDiagnostics(ctx, cfg, port) {
     try {
       return g.collectDiagnostics({ dataDir: ctx?.dataDir, webPort: port });
     } catch (e) {
-      ctx.log?.warn?.("[dsh-hanako] 收集连接自检失败:", e?.message || String(e));
+      ctx.log?.warn?.(
+        "[dsh-hanako] 收集连接自检失败:",
+        e?.message || String(e),
+      );
       return null;
     }
   }
@@ -77,12 +85,22 @@ function readDiagnostics(ctx, cfg, port) {
  * 的 color-scheme，因此 dsh 会跟随宿主主题；dsh 内显式选了 light/dark 则不受影响。
  * diagnostics：未就绪时服务端收集的首帧自检数据（JSON 对象或 null）；浏览器端
  * 渲染进提示区，并在每次 health 轮询未就绪时用新 diagnostics 刷新。 */
-function buildShell({ ready, hcLink, theme, api, port, colorScheme, diagnostics }) {
+function buildShell({
+  ready,
+  hcLink,
+  theme,
+  api,
+  port,
+  colorScheme,
+  diagnostics,
+}) {
   const iframe = ready
     ? `<iframe id="dsh-frame" src="http://127.0.0.1:${port}/"></iframe>`
     : `<iframe id="dsh-frame"></iframe>`;
   // 嵌入首帧自检 JSON：把 </ 转义成 <\/，防诊断文本（路径/stderr）里的 </script> 提前闭合脚本
-  const initDiag = diagnostics ? JSON.stringify(diagnostics).replace(/<\//g, "<\\/") : "null";
+  const initDiag = diagnostics
+    ? JSON.stringify(diagnostics).replace(/<\//g, "<\\/")
+    : "null";
   return `<!DOCTYPE html>
 <html lang="zh">
 <head>
@@ -175,8 +193,10 @@ window.parent.postMessage({ type: "ready" }, "*");
         + '<span class="diag-mark">' + mark + '</span>'
         + '<div class="diag-body">'
         + '<div class="diag-name">' + escHtml(d.name) + '</div>'
+        + (d.key === "deps" && d.version ? '<div class="diag-detail">' + escHtml(versionLine(d)) + '</div>' : "") // v0.13.0: deps 版本行（当前/最新/可更新）
         + (d.detail ? '<div class="diag-detail">' + escHtml(d.detail) + '</div>' : "")
         + (d.key === "deps" && d.installing ? progressHtml(d) : "") // v0.8.8: 安装实时进度
+        + (d.key === "deps" && d.updating ? updateProgressHtml(d) : "") // v0.13.0: 更新 DSH 进度/结果
         + (d.key === "process" && d.logPath ? '<div class="diag-logpath">本次会话日志：' + escHtml(d.logPath) + '</div>' : "") // v0.10.8: 时间戳会话文件路径
         + (d.fix ? '<div class="diag-fix">修复：' + escHtml(d.fix) + '</div>' : "")
         + actionButtonHtml(d)
@@ -226,6 +246,16 @@ window.parent.postMessage({ type: "ready" }, "*");
           html += '<button type="button" class="diag-btn" data-action="verify-deps" data-check="deps"'
             + (d.verifyRunning ? " disabled" : "") + '>' + (d.verifyRunning ? "检测中…" : "检测依赖") + '</button>';
         }
+        // v0.13.0: 「检查更新」常驻（检查中/更新中/安装中禁用）；「更新 DSH」仅可更新时出现
+        // （更新中禁用显示「更新中…」）。两者共用 deps 卡片的 diag-btn-msg 提示区。
+        if (!d.installing) {
+          html += '<button type="button" class="diag-btn" data-action="check-update" data-check="deps"'
+            + (d.checking || d.updating ? " disabled" : "") + '>' + (d.checking ? "检查中…" : "检查更新") + '</button>';
+        }
+        if (d.check && d.check.updateAvailable && !d.installing) {
+          html += '<button type="button" class="diag-btn" data-action="update-dsh" data-check="deps"'
+            + (d.updating ? " disabled" : "") + '>' + (d.updating ? "更新中…" : "更新 DSH") + '</button>';
+        }
       }
       return html ? html + '<span class="diag-btn-msg"></span>' : "";
     }
@@ -258,6 +288,27 @@ window.parent.postMessage({ type: "ready" }, "*");
   function progressHtml(d) {
     var html = '<pre class="diag-progress">' + escHtml(d.installLog || "正在准备…") + '</pre>';
     if (d.installAt) html += '<div class="diag-progress-time">更新于 ' + escHtml(fmtTime(d.installAt)) + '</div>';
+    return html;
+  }
+  // v0.13.0: deps 版本行（当前版本 / 最新版本 / 可更新状态，数据源 = 诊断 version/check 字段）
+  function versionLine(d) {
+    var s = "当前版本 " + (d.version ? "v" + d.version : "未安装");
+    var c = d.check;
+    if (c && c.latest) {
+      s += " · 最新 v" + c.latest;
+      s += c.updateAvailable ? "（可更新）" : "（已最新）";
+    }
+    if (c && c.error) s += " · 检查失败：" + c.error;
+    return s;
+  }
+  // v0.13.0: 更新 DSH 进度/结果块（update-result.json 内容，随 3s 轮询刷新）
+  function updateProgressHtml(d) {
+    var r = d.updateResult || null;
+    var text = "正在更新 DSH…（将重启 DSHana，正在执行的任务会中断）";
+    if (r && r.state === "done") text = "更新完成 v" + (r.version || "?") + (r.error ? "（web host 重启失败：" + r.error + "）" : "") + "，请重启 DSHana 使完全生效";
+    else if (r && r.state === "error") text = "更新失败：" + (r.error || "未知错误");
+    var html = '<pre class="diag-progress">' + escHtml(text) + '</pre>';
+    if (r && r.at) html += '<div class="diag-progress-time">更新于 ' + escHtml(fmtTime(r.at)) + '</div>';
     return html;
   }
   function setBtnMsg(check, text) {
@@ -331,6 +382,18 @@ window.parent.postMessage({ type: "ready" }, "*");
         verifyBtn.disabled = false;
         verifyBtn.textContent = "检测依赖";
       }
+    }
+    // v0.13.0: 「检查更新」/「更新 DSH」按钮状态同步（以诊断 checking/updating 为准；
+    // 按钮处理器自身已做乐观禁用，这里兜底页面刷新/轮询后状态一致）
+    var checkBtn = listBtn("deps", "check-update");
+    if (checkBtn && deps) {
+      checkBtn.disabled = deps.checking || deps.updating || deps.installing;
+      checkBtn.textContent = deps.checking ? "检查中…" : "检查更新";
+    }
+    var updBtn = listBtn("deps", "update-dsh");
+    if (updBtn && deps) {
+      updBtn.disabled = deps.updating;
+      updBtn.textContent = deps.updating ? "更新中…" : "更新 DSH";
     }
   }
   function startWebHost() {
@@ -435,6 +498,66 @@ window.parent.postMessage({ type: "ready" }, "*");
   function verifyDeps() {
     runVerifyDeps(listBtn("deps", "verify-deps"));
   }
+  // v0.13.0: 版本检查（GET /webui/check-update，只读）——「检查更新」按钮。服务端
+  // await 检查（npm view ≤~15s，官方源失败自动重试 npmmirror），结果缓存进 g.checkResult
+  // 并写 check-result.json；拿到 ok 响应后触发一次 health 读取诊断刷新 deps 卡片
+  // （版本行显示最新版本/可更新状态，update-dsh 按钮按需出现）。
+  function checkUpdate() {
+    var btn = listBtn("deps", "check-update");
+    if (!btn || btn.disabled) return; // 幂等：已在检查中
+    btn.disabled = true;
+    btn.textContent = "检查中…";
+    setBtnMsg("deps", "");
+    fetch(api + "/webui/check-update", {
+      headers: surfaceHeaders(),
+      signal: AbortSignal.timeout(20000),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d && d.ok) {
+          // 结果已写入服务端 g.checkResult：刷新一次诊断（版本行/按钮状态进 deps 卡片）
+          refreshDiag();
+          return;
+        }
+        var b = listBtn("deps", "check-update");
+        if (b) { b.disabled = false; b.textContent = "检查更新"; }
+        setBtnMsg("deps", d && d.error ? d.error : "检查请求失败，请稍后重试");
+      })
+      .catch(function () {
+        var b = listBtn("deps", "check-update");
+        if (b) { b.disabled = false; b.textContent = "检查更新"; }
+        setBtnMsg("deps", "检查请求超时或网络错误，请重试");
+      });
+  }
+  // v0.13.0: 更新 DSH（POST /webui/update-dsh）——「更新 DSH」按钮。点击前 confirm 提示
+  // （更新会重启 web host，正在执行的任务中断）；触发后服务端异步执行（停 web host →
+  // npm i latest → 起 web host），页面靠 3s 轮询诊断刷新 updateProgressHtml（updating/
+  // done/error）与按钮状态。
+  function updateDsh() {
+    var btn = listBtn("deps", "update-dsh");
+    if (!btn || btn.disabled) return; // 幂等：已在更新中
+    if (!window.confirm("更新将重启 DSHana，正在执行的任务会中断，确定继续？")) return;
+    btn.disabled = true;
+    btn.textContent = "更新中…";
+    setBtnMsg("deps", "");
+    fetch(api + "/webui/update-dsh", {
+      method: "POST",
+      headers: surfaceHeaders(),
+      signal: AbortSignal.timeout(5000),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d && d.ok) { refreshDiag(); return; } // updating：保持禁用，轮询诊断刷新
+        var b = listBtn("deps", "update-dsh");
+        if (b) { b.disabled = false; b.textContent = "更新 DSH"; }
+        setBtnMsg("deps", d && d.error ? d.error : "更新请求失败，请稍后重试");
+      })
+      .catch(function () {
+        var b = listBtn("deps", "update-dsh");
+        if (b) { b.disabled = false; b.textContent = "更新 DSH"; }
+        setBtnMsg("deps", "更新请求超时或网络错误，请重试");
+      });
+  }
   // 进标签页自动检测一次（仅依赖已装时；不随轮询重复——只在这里调一次）
   function autoVerifyDeps() {
     var deps = checkByKey(initDiag, "deps");
@@ -450,6 +573,8 @@ window.parent.postMessage({ type: "ready" }, "*");
     if (action === "start") startWebHost();
     else if (action === "install-deps") installDeps();
     else if (action === "verify-deps") verifyDeps();
+    else if (action === "check-update") checkUpdate();
+    else if (action === "update-dsh") updateDsh();
   }
   var pollTimer = null;
   function poll() {
@@ -519,7 +644,8 @@ window.parent.postMessage({ type: "ready" }, "*");
 export default function registerWebuiRoutes(app, ctx) {
   const base = "/api/plugins/" + ctx.pluginId;
   // 端口：manifest 默认 + 用户配置合并后的 ctx.config；非对象容错回退 3080
-  const cfg = ctx && typeof ctx.config === "object" && ctx.config ? ctx.config : {};
+  const cfg =
+    ctx && typeof ctx.config === "object" && ctx.config ? ctx.config : {};
   const port = Number(cfg.webPort) || 3080;
 
   // 插件页：服务端先探测 host，就绪直接渲染 iframe；未就绪给提示（含自检诊断）+ 浏览器端轮询
@@ -533,7 +659,15 @@ export default function registerWebuiRoutes(app, ctx) {
     // 未就绪时服务端同步收集一次自检（首屏即渲染，轮询再刷新）；就绪不收集保持轻量
     const diagnostics = ready ? null : readDiagnostics(ctx, cfg, port);
     return c.html(
-      buildShell({ ready, hcLink, theme: th, api: base, port, colorScheme, diagnostics })
+      buildShell({
+        ready,
+        hcLink,
+        theme: th,
+        api: base,
+        port,
+        colorScheme,
+        diagnostics,
+      }),
     );
   });
 
@@ -561,10 +695,15 @@ export default function registerWebuiRoutes(app, ctx) {
       // 异步触发（startWebHostFromPlugin 内部已 try/catch 记 webLastError 返回布尔；
       // 这里再 .catch 兜底——路由不等待就绪、不抛异常）。dataDir 缺省用单例记录值，
       // 避免路由 ctx 无 dataDir 时误落 PLUGIN_ROOT/data。
-      Promise.resolve(g.startWebHost(ctx.config, ctx.dataDir || g.dataDir)).catch(() => {});
+      Promise.resolve(
+        g.startWebHost(ctx.config, ctx.dataDir || g.dataDir),
+      ).catch(() => {});
       return c.json({ ok: true, state: "starting" });
     } catch (e) {
-      ctx.log?.warn?.("[dsh-hanako] 手动启动 web host 失败:", e?.message || String(e));
+      ctx.log?.warn?.(
+        "[dsh-hanako] 手动启动 web host 失败:",
+        e?.message || String(e),
+      );
       return c.json({ ok: false, error: "启动请求失败，请稍后重试" });
     }
   });
@@ -582,10 +721,15 @@ export default function registerWebuiRoutes(app, ctx) {
       if (g.depsInstalling) return c.json({ ok: true, state: "installing" });
       // 异步触发（installDepsFromPlugin 内部已 try/catch 记 depsInstallError 返回结果；
       // 这里再 .catch 兜底——路由不等待完成、不抛异常）。dataDir 缺省用单例记录值。
-      Promise.resolve(g.installDeps(ctx.config, ctx.dataDir || g.dataDir)).catch(() => {});
+      Promise.resolve(
+        g.installDeps(ctx.config, ctx.dataDir || g.dataDir),
+      ).catch(() => {});
       return c.json({ ok: true, state: "installing" });
     } catch (e) {
-      ctx.log?.warn?.("[dsh-hanako] 自动安装依赖失败:", e?.message || String(e));
+      ctx.log?.warn?.(
+        "[dsh-hanako] 自动安装依赖失败:",
+        e?.message || String(e),
+      );
       return c.json({ ok: false, error: "安装请求失败，请稍后重试" });
     }
   });
@@ -601,12 +745,79 @@ export default function registerWebuiRoutes(app, ctx) {
         return c.json({ ok: false, error: "插件工具模块未加载，稍后重试" });
       }
       if (g.depsSmoke?.running) return c.json({ ok: true, running: true });
-      const smoke = await g.verifyDeps({ dataDir: ctx.dataDir || g.dataDir, webPort: port });
-      return c.json({ ok: true, running: false, verified: smoke.ok, version: smoke.version, error: smoke.error || null });
+      const smoke = await g.verifyDeps({
+        dataDir: ctx.dataDir || g.dataDir,
+        webPort: port,
+      });
+      return c.json({
+        ok: true,
+        running: false,
+        verified: smoke.ok,
+        version: smoke.version,
+        error: smoke.error || null,
+      });
     } catch (e) {
-      ctx.log?.warn?.("[dsh-hanako] 运行级依赖检测失败:", e?.message || String(e));
+      ctx.log?.warn?.(
+        "[dsh-hanako] 运行级依赖检测失败:",
+        e?.message || String(e),
+      );
       return c.json({ ok: false, error: "检测请求失败，请稍后重试" });
     }
   });
 
+  // 版本检查（v0.13.0: deps 卡片「检查更新」按钮 + Agent 工具 dsh_update 共用能力层；
+  // GET 只读）：检查中（g.checking）→ {ok:true,running:true}；否则 await
+  // g.checkDshUpdate(cfg)（npm view ≤~15s，官方源失败重试 npmmirror）→
+  // {ok:true, localVersion, latestVersion, updateAvailable, error?}。结果缓存进
+  // g.checkResult 并写 check-result.json，前端随后经 health 读取诊断刷新 deps 卡片。
+  // 单例缺失/无函数/异常一律容错回 {ok:false}，本路由不抛异常。
+  app.get("/webui/check-update", async (c) => {
+    const g = globalThis.__dshHanako;
+    try {
+      if (!g || typeof g.checkDshUpdate !== "function") {
+        return c.json({ ok: false, error: "插件工具模块未加载，稍后重试" });
+      }
+      if (g.checking) return c.json({ ok: true, running: true });
+      const r = await g.checkDshUpdate({
+        dataDir: ctx.dataDir || g.dataDir,
+        webPort: port,
+      });
+      return c.json({
+        ok: true,
+        running: false,
+        localVersion: r.localVersion,
+        latestVersion: r.latestVersion,
+        updateAvailable: r.updateAvailable,
+        error: r.error || null,
+      });
+    } catch (e) {
+      ctx.log?.warn?.("[dsh-hanako] 版本检查失败:", e?.message || String(e));
+      return c.json({ ok: false, error: "版本检查失败，请稍后重试" });
+    }
+  });
+
+  // 更新 DSH（v0.13.0: deps 卡片「更新 DSH」按钮 + Agent 工具 dsh_update 共用能力层）：
+  // 更新中（g.updating）→ {ok:true,state:"updating"}；否则异步触发 g.updateDsh(cfg)
+  // （不 await 其完成——npm i 可能耗时数分钟，前端轮询 health 诊断/设置页
+  // update-result.json 看进度）→ {ok:true,state:"updating"}。更新会重启 web host，
+  // 正在执行的 dsh 任务会中断（前端按钮已有确认文案）。单例缺失/无函数/异常一律容错
+  // 回 {ok:false}，本路由不抛异常。
+  app.post("/webui/update-dsh", (c) => {
+    const g = globalThis.__dshHanako;
+    try {
+      if (!g || typeof g.updateDsh !== "function") {
+        return c.json({ ok: false, error: "插件工具模块未加载，稍后重试" });
+      }
+      if (g.updating) return c.json({ ok: true, state: "updating" });
+      // 异步触发（updateDsh 内部已 try/catch 写 update-result.json 返回结果；
+      // 这里再 .catch 兜底——路由不等待完成、不抛异常）。dataDir 缺省用单例记录值。
+      Promise.resolve(
+        g.updateDsh({ dataDir: ctx.dataDir || g.dataDir, webPort: port }),
+      ).catch(() => {});
+      return c.json({ ok: true, state: "updating" });
+    } catch (e) {
+      ctx.log?.warn?.("[dsh-hanako] 更新 DSH 失败:", e?.message || String(e));
+      return c.json({ ok: false, error: "更新请求失败，请稍后重试" });
+    }
+  });
 }

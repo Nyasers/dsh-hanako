@@ -6,11 +6,11 @@
 
 1. **拖入 zip 包**：把插件的 release zip（`dsh-hanako-v<version>.zip`，从 GitHub Releases 下载）拖进 Hana 插件安装界面（或解压到插件目录），插件即完成装载
 
-2. **打开 DSHana 标签页自装**：插件加载后自动拉起 web host，若未就绪则显示诊断列表。点击 deps 卡片的「安装依赖」——页面自动完成部署（复制 package.json、创建 node 代理脚本、`npm i @deepseek-ai/dsh`、运行级验证），无需 Agent 介入（v0.8.6+）。完成后去 t2 点「手动启动 web host」即可。
+2. **打开 DSHana 标签页自装**：插件加载后自动拉起 web host，若未就绪则显示诊断列表。点击 deps 卡片的「安装依赖」——页面自动完成部署（复制 package.json、创建 node 代理脚本、`npm i @deepseek-ai/dsh`、运行级验证），无需 Agent 介入（v0.8.6+）。完成后去 t2 点「手动启动 web host」即可。**也可让 Agent 调 `dsh_install` 工具**（异步默认，渲染安装卡片显示实时 npm 日志，安装完成自动拉起 web host；`dsh_install(action="verify")` 只检测依赖完整性）。
 
 3. **验证**：装完让 Agent 跑一次 `dsh_run` 最小试任务验证，卡片不报 web host 错误即安装成功。
 
-**无需配置 API Key / 模型**：dsh 凭据由 dsh-hana-provider 插件直读 Hana 宿主 `provider-catalog.json`，模型跟随宿主 `models.json`。任务模型默认 = dsh 默认模型（`settings.yaml` 的 `agent-default-model`），可在 **dsh 设置页「默认模型」配置块**直接配置（Provider/模型/思考强度三级联动，保存即生效，见下文），`dsh_run` 工具参数 `provider` / `model` / `reasoningEffort` 可显式覆盖。
+**无需配置 API Key / 模型**：dsh 凭据由 dsh-hana-provider 插件直读 Hana 宿主 `provider-catalog.json`，模型跟随宿主 `models.json`。任务模型默认 = dsh 默认模型（`settings.yaml` 的 `agent-default-model`），可在 **dsh 设置页「DSHana 设置」分页**直接配置（页头下方「默认模型」卡片：Provider/模型/思考强度三级联动，保存即生效，见下文）；同分页的 **「DSH 版本」卡片**提供 `@deepseek-ai/dsh` 版本检查与一键更新（检查/更新走宿主能力层，Agent 工具 `dsh_update` 也可用）。`dsh_run` 工具参数 `provider` / `model` / `reasoningEffort` 可显式覆盖。
 
 安装遇到问题，把报错丢给 Agent 即可（技能里有完整排错表）。
 

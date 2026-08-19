@@ -45,10 +45,13 @@ if (envDir) {
 // 具名导出兜底：ESM 包直接取 rspack；CJS 包经 import() interop 后 default 内取
 const rspack = rspackPkg.rspack ?? rspackPkg.default?.rspack;
 
-// 入口：生命周期 index.js + 5 个工具文件（宿主按 manifest 路径加载，保持子目录结构）
+// 入口：生命周期 index.js + 7 个工具文件（宿主按 manifest 路径加载，保持子目录结构；
+// v0.13.0 lib 提取：tools/lib/*.js 经相对 import 被 rspack 内联进各入口 bundle）
 const entryNames = [
   "index",
   "tools/dsh-run",
+  "tools/dsh-update",
+  "tools/dsh-install",
   "tools/dsh-approve",
   "tools/dsh-cancel",
   "tools/dsh-ops",

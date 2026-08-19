@@ -18,5 +18,10 @@
         catalogPath: '{{CATALOG_PATH}}'
         dshPkgDir: '{{DSH_PKG_DIR}}'
 - insert:
-    - id: dsh-hana-default-model
-      name: 'dsh-hana-default-model'
+    - id: dsh-hana-settings
+      name: 'dsh-hana-settings'
+      config:
+        dshPkgDir: '{{DSH_PKG_DIR}}'
+        npmCliPath: '{{NPM_CLI_PATH}}'
+        electronNode: '{{ELECTRON_NODE}}'
+        dataDir: '{{DATA_DIR}}'

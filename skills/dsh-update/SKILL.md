@@ -1,0 +1,52 @@
+---
+name: dsh-update
+description: "dsh_update 工具手册（源码 tools/dsh-update.js + tools/dsh-run.js 能力层核对）。触发场景：检查 @deepseek-ai/dsh 版本（action=check，本地 + 远端 + 可更新判断）、更新 DSH（action=update，停 web host → npm i latest → 起 web host，正在执行的任务会中断）、更新执行中重复调用返回状态、wait=true 同步等待、dsh 设置页「DSH 版本块」/ DSHana 标签页 deps 卡片与工具共用同一宿主能力层（单一事实源）。需要检查或更新 dsh 前先读本技能。"
+---
+
+# dsh_update 工具手册
+
+检查或更新 DeepSeek Harness（dsh）版本。权限 `external_side_effect`（external_api）。实现 `tools/dsh-update.js`，宿主能力层 `tools/dsh-run.js`（`g.checkDshUpdate` / `g.updateDsh`，挂 globalThis 单例调用，不静态 import）。
+
+## 参数契约
+
+`required: []`（全部可选，默认 `action=check`）：
+
+| 参数 | 类型 | 语义 |
+|---|---|---|
+| `action` | string | `check`（默认）= 只查版本，只读不改动任何东西；`update` = 执行完整更新（停 web host → npm i @deepseek-ai/dsh latest → 起 web host，**正在执行的 dsh 任务会中断**） |
+| `wait` | boolean | `false`（默认）= 异步：update 立即返回，更新在后台执行，完成后宿主唤醒、结果后台送达；`true` = 同步：等更新跑完直接返回最终结果（npm i 可能耗时数分钟，阻塞当前回合） |
+
+## 行为（源码核实）
+
+**check**：本地版本（运行级验证 verifyDepsSmoke 缓存优先，无则直读 dsh-pkg package.json）+ 远端版本（`spawn npm view @deepseek-ai/dsh version`，官方源失败自动重试 `--registry=https://registry.npmmirror.com`，15s 超时 kill）→ zero-dep semver 比较（major.minor.patch 三段数字逐个比，预发布 `-rc.x` 视为低于同版本正式版）→ `{ localVersion, latestVersion, updateAvailable, error? }`。结果写 `<dataDir>/check-result.json` 并缓存 `g.checkResult`（DSHana 标签页/设置页读同一份）。
+
+**update**：① 写 `<dataDir>/update-result.json { state:'updating', at }` → ② 停 web host（closeProcess，Windows 文件锁前提：npm i 要替换被 web host 占用的 dsh 包文件）→ ③ `installDepsFromPlugin`（npm i @deepseek-ai/dsh latest，官方源失败重试 npmmirror）→ ④ 起 web host（ensureWebHost，失败不阻断结果上报，记 error 字段）→ ⑤ 读新版本 → 写 `{ state:'done', version, at }`；任一步失败写 `{ state:'error', error, at }`（截断 ≤1500）→ ⑥ 清 update-request.json（写回 idle 防重复触发）。**并发防护**：更新执行中（`g.updating`）重复调用返回 `{ ok:false, state:'updating' }` 不重复执行；检查（`g.checking`）同理。
+
+**异步模式**：`update` 默认异步——立即返回「已后台执行」，经宿主 deferred 通道注册唤醒（taskId `dup_*`），完成后后台消息带回 `{ tool:'dsh_update', action:'update', status:'done', version }`（失败带 error）。
+
+## 返回
+
+- **check**：`DSH 版本检查：本地 vX / 已是最新版本（vY）/ 可更新 / 未安装 / 远端查询失败…`，details `{ dsh: { action:'check', localVersion, latestVersion, updateAvailable, error? } }`
+- **update 同步（wait=true）**：`DSH 更新完成：vX…，新任务将使用新版本，请重启 DSHana 使完全生效` 或 `DSH 更新失败：…`，details `{ dsh: { action:'update', ok, state:'done'|'error', version?, error? } }`
+- **update 异步（默认）**：立即返回「已在后台执行（将重启 web host，正在执行的任务会中断）」，details `{ dsh: { action:'update', status:'updating', taskId } }`
+- **更新中重复调用**：`DSH 更新已在执行中…`，details `{ dsh: { action:'update', status:'updating' } }`
+
+## 使用场景
+
+- **版本检查**：Agent 需要确认当前 dsh 版本 / 是否有新版（`dsh_update(action="check")`）
+- **更新 DSH**：有新版本且当前无运行中任务时（`dsh_update(action="update")`）——**先确认没有正在执行的 dsh 任务**（dsh_ops 查会话/看卡片），更新会重启 web host 中断任务
+- 与 dsh 设置页「DSHana 设置 → DSH 版本卡片」、DSHana 标签页 deps 卡片共用同一宿主能力层，结果一致
+
+## 示例
+
+```
+dsh_update()                              # 查版本（默认 check）
+dsh_update(action="check")
+dsh_update(action="update")               # 异步：后台执行，完成后唤醒带回结果
+dsh_update(action="update", wait=true)    # 同步：等更新跑完直接返回
+```
+
+## 关联
+
+- 更新进度/结果也可在 dsh 设置页「DSH 版本」卡片（每 2s 轮询 update-status）或 DSHana 标签页 deps 卡片（3s 轮询诊断）查看——同一份 `update-result.json`。
+- 更新后新任务将使用新版本；建议重启 DSHana 使完全生效。更新失败按 deps 卡片/设置页的 error 字段排查（registry 网络、web host 重启失败等，见 dsh-hanako 技能排错表）。

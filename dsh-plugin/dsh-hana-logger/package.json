@@ -1,6 +1,6 @@
 {
   "name": "dsh-hana-logger",
-  "version": "0.12.8",
+  "version": "0.13.0",
   "private": true,
   "type": "module",
   "main": "index.js",

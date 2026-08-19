@@ -6,6 +6,9 @@
 //   GET /ops/stream?sessionId=&rpcId=&timeoutMs=     SSE 推送源（卡片主链路：基线快照 + DSH 实时事件转发）
 //   GET /ops/status?opId=&sessionId=&rpcId=          兜底状态 JSON（EventSource 建立失败时卡片回退一次；仅 jsonl 恢复路径）
 //   GET /ops/output?opId=&sessionId=&rpcId=          兜底全量输出 JSON（兼容旧卡片懒加载；仅 jsonl 恢复路径）
+//   GET /card/dep?taskId=                            安装/升级卡片页面（v0.13.0：dsh_install/dsh_update 异步流程，data-kind="dep"）
+//   GET /ops/dep-stream?taskId=                      安装/升级卡片 SSE 推送源（v0.13.0：进程内 g.depTasks + g.depsInstallLog）
+//   GET /ops/dep-status?taskId=                      安装/升级卡片兜底状态 JSON（v0.13.0）
 //
 // v0.10.46 架构改造：卡片链路从「HTTP 轮询 + op Map」改为「SSE 服务端推送 + jsonl 唯一事实源」。
 // 三层：卡片（iframe EventSource）<-> 插件（routes 转发）<-> DSH（events.mux WebSocket）。
@@ -21,7 +24,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { zstdDecompressSync } from "node:zlib";
 
-const APP = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "app");
+const APP = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "app",
+);
 
 function readCardAssets() {
   return {
@@ -40,17 +47,28 @@ function decodeSessionLog(filePath) {
   const buf = fs.readFileSync(filePath);
   const starts = [];
   let i = 0;
-  while ((i = buf.indexOf(ZSTD_MAGIC, i)) !== -1) { starts.push(i); i += 4; }
+  while ((i = buf.indexOf(ZSTD_MAGIC, i)) !== -1) {
+    starts.push(i);
+    i += 4;
+  }
   const chunks = [];
   for (let k = 0; k < starts.length; k++) {
     const end = k + 1 < starts.length ? starts[k + 1] : buf.length;
-    try { chunks.push(zstdDecompressSync(buf.subarray(starts[k], end))); } catch { /* 单帧损坏跳过 */ }
+    try {
+      chunks.push(zstdDecompressSync(buf.subarray(starts[k], end)));
+    } catch {
+      /* 单帧损坏跳过 */
+    }
   }
   const events = [];
   for (const c of chunks) {
     for (const line of c.toString("utf8").split("\n")) {
       if (!line.trim()) continue;
-      try { events.push(JSON.parse(line)); } catch { /* 坏行跳过 */ }
+      try {
+        events.push(JSON.parse(line));
+      } catch {
+        /* 坏行跳过 */
+      }
     }
   }
   return events;
@@ -70,7 +88,8 @@ function sessionLogPath(dataDir, sessionId) {
 function textFromBlocks(content) {
   if (!content) return "";
   if (typeof content === "string") return content;
-  if (Array.isArray(content)) return content.map((b) => (b && b.text) || "").join("");
+  if (Array.isArray(content))
+    return content.map((b) => (b && b.text) || "").join("");
   return "";
 }
 
@@ -80,8 +99,10 @@ function mergeUsage(acc, u) {
   acc = acc || {};
   acc.inputTokens = (acc.inputTokens || 0) + (u.inputTokens ?? 0);
   acc.outputTokens = (acc.outputTokens || 0) + (u.outputTokens ?? 0);
-  if (u.cacheReadTokens != null) acc.cacheReadTokens = (acc.cacheReadTokens || 0) + u.cacheReadTokens;
-  if (u.reasoningTokens != null) acc.reasoningTokens = (acc.reasoningTokens || 0) + u.reasoningTokens;
+  if (u.cacheReadTokens != null)
+    acc.cacheReadTokens = (acc.cacheReadTokens || 0) + u.cacheReadTokens;
+  if (u.reasoningTokens != null)
+    acc.reasoningTokens = (acc.reasoningTokens || 0) + u.reasoningTokens;
   return acc;
 }
 
@@ -90,22 +111,27 @@ function rebuildOpFromLog(dataDir, sessionId, rpcId) {
   const logPath = sessionLogPath(dataDir, sessionId);
   if (!logPath) return null;
   let events = [];
-  try { events = decodeSessionLog(logPath); } catch { return null; }
+  try {
+    events = decodeSessionLog(logPath);
+  } catch {
+    return null;
+  }
   let header = null;
   const prompts = [];
   for (const ev of events) {
     if (ev.type === "session" && !header) header = ev;
-    else if (ev.type === "user/message" && ev.data?.source?.kind === "user") prompts.push(ev);
+    else if (ev.type === "user/message" && ev.data?.source?.kind === "user")
+      prompts.push(ev);
   }
   const idx = prompts.findIndex((u) => u.data?.source?.rpcId === rpcId);
   if (idx < 0) return null;
   const prompt = prompts[idx];
   const startSeq = prompt.seq;
   const endSeq = idx + 1 < prompts.length ? prompts[idx + 1].seq : Infinity;
-  const blockSeq = [];   // 结构化输出：按消息顺序收集 blocks（text/reasoning/tool-call），reasoning 可折叠
-  let msgTexts = [];     // 纯文本拼接（outputLength/预览用 + 无 blocks 时兜底）
+  const blockSeq = []; // 结构化输出：按消息顺序收集 blocks（text/reasoning/tool-call），reasoning 可折叠
+  let msgTexts = []; // 纯文本拼接（outputLength/预览用 + 无 blocks 时兜底）
   let sawFinalFinish = false;
-  let finalText = "";    // 最后一个 finish(reason.kind==stop) 之后的 assistant/message 文本 = 最终回答（摘要）
+  let finalText = ""; // 最后一个 finish(reason.kind==stop) 之后的 assistant/message 文本 = 最终回答（摘要）
   let lastMsgText = "";
   let usage = null;
   let turnEnd = null;
@@ -115,15 +141,22 @@ function rebuildOpFromLog(dataDir, sessionId, rpcId) {
     if (ev.seq < startSeq || ev.seq >= endSeq) continue;
     if (ev.type === "assistant/chunk") {
       const c = ev.data?.chunk;
-      if (c?.type === "finish" && c.reason?.kind === "stop") sawFinalFinish = true; // 工具循环结束的最终 LLM 调用
+      if (c?.type === "finish" && c.reason?.kind === "stop")
+        sawFinalFinish = true; // 工具循环结束的最终 LLM 调用
     } else if (ev.type === "assistant/message") {
-      const blocks = Array.isArray(ev.data?.message?.content) ? ev.data.message.content : [];
+      const blocks = Array.isArray(ev.data?.message?.content)
+        ? ev.data.message.content
+        : [];
       let msgText = "";
       for (const b of blocks) {
         if (b?.type === "text" && typeof b.text === "string" && b.text) {
           blockSeq.push({ type: "text", text: b.text });
           msgText += b.text;
-        } else if (b?.type === "reasoning" && typeof b.text === "string" && b.text) {
+        } else if (
+          b?.type === "reasoning" &&
+          typeof b.text === "string" &&
+          b.text
+        ) {
           blockSeq.push({ type: "reasoning", text: b.text });
         } else if (b?.type === "tool-call" && b.name) {
           blockSeq.push({ type: "tool-call", name: b.name });
@@ -145,7 +178,9 @@ function rebuildOpFromLog(dataDir, sessionId, rpcId) {
     }
   }
   // 结构化输出（卡片渲染器识别 dsh-blocks-v1 前缀，reasoning 折叠展示）；无 blocks 时回退纯文本
-  const output = blockSeq.length ? "dsh-blocks-v1::" + JSON.stringify(blockSeq) : msgTexts.join("\n\n");
+  const output = blockSeq.length
+    ? "dsh-blocks-v1::" + JSON.stringify(blockSeq)
+    : msgTexts.join("\n\n");
   const textLen = msgTexts.join("").length;
   const taskText = textFromBlocks(prompt.data?.content);
   const startedAt = new Date(prompt.time).toISOString();
@@ -178,7 +213,8 @@ function rebuildOpFromLog(dataDir, sessionId, rpcId) {
   }
   const summaryText = finalText || lastMsgText;
   const stopReason = turnEnd.data?.reason?.kind || "end_turn";
-  const isError = stopReason === "error" || stopReason === "aborted" || !!lastErr;
+  const isError =
+    stopReason === "error" || stopReason === "aborted" || !!lastErr;
   return {
     opId: "recovered-" + rpcId,
     rpcId,
@@ -191,10 +227,13 @@ function rebuildOpFromLog(dataDir, sessionId, rpcId) {
     timeoutMs: null,
     status: isError ? "error" : "ok",
     startedAt,
-    durationMs: turnEnd?.time != null ? Math.max(0, turnEnd.time - prompt.time) : null,
+    durationMs:
+      turnEnd?.time != null ? Math.max(0, turnEnd.time - prompt.time) : null,
     stopReason,
     error: isError ? String(lastErr || stopReason) : undefined,
-    summary: summaryText ? { text: summaryText, summaryOf: "final-message" } : null,
+    summary: summaryText
+      ? { text: summaryText, summaryOf: "final-message" }
+      : null,
     usage,
     output,
     outputLength: textLen || output.length,
@@ -228,7 +267,8 @@ function readOp({ sessionId, rpcId, timeoutMs }, includeFull) {
   if (!rpcId || !sessionId || !g?.dataDir) return null;
   const op = cachedRebuild(g.dataDir, String(sessionId), String(rpcId));
   if (!op) return null;
-  if (op.timeoutMs == null && timeoutMs != null) op.timeoutMs = Number(timeoutMs) || null;
+  if (op.timeoutMs == null && timeoutMs != null)
+    op.timeoutMs = Number(timeoutMs) || null;
   let output = String(op.output ?? "");
   // 预览：结构化的 outputPreview 优先，否则 output 尾部（结构化 blocks 取 text 块文本）
   const isBlocks = output.indexOf("dsh-blocks-v1::") === 0;
@@ -238,8 +278,13 @@ function readOp({ sessionId, rpcId, timeoutMs }, includeFull) {
   } else if (isBlocks) {
     try {
       const blocks = JSON.parse(output.slice("dsh-blocks-v1::".length));
-      previewText = blocks.filter((b) => b.type === "text" && b.text).map((b) => b.text).join("");
-    } catch { /* 解析失败用原文 */ }
+      previewText = blocks
+        .filter((b) => b.type === "text" && b.text)
+        .map((b) => b.text)
+        .join("");
+    } catch {
+      /* 解析失败用原文 */
+    }
   }
   const snap = {
     opId: op.opId,
@@ -259,7 +304,8 @@ function readOp({ sessionId, rpcId, timeoutMs }, includeFull) {
     summary: op.summary ?? null, // { text, summaryOf, fullLength } | null
     usage: op.usage ?? null, // DeepSeek adapter usage { inputTokens, outputTokens, cacheReadTokens, reasoningTokens } | null
     outputPreview: previewText.slice(-1024), // 预览 1KB（v0.10.41：300→1KB，滚动摘要显示量更足）
-    outputLength: op.outputLength ?? (isBlocks ? previewText.length : output.length),
+    outputLength:
+      op.outputLength ?? (isBlocks ? previewText.length : output.length),
   };
   if (includeFull) snap.output = output;
   return snap;
@@ -302,7 +348,8 @@ ${hcLink}
     const sessionId = String(c.req.query("sessionId") || "");
     const rpcId = String(c.req.query("rpcId") || "");
     const timeoutMs = String(c.req.query("timeoutMs") || "");
-    if (!sessionId || !rpcId) return c.json({ ok: false, error: "缺少 sessionId 或 rpcId" }, 400);
+    if (!sessionId || !rpcId)
+      return c.json({ ok: false, error: "缺少 sessionId 或 rpcId" }, 400);
     const g = globalThis.__dshHanako;
     const baseline = readOp({ sessionId, rpcId, timeoutMs }, true);
     if (!baseline) return c.json({ ok: false, error: "任务记录不存在" }, 404);
@@ -317,33 +364,60 @@ ${hcLink}
         let closed = false;
         const send = (name, data) => {
           if (closed) return;
-          try { controller.enqueue(enc.encode(`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`)); } catch { /* 连接已断 */ }
+          try {
+            controller.enqueue(
+              enc.encode(`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`),
+            );
+          } catch {
+            /* 连接已断 */
+          }
         };
         const closeAll = () => {
           if (closed) return;
           closed = true;
-          try { if (ws) ws.close(); } catch { /* 已关 */ }
-          try { controller.close(); } catch { /* 已关 */ }
+          try {
+            if (ws) ws.close();
+          } catch {
+            /* 已关 */
+          }
+          try {
+            controller.close();
+          } catch {
+            /* 已关 */
+          }
         };
         // a) 基线快照（jsonl 恢复；运行中窗口归一化为 running + 部分输出）
         send("baseline", baseline);
         // b) 转发 DSH 实时事件：events.mux WebSocket（与 tools/dsh-run.js openMux 同款连接）
         try {
-          if (typeof WebSocket !== "function") throw new Error("宿主环境无全局 WebSocket，无法订阅 dsh 事件流");
+          if (typeof WebSocket !== "function")
+            throw new Error("宿主环境无全局 WebSocket，无法订阅 dsh 事件流");
           ws = new WebSocket(`ws://127.0.0.1:${port}/api/events.mux`);
           ws.onmessage = (ev) => {
             let frame = {};
             let envelope = null;
-            try { envelope = JSON.parse(ev.data); frame = envelope?.payload || envelope || {}; } catch { return; }
+            try {
+              envelope = JSON.parse(ev.data);
+              frame = envelope?.payload || envelope || {};
+            } catch {
+              return;
+            }
             // server-request 信封（approval/requested 等应答类帧）：外层 rpcId 补进 frame
-            if (envelope && typeof envelope === "object" && typeof envelope.rpcId === "string" && typeof frame.rpcId !== "string") {
+            if (
+              envelope &&
+              typeof envelope === "object" &&
+              typeof envelope.rpcId === "string" &&
+              typeof frame.rpcId !== "string"
+            ) {
               frame.rpcId = envelope.rpcId;
             }
             if (!frame || typeof frame.type !== "string") return;
             if (frame.sessionId && frame.sessionId !== sessionId) return; // 只转发本连接会话的帧
             send("event", frame);
           };
-          ws.onerror = () => { /* 错误由 onclose 收尾 */ };
+          ws.onerror = () => {
+            /* 错误由 onclose 收尾 */
+          };
           ws.onclose = () => closeAll();
         } catch (e) {
           // WS 建立失败：基线已推送，结束流（卡片侧 EventSource 会自动重连 / 兜底 /ops/status）
@@ -352,7 +426,13 @@ ${hcLink}
       },
       cancel() {
         // 卡片断开（EventSource.close / 页面卸载）：关 WS 释放连接
-        if (ws) { try { ws.close(); } catch { /* 已关 */ } }
+        if (ws) {
+          try {
+            ws.close();
+          } catch {
+            /* 已关 */
+          }
+        }
       },
     });
     return c.body(stream, 200, {
@@ -370,7 +450,8 @@ ${hcLink}
     const sessionId = String(c.req.query("sessionId") || "");
     const rpcId = String(c.req.query("rpcId") || "");
     const timeoutMs = String(c.req.query("timeoutMs") || "");
-    if (!opId && !rpcId) return c.json({ ok: false, error: "缺少 opId 或 rpcId" }, 400);
+    if (!opId && !rpcId)
+      return c.json({ ok: false, error: "缺少 opId 或 rpcId" }, 400);
     const op = readOp({ opId, sessionId, rpcId, timeoutMs });
     if (!op) return c.json({ ok: false, error: "任务记录不存在" }, 404);
     return c.json({ ok: true, op });
@@ -382,10 +463,165 @@ ${hcLink}
     const sessionId = String(c.req.query("sessionId") || "");
     const rpcId = String(c.req.query("rpcId") || "");
     const timeoutMs = String(c.req.query("timeoutMs") || "");
-    if (!opId && !rpcId) return c.json({ ok: false, error: "缺少 opId 或 rpcId" }, 400);
+    if (!opId && !rpcId)
+      return c.json({ ok: false, error: "缺少 opId 或 rpcId" }, 400);
     const op = readOp({ opId, sessionId, rpcId, timeoutMs }, true);
     if (!op) return c.json({ ok: false, error: "任务记录不存在" }, 404);
-    return c.json({ ok: true, opId: op.opId, output: op.output, outputLength: op.outputLength });
+    return c.json({
+      ok: true,
+      opId: op.opId,
+      output: op.output,
+      outputLength: op.outputLength,
+    });
+  });
+
+  // ── 安装/升级卡片（v0.13.0：数据源 = 宿主单例 g.depTasks + g.depsInstallLog）──
+  // dsh_install / dsh_update 异步流程登记 g.depTasks（Map：taskId → { taskId, kind:
+  // install|update, state: running|ok|error, log, at, result }）；本卡片非 dsh 会话、
+  // 无 jsonl，状态与 npm 实时日志全在宿主进程内。三条链路与任务卡片同构：
+  //   GET /card/dep?taskId=      卡片页面（iframe 内容，data-kind="dep"）
+  //   GET /ops/dep-stream?taskId= SSE 推送源（定时推快照 + log 增量；终态推送后关闭）
+  //   GET /ops/dep-status?taskId= 兜底状态 JSON（EventSource 建立失败时卡片回退一次）
+
+  /** 构建安装/升级任务快照（数据源：g.depTasks 条目 + g.depsInstallLog 实时日志 +
+   * update-result.json（kind=update 时合并，version/error 权威化）。只回非敏感字段。 */
+  function buildDepSnapshot(g, t) {
+    const snap = {
+      taskId: t.taskId,
+      kind: t.kind,
+      state: t.state,
+      at: t.at,
+      result: t.result,
+    };
+    // 日志：终态定格（entry.log）优先；运行期读 g.depsInstallLog 实时尾部（≤2000）
+    snap.log =
+      t.log != null ? t.log : String(g?.depsInstallLog || "").slice(-2000);
+    if (t.kind === "update") {
+      try {
+        const uf = path.join(g?.dataDir || "", "update-result.json");
+        if (fs.existsSync(uf)) {
+          const u = JSON.parse(fs.readFileSync(uf, "utf8"));
+          if (u && typeof u === "object") {
+            snap.update = {
+              state: u.state,
+              version: u.version ?? null,
+              error: String(u.error || "").slice(0, 400) || null,
+              at: u.at || null,
+            };
+          }
+        }
+      } catch {
+        /* 读 update-result.json 失败忽略（非权威源，result 已含） */
+      }
+    }
+    return snap;
+  }
+
+  // 安装/升级卡片页（iframe 内容）：taskId 定位 g.depTasks 条目
+  app.get("/card/dep", (c) => {
+    const assets = readCardAssets();
+    const taskId = String(c.req.query("taskId") || "");
+    const hc = c.req.query("hana-css") || "";
+    const th = c.req.query("hana-theme") || "inherit";
+    const hcLink = hc ? `<link rel="stylesheet" href="${esc(hc)}">` : "";
+    return c.html(`<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>DSH 安装/升级</title>
+${hcLink}
+<style>${assets.css}<\/style>
+</head>
+<body data-hana-theme="${esc(th)}">
+<div id="dsh-root" data-kind="dep" data-task="${esc(taskId)}"></div>
+<script>window.__API="${base}";<\/script>
+<script>${assets.js}<\/script>
+</body>
+</html>`);
+  });
+
+  // 安装/升级卡片 SSE 推送源：进程内数据（g.depTasks），定时推快照；
+  // 终态（ok/error）推送后关闭流；每 30s 无数据时推心跳（防代理超时断连）。
+  app.get("/ops/dep-stream", (c) => {
+    const taskId = String(c.req.query("taskId") || "");
+    if (!taskId) return c.json({ ok: false, error: "缺少 taskId" }, 400);
+    const g = globalThis.__dshHanako;
+    const stream = new ReadableStream({
+      start(controller) {
+        const enc = new TextEncoder();
+        let closed = false;
+        let timer = null;
+        let lastBeat = Date.now();
+        const send = (name, data) => {
+          if (closed) return;
+          try {
+            controller.enqueue(
+              enc.encode(`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`),
+            );
+          } catch {
+            closeAll();
+          }
+        };
+        const closeAll = () => {
+          if (closed) return;
+          closed = true;
+          if (timer) clearInterval(timer);
+          try {
+            controller.close();
+          } catch {
+            /* 已关 */
+          }
+        };
+        const push = () => {
+          const t = g?.depTasks?.get(taskId) || null;
+          if (!t) {
+            send("error", { error: "任务不存在" });
+            closeAll();
+            return;
+          }
+          send("snapshot", buildDepSnapshot(g, t));
+          if (t.state !== "running") closeAll();
+        };
+        // 首帧立即推（卡片挂载即见当前状态）；之后每 1s 推一次（running 时 log 实时滚动）
+        push();
+        timer = setInterval(() => {
+          if (closed) return;
+          if (Date.now() - lastBeat >= 30000) {
+            // 心跳：空注释行（SSE 注释帧），防代理/浏览器超时判定
+            lastBeat = Date.now();
+            try {
+              controller.enqueue(enc.encode(": heartbeat\n\n"));
+            } catch {
+              closeAll();
+            }
+            return;
+          }
+          push();
+        }, 1000);
+      },
+      cancel() {
+        // 卡片断开（EventSource.close / 页面卸载）：停定时器释放
+        closed = true;
+        if (timer) clearInterval(timer);
+      },
+    });
+    return c.body(stream, 200, {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      connection: "keep-alive",
+      "x-accel-buffering": "no",
+    });
+  });
+
+  // 安装/升级卡片兜底状态 JSON（EventSource 建立失败时卡片回退一次）
+  app.get("/ops/dep-status", (c) => {
+    const taskId = String(c.req.query("taskId") || "");
+    if (!taskId) return c.json({ ok: false, error: "缺少 taskId" }, 400);
+    const g = globalThis.__dshHanako;
+    const t = g?.depTasks?.get(taskId) || null;
+    if (!t) return c.json({ ok: false, error: "任务不存在" }, 404);
+    return c.json({ ok: true, task: buildDepSnapshot(g, t) });
   });
 }
 

@@ -1,10 +1,12 @@
 ## 工具
 
-五个工具由插件注册（实现 `tools/*.js`），**完整调用手册（参数语义、返回结构、错误码、审批通道、副作用）见各工具的 SKILL**：
+七个工具由插件注册（实现 `tools/*.js`），**完整调用手册（参数语义、返回结构、错误码、审批通道、副作用）见各工具的 SKILL**：
 
 | 工具 | 用途 | 调用手册 |
 | --- | --- | --- |
 | `dsh_run` | 提交任务给 dsh agent 执行（默认异步，wait=true 同步；provider/model 显式覆盖） | [dsh-run](skills/dsh-run/SKILL.md) |
+| `dsh_install` | 安装/验证 dsh 依赖（action=install/verify；install 自动重试 registry + 自动运行级重验 + autoStart，渲染安装卡片） | [dsh-install](skills/dsh-install/SKILL.md) |
+| `dsh_update` | 检查/更新 dsh 版本（action=check/update；update 重启 web host，正在执行的任务中断，渲染升级卡片） | [dsh-update](skills/dsh-update/SKILL.md) |
 | `dsh_approve` | 应答 dsh 任务挂起的权限审批（allowed-once / rejected） | [dsh-approve](skills/dsh-approve/SKILL.md) |
 | `dsh_cancel` | 取消运行中的 dsh 任务（主动止损，幂等） | [dsh-cancel](skills/dsh-cancel/SKILL.md) |
 | `dsh_ops` | 查询 dsh 会话清单与摘要（解析 dsh 会话缓存 session_projcache 可查，支持 limit） | [dsh-ops](skills/dsh-ops/SKILL.md) |
@@ -33,18 +35,27 @@ DSHana 标签内 dsh 主题与宿主 Hana 联动：
 1. **明暗**：壳页面按 `hana-theme` query 映射 `color-scheme`（深色主题 → dark），Chromium 让跨源 iframe 的 `prefers-color-scheme` 继承父页面 color-scheme，dsh 的 `system` 解析即跟随宿主明暗
 2. **配色**：壳桥 `getComputedStyle` 读宿主 `theme.css`（宿主动态端点 `/api/plugins/theme.css?theme=<id>`，返回压平为 `:root` 的扁平版，插件页面 link 即生效）的 16 个主题变量（bg 层次 / 文字三阶 / accent 三态 / border / green / danger / userBg / overlay 三档 / dropOverlay），回传给注入的 `dsh-hana-theme` cordis 插件，写 **body 层 `!important` 覆盖**（dsh 的 presenter 把 token 以 inline style 写到 body，覆盖必须同层才压得过）
 3. **覆盖范围**：72 个 `--dsw-alias-*` + `--dsw-specific-*` token（bg 层次/遮罩/文字/brand/button/border/interactive/markdown/state/组件专用/滚动条），功能性颜色保留原生（照片查看器黑底、danger·warn 语义色、按钮反白文字、toast·tooltip 深色浮层、工具栏半透明、骨架屏、反白边框）
-4. **分发**：cordis 插件经 dsh-host-webserver `tapIndex` 注入 index 响应；插件本体在安装目录 `dsh-plugin/dsh-hana-theme/`（包名 `dsh-hana-theme` 注册，dsh-run.js 启动前在 `$DSH_HOME/profiles/node_modules` 建 junction 指向安装目录，与四内嵌插件（logger/theme/provider/default-model）统一机制）
+4. **分发**：cordis 插件经 dsh-host-webserver `tapIndex` 注入 index 响应；插件本体在安装目录 `dsh-plugin/dsh-hana-theme/`（包名 `dsh-hana-theme` 注册，dsh-run.js 启动前在 `$DSH_HOME/profiles/node_modules` 建 junction 指向安装目录，与四内嵌插件（logger/theme/provider/settings）统一机制）
 
 **生效时机**：用户切 dsh 偏好或宿主切 Hana 主题后，**重开 DSHana 标签页生效**（主题 CSS 只在打开标签页时拉取一次；重开即拉最新主题，宿主新增/修改主题零适配）。
 
-### 默认模型配置（v0.9.5）
+### DSHana 设置分页（v0.9.5 默认模型 → v0.13.0 改名升级）
 
-DSHana 的 `agent-default-model`（`settings.yaml`）是任务默认模型的事实源——`dsh_run` 不显式传 `provider` / `model` 时用它。dsh 设置页原生没有该段的配置 UI（`settings.mutate` 对 `agent-default-model` 段不可用，「not exposed to configuration clients」），由本插件补一个显式入口：
+dsh 设置页左下角齿轮打开设置面板，导航栏出现**原生**「DSHana 设置」分页（settings.section slot 注册——id `dshana-settings`，ledger 驱动导航自动投影，点击切换/内容渲染全走 dsh 原生 React；v0.13.0 由「默认模型」分页改名升级）。分页 = **设置中心式布局**（v0.13.0 UI 重排，不再是「默认模型表单 + 版本块硬堆叠」）：顶部 **DSHana 品牌页头**（齿轮图标 + 标题，`hs-*` 类前缀 = hana-settings，替代改名前的 `hdm-` = hana-default-model），下方**两个并列的分组卡片**（`.hs-card`，卡片头分隔线 + 独立内容区）：
 
-- **位置**：dsh Web UI 左下角齿轮打开设置面板，导航栏出现**原生**「默认模型」分页（v0.9.5 正规化升级：不再是 DOM 注入的 tab，而是经 dsh 前端 slot 注册——settings.section slot（id default-model）注册进 ledger 后导航自动投影该分页，点击切换/内容渲染全走 dsh 原生 React 逻辑；图标为设置面板内置的通用齿轮（navIcon 对未知 id 的兜底）），分页内容 = Provider / 模型 / 思考强度 三级联动下拉 + 保存按钮 + 当前值回显
+**① 默认模型卡片**：DSHana 的 `agent-default-model`（`settings.yaml`）是任务默认模型的事实源——`dsh_run` 不显式传 `provider` / `model` 时用它。dsh 设置页原生没有该段的配置 UI（`settings.mutate` 对 `agent-default-model` 段不可用，「not exposed to configuration clients」），由本卡片补显式入口：
+
+- Provider / 模型 / 思考强度 三级联动下拉 + 保存按钮 + 当前值回显
 - **选项**：`llm.models` RPC 权威列表——dsh 全部可用 provider（宿主注入的 sensenova/agnes/deepseek 与 dsh 单独配置的 deepseek-official 等）；模型按 provider 联动过滤；思考强度按模型 `reasoning.efforts` 动态填充（off/high/max 或 minimal/low/medium/high 等，无 `reasoning` 的模型不显示思考下拉）。**联动行为**：切 provider 自动选中该 provider 第一个模型 + 默认思考强度；打开分页回显当前默认（provider/model/effort 预选到表单，无当前值时自动选第一个 provider）
 - **保存即生效**：写 `settings.yaml` 的 `agent-default-model` + 更新内存态，无需重启；此后 `dsh_run` 不显式指定时即用此默认
-- **机制**：`dsh-hana-default-model` 插件按 dsh client 插件规范双端部署——后端（`index.js`）注册 `POST /api/hana-default-model.read` / `.save` 两条路由（`webServer.register` exact，经 `agentDefaultModel` 服务读写）；前端（`client.js`，package.json 的 `dsh.client` 声明 + `exports["./client"]` 指向）注册 `settings.section` slot 原生渲染分页。包名注册经 `$DSH_HOME/profiles/node_modules` junction 解析（dsh-run.js 启动前幂等创建）
+
+**② DSH 版本卡片**：`@deepseek-ai/dsh` 版本检查与更新。**检查/更新走宿主能力层桥接（v0.13.0 单一事实源）**——Agent 工具 `dsh_update`、DSHana 标签页（`/webui/check-update`、`/webui/update-dsh` + deps 卡片版本行）、本分页三个消费面共用宿主侧 `tools/dsh-run.js` 的 `checkDshUpdate` / `updateDsh`：
+
+- **本地版本**：dsh 侧直读 dsh-pkg `package.json`（零延迟，挂载即显示，不经桥接）；远端版本经桥接——本分页 `POST /api/hana-settings.check-version` 写 `<dataDir>/update-request.json { state:'check-requested' }`，宿主 `ensureUpdateWatch`（`ctx.resources.watch` 感知）→ `checkDshUpdate`（本地版本复用 verifyDepsSmoke 缓存/直读 package.json + 远端 `npm view`，官方源失败重试 npmmirror，zero-dep semver 比较）→ 结果写 `<dataDir>/check-result.json` 读回；宿主检查未完成返回 `{ state:'pending' }` 由前端轮询（1.5s，上限 12 次）
+- **更新闭环**：「更新到最新」→ `POST /api/hana-settings.request-update` 写 `update-request.json { state:'requested' }` → 宿主 `ensureUpdateWatch` → `updateDsh`（停 web host → `installDepsFromPlugin`（npm i `@deepseek-ai/dsh` latest）→ 起 web host → 读新版本）→ 结果写 `<dataDir>/update-result.json { state: done|error, version?, error?, at }` → 前端每 2s 轮询 `POST /api/hana-settings.update-status` 直到 done/error（web host 重启窗口连接失败视为仍在更新，90 次上限）。done 显示「更新完成 vX.Y.Z，请重启 DSHana 使完全生效」
+- **并发防护**：宿主 `g.checking` / `g.updating` 运行期标志——检查/更新进行中重复请求跳过（watch 触发层 + 能力层双重防护）；检查另加 5s 时间窗防 npm view 重复跑
+
+**机制**：`dsh-hana-settings` 插件按 dsh client 插件规范双端部署——后端（`index.js`）注册 `POST /api/hana-settings.read` / `.save` / `.check-version` / `.request-update` / `.update-status` 五条路由（`webServer.register` exact，read/save 经 `agentDefaultModel` 服务读写，check/update 经桥接文件与宿主能力层交互）；前端（`client.js`，package.json 的 `dsh.client` 声明 + `exports["./client"]` 指向）注册 `settings.section` slot 原生渲染分页。包名注册经 `$DSH_HOME/profiles/node_modules` junction 解析（dsh-run.js 启动前幂等创建）
 
 ## 连接失败自检与自愈
 
@@ -82,6 +93,16 @@ web host 未就绪时，DSHana 标签页不再只显示「正在重试…」—�
 
 完成/失败时经宿主 deferred 通道唤醒 Agent，无需轮询等待。
 
+### 安装/升级卡片（v0.13.0）
+
+`dsh_install`（安装）与 `dsh_update`（更新）的**异步**流程渲染「安装/升级卡片」——与任务卡片同构（iframe EventSource），但数据源不是 dsh 会话 jsonl（安装/升级不是 dsh 会话），而是**宿主单例**：
+
+- **登记**：异步工具流程生成 `taskId`（`dsh_install_*` / `dsh_update_*`）→ 登记 `g.depTasks`（Map：`taskId → { taskId, kind: install|update, state: running|ok|error, log, at, result }`）→ 返回 `details.card.route = /card/dep?taskId=...`（宿主渲染 iframe 卡片，与 dsh_run 同机制）
+- **页面** `GET /card/dep?taskId=`（iframe 内容，`data-kind="dep"`）
+- **SSE** `GET /ops/dep-stream?taskId=`：首帧快照 + 每 1s 推一次（running 时 npm 日志实时滚动），终态推送后关闭；30s 心跳防代理超时；`GET /ops/dep-status?taskId=` 兜底 JSON
+- **数据源**：`g.depTasks` 条目 + `g.depsInstallLog`（installDepsFromPlugin 的 npm i 输出与里程碑同通道 `emitLog` 流式写入内存尾环 ≤8000，实时尾部卡片侧 ≤2000；同流实时写会话日志 src=npm，行规范化）+ `update-result.json`（kind=update 时合并 version/error 权威化）
+- **渲染**（app/card.js `initDepCard` 分支，按 `data-kind="dep"` 分流，不触碰任务卡片逻辑）：标题（DSH 安装 / DSH 升级）+ 状态徽标（安装中/升级中/完成/失败）+ npm 日志尾部预格式实时滚动（运行中隐藏滚动条 + 固定滚底）+ 完成结果行（「已安装 vX.Y.Z，web host 已自动启动」/「更新完成 vX，请重启 DSHana 使完全生效」/ 错误信息）
+
 ## 审批流程
 
 dsh 会话默认 `approval/policy=ask`：agent 请求越界权限时发出 approval/requested，任务挂起等应答。插件捕获审批帧（保留 rpcId），把审批上下文存进运行期协调条目（终态即删，不落任务快照），经宿主 deferred 通道投递 `dsh-approval` 通知唤醒 Agent；Agent 收到后调 `dsh_approve` 应答（allowed-once / rejected），任务继续。
@@ -97,11 +118,12 @@ dsh 的 `/api/events.mux` **要求 WebSocket 升级**：GET 返回 `426 Upgrade 
 - 订阅按连接绑定，会话列表从 `dsh-home/sessions/` 落盘目录或 Web UI 获取## 架构
 
 - **依赖按需部署**：zip 零依赖（约 0.1MB，代码 bundle + 配置 + 技能）。dsh 依赖树（`@deepseek-ai/dsh` + node-pty/koffi 原生模块，约 246MB）由 Agent 部署时 **npm i @deepseek-ai/dsh --omit=dev 到数据目录 `dsh-pkg/`**（复制 package.json + 创建指向宿主 electron node 的代理脚本 `pkgDir/node.cmd`，PATH 首部指向 pkgDir，升级安装整体替换插件目录不丢依赖；registry 不通时切镜像 `--registry=https://registry.npmmirror.com`），也可在 DSHana 标签页 deps 卡片点「安装依赖」自动完成（v0.8.6+，命令同上）。解析链：`<dataDir>/dsh-pkg` 优先 → 插件安装目录 `node_modules`（兼容旧形态）。依赖完整性另经**运行级验证**（`node cliBin --version`，v0.8.7+，能跑 = 依赖图完整，防 npm i 中断/ --omit=peer 误用造成的假就绪）
-- **插件本体 rspack bundle**：`index.js` + `tools/*.js` 经 `scripts/build.mjs` 打包，`scripts/pack.mjs` 铺平到标准位置交付（根 `index.js` + `tools/`，无 dist/）。构建工具 @rspack/core 声明为 devDependencies（构建契约，部署 `--omit=dev` 不装）
-- **dsh 启动 patch overlay**：dsh-run.js spawn `dsh --profile web --patch <...> --port <...>`，启动前渲染单一模板 `dsh-plugin/dsh-hanako.patch.yml.tpl` 为机器绝对路径写数据目录 `dsh-hanako.patch.generated.yml`（五段：session-query 全文搜索默认启用 `openAt: first-search` + dsh-hana-logger 统一日志服务注册 + dsh-hana-theme 主题插件注册 + dsh-hana-provider 宿主 provider 跟随注册 + dsh-hana-default-model 设置页默认模型配置块注册；v0.9.5 起 provider 段**恒渲染**——无配置项，宿主数据目录直接探测（插件安装形态 `<宿主数据目录>/plugins/<pluginId>` 上溯定位 models.json / provider-catalog.json），default-model 段同样恒挂载；四段 cordis 插件均**包名注册**（`name: dsh-hana-logger / dsh-hana-theme / dsh-hana-provider / dsh-hana-default-model`，非 file:// URL，因 dsh client 模块发现按 `require.resolve('<name>/package.json')` 解析，file:// 不可解析），dsh-run.js spawn 前在 `$DSH_HOME/profiles/node_modules` 幂等创建 junction 指向插件安装目录 `dsh-plugin/<同名包>`（与 dsh 自维护的 junction farm 同机制——dsh 的 `healProfilesModuleFallback` 只管理自身依赖闭包，不碰外来 junction））；模板缺失/渲染失败不挂任何 patch 记 warn（会话全文搜索保持上游默认禁用）——patch 缺失时优雅降级不阻断启动
+- **插件本体 rspack bundle**：`index.js` + `tools/*.js` 经 `scripts/build.mjs` 打包，`scripts/pack.mjs` 铺平到标准位置交付（根 `index.js` + `tools/`，无 dist/）。构建工具 @rspack/core 声明为 devDependencies（构建契约，部署 `--omit=dev` 不装）。**v0.13.0 lib 提取**：安装/检查/更新能力层与共用状态抽到 `tools/lib/`——`lib/state.js`（getSingleton 单例 + 环境常量 IS_WIN/ELECTRON_NODE/ELECTRON_NODE_ENV/PLUGIN_ROOT/manifestDefaults + `g.depTasks` 默认）、`lib/install.js`（resolveDshPkgDir / installDepsFromPlugin / verifyDepsSmoke / semver 比较 / readDshInstalledVersion）、`lib/check.js`（checkDshUpdate）；rspack 入口（dsh-run/dsh-update/dsh-install）静态 import lib，bundle 内联（?t= 重载即刷新）；**非 bundle 侧（routes/webui.js、index.js）保持经 globalThis 单例调用，不 import lib**
+- **dsh 启动 patch overlay**：dsh-run.js spawn `dsh --profile web --patch <...> --port <...>`，启动前渲染单一模板 `dsh-plugin/dsh-hanako.patch.yml.tpl` 为机器绝对路径写数据目录 `dsh-hanako.patch.generated.yml`（五段：session-query 全文搜索默认启用 `openAt: first-search` + dsh-hana-logger 统一日志服务注册 + dsh-hana-theme 主题插件注册 + dsh-hana-provider 宿主 provider 跟随注册 + dsh-hana-settings 设置页 DSHana 设置分页注册（v0.13.0 由 default-model 改名升级，config 注入 `dshPkgDir`/`npmCliPath`/`electronNode`/`dataDir`——后者三者为「检查与更新 DSH」桥接链路）；v0.9.5 起 provider 段**恒渲染**——无配置项，宿主数据目录直接探测（插件安装形态 `<宿主数据目录>/plugins/<pluginId>` 上溯定位 models.json / provider-catalog.json），settings 段同样恒挂载；四段 cordis 插件均**包名注册**（`name: dsh-hana-logger / dsh-hana-theme / dsh-hana-provider / dsh-hana-settings`，非 file:// URL，因 dsh client 模块发现按 `require.resolve('<name>/package.json')` 解析，file:// 不可解析），dsh-run.js spawn 前在 `$DSH_HOME/profiles/node_modules` 幂等创建 junction 指向插件安装目录 `dsh-plugin/<同名包>`（与 dsh 自维护的 junction farm 同机制——dsh 的 `healProfilesModuleFallback` 只管理自身依赖闭包，不碰外来 junction））；模板缺失/渲染失败不挂任何 patch 记 warn（会话全文搜索保持上游默认禁用）——patch 缺失时优雅降级不阻断启动
 - **凭据与模型跟随**：dsh-hana-provider 插件恒开直读 Hana 宿主 `provider-catalog.json`（凭据）+ `models.json`（模型），dsh models 页出现 Hana 全部 provider；配置热跟随 = **宿主 push**（v0.10.7：宿主侧经 `ctx.resources.watch` 感知两文件变化，bus 派发 `resource.changed` → 防抖 300ms → POST dsh web host `/api/hana-provider.refresh`，dsh 侧插件重读配置 `handle.replace()` 原子更新，不再自建 fs.watch）；任务模型默认 = dsh 默认模型（`settings.yaml` 的 `agent-default-model`），`dsh_run` 工具参数 `provider`/`model`/`reasoningEffort` 显式覆盖（显式时 selectModel，dsh 会把所选模型写回全局默认 settings.yaml）
-- **统一日志**（v0.10.8）：DSHana 插件全量运行日志 = `<dataDir>/logs/` 下**时间戳会话文件** `<YYYYMMDD-HHmmss-SSS>.log`（每次插件会话一个，文件名即应用层创建时刻，毫秒级唯一），DSHana 诊断面板/错误信息直接显示当前会话日志路径。内容 = index.js 生命周期 + web host 进程 stdout/stderr **全量落盘** + theme/provider/default-model 三个内嵌插件诊断（经 **dsh-hana-logger** 统一日志服务写日志——cordis `provide 'hanaLogger'` / `inject ['hanaLogger']`（服务名驼峰与属性访问一致，不能用 'logger'——cordis 内置 LoggerService 冲突，也不能用连字符名——注入属性按服务名原样挂载），单一实现，src 前缀不变；**logPath 仅 logger 段注入**，消费方零配置）+ dsh-run 工具关键路径；行格式 `[HH:mm:ss.SSS] [out|err|provider|theme|default-model|hana] 内容`（文件名即创建时刻，无首行冗余），provider 前缀记 refresh 成功（provider/模型数/耗时）/失败/收到刷新请求。**旧日志 zstd 压缩、全部保留**（同 dsh session 持久化哲学）：插件 onload 时把上一会话及更早的时间戳 `.log` 用 **Node 内置 `node:zlib` zstd**（零依赖，标准格式 magic `28b52ffd`，任何 zstd 工具可解）压缩为 `.log.zst` 后删原文件，不删除任何历史；web host 多次重启（失败重试/手动重启）不换会话文件，同一插件会话日志连续。**启动失败排查**：诊断界面看 stderr 尾部（截断 ≤800）与「本次会话日志」路径 → 完整日志打开该时间戳文件，历史日志看 `.zst` 压缩文件
-- **设置页默认模型配置**：dsh-hana-default-model 插件按 dsh client 插件规范双端部署（后端 `webServer.register` 两条 `/api/hana-default-model.*` exact 路由 + 前端 `client.js` 注册 `settings.section` slot 原生渲染「默认模型」分页）在 dsh 设置面板补上 `agent-default-model` 配置 UI——Provider/模型/思考强度三级联动（选项 = `llm.models` 权威列表），保存经 `agentDefaultModel` 服务写 `settings.yaml` 并更新内存态，立即生效
+- **统一日志**（v0.10.8）：DSHana 插件全量运行日志 = `<dataDir>/logs/` 下**时间戳会话文件** `<YYYYMMDD-HHmmss-SSS>.log`（每次插件会话一个，文件名即应用层创建时刻，毫秒级唯一），DSHana 诊断面板/错误信息直接显示当前会话日志路径。内容 = index.js 生命周期 + web host 进程 stdout/stderr **全量落盘** + theme/provider/settings 三个内嵌插件诊断（经 **dsh-hana-logger** 统一日志服务写日志——cordis `provide 'hanaLogger'` / `inject ['hanaLogger']`（服务名驼峰与属性访问一致，不能用 'logger'——cordis 内置 LoggerService 冲突，也不能用连字符名——注入属性按服务名原样挂载），单一实现，src 前缀不变；**logPath 仅 logger 段注入**，消费方零配置）+ dsh-run 工具关键路径；行格式 `[HH:mm:ss.SSS] [out|err|provider|theme|settings|hana|npm] 内容`（文件名即创建时刻，无首行冗余；**npm src = 依赖安装/升级的 npm i 输出实时流**——installDepsFromPlugin `emitLog` 逐 chunk 写会话日志，取代旧「命令完成后一次性写入」；会话日志**行规范化**：`\r\n`/裸 `\r`（npm 进度帧、TTY 重绘）统一折行、逐行加 `[ts] [src]` 前缀、空行丢弃，保证每行都带时间戳/来源），provider 前缀记 refresh 成功（provider/模型数/耗时）/失败/收到刷新请求，settings 前缀记默认模型保存/版本检查/更新请求。**旧日志 zstd 压缩、全部保留**（同 dsh session 持久化哲学）：插件 onload 时把上一会话及更早的时间戳 `.log` 用 **Node 内置 `node:zlib` zstd**（零依赖，标准格式 magic `28b52ffd`，任何 zstd 工具可解）压缩为 `.log.zst` 后删原文件，不删除任何历史；web host 多次重启（失败重试/手动重启）不换会话文件，同一插件会话日志连续。**启动失败排查**：诊断界面看 stderr 尾部（截断 ≤800）与「本次会话日志」路径 → 完整日志打开该时间戳文件，历史日志看 `.zst` 压缩文件
+- **DSHana 设置分页**（v0.9.5 默认模型 → v0.13.0 改名升级 + UI 重排）：dsh-hana-settings 插件按 dsh client 插件规范双端部署（后端 `webServer.register` 五条 `/api/hana-settings.*` exact 路由（read/save/check-version/request-update/update-status）+ 前端 `client.js` 注册 `settings.section` slot（id `dshana-settings`）原生渲染分页）——设置中心式布局：页头 DSHana 品牌区 + 两个并列分组卡片；① 默认模型卡片：`agent-default-model` 配置 UI（Provider/模型/思考强度三级联动，选项 = `llm.models` 权威列表，保存经 `agentDefaultModel` 服务写 `settings.yaml` 并更新内存态，立即生效）；② DSH 版本卡片：`@deepseek-ai/dsh` 版本检查与更新，检查/更新走**宿主能力层桥接**（本插件写 `update-request.json` 桥接请求 → 宿主 `ensureUpdateWatch` → `checkDshUpdate` / `updateDsh` → 结果写 `check-result.json` / `update-result.json` 读回），Agent 工具 `dsh_update`、DSHana 标签页（`/webui/check-update`、`/webui/update-dsh`）、本分页三面共用同一能力层（单一事实源）
+- **DSH 检查/更新能力层**（v0.13.0）：`tools/lib/` 提取后挂单例 `g.checkDshUpdate` / `g.updateDsh` / `g.installDeps` / `g.verifyDeps`（Agent 工具 dsh_install/dsh_update、webui 路由、dsh 设置页桥接四面共用，单一事实源）——`checkDshUpdate`（lib/check.js）：本地版本（verifyDepsSmoke 缓存优先/直读 dsh-pkg package.json）+ 远端版本（`npm view @deepseek-ai/dsh version`，官方源失败重试 npmmirror，15s 超时）+ zero-dep semver 比较 → `{ localVersion, latestVersion, updateAvailable, error? }`，结果写 `check-result.json`；`updateDsh`（dsh-run.js，组合 lib 的 installDepsFromPlugin/verifyDepsSmoke）：停 web host → npm i latest → 起 web host → 读新版本 → 写 `update-result.json { state: done|error, version?, error?, at }`；`installDepsFromPlugin` / `verifyDepsSmoke`（lib/install.js）：依赖部署与运行级验证；并发防护 `g.checking` / `g.updating` / `g.depsInstalling`（进行中重复调用返回状态不重复执行）
 - **进程单例挂 `globalThis.__dshHanako`**：`index.js` 卸载清理时读取（不 import 插件文件，避免读到旧模块缓存）
 - **宿主 tools 模块缓存**：宿主按插件 id 缓存 tools 模块，**改代码后必须重启 Hana 才加载新 tools**
 

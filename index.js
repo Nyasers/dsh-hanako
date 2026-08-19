@@ -15,7 +15,17 @@
 //  4. 插件卸载/重载时回收常驻 web host 子进程。
 // 单例挂在 globalThis.__dshHanako（tools/dsh-run.js 写入），这里不 import 插件文件，
 // 避免 Hana 的模块缓存导致清理逻辑读取到旧模块。
-import { existsSync, mkdirSync, renameSync, readdirSync, unlinkSync, appendFileSync, lstatSync, writeFileSync, readFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  renameSync,
+  readdirSync,
+  unlinkSync,
+  appendFileSync,
+  lstatSync,
+  writeFileSync,
+  readFileSync,
+} from "node:fs";
 import { zstdCompressSync } from "node:zlib";
 import { join, dirname } from "node:path";
 
@@ -28,7 +38,8 @@ import { join, dirname } from "node:path";
 // magic 28b52ffd，任何 zstd 工具/库可解），删除原 .log——全部保留不删除。
 // 会话边界 = 插件 onload：旧 latest.log 残留（历史版本遗留）归档/清理 → 压缩旧日志
 // → 建新会话文件（空文件，无首行；会话开始以 onload 日志行为标识）。行格式
-// [<HH:mm:ss.SSS>] [<src>] <内容>，src ∈ out/err/provider/theme/default-model/hana；写失败静默。
+// [<HH:mm:ss.SSS>] [<src>] <内容>，src ∈ out/err/provider/theme/settings/hana/npm
+// （npm = 依赖安装/升级的 npm i 原始输出实时流，install.js emitLog 写入）；写失败静默。
 const LOG_NAME_RE = /^\d{8}-\d{6}(?:-\d+)?\.log$/;
 function logTs() {
   const d = new Date();
@@ -41,13 +52,30 @@ function logFileStamp(d) {
   // 毫秒级精度：同一秒内多次会话（快速重启）天然不撞名，无需后缀消歧
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}-${p3(d.getMilliseconds())}`;
 }
+// 追加日志（行规范化）：\r\n / 裸 \r（npm 进度帧、TTY 重绘）统一折行，逐行加
+// [ts] [src] 前缀、空行丢弃——保证会话日志每行都带时间戳/来源（旧实现整块只加一次
+// 前缀，多行块后续行无前缀，不合规范）；chunk 内所有行共用同一时间戳（单次 append，
+// 性能与旧实现一致）。副作用：跨 chunk 的半行按 chunk 边界拆成两行（诊断可接受）。
 function appendLogLine(logPath, src, chunk) {
   try {
     if (!logPath) return;
     mkdirSync(dirname(logPath), { recursive: true });
-    const text = String(chunk ?? "").replace(/\r\n/g, "\n").replace(/\n+$/, "");
-    appendFileSync(logPath, `[${logTs()}] [${src}] ${text}\n`, "utf8");
-  } catch { /* 日志失败不阻断 */ }
+    const lines = String(chunk ?? "")
+      .replace(/\r\n/g, "\n")
+      .replace(/\r/g, "\n")
+      .split("\n")
+      .map((l) => l.trimEnd())
+      .filter((l) => l.length > 0);
+    if (!lines.length) return;
+    const ts = logTs();
+    appendFileSync(
+      logPath,
+      lines.map((l) => `[${ts}] [${src}] ${l}`).join("\n") + "\n",
+      "utf8",
+    );
+  } catch {
+    /* 日志失败不阻断 */
+  }
 }
 // 下一个时间戳日志文件路径（now 毫秒级命名；极端同毫秒冲突加 -i 后缀），用于新会话
 // 文件与旧 latest 归档——文件名即应用层创建时刻，不依赖文件系统元数据
@@ -76,9 +104,13 @@ function compressArchivedLogs(logsDir) {
         writeFileSync(src + ".zst", zstdCompressSync(raw));
         unlinkSync(src);
         count += 1;
-      } catch { /* 单个压缩失败跳过（保留原文件） */ }
+      } catch {
+        /* 单个压缩失败跳过（保留原文件） */
+      }
     }
-  } catch { /* 扫描失败不阻断 */ }
+  } catch {
+    /* 扫描失败不阻断 */
+  }
   return count;
 }
 
@@ -105,7 +137,9 @@ export default class DshHanakoPlugin {
           archivedName = nextTimestampLogPath(logsDir);
           renameSync(latest, archivedName);
         }
-      } catch { /* 旧文件处理失败不阻断 */ }
+      } catch {
+        /* 旧文件处理失败不阻断 */
+      }
     }
     // 压缩旧日志（上一会话及更早的时间戳 .log → .log.zst，全部保留不删除；须在建新
     // 会话文件之前执行，避免把新会话文件也压缩）
@@ -115,7 +149,8 @@ export default class DshHanakoPlugin {
     // 挂单例：dsh-run.js 的 logPath 优先取 g.logPath；appendLog 供 dsh-run 复用（行格式一致）
     g.logPath = logPath;
     g.appendLog = (src, chunk) => appendLogLine(logPath, src, chunk);
-    if (archivedName) g.appendLog("hana", `日志归档：${archivedName}（上一插件会话）`);
+    if (archivedName)
+      g.appendLog("hana", `日志归档：${archivedName}（上一插件会话）`);
     if (compressed > 0) g.appendLog("hana", `旧日志压缩：${compressed} 个`);
     g.appendLog("hana", "plugin onload（日志会话开始）");
 
@@ -144,14 +179,24 @@ export default class DshHanakoPlugin {
       while (Date.now() < deadline) {
         if (g && typeof g.startWebHost === "function") {
           const ok = await g.startWebHost(config, dataDir);
-          log.info(`[dsh-hanako] dsh web host ${ok ? "已随插件启动" : "启动未就绪（工具调用时将重试）"}`);
-          g.appendLog?.("hana", `dsh web host 启动${ok ? "成功（已随插件启动）" : "未就绪（工具调用时将重试）"}`);
+          log.info(
+            `[dsh-hanako] dsh web host ${ok ? "已随插件启动" : "启动未就绪（工具调用时将重试）"}`,
+          );
+          g.appendLog?.(
+            "hana",
+            `dsh web host 启动${ok ? "成功（已随插件启动）" : "未就绪（工具调用时将重试）"}`,
+          );
           return;
         }
         await new Promise((r) => setTimeout(r, 100));
       }
-      log.warn("[dsh-hanako] 5s 内未等到工具模块加载，dsh web host 将随首次工具调用启动");
-      g.appendLog?.("hana", "5s 内未等到工具模块加载，dsh web host 将随首次工具调用启动");
+      log.warn(
+        "[dsh-hanako] 5s 内未等到工具模块加载，dsh web host 将随首次工具调用启动",
+      );
+      g.appendLog?.(
+        "hana",
+        "5s 内未等到工具模块加载，dsh web host 将随首次工具调用启动",
+      );
     };
     tryStart().catch((e) => {
       log.warn?.("[dsh-hanako] web host 启动异常:", e?.message || String(e));

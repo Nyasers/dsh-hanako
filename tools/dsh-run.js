@@ -1,16 +1,30 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// tools/dsh-run.js — dsh_run 工具（单文件自包含）
+// tools/dsh-run.js — dsh_run 工具 + web host 生命周期（v0.13.0 lib 提取后瘦身）
 // 把任务交给 DeepSeek Harness（dsh）的 web host（--profile web）执行：
 // 插件 spawn dsh web（DSH_HOME 指向插件数据目录，账本随插件生命周期），
 // 经其 /api 网关提交任务（session.create → events.mux 订阅 → session.prompt），
 // 实时事件流驱动卡片 Markdown 输出。web UI 天然可见插件全部任务。
 //
-// 为什么是单文件：Hana 以带 ?t= 时间戳的 URL 加载 tools/*.js（热更新缓存破坏），
-// 但 tools 内部静态 import 的相对模块是无 query 的固定 URL，Node ESM 按 URL 缓存、
-// 永不刷新。因此 web host 管理、HTTP RPC 客户端、SSE 事件循环全部内联在本文件
-// （Node 24 内置 fetch/AbortController，零第三方依赖）。
+// 模块结构（v0.13.0）：安装/检查/更新能力层与共用状态提取到 tools/lib/——
+//   lib/state.js    getSingleton（globalThis 单例）+ 环境常量（IS_WIN / ELECTRON_NODE /
+//                   ELECTRON_NODE_ENV / PLUGIN_ROOT / manifestDefaults）+ g.depTasks 默认
+//   lib/install.js  resolveDshPkgDir / installDepsFromPlugin / verifyDepsSmoke /
+//                   semver 比较（parseSemver / compareSemver）/ readDshInstalledVersion
+//   lib/check.js    checkDshUpdate（npmViewLatest + 本地版本直读 + semver 比较）
+// 本文件保留：web host 生命周期（closeProcess / ensureWebHost / ensureProviderPushWatch /
+// ensureUpdateWatch / startWebHostFromPlugin / collectWebDiagnostics）+ 任务提交链路 +
+// updateDsh（组合 lib 的 installDepsFromPlugin / verifyDepsSmoke / readDshInstalledVersion）。
+// 单例挂载在本文件（getSingleton() 内逐字段赋值保留：g.closeProcess / g.collectDiagnostics /
+// g.installDeps / g.verifyDeps / g.checkDshUpdate / g.updateDsh / g.startWebHost），
+// routes/webui.js 与 index.js 经单例调用不受影响。
+//
+// 为什么是单文件（历史约束）：Hana 以带 ?t= 时间戳的 URL 加载 tools/*.js（热更新缓存破坏），
+// 但 tools 内部静态 import 的相对模块是无 query 的固定 URL，Node ESM 按 URL 缓存、永不刷新。
+// 分发形态宿主加载的是 dist/tools/*.js（rspack bundle，build.mjs 入口内联 import），
+// ?t= 重载即刷新 lib，无缓存问题；因此 rspack 入口（dsh-run/dsh-update/dsh-install）可以
+// 静态 import lib。非 bundle 侧（routes/webui.js、index.js）保持经 globalThis 单例调用。
 // 进程单例挂 globalThis.__dshHanako，供 index.js 卸载清理。
 //
 // 权限：external_side_effect（调用 dsh 编码 agent 执行任务，消耗 Hana 宿主 provider 额度，Auto 模式送审）。
@@ -20,33 +34,32 @@ import {
   existsSync,
   mkdirSync,
   writeFileSync,
-  copyFileSync,
   symlinkSync,
   lstatSync,
-  readlinkSync,
   unlinkSync,
   renameSync,
   appendFileSync,
 } from "node:fs";
-import { join, dirname, delimiter } from "node:path";
+import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
+// v0.13.0: 共用模块（lib 内联进 bundle，见文件头「模块结构」）
+import {
+  getSingleton,
+  PLUGIN_ROOT,
+  manifestDefaults,
+  ELECTRON_NODE,
+  ELECTRON_NODE_ENV,
+  IS_WIN,
+} from "./lib/state.js";
+import {
+  resolveDshPkgDir,
+  installDepsFromPlugin,
+  verifyDepsSmoke,
+  readDshInstalledVersion,
+} from "./lib/install.js";
+import { checkDshUpdate } from "./lib/check.js";
 
-const IS_WIN = process.platform === "win32";
-
-const ELECTRON_NODE = process.execPath;
-const ELECTRON_NODE_ENV = { ...process.env, ELECTRON_RUN_AS_NODE: 1 };
-
-const __here = dirname(fileURLToPath(import.meta.url));
-// v0.6.0: PLUGIN_ROOT 向上查找含 manifest.json 的目录——源码形态（tools/ 下）与
-// rspack bundle 形态（dist/tools/ 下）都能正确定位插件根。
-let PLUGIN_ROOT = __here;
-while (!existsSync(join(PLUGIN_ROOT, "manifest.json"))) {
-  const parent = dirname(PLUGIN_ROOT);
-  if (parent === PLUGIN_ROOT)
-    throw new Error("无法定位插件根：向上未找到 manifest.json");
-  PLUGIN_ROOT = parent;
-}
 const STDERR_CAP = 8192;
 const PORT_READY_TIMEOUT_MS = 60000; // web host 端口就绪等待上限
 // ---- 统一日志（v0.10.8 定稿：时间戳会话文件，index.js onload 初始化）----
@@ -55,21 +68,32 @@ const PORT_READY_TIMEOUT_MS = 60000; // web host 端口就绪等待上限
 // 诊断 + dsh-run 工具关键路径）；旧日志由 index.js onload zstd 压缩为 .log.zst 全部保留。
 // 本模块只把 stdout/stderr 写入 logPath（单例 g.logPath 优先），并保留兜底初始化
 // （index.js 未初始化时自建时间戳会话文件）。
-// 行格式 [<HH:mm:ss.SSS>] [<src>] <内容>，src ∈ out/err/provider/hana；写失败静默。
+// 行格式 [<HH:mm:ss.SSS>] [<src>] <内容>，src ∈ out/err/provider/hana/npm；写失败静默。
 function logTs() {
   const d = new Date();
   const p = (n, w) => String(n).padStart(w || 2, "0");
   return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
 }
-// 追加一行日志：整体加前缀 + 尾部换行（多行 chunk 不拆行，简单起见同前缀）
+// 追加日志（行规范化，与 index.js appendLogLine 同规范——这里是兜底实现，index.js
+// 未初始化时用）：\r\n / 裸 \r 统一折行，逐行加 [ts] [src] 前缀、空行丢弃；chunk 内
+// 所有行共用同一时间戳（单次 append）。跨 chunk 的半行按 chunk 边界拆行（诊断可接受）。
 function appendLog(logPath, src, chunk) {
   try {
     if (!logPath) return;
     mkdirSync(dirname(logPath), { recursive: true });
-    const text = String(chunk ?? "")
+    const lines = String(chunk ?? "")
       .replace(/\r\n/g, "\n")
-      .replace(/\n+$/, "");
-    appendFileSync(logPath, `[${logTs()}] [${src}] ${text}\n`, "utf8");
+      .replace(/\r/g, "\n")
+      .split("\n")
+      .map((l) => l.trimEnd())
+      .filter((l) => l.length > 0);
+    if (!lines.length) return;
+    const ts = logTs();
+    appendFileSync(
+      logPath,
+      lines.map((l) => `[${ts}] [${src}] ${l}`).join("\n") + "\n",
+      "utf8",
+    );
   } catch {
     /* 日志失败不阻断 */
   }
@@ -182,23 +206,6 @@ function readDshDefaultPreset(dshHome) {
   }
 }
 
-// ---- manifest configuration 默认值（单一事实源：manifest.json）----
-// dev invoke 等场景 ctx.config 可能未注入默认值或带 undefined 键，这里静态读取保证配置可用。
-const manifestDefaults = (() => {
-  try {
-    const m = JSON.parse(
-      readFileSync(join(PLUGIN_ROOT, "manifest.json"), "utf8"),
-    );
-    const props = m?.contributes?.configuration?.properties || {};
-    const out = {};
-    for (const [k, v] of Object.entries(props))
-      if (v && "default" in v) out[k] = v.default;
-    return out;
-  } catch {
-    return {};
-  }
-})();
-
 // ---- config.json 自动初始化（全新安装免「先保存一次」引导）----
 // config.json 不随包分发（宿主设置界面生成，路径 <插件数据目录>/config.json），
 // 全新安装时不存在。插件初始化（onload 拉起 web host / 首次工具调用）时按 manifest
@@ -264,7 +271,6 @@ function resolveApprovalTimeoutMs(cfg) {
   return 0; // 快照缺失/非数字/0/负数：禁用超时拒绝（0，调用方判断）
 }
 
-
 // defaultCwd 解析（「配置单一事实源」哲学，补齐直读兜底）：优先直读
 // dataDir/config.json 的 global.defaultCwd（设置界面改动即时生效；Agent 直改文件同样生效），
 // 无则回退配置快照/空。工具显式传 cwd 时在 doExecute 内优先，不受影响。
@@ -282,25 +288,28 @@ function resolveDefaultCwd(cfg) {
   return String(cfg.defaultCwd || "");
 }
 
-// ---- 常驻 web host 单例（globalThis 跨模块共享，index.js 卸载清理时读取）----
-function getSingleton() {
-  if (!globalThis.__dshHanako || typeof globalThis.__dshHanako !== "object") {
-    globalThis.__dshHanako = { web: null };
-  }
-  const g = globalThis.__dshHanako;
-  // 旧对象可能缺新字段（热更新后旧 globalThis 对象仍在）：逐字段兜底
-  // v0.10.46：g.ops 不再是任务状态注册表（jsonl 唯一事实源），仅存审批/取消运行期协调状态
-  if (!g.ops) g.ops = new Map();
+// ---- 常驻 web host 单例挂载（v0.13.0：getSingleton 本体在 lib/state.js，这里只挂本文件
+// 定义/组合的函数；routes/webui.js、index.js、tools/dsh-*.js 经 globalThis 单例调用）----
+// 说明：lib/state.js 的 getSingleton 只做初始化 + 字段兜底（ops/depTasks Map），函数挂载
+// 由各定义模块负责——本文件挂 closeProcess / collectDiagnostics / updateDsh /
+// startWebHost；lib/install.js 挂 installDeps / verifyDeps；lib/check.js 挂 checkDshUpdate
+// （见各文件尾部/挂载段）。模块加载顺序：dsh-run.js import lib → lib 顶层挂载先执行 →
+// 本文件挂载随后执行，单例字段齐全。
+const mountSingleton = () => {
+  const g = getSingleton();
   g.closeProcess = closeProcess;
-  // v0.8.3: 插件页连接失败自检——经单例挂载诊断收集函数（routes 不静态 import 本模块：
-  // Hana 带 ?t= 加载 tools，静态 import 会命中 Node ESM 固定 URL 缓存读到旧模块）
+  // v0.8.3: 插件页连接失败自检——经单例挂载诊断收集函数（routes 不静态 import 本模块）
   g.collectDiagnostics = collectWebDiagnostics;
-  // v0.8.6: deps 缺失项「安装依赖」按钮的后端部署逻辑（同挂单例纪律）
+  // v0.13.0: DSH 更新能力层（Agent 工具 dsh_update / 设置页桥接共用；组合 lib 能力）
+  g.updateDsh = updateDsh;
+  // v0.13.0: lib 能力挂载（getSingleton 本体在 lib/state.js 不再逐函数赋值，这里统一挂；
+  // installDeps/verifyDeps 在文件尾部原挂载点另有一次显式赋值，幂等）
   g.installDeps = installDepsFromPlugin;
-  // v0.8.7: 依赖运行级完整性验证（node cliBin --version 冒烟，结果缓存 g.depsSmoke）
   g.verifyDeps = verifyDepsSmoke;
+  g.checkDshUpdate = checkDshUpdate;
   return g;
-}
+};
+mountSingleton();
 
 // ---- deferred 唤醒（宿主原生后台任务通道，HRD wake.js 同协议）----
 // 工具发起时 deferred:register（登记 + 投递策略）→ 终态 resolve/fail → 宿主投递
@@ -452,22 +461,9 @@ function createOpEntry(opId, { task }) {
 }
 
 // ---- web host 生命周期：spawn dsh web（DSH_HOME 锁进插件数据目录）----
-// v0.6.0: dsh 依赖位置两形态——① 数据目录 dsh-pkg/（Agent npm i @deepseek-ai/dsh 部署的轻量分发形态，
-// 优先）；② 插件安装目录 node_modules（现役 zip 自带形态，兑底）。DSH_HOME 恒在数据目录。
-function resolveDshPkgDir(cfg) {
-  if (cfg?.dataDir) {
-    const candidate = join(cfg.dataDir, "dsh-pkg");
-    if (
-      existsSync(
-        join(candidate, "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js"),
-      )
-    ) {
-      return candidate;
-    }
-  }
-  return PLUGIN_ROOT;
-}
-
+// v0.13.0: dsh 依赖位置解析（resolveDshPkgDir）已提取到 lib/install.js——数据目录
+// dsh-pkg/ 优先（Agent npm i @deepseek-ai/dsh 部署的轻量分发形态），插件安装目录
+// node_modules 兑底（现役 zip 自带形态）。DSH_HOME 恒在数据目录。
 async function ensureWebHost(cfg) {
   const g = getSingleton();
   if (g.web?.ready) return g.web;
@@ -516,8 +512,9 @@ async function ensureWebHost(cfg) {
   // v0.8.1: 主题注入 overlay；v0.9.3: 宿主 provider 跟随 overlay——多份 patch 合并为
   // dsh-plugin/dsh-hanako.patch.yml.tpl 单一模板：段1 session-query 静态配置块 + 段2 theme
   // insert + 段3 provider insert（v0.9.5 起恒渲染：hostProvider 恒开跟随宿主，无关闭选项）
-  // + 段4 default-model insert（v0.9.5 起恒挂载）。
-  // cordis 插件加载：theme/provider/default-model/logger 四段均以包名注册（dsh client 模块发现
+  // + 段4 settings insert（v0.9.5 起恒挂载；v0.13.0 改名 dsh-hana-settings 并注入
+  // 「检查与更新 DSH」链路 config：dshPkgDir/npmCliPath/electronNode/dataDir）。
+  // cordis 插件加载：theme/provider/settings/logger 四段均以包名注册（dsh client 模块发现
   // 按 loader entry 的 name 做 require.resolve('<name>/package.json')，file:// 无法解析），
   // 故启动前须在 $DSH_HOME/profiles/node_modules 统一建 junction（包名 → 插件安装目录
   // dsh-plugin/<pkg>），与 dsh 自维护的 junction farm 同机制（ensureCordisJunctions
@@ -525,11 +522,12 @@ async function ensureWebHost(cfg) {
   // 启动前渲染模板（占位符→实际路径）到数据目录 dsh-hanako.patch.generated.yml；launcher
   // flag（--profile/--patch）必须位于应用参数（--port）之前。模板缺失/渲染失败时不挂
   // 任何 patch 记 warn（会话全文搜索保持上游默认禁用），不阻断 dsh 启动。
-  // v0.9.5 正规化升级：dsh-hana-default-model 先行改包名注册；本版 theme/provider 一并
-  // 正规化——dsh client 模块发现按 require.resolve('<name>/package.json') 找 package.json
-  // 的 dsh.client 声明，file:// 形式无法解析。包名解析锚点是 $DSH_HOME/profiles（baseUrl
-  // 父目录的 node_modules），启动前统一建 junction：$DSH_HOME/profiles/node_modules/
-  // <dsh-hana-theme|dsh-hana-provider|dsh-hana-default-model|dsh-hana-logger> → 插件安装目录
+  // v0.9.5 正规化升级：dsh-hana-settings 前身 dsh-hana-default-model 先行改包名注册；
+  // 本版 theme/provider 一并正规化——dsh client 模块发现按
+  // require.resolve('<name>/package.json') 找 package.json 的 dsh.client 声明，file://
+  // 形式无法解析。包名解析锚点是 $DSH_HOME/profiles（baseUrl 父目录的 node_modules），
+  // 启动前统一建 junction：$DSH_HOME/profiles/node_modules/
+  // <dsh-hana-theme|dsh-hana-provider|dsh-hana-settings|dsh-hana-logger> → 插件安装目录
   // dsh-plugin/<同名包>（与 dsh 自维护的 junction farm 同机制；dsh 的
   // healProfilesModuleFallback 只管理自身依赖闭包，不碰外来 link）。
   // 无条件重建：每次启动删旧建新（不比较 readlink）——junction 状态无条件收敛到当前
@@ -541,7 +539,7 @@ async function ensureWebHost(cfg) {
     const packages = [
       "dsh-hana-theme",
       "dsh-hana-provider",
-      "dsh-hana-default-model",
+      "dsh-hana-settings",
       "dsh-hana-logger",
     ];
     for (const pkg of packages) {
@@ -573,11 +571,13 @@ async function ensureWebHost(cfg) {
 
   const patchFiles = [];
   const patchTpl = join(PLUGIN_ROOT, "dsh-plugin", "dsh-hanako.patch.yml.tpl");
-  // 渲染 provider 的 config 依赖解析基座占位符（MODELS_PATH / CATALOG_PATH /
-  // DSH_PKG_DIR / LOG_PATH）——theme/provider/default-model 三段均以包名注册，不再有
-  // file:// URL 占位符；包名经 ensureCordisJunctions 的 junction 解析。LOG_PATH 为本次
-  // 会话日志文件路径，四个内嵌插件（theme/provider/default-model/logger）经统一日志
-  // 服务（dsh-hana-logger，inject ['hanaLogger']）写入同一文件（src 前缀不变）。
+  // 渲染各插件的 config 依赖解析基座占位符——theme/provider/settings/logger 四段均以
+  // 包名注册，不再有 file:// URL 占位符；包名经 ensureCordisJunctions 的 junction 解析。
+  // MODELS_PATH / CATALOG_PATH = 宿主 provider 两文件（provider 段）；DSH_PKG_DIR =
+  // dsh 包安装目录（provider/settings 段）；LOG_PATH = 本次会话日志文件路径（logger
+  // 段，四个内嵌插件经统一日志服务（dsh-hana-logger，inject ['hanaLogger']）写入同一
+  // 文件，src 前缀不变）；NPM_CLI_PATH / ELECTRON_NODE / DATA_DIR = settings 段
+  // 「检查与更新 DSH」链路（npm view 查远端版本 + 更新请求/结果文件写入数据目录）。
   const renderPatchTpl = () => {
     const gen = join(cfg.dataDir, "dsh-hanako.patch.generated.yml");
     let content = readFileSync(patchTpl, "utf8")
@@ -588,7 +588,15 @@ async function ensureWebHost(cfg) {
       .split("{{DSH_PKG_DIR}}")
       .join(cfg.dshPkgDir || resolveDshPkgDir(cfg))
       .split("{{LOG_PATH}}")
-      .join(logPath);
+      .join(logPath)
+      // v0.13.0: dsh-hana-settings「检查与更新 DSH」链路占位符（npm-cli.js 路径 /
+      // 宿主 electron node / 插件数据目录）
+      .split("{{NPM_CLI_PATH}}")
+      .join(join(PLUGIN_ROOT, "node_modules", "npm", "bin", "npm-cli.js"))
+      .split("{{ELECTRON_NODE}}")
+      .join(ELECTRON_NODE)
+      .split("{{DATA_DIR}}")
+      .join(cfg.dataDir);
     writeFileSync(gen, content, "utf8");
     return gen;
   };
@@ -831,6 +839,254 @@ function ensureProviderPushWatch(cfg) {
   );
 }
 
+// ---- DSH 检查能力（v0.13.0：checkDshUpdate / npmViewLatest / semver 比较 / 本地版本
+// 直读已提取到 lib/check.js + lib/install.js，经 getSingleton 挂 g.checkDshUpdate 供
+// Agent 工具 dsh_update / DSHana 标签页 webui 路由 / 设置页桥接三面共用，单一事实源）----
+
+// ---- 更新 DSH（能力层）：停 web host（closeProcess——回收子进程，Windows 文件锁前提：
+// npm i 要替换被 web host 占用的 dsh 包文件）→ installDepsFromPlugin（npm i
+// @deepseek-ai/dsh = 装 latest，成功即新版本）→ 起 web host（ensureWebHost，失败不阻断
+// 结果上报，记 error 字段）→ 读新版本。全程写 <dataDir>/update-result.json
+// { state: done|error, version?, error?, at }（dsh 设置页 update-status 路由读）。
+// 并发防护：g.updating 进行中重复调用返回 { ok:false, state:"updating" } 不重复执行；
+// 与 installDepsFromPlugin 内部 g.depsInstalling 独立（本标志管整条更新流程）。----
+async function updateDsh(cfg) {
+  const g = getSingleton();
+  if (g.updating) return { ok: false, state: "updating" };
+  g.updating = true;
+  g.updateError = null;
+  const dataDir = cfg.dataDir || g.dataDir;
+  const resultFile = join(dataDir, "update-result.json");
+  const requestFile = join(dataDir, "update-request.json");
+  const stamp = () => new Date().toISOString();
+  const log = (s) => {
+    try {
+      g.appendLog?.("hana", `[DSH 更新] ${s}`);
+    } catch {
+      /* 日志失败不阻断 */
+    }
+    console.log(`[dsh-run] DSH 更新：${s}`);
+  };
+  const writeResult = (obj) => {
+    try {
+      mkdirSync(dataDir, { recursive: true });
+      writeFileSync(resultFile, JSON.stringify(obj), "utf8");
+    } catch (e) {
+      log(`update-result.json 写入失败：${e?.message || e}`);
+    }
+  };
+  try {
+    // ① 进度态（前端轮询 update-status 可见）
+    writeResult({ state: "updating", at: stamp() });
+    // ② 停 web host（Windows 文件锁前提）
+    log("停止 web host…");
+    await closeProcess();
+    // ③ 装 latest（installDepsFromPlugin 内部有 g.depsInstalling 防并发；成功后
+    // 会自动运行级重验刷新 g.depsSmoke）
+    log("执行 npm i @deepseek-ai/dsh（latest）…");
+    const install = await installDepsFromPlugin(cfg, dataDir);
+    if (!install || !install.ok)
+      throw new Error(install?.error || "依赖安装失败");
+    // ④ 起新进程（失败不阻断结果上报，记 error 字段）
+    let restartError = null;
+    try {
+      await ensureWebHost(cfg);
+    } catch (e) {
+      restartError = String(e?.message || e).slice(0, 1500);
+      log(`web host 重启失败：${restartError}`);
+    }
+    // ④b 重启后重建宿主侧 watch——closeProcess 已清理旧 watch（provider 热跟随 + DSH
+    // 检查/更新桥接），ensureWebHost 本身不建 watch（只有 startWebHostFromPlugin 建），
+    // 不重建则更新后设置页检查/更新请求不再触发宿主处理
+    ensureProviderPushWatch(cfg);
+    ensureUpdateWatch(cfg);
+    // ⑤ 读新版本 → done（installDepsFromPlugin 已刷新 g.depsSmoke，优先用；无则直读 package.json）
+    const version =
+      (g.depsSmoke && !g.depsSmoke.running && g.depsSmoke.ok
+        ? g.depsSmoke.version
+        : null) ||
+      readDshInstalledVersion({ ...cfg, dataDir }) ||
+      null;
+    writeResult({
+      state: "done",
+      version,
+      ...(restartError ? { error: restartError } : {}),
+      at: stamp(),
+    });
+    log(
+      `更新完成（version=${version || "未知"}${restartError ? "，web host 重启失败：" + restartError : ""}）`,
+    );
+    return {
+      ok: true,
+      state: "done",
+      version,
+      ...(restartError ? { error: restartError } : {}),
+    };
+  } catch (e) {
+    const err = String(e?.message || e).slice(0, 1500);
+    g.updateError = err;
+    writeResult({ state: "error", error: err, at: stamp() });
+    log(`更新失败：${err}`);
+    return { ok: false, state: "error", error: err };
+  } finally {
+    // ⑥ 清 update-request.json（写回 idle，防重复触发）
+    try {
+      writeFileSync(requestFile, JSON.stringify({ state: "idle" }), "utf8");
+    } catch {
+      /* 清理失败不阻断 */
+    }
+    // ⑦ 解锁
+    g.updating = false;
+  }
+}
+
+// ---- 宿主侧 DSH 检查/更新桥接 watch（v0.13.0：dsh 设置页「DSH 版本」块 → 宿主能力层）----
+// 语义：dsh-hana-settings 插件写 <dataDir>/update-request.json（state: 'check-requested'
+// 请求版本检查 / 'requested' 请求更新），宿主侧经 ctx.resources.watch 感知变化（bus 派发
+// resource.changed，resourceKey 格式 local_fs:<path>）→ 读文件按 state 分发：
+//   check-requested → checkDshUpdate（结果写 check-result.json，dsh 侧路由读回）
+//   requested → updateDsh（写 update-result.json，npm i latest + 重启 web host）
+// 防抖去重：用能力层自身运行期标志——检查 g.checking / 更新 g.updating 进行中重复请求
+// 直接跳过（在飞操作的结果会写对应结果文件）；检查另加 5s 时间窗（刚检查过不重复跑
+// npm view，结果已在 check-result.json）。watch 建立失败降级不阻断（设置页版本块仍可
+// 显示本地版本，检查/更新按钮请求写入后无人消费——降级可接受）。
+// 幂等：startWebHost 重复调用 / web host 重建时先清理旧 watch 再建；cleanup 挂单例
+// g.updateWatchCleanup，closeProcess 回收 web host 时调用（退订 bus + 关 watchers）。
+function ensureUpdateWatch(cfg) {
+  const g = getSingleton();
+  // 幂等：先清理旧 watch + 退订（startWebHost 重复调用 / web host 重建时）
+  if (typeof g.updateWatchCleanup === "function") {
+    try {
+      g.updateWatchCleanup();
+    } catch {
+      /* 清理失败不阻断 */
+    }
+    g.updateWatchCleanup = null;
+  }
+  const resources = g.resources;
+  const bus = g.bus;
+  // resources/bus 缺失（旧宿主无此服务 / onload 未注入）：降级不阻断
+  if (!resources || typeof resources.watch !== "function") {
+    console.warn(
+      "[dsh-run] 宿主 resources 不可用，DSH 检查/更新桥接 watch 未建立（设置页检查/更新请求将不触发宿主处理）",
+    );
+    return;
+  }
+  if (!bus || typeof bus.subscribe !== "function") {
+    console.warn(
+      "[dsh-run] 宿主 bus 不可用，DSH 检查/更新桥接 watch 未建立（设置页检查/更新请求将不触发宿主处理）",
+    );
+    return;
+  }
+  const dataDir = cfg.dataDir || g.dataDir;
+  if (!dataDir) {
+    console.warn("[dsh-run] 缺少 dataDir，DSH 检查/更新桥接 watch 未建立");
+    return;
+  }
+  const path = join(dataDir, "update-request.json");
+  // watch 前确保文件存在（不存在则写 { state: 'idle' } 占位——resources.watch 对不存在的
+  // 文件可能不派发事件，占位保证文件系统就位后变化可感知）
+  try {
+    if (!existsSync(path)) {
+      mkdirSync(dataDir, { recursive: true });
+      writeFileSync(path, JSON.stringify({ state: "idle" }), "utf8");
+    }
+  } catch (e) {
+    console.warn(
+      `[dsh-run] update-request.json 占位写入失败（${e?.message || e}），检查/更新桥接 watch 未建立`,
+    );
+    return;
+  }
+  const handles = [];
+  const resourceKeys = new Set();
+  try {
+    const handle = resources.watch(
+      { kind: "local-file", path },
+      { purpose: "dsh-hana-update" },
+    );
+    handles.push(handle);
+    // watch 返回 { subscriptionId, resourceKeys, unsubscribe, close }：resourceKeys 即
+    // 事件过滤键（格式 local_fs:<path>）；无 resourceKeys 时按约定格式兜底
+    if (Array.isArray(handle?.resourceKeys) && handle.resourceKeys.length > 0) {
+      for (const key of handle.resourceKeys) resourceKeys.add(key);
+    } else {
+      resourceKeys.add(`local_fs:${path}`);
+    }
+  } catch (e) {
+    console.warn(
+      `[dsh-run] DSH 检查/更新桥接 watch 建立失败 ${path}（${e?.message || e}），设置页检查/更新请求将不触发宿主处理`,
+    );
+    return;
+  }
+  // bus.subscribe 返回 unsubscribe 函数（SDK 类型 () => void）；防御性兼容 { unsubscribe } 形状
+  const unsub = bus.subscribe((event) => {
+    if (!event || typeof event !== "object") return;
+    if (event.type !== "resource.changed") return;
+    const key = event.resourceKey;
+    if (typeof key === "string" && resourceKeys.has(key)) {
+      onBridgeRequestChanged(dataDir, path, cfg);
+    }
+  });
+  g.updateWatchCleanup = () => {
+    for (const handle of handles) {
+      try {
+        handle?.unsubscribe?.();
+      } catch {
+        /* 已关闭 */
+      }
+    }
+    handles.length = 0;
+    resourceKeys.clear();
+    if (typeof unsub === "function") {
+      try {
+        unsub();
+      } catch {
+        /* 退订失败忽略 */
+      }
+    } else if (unsub && typeof unsub.unsubscribe === "function") {
+      try {
+        unsub.unsubscribe();
+      } catch {
+        /* 退订失败忽略 */
+      }
+    }
+    g.updateWatchCleanup = null;
+  };
+  console.log(
+    `[dsh-run] DSH 检查/更新桥接 watch 已建立（${path}），设置页检查/更新请求将触发宿主处理`,
+  );
+}
+
+// update-request.json 变化分发（check-requested → 版本检查；requested → 更新）。
+// 防抖去重：检查/更新进行中（g.checking / g.updating）直接跳过——在飞操作的结果会写
+// 对应结果文件；检查另加 5s 时间窗（刚检查过不重复跑 npm view）。失败只记日志不抛出。
+function onBridgeRequestChanged(dataDir, path, cfg) {
+  const g = getSingleton();
+  let req = null;
+  try {
+    req = JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return; // 解析失败/不存在：忽略
+  }
+  if (!req || typeof req !== "object") return;
+  if (req.state === "check-requested") {
+    if (g.checking || g.updating) return; // 进行中：跳过（在飞操作的结果会写 check-result.json）
+    if (g.checkAt && Date.now() - g.checkAt < 5000) return; // 5s 内刚检查过：结果已在 check-result.json
+    console.log(
+      "[dsh-run] 收到 DSH 版本检查请求（设置页），执行 checkDshUpdate",
+    );
+    checkDshUpdate(cfg).catch((e) => {
+      console.warn(`[dsh-run] 版本检查异常：${e?.message || e}`);
+    });
+  } else if (req.state === "requested") {
+    if (g.updating) return; // 更新中：跳过（重复触发防护）
+    console.log("[dsh-run] 收到 DSH 更新请求（设置页），执行 updateDsh");
+    updateDsh(cfg).catch((e) => {
+      console.warn(`[dsh-run] DSH 更新异常：${e?.message || e}`);
+    });
+  }
+}
+
 // push dsh web host 刷新（回环调用 127.0.0.1:{port}，5s 超时；成功/失败都 console.log 简记，
 // 失败不阻断——web host 未起/端口未就绪时静默忽略，dsh 侧启动时已 refresh 一次）
 async function pushProviderRefresh(port) {
@@ -878,6 +1134,9 @@ getSingleton().startWebHost = async function startWebHostFromPlugin(
     await ensureWebHost(cfg);
     // v0.10.7: web host 就绪后建立宿主侧 provider 跟随 push watch（幂等：先清理旧 watch 再建）
     ensureProviderPushWatch(cfg);
+    // v0.13.0: DSH 检查/更新桥接 watch（幂等）：dsh 设置页「DSH 版本」块写
+    // update-request.json → 宿主 checkDshUpdate / updateDsh（单一事实源）
+    ensureUpdateWatch(cfg);
     return true;
   } catch (e) {
     // 记录失败原因供诊断（onload 侧只能看到布尔）；后续工具调用重试
@@ -894,236 +1153,10 @@ getSingleton().startWebHost = async function startWebHostFromPlugin(
   }
 };
 
-// ---- 依赖自主部署（v0.8.6: deps 缺失项「安装依赖」按钮的后端逻辑）----
-// 参照技能文档 dsh-hanako/SKILL.md 依赖自主部署章节：部署目标恒为数据目录 dsh-pkg
-// （升级安装会清插件目录 node_modules，数据目录随插件生命周期保留；不部署到插件根），
-// 把插件根的 package.json 复制进去，在 pkgDir 下创建指向宿主 electron node 的代理脚本，
-// 然后执行 npm i @deepseek-ai/dsh --omit=dev --loglevel=http。
-// 关键：PATH 首部指向 pkgDir——代理脚本（node.cmd/node）将子进程 node 请求转发到宿主 electron node，
-// koffi/node-pty 的 install script 经 cmd 起子进程 node 时就能找到宿主 electron node。
-// --omit=dev 剔除 rspack 构建树（peer 自动装默认开启，保留 dsh 树）。
-// registry 默认官方源，失败自动重试 npmmirror。部署是长任务：本函数异步
-// 执行不 await（调用方立即返回，页面靠轮询诊断刷新）；状态记单例 g.depsInstalling /
-// g.depsInstallError / g.depsInstallAt / g.depsInstallLog（≤800）。
-async function installDepsFromPlugin(ctxConfig, ctxDataDir) {
-  const g = getSingleton();
-  // 部署中并发调用直接返回（路由侧也会先查 g.depsInstalling，这里是直调兜底）
-  if (g.depsInstalling) return { ok: false, state: "installing" };
-  const cfg = { ...manifestDefaults };
-  for (const [k, v] of Object.entries(ctxConfig || {})) {
-    if (v !== undefined && v !== null && v !== "") cfg[k] = v;
-  }
-  const dataDir = ctxDataDir || g.dataDir || join(PLUGIN_ROOT, "data");
-  cfg.dataDir = dataDir;
-  g.depsInstalling = true;
-  g.depsInstallError = null;
-  g.depsInstallAt = new Date().toISOString();
-  g.depsInstallLog = "";
-  // v0.8.8: log 写入也刷新最近更新时间（前端 installing 态显示「更新于 HH:MM:SS」）
-  const log = (s) => {
-    g.depsInstallLog = (g.depsInstallLog + String(s)).slice(-800);
-    g.depsInstallAt = new Date().toISOString();
-  };
-  try {
-    // 1. 部署目录 = 数据目录 dsh-pkg（mkdir recursive，不存在则建）
-    const pkgDir = join(dataDir, "dsh-pkg");
-    mkdirSync(pkgDir, { recursive: true });
-    // 2. 复制插件根 package.json
-    const srcPkg = join(PLUGIN_ROOT, "package.json");
-    if (!existsSync(srcPkg))
-      throw new Error("插件根缺少 package.json：" + srcPkg);
-    copyFileSync(srcPkg, join(pkgDir, "package.json"));
-    log("Copied package.json to " + pkgDir);
-    // 3. 创建 node 代理，定位 npm-cli.js
-    if (IS_WIN) {
-      const script = join(pkgDir, "node.cmd");
-      const content = `@"${ELECTRON_NODE}" %*\n`;
-      writeFileSync(script, content);
-    } else {
-      const script = join(pkgDir, "node");
-      const content = `#!/bin/sh\nexec "${ELECTRON_NODE}" "$@"\n`;
-      writeFileSync(script, content, { mode: 0o755 });
-    }
-    log("Created proxy node at" + pkgDir);
-    const npmCli = join(
-      PLUGIN_ROOT,
-      "node_modules",
-      "npm",
-      "bin",
-      "npm-cli.js",
-    );
-    if (!existsSync(npmCli)) {
-      throw new Error("npm-cli.js 不存在：" + npmCli);
-    }
-    // 4. npm i @deepseek-ai/dsh：--omit=dev 剔除构建树；PATH 首部指向 pkgDir（代理脚本 node.cmd/node 让 install script 找到宿主 electron node）
-    const run = async (registryArgs) => {
-      const child = spawn(
-        ELECTRON_NODE,
-        [
-          npmCli,
-          "i",
-          "@deepseek-ai/dsh",
-          "--omit=dev",
-          "--loglevel=http",
-          ...registryArgs,
-        ],
-        {
-          cwd: pkgDir,
-          stdio: ["ignore", "pipe", "pipe"],
-          env: {
-            ...ELECTRON_NODE_ENV,
-            PATH: pkgDir + delimiter + (process.env.PATH || ""),
-          },
-          windowsHide: true,
-        },
-      );
-      let out = ""; // 仅用于错误信息提取（失败时拼进错误文本）
-      // v0.8.8: npm i 输出流式累积到 depsInstallLog（≤800 截断）+ 每次 data 刷新
-      // depsInstallAt——前端 3s 轮询 health 会随诊断刷新 installLog 尾部，呈现实时进度
-      const cap = (d) => {
-        out += String(d);
-        g.depsInstallLog += String(d);
-        g.depsInstallAt = new Date().toISOString();
-      };
-      child.stdout.on("data", cap);
-      child.stderr.on("data", cap);
-      const code = await new Promise((res) => child.once("close", res));
-      g.appendLog("npm", out);
-      if (code !== 0)
-        throw new Error(
-          "npm i 失败 @deepseek-ai/dsh（exit " +
-            code +
-            "）：" +
-            (out.slice(-300) || "无输出"),
-        );
-      return out;
-    };
-    try {
-      await run([]); // 官方源
-    } catch (e) {
-      log("[官方源失败] " + e.message + "，重试 npmmirror…");
-      await run(["--registry=https://registry.npmmirror.com"]);
-    }
-    // 5. 校验 dsh 包就位（resolveDshPkgDir 优先 dsh-pkg，这里 cliBin 即部署产物）
-    const cliBin = join(
-      pkgDir,
-      "node_modules",
-      "@deepseek-ai",
-      "dsh",
-      "lib",
-      "bin.js",
-    );
-    if (!existsSync(cliBin)) {
-      throw new Error(
-        "npm i 完成但未找到 dsh 包：" +
-          cliBin +
-          " 不存在（部署目录 " +
-          pkgDir +
-          "）",
-      );
-    }
-    g.depsInstallError = null;
-    log("[完成] " + cliBin);
-    // v0.8.7: 部署成功后强制运行级重验（清旧缓存，await 刷新——安装流程本身就是等待场景）
-    g.depsSmoke = null;
-    await verifyDepsSmoke(cfg);
-    return { ok: true, state: "installed", cliBin };
-  } catch (e) {
-    g.depsInstallError = String(e?.message || e).slice(0, 1500);
-    log("[失败] " + g.depsInstallError);
-    return { ok: false, state: "error", error: g.depsInstallError };
-  } finally {
-    g.depsInstalling = false;
-  }
-}
-// 挂单例（getSingleton() 内也有同款赋值，这里显式建立一次）
+// v0.13.0: installDepsFromPlugin / verifyDepsSmoke 已提取到 lib/install.js（本文件顶部
+// import），这里显式挂单例（getSingleton 本体在 lib/state.js 不再逐函数赋值；mountSingleton
+// 与 lib 侧挂载保持同款幂等语义）。routes/webui.js 经 g.installDeps / g.verifyDeps 调用。
 getSingleton().installDeps = installDepsFromPlugin;
-
-// ---- 依赖运行级完整性验证（v0.8.7: deps 存在性之外的加载冒烟）----
-// dsh 是 cordis 生态，模块图挂大量 peer 依赖（dsh-agent/dsh-llm-deepseek/dsh-tool-* 等）：
-// npm i 中断 / install script 失败未回滚 / --omit=peer 误用都会造成「入口文件在、依赖缺」
-// 的假就绪，运行时才抛 ERR_MODULE_NOT_FOUND。文件存在 ≠ 依赖完整。
-// 可靠检测 = 运行级验证「node <cliBin> --version」：node 沿 import 图加载整个 cordis 模块树，
-// 任何依赖缺失都会抛错且退出码非 0（技能文档「部署后验证 node lib/bin.js --version 应输出
-// 0.1.0-rc.6」同款逻辑）。能跑 = 依赖图完整。
-// 防并发/防轮询风暴：结果缓存到单例 g.depsSmoke = { ok, version, error, stderr, at, running }；
-// running=true 时直接返回当前缓存不重复 spawn（spawn 一次 --version 数百 ms，3s 轮询 ×
-// 每次 spawn 不可接受，必须缓存 + running 标志）。v0.8.8 起触发时机：进标签页自动一次 +
-// 手动「检测依赖」按钮（经 GET /webui/verify-deps 驱动）/ installDeps 部署成功后强制重验。
-async function verifyDepsSmoke(cfg) {
-  const g = getSingleton();
-  // 防并发：验证进行中直接返回当前缓存（不重复 spawn）
-  if (g.depsSmoke?.running) return g.depsSmoke;
-  const dataDir =
-    cfg.dataDir || g.dataDir || (g.web?.dshHome ? dirname(g.web.dshHome) : "");
-  const diagCfg = { ...cfg, dataDir };
-  const pkgDir = resolveDshPkgDir(diagCfg);
-  const cliBin = join(
-    pkgDir,
-    "node_modules",
-    "@deepseek-ai",
-    "dsh",
-    "lib",
-    "bin.js",
-  );
-  const smoke = {
-    ok: false,
-    version: null,
-    error: "",
-    stderr: "",
-    at: "",
-    running: true,
-  };
-  g.depsSmoke = smoke;
-  try {
-    if (!existsSync(cliBin)) throw new Error("cliBin 不存在：" + cliBin);
-    // spawn node cliBin --version，10s 超时兜底（child.kill）；capture stdout+stderr
-    const child = spawn(ELECTRON_NODE, [cliBin, "--version"], {
-      cwd: dirname(cliBin),
-      stdio: ["ignore", "pipe", "pipe"],
-      env: ELECTRON_NODE_ENV,
-      windowsHide: true,
-    });
-    let out = "";
-    let err = "";
-    child.stdout.on("data", (d) => {
-      out = (out + String(d)).slice(-800);
-    });
-    child.stderr.on("data", (d) => {
-      err = (err + String(d)).slice(-800);
-    });
-    const timer = setTimeout(() => {
-      try {
-        child.kill();
-      } catch {
-        /* 已退出 */
-      }
-    }, 10000);
-    const code = await new Promise((res) => child.once("close", res));
-    clearTimeout(timer);
-    const stdout = out.trim();
-    const version = (stdout.match(/^\s*(\d+\.\d+\.\d+)/) || [])[1] || null;
-    if (code === 0 && version) {
-      smoke.ok = true;
-      smoke.version = version;
-      smoke.error = "";
-      smoke.stderr = err.slice(-400);
-    } else {
-      // 真实错误（ERR_MODULE_NOT_FOUND 等）截断 ≤400 存入 error
-      smoke.ok = false;
-      smoke.error = String(err || out || "退出码 " + code).slice(0, 400);
-      smoke.stderr = String(err || out).slice(-400);
-    }
-  } catch (e) {
-    smoke.ok = false;
-    smoke.error = String(e?.message || e).slice(0, 400);
-  } finally {
-    smoke.at = new Date().toISOString();
-    smoke.running = false;
-  }
-  return smoke;
-}
-// 挂单例（getSingleton() 内也有同款赋值，这里显式建立一次）
 getSingleton().verifyDeps = verifyDepsSmoke;
 
 // ---- 连接失败自检（v0.8.3: 插件页 web host 未就绪时的诊断数据源）----
@@ -1167,6 +1200,10 @@ export function collectWebDiagnostics(cfg = {}) {
 /** ① dsh 依赖：cliBin 存在性（resolveDshPkgDir 同款：数据目录 dsh-pkg 优先，插件根兑底）
  * v0.8.6: 叠加部署状态——g.depsInstalling（npm i 进行中）/ g.depsInstallError（上次失败）/ g.depsInstallLog
  * v0.8.7: 叠加运行级完整性验证——g.depsSmoke（verifyDepsSmoke 缓存 { ok, version, error, stderr, at, running }）。
+ * v0.13.0: 叠加版本/检查/更新状态——version（当前版本）、check（最近一次 checkDshUpdate
+ * 缓存：latest/updateAvailable/at/error）、checking/updating（进行中）、updateResult
+ * （update-result.json 文件内容：state/version/error/at）——deps 卡片版本行 + 「检查更新」
+ * 「更新 DSH」按钮数据源。
  * ok 判定升级：存在 且（未验证/验证中视为暂通过，验证过必须通过）——文件存在 ≠ 依赖完整。 */
 function buildDepsDiagCheck(g, cfg) {
   const pkgDir = resolveDshPkgDir(cfg);
@@ -1205,6 +1242,24 @@ function buildDepsDiagCheck(g, cfg) {
       : null;
   const verifyVersion = smoke?.version ?? null;
   const verifyAt = smoke?.at ?? null;
+  // v0.13.0: 当前版本（运行级验证缓存优先，无则直读 dsh-pkg package.json）+ 版本检查
+  // 状态（g.checkResult 缓存：最近一次 checkDshUpdate 结果）+ 更新状态（g.updating /
+  // g.updateError + update-result.json 文件内容）。只回非敏感布尔/版本号/截断文本。
+  const currentVersion =
+    (smoke && !smoke.running && smoke.ok ? smoke.version : null) ||
+    readDshInstalledVersion(cfg) ||
+    null;
+  const checkResult = g.checkResult || null;
+  const checking = Boolean(g.checking);
+  const updating = Boolean(g.updating);
+  const updateError = String(g.updateError || "").slice(0, 300);
+  let updateResult = null;
+  try {
+    const uf = join(cfg.dataDir, "update-result.json");
+    if (existsSync(uf)) updateResult = JSON.parse(readFileSync(uf, "utf8"));
+  } catch {
+    /* 解析失败忽略 */
+  }
   // ok：存在 且（未验证/验证中暂通过；验证过必须通过）——验证失败 → ok=false
   const ok = installed && (!smoke || smoke.ok || smoke.running);
   const check = {
@@ -1223,6 +1278,18 @@ function buildDepsDiagCheck(g, cfg) {
     installAt,
     pkgDir,
     cliBin,
+    // v0.13.0: 版本/检查/更新状态（deps 卡片版本行 + 检查更新/更新 DSH 按钮）
+    version: currentVersion,
+    check: {
+      latest: checkResult?.latestVersion ?? null,
+      updateAvailable: Boolean(checkResult?.updateAvailable),
+      at: checkResult?.at || null,
+      error: String(checkResult?.error || "").slice(0, 300) || null,
+    },
+    checking,
+    updating,
+    updateError: updateError || null,
+    updateResult,
     detail: "",
     fix: "",
   };
@@ -1257,7 +1324,10 @@ function buildDepsDiagCheck(g, cfg) {
   } else {
     // 存在 + 验证通过：能跑 = 依赖图完整
     check.detail =
-      "dsh 包已就绪（运行级验证通过，版本 v" + smoke.version + "）：" + cliBin;
+      "dsh 包已就绪（运行级验证通过，版本 v" +
+      (currentVersion || smoke?.version || "?") +
+      "）：" +
+      cliBin;
   }
   return check;
 }
@@ -1366,10 +1436,17 @@ function pickProcessFix(lastError, stderr, port) {
 
 export async function closeProcess() {
   const g = getSingleton();
-  // 先清理 provider 热跟随 watch（退订 bus + 关 watchers），再回收 web host 进程
+  // 先清理 watch（provider 热跟随 + DSH 检查/更新桥接），再回收 web host 进程
   if (typeof g.providerPushCleanup === "function") {
     try {
       g.providerPushCleanup();
+    } catch {
+      /* 清理失败不阻断 */
+    }
+  }
+  if (typeof g.updateWatchCleanup === "function") {
+    try {
+      g.updateWatchCleanup();
     } catch {
       /* 清理失败不阻断 */
     }
@@ -2131,21 +2208,10 @@ function submitTask(
 export const name = "dsh_run";
 
 export const description =
-  "把任务交给 DeepSeek Harness（dsh，DeepSeek 官方开源 agent harness）的常驻 web host 执行。" +
-  "dsh 是一个完整编码 agent：DeepSeek 官方 API、沙箱 bash 与文件系统工具、上下文压缩、subagent 级联。" +
-  "适合：需要独立 agent 上下文深度执行的代码任务（实现/重构/调试/测试）、需要沙箱 shell 的实验、" +
-  "或需要与当前对话隔离的长任务。任务文本会作为用户消息发给 dsh 编码 agent；cwd 是其沙箱工作目录。" +
-  "默认异步：立即返回任务已提交（对话中渲染运行卡片，实时显示进度与输出），任务完成后宿主自动唤醒、" +
-  "结果随后台消息送达。传 wait=true 可同步等待最终结果直接返回。失败时抛出错误说明原因。" +
-  "任务会话在 dsh Web UI（webPort 端口，默认 3080）中可见且持久化，可随时浏览器查看/继续。" +
-  "回调压缩（PTC 式）：异步完成回调默认只带最终结论摘要（callbackMode=summary，省上下文），完整输出在卡片与 dsh web UI 可查；设 callbackMode=full 可回传全量。" +
-  "审批：dsh agent 请求越界权限时任务挂起，插件经 deferred 通道发来 dsh-approval 通知（带 opId/approvalId/理由/命令参数原文），用 dsh_approve 工具应答（allowed-once/rejected）；无人应答超时自动拒绝（approvalTimeoutMs，0=禁用）；也可在 dsh Web UI 人工处理。" +
-  "agentPreset：任务可指定 agent 预设模式（standard/code/cordis/minimal），缺省不指定，用 dsh 默认（dsh Web UI 可调）。" +
-  "reasoningEffort：任务可显式指定推理强度（off/high/max）；不传时不指定，由 dsh 默认处理（通常 high）。" +
-  "provider/model：任务可显式指定模型（如 provider=deepseek model=deepseek-v4-flash），" +
-  "传了则 selectModel 覆盖 dsh 默认（dsh 会把所选模型写回全局默认 settings.yaml，显式指定即成为新默认）；" +
-  "都不传则任务直接用 dsh 默认模型（settings.yaml agent-default-model），不 selectModel。" +
-  "resume：传 sessionId 复用已有会话继续任务（agent 保留上文），省上下文重建。resume 时以会话已有 cwd 为准（自动查询沿用，无需传 cwd）。";
+  "把任务交给 DeepSeek Harness（dsh）的常驻 web host 执行（完整编码 agent：沙箱 shell 与文件系统、上下文压缩、subagent 级联）。" +
+  "适合需要独立 agent 上下文深度执行的代码任务（实现/重构/调试/测试）或与当前对话隔离的长任务。" +
+  "默认异步：提交即渲染实时卡片、完成后宿主唤醒结果后台送达；wait=true 同步直接返回。任务会话在 dsh Web UI（webPort，默认 3080）可见可继续。" +
+  "完整调用手册（agentPreset/reasoningEffort/provider/model/sessionId resume/审批/回调模式）见 SKILL: skills/dsh-run/SKILL.md";
 
 export const parameters = {
   type: "object",

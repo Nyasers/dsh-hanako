@@ -17,24 +17,25 @@ const __here = dirname(fileURLToPath(import.meta.url));
 let PLUGIN_ROOT = __here;
 while (!existsSync(join(PLUGIN_ROOT, "manifest.json"))) {
   const parent = dirname(PLUGIN_ROOT);
-  if (parent === PLUGIN_ROOT) throw new Error("无法定位插件根：向上未找到 manifest.json");
+  if (parent === PLUGIN_ROOT)
+    throw new Error("无法定位插件根：向上未找到 manifest.json");
   PLUGIN_ROOT = parent;
 }
 
 export const name = "dsh_ops";
 
 export const description =
-  "查询 dsh 会话清单与摘要（解析 dsh 官方会话持久化缓存 session_projcache.json，dsh 侧持久化、重启后仍可查）：" +
-  "按最近提示时间（lastPromptAt）最新在前，limit 控制返回条数（默认 10，有效范围 1~100）。" +
-  "返回 sessionId/标题/cwd/创建时间/最近提示时间/token usage/会话统计（turns/steps/llmMs），供对账与回溯。" +
-  "需要按内容搜索历史会话用 dsh_search（命中拿 sessionId 再 resume）";
+  "查询 dsh 会话清单与摘要（解析 dsh 会话缓存 session_projcache，dsh 侧持久化、重启后仍可查）：" +
+  "最新在前，limit 默认 10（1~100）。返回 sessionId/标题/cwd/时间/usage/会话统计，供对账与回溯。" +
+  "按内容搜索历史会话用 dsh_search。完整调用手册见 SKILL: skills/dsh-ops/SKILL.md";
 
 export const parameters = {
   type: "object",
   properties: {
     limit: {
       type: "integer",
-      description: "返回条数（按 lastPromptAt 最新在前，取最近 N 条）：默认 10，有效范围 1~100，超出自动收敛到边界",
+      description:
+        "返回条数（按 lastPromptAt 最新在前，取最近 N 条）：默认 10，有效范围 1~100，超出自动收敛到边界",
     },
   },
   required: [],
@@ -44,7 +45,8 @@ export const sessionPermission = {
   kind: "external_side_effect",
   describeSideEffect: () => ({
     kind: "local_read",
-    summary: "读取 dsh 会话持久化缓存 session_projcache.json（dsh 官方 proj cache，本地只读）",
+    summary:
+      "读取 dsh 会话持久化缓存 session_projcache.json（dsh 官方 proj cache，本地只读）",
     ruleId: "dsh-hanako-ops",
   }),
 };
@@ -61,7 +63,12 @@ function clampLimit(raw) {
 async function doExecute(input, ctx) {
   const g = globalThis.__dshHanako;
   const dataDir = g?.dataDir || join(PLUGIN_ROOT, "data");
-  const cachePath = join(dataDir, "dsh-home", "storages", "session_projcache.json");
+  const cachePath = join(
+    dataDir,
+    "dsh-home",
+    "storages",
+    "session_projcache.json",
+  );
   const limit = clampLimit(input.limit);
 
   // 读 + JSON.parse 整个文件：任何异常（文件不存在 / JSON 损坏 / 结构不符）返回空结果，不抛错
@@ -70,7 +77,9 @@ async function doExecute(input, ctx) {
     const j = JSON.parse(readFileSync(cachePath, "utf8"));
     const tbl = j?.tables?.sessions;
     if (tbl && typeof tbl === "object" && !Array.isArray(tbl)) sessions = tbl;
-  } catch { /* 数据源不可用：按空清单处理 */ }
+  } catch {
+    /* 数据源不可用：按空清单处理 */
+  }
 
   // 遍历 tables.sessions（对象 map），每条映射摘要对象：字段存在才带（null 兜底）
   const items = [];
@@ -80,7 +89,8 @@ async function doExecute(input, ctx) {
       const identity = s.identity || {};
       const rows = s.rows || {};
       const createdAt = identity.createdAt;
-      const lastPromptAt = rows.sessionListMetadata?.val?.lastPromptAt ?? createdAt;
+      const lastPromptAt =
+        rows.sessionListMetadata?.val?.lastPromptAt ?? createdAt;
       const item = { sessionId, title: String(rows.title?.val ?? "") }; // title null → ""
       if (identity.cwd != null) item.cwd = identity.cwd;
       if (createdAt != null) item.createdAt = createdAt;
@@ -98,7 +108,9 @@ async function doExecute(input, ctx) {
   }
 
   // 排序：lastPromptAt 降序（最新在前；缺失时兜底 createdAt，仍缺失排最后）
-  items.sort((a, b) => (b.lastPromptAt ?? -Infinity) - (a.lastPromptAt ?? -Infinity));
+  items.sort(
+    (a, b) => (b.lastPromptAt ?? -Infinity) - (a.lastPromptAt ?? -Infinity),
+  );
   const top = items.slice(0, limit);
 
   if (top.length === 0) {
@@ -108,10 +120,16 @@ async function doExecute(input, ctx) {
     };
   }
 
-  const lines = top.map((s) => `${s.sessionId} · ${String(s.title).slice(0, 40)} · ${String(s.cwd ?? "")}`);
+  const lines = top.map(
+    (s) =>
+      `${s.sessionId} · ${String(s.title).slice(0, 40)} · ${String(s.cwd ?? "")}`,
+  );
   return {
     content: [
-      { type: "text", text: `dsh 会话清单（共 ${items.length} 条，最新 ${top.length} 条）：\n${lines.join("\n")}` },
+      {
+        type: "text",
+        text: `dsh 会话清单（共 ${items.length} 条，最新 ${top.length} 条）：\n${lines.join("\n")}`,
+      },
     ],
     details: { dsh: { count: items.length, limit, sessions: top } },
   };
@@ -121,7 +139,10 @@ export async function execute(input, ctx) {
   try {
     return await doExecute(input, ctx);
   } catch (e) {
-    ctx.log?.error?.("[dsh-hanako] dsh_ops failed:", e?.stack || e?.message || String(e));
+    ctx.log?.error?.(
+      "[dsh-hanako] dsh_ops failed:",
+      e?.stack || e?.message || String(e),
+    );
     throw e;
   }
 }
