@@ -94,9 +94,16 @@ function buildShell({
   colorScheme,
   diagnostics,
 }) {
+  // v0.13.2：dsh WebUI iframe 权限显式声明。宿主插件 iframe 的 sandbox 仅含
+  // allow-scripts/allow-forms/allow-popups/allow-same-origin 且无 allow 属性；
+  // 内层裸嵌 iframe 未声明时继承该受限集合（downloads/modals/pointer-lock 被连坐），
+  // 且跨源（127.0.0.1:<port> ≠ 宿主 origin）时 permissions policy 默认 self
+  // 对 clipboard/fullscreen/autoplay 一律 deny。显式声明 sandbox + allow 覆盖继承。
+  const IFRAME_SANDBOX = "allow-scripts allow-same-origin allow-forms allow-popups allow-downloads allow-modals allow-pointer-lock";
+  const IFRAME_ALLOW = "clipboard-read; clipboard-write; fullscreen; autoplay";
   const iframe = ready
-    ? `<iframe id="dsh-frame" src="http://127.0.0.1:${port}/"></iframe>`
-    : `<iframe id="dsh-frame"></iframe>`;
+    ? `<iframe id="dsh-frame" src="http://127.0.0.1:${port}/" sandbox="${IFRAME_SANDBOX}" allow="${IFRAME_ALLOW}"></iframe>`
+    : `<iframe id="dsh-frame" sandbox="${IFRAME_SANDBOX}" allow="${IFRAME_ALLOW}"></iframe>`;
   // 嵌入首帧自检 JSON：把 </ 转义成 <\/，防诊断文本（路径/stderr）里的 </script> 提前闭合脚本
   const initDiag = diagnostics
     ? JSON.stringify(diagnostics).replace(/<\//g, "<\\/")
