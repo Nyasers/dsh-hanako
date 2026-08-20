@@ -30,20 +30,33 @@ export const inject = ["hanaLogger"];
 
 // 默认主题 fallback（Hana 默认 new-warm-paper；仅桥不可用时兜底）
 const DEFAULT_THEME = {
-  bg: "#F5EFE4", bgCard: "#FBF7EE", sidebarBg: "#EFE8DB",
-  text: "#2A2622", textLight: "#4A433C", textMuted: "#6B6158",
-  accent: "#537D96", accentHover: "#3F6179", accentLight: "rgba(83,125,150,0.08)",
-  border: "#D8CFBE", green: "#4A6B4A", danger: "#8B2C1F",
-  userBg: "rgba(83,125,150,0.08)", overlayStrong: "rgba(42,38,34,0.15)",
-  overlayMedium: "rgba(42,38,34,0.08)", dropOverlayBg: "rgba(245,239,228,0.85)",
+  bg: "#F5EFE4",
+  bgCard: "#FBF7EE",
+  sidebarBg: "#EFE8DB",
+  text: "#2A2622",
+  textLight: "#4A433C",
+  textMuted: "#6B6158",
+  accent: "#537D96",
+  accentHover: "#3F6179",
+  accentLight: "rgba(83,125,150,0.08)",
+  border: "#D8CFBE",
+  green: "#4A6B4A",
+  danger: "#8B2C1F",
+  userBg: "rgba(83,125,150,0.08)",
+  overlayStrong: "rgba(42,38,34,0.15)",
+  overlayMedium: "rgba(42,38,34,0.08)",
+  dropOverlayBg: "rgba(245,239,228,0.85)",
 };
 
 // alias/specific token ← 主题字段映射（~ 前缀 = 静态值，不走主题字段）
 const TOKEN_MAP = [
   // bg 层次
-  ["--dsw-alias-bg-base", "bg"], ["--dsw-alias-bg-layer-1", "bg"],
-  ["--dsw-alias-bg-layer-2", "bgCard"], ["--dsw-alias-bg-layer-3", "sidebarBg"],
-  ["--dsw-alias-bg-module-platform", "sidebarBg"], ["--dsw-alias-bg-multi-select", "accentLight"],
+  ["--dsw-alias-bg-base", "bg"],
+  ["--dsw-alias-bg-layer-1", "bg"],
+  ["--dsw-alias-bg-layer-2", "bgCard"],
+  ["--dsw-alias-bg-layer-3", "sidebarBg"],
+  ["--dsw-alias-bg-module-platform", "sidebarBg"],
+  ["--dsw-alias-bg-multi-select", "accentLight"],
   ["--dsw-alias-bg-overlay", "bgCard"],
   // bg-mask：主题化遮罩层次（mask-3 全屏深遮罩/拖放 → drop-overlay；photo 保留黑底）
   ["--dsw-alias-bg-mask-1", "overlayStrong"],
@@ -51,40 +64,63 @@ const TOKEN_MAP = [
   ["--dsw-alias-bg-mask-3", "dropOverlayBg"],
   ["--dsw-alias-bg-mask-drop", "dropOverlayBg"],
   // brand
-  ["--dsw-alias-brand-primary", "accent"], ["--dsw-alias-brand-primary-invert", "accent"],
-  ["--dsw-alias-brand-primary-new-colorprimary-new-color", "accent"], ["--dsw-alias-brand-text", "text"],
+  ["--dsw-alias-brand-primary", "accent"],
+  ["--dsw-alias-brand-primary-invert", "accent"],
+  ["--dsw-alias-brand-primary-new-colorprimary-new-color", "accent"],
+  ["--dsw-alias-brand-text", "text"],
   // button
-  ["--dsw-alias-button-primary-fill", "accent"], ["--dsw-alias-button-primary-hover", "accentHover"],
-  ["--dsw-alias-button-primary-dimmed", "accentLight"], ["--dsw-alias-button-contrast-fill", "accent"],
-  ["--dsw-alias-button-elevated-fill", "bgCard"], ["--dsw-alias-button-floating-fill", "bgCard"],
-  ["--dsw-alias-button-floating-hover", "accentLight"], ["--dsw-alias-button-info-fill", "accent"],
+  ["--dsw-alias-button-primary-fill", "accent"],
+  ["--dsw-alias-button-primary-hover", "accentHover"],
+  ["--dsw-alias-button-primary-dimmed", "accentLight"],
+  ["--dsw-alias-button-contrast-fill", "accent"],
+  ["--dsw-alias-button-elevated-fill", "bgCard"],
+  ["--dsw-alias-button-floating-fill", "bgCard"],
+  ["--dsw-alias-button-floating-hover", "accentLight"],
+  ["--dsw-alias-button-info-fill", "accent"],
   ["--dsw-alias-button-info-hover", "accentHover"],
   ["--dsw-alias-button-ghost-active-border", "border"],
   ["--dsw-alias-button-ghost-active-fill", "bgCard"],
   ["--dsw-alias-button-ghost-active-hover", "accentLight"],
   // label 三阶
-  ["--dsw-alias-label-primary", "text"], ["--dsw-alias-label-primary-bluish", "accent"],
-  ["--dsw-alias-label-primary-dimmed", "textLight"], ["--dsw-alias-label-secondary", "textLight"],
-  ["--dsw-alias-label-tertiary", "textMuted"], ["--dsw-alias-label-caption", "textMuted"],
+  ["--dsw-alias-label-primary", "text"],
+  ["--dsw-alias-label-primary-bluish", "accent"],
+  ["--dsw-alias-label-primary-dimmed", "textLight"],
+  ["--dsw-alias-label-secondary", "textLight"],
+  ["--dsw-alias-label-tertiary", "textMuted"],
+  ["--dsw-alias-label-caption", "textMuted"],
   ["--dsw-alias-label-dimmed", "textMuted"],
   // border（Hana 单一 ink-line；darkmode-thin 为 l2 的 dark 特化）
-  ["--dsw-alias-border-l1", "border"], ["--dsw-alias-border-l2", "border"],
-  ["--dsw-alias-border-l2-darkmode-thin", "border"], ["--dsw-alias-border-l3", "border"], ["--dsw-alias-border-l4", "border"],
+  ["--dsw-alias-border-l1", "border"],
+  ["--dsw-alias-border-l2", "border"],
+  ["--dsw-alias-border-l2-darkmode-thin", "border"],
+  ["--dsw-alias-border-l3", "border"],
+  ["--dsw-alias-border-l4", "border"],
   // interactive
-  ["--dsw-alias-interactive-bg-hover", "accentLight"], ["--dsw-alias-interactive-bg-active", "accentLight"],
-  ["--dsw-alias-interactive-bg-hover-accent", "accentLight"], ["--dsw-alias-interactive-bg-hover-solid", "bgCard"],
+  ["--dsw-alias-interactive-bg-hover", "accentLight"],
+  ["--dsw-alias-interactive-bg-active", "accentLight"],
+  ["--dsw-alias-interactive-bg-hover-accent", "accentLight"],
+  ["--dsw-alias-interactive-bg-hover-solid", "bgCard"],
   // markdown
-  ["--dsw-alias-markdown-inline-code", "accentLight"], ["--dsw-alias-markdown-code-block", "bg"],
-  ["--dsw-alias-markdown-code-block-banner", "bgCard"], ["--dsw-alias-markdown-code-segment-selected", "accentLight"],
-  ["--dsw-alias-markdown-code-segment-unselected", "bg"], ["--dsw-alias-markdown-tag", "accentLight"],
-  ["--dsw-alias-markdown-placeholder", "accentLight"], ["--dsw-alias-markdown-citation", "bgCard"],
+  ["--dsw-alias-markdown-inline-code", "accentLight"],
+  ["--dsw-alias-markdown-code-block", "bg"],
+  ["--dsw-alias-markdown-code-block-banner", "bgCard"],
+  ["--dsw-alias-markdown-code-segment-selected", "accentLight"],
+  ["--dsw-alias-markdown-code-segment-unselected", "bg"],
+  ["--dsw-alias-markdown-tag", "accentLight"],
+  ["--dsw-alias-markdown-placeholder", "accentLight"],
+  ["--dsw-alias-markdown-citation", "bgCard"],
   // state 语义色
-  ["--dsw-alias-state-business-primary", "accent"], ["--dsw-alias-state-business-tertiary", "accentLight"],
-  ["--dsw-alias-state-error-primary", "danger"], ["--dsw-alias-state-error-secondary", "danger"],
-  ["--dsw-alias-state-success-primary", "green"], ["--dsw-alias-state-success-secondary", "green"],
+  ["--dsw-alias-state-business-primary", "accent"],
+  ["--dsw-alias-state-business-tertiary", "accentLight"],
+  ["--dsw-alias-state-error-primary", "danger"],
+  ["--dsw-alias-state-error-secondary", "danger"],
+  ["--dsw-alias-state-success-primary", "green"],
+  ["--dsw-alias-state-success-secondary", "green"],
   // scrollbar：复刻 Hana 原生语言（中性灰，不主题化）
-  ["--dsw-alias-scrollbar-bg-l1", "~rgba(128,128,128,0.2)"], ["--dsw-alias-scrollbar-bg-l2", "~rgba(128,128,128,0.2)"],
-  ["--dsw-alias-scrollbar-hover-l1", "~rgba(128,128,128,0.4)"], ["--dsw-alias-scrollbar-hover-l2", "~rgba(128,128,128,0.4)"],
+  ["--dsw-alias-scrollbar-bg-l1", "~rgba(128,128,128,0.2)"],
+  ["--dsw-alias-scrollbar-bg-l2", "~rgba(128,128,128,0.2)"],
+  ["--dsw-alias-scrollbar-hover-l1", "~rgba(128,128,128,0.4)"],
+  ["--dsw-alias-scrollbar-hover-l2", "~rgba(128,128,128,0.4)"],
   // specific 层：bubble 用 Hana userBg（accent 透明遮罩，非实色卡片）
   ["--dsw-specific-bubble-highlight", "accentLight"],
   ["--dsw-specific-bubble", "userBg"],
@@ -100,7 +136,9 @@ const TOKEN_MAP = [
 ];
 
 function tokenCss(v) {
-  return TOKEN_MAP.map(([t, k]) => `${t}:${k[0] === "~" ? k.slice(1) : v[k]}!important`).join(";");
+  return TOKEN_MAP.map(
+    ([t, k]) => `${t}:${k[0] === "~" ? k.slice(1) : v[k]}!important`,
+  ).join(";");
 }
 
 // 静态 fallback 写 body 层（压 presenter inline）；脚本启动即移除，仅无脚本时兜底
@@ -137,7 +175,12 @@ const BRIDGE = `<script id="dsh-hana-theme-bridge">
   window.addEventListener("message", function (e) {
     if (e.data && e.data.dshHanaTheme) {
       var v = e.data.dshHanaTheme.vars;
-      if (v && Object.keys(v).length) { cur = v; applyOrRemove(); }
+      if (v && Object.keys(v).length) {
+        cur = v;
+        applyOrRemove();
+        // 收到主题 vars：停止周期重试（竞态已破除）
+        if (askTimer) { clearInterval(askTimer); askTimer = null; }
+      }
     }
   });
   fetch("/api/settings.describe", {
@@ -158,6 +201,13 @@ const BRIDGE = `<script id="dsh-hana-theme-bridge">
     .catch(function () {});
   var mq = window.matchMedia && matchMedia("(prefers-color-scheme: dark)");
   if (mq && mq.addEventListener) mq.addEventListener("change", ask);
+  // 竞态修复：壳页（宿主 iframe 外层）主题桥的注册可能与 dsh 页面加载不同步——脚本加载时
+  // 的首次 ask 可能落在壳桥注册前被丢弃（cur 恒 null → 内层 dsh WebUI 不跟随主题）。
+  // 周期重试 ask（收到主题 vars 即停止）：消除时序竞态；对已注册的壳桥幂等（postMessage 无副作用）。
+  var askTimer = setInterval(function () {
+    if (cur && Object.keys(cur).length) { if (askTimer) { clearInterval(askTimer); askTimer = null; } return; }
+    ask();
+  }, 1000);
   ask();
 })();
 </script>`;
@@ -173,7 +223,13 @@ export function apply(ctx, config) {
         httpCtx.hanaLogger.log("theme", "主题注入 tapIndex 已注册");
       } catch (e) {
         httpCtx.hanaLogger.log("theme", `主题注入注册失败：${e?.message || e}`);
-        try { ctx.logger?.warn?.(`[dsh-hana-theme] tapIndex 注册失败：${e?.message || e}`); } catch { /* 忽略 */ }
+        try {
+          ctx.logger?.warn?.(
+            `[dsh-hana-theme] tapIndex 注册失败：${e?.message || e}`,
+          );
+        } catch {
+          /* 忽略 */
+        }
       }
     });
   });
