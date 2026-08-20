@@ -3,19 +3,20 @@
 //
 // dsh-hana-provider — 让 dsh 直接复用 Hana 宿主的 provider 配置并完全跟随（v0.9.3）。
 //
-// 语义：dsh 启动器 --patch 挂载本插件后，provider 目录来自宿主配置文件
-// （models.json + provider-catalog.json），而不是 dsh 自己的 profile/settings：
-//   · 目录：models.json 的 providers 对象 → { baseURL, api, apiKey, models, displayName }
-//   · 凭据：models.json 的 apiKey 是引用（"hana-runtime-api-key:X"），实际 api_key
-//     从 provider-catalog.json 对应条目直读；catalog 缺失的 provider 跳过并记日志
-//   · 跟随：宿主侧 ctx.resources.watch 感知两文件变化（bus 派发 resource.changed，
-//     resourceKey 格式 local_fs:<path>）→ POST /api/hana-provider.refresh 通知刷新 →
-//     重读 → handle.replace() 原子更新，JSON 解析失败保留旧配置并记日志；不动 dsh
-//     自身 profile，与用户 provider 共存（本插件不再自建 fs.watch）
-//   · 诊断日志：经 dsh-hana-logger 统一日志服务（inject ['hanaLogger']）写入本次插件会话
-//     日志文件（宿主 patch config 注入 {{LOG_PATH}}），refresh 成功/失败/收到刷新请求
-//     写入同一文件（行格式 [<HH:mm:ss.SSS>] [provider] <内容>，与宿主侧 appendLog
-//     一致）；服务未就绪/写失败时静默跳过（日志失败不阻断）
+// 语义：dsh 启动器 --patch 只负责加载本插件本体（config 仅有 dshPkgDir，
+// 供依赖解析）；provider 数据绝不经 patch 注入，一律由宿主侧组装后经 HTTP push 下发：
+//   · 组装在宿主：宿主读 models.json + provider-catalog.json，mapModel/readHostConfig 对
+//     每个 provider 校验 apiKey/baseURL/api 支持/models 非空 → 组装 route 目录，经
+//     POST /api/hana-provider.refresh 的 body.routes 传给本插件
+//   · 本插件只接受：applySnapshot(routes) 消费宿主 push 的 route 目录（不读文件，不
+//     mapModel/readHostConfig/readJsonFile——这些已上移宿主侧）。启动时 snapshot 为空
+//     （不读文件、不依赖 patch data），首个 routes 由宿主 web host 就绪后主动 push 填上
+//   · 跟随：宿主侧 ctx.resources.watch 感知两文件变化（bus 派发 resource.changed）→ 防抖
+//     push 最新 routes → handle.replace() 原子更新；routes 缺失/为空保留旧 snapshot 记日志
+//   · 诊断日志：经 dsh-hana-logger 统一日志服务（inject ['hanaLogger']）写入本次会话日志
+//     文件（宿主 patch config 注入 {{LOG_PATH}}），refresh 成功/失败/收到刷新请求写入
+//     同一文件（行格式 [<HH:mm:ss.SSS>] [provider] <内容>，与宿主侧 appendLog 一致）；
+//     服务未就绪/写失败时静默跳过（日志失败不阻断）
 //
 // compat 映射（定稿）：
 //   · Hana compat.thinkingFormat → pi-ai compat.thinkingFormat 直通
@@ -53,36 +54,12 @@
 export const name = "dsh-hana-provider";
 export const inject = ["llm", "webServer", "hanaLogger"];
 
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300000;
-const DEFAULT_CONTEXT_WINDOW = 262144;
 
-const DEFAULT_MAX_TOKENS = 32768;
-const THINKING_LEVELS = [
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-];
-const THINKING_FORMATS = [
-  "openai",
-  "openrouter",
-  "deepseek",
-  "together",
-  "zai",
-  "qwen",
-  "chat-template",
-  "qwen-chat-template",
-  "string-thinking",
-  "ant-ling",
-];
-const NO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 const NS = "dsh-hana-provider";
 const DEP_SPECS = {
   piAi: "@earendil-works/pi-ai",
@@ -177,151 +154,6 @@ async function loadDeps(config) {
   return out;
 }
 
-// ---- 宿主配置直读（只读两文件，不写不改）----
-function readJsonFile(path) {
-  if (!existsSync(path)) return { value: null, error: `文件不存在：${path}` };
-  try {
-    return { value: JSON.parse(readFileSync(path, "utf8")), error: null };
-  } catch (e) {
-    return { value: null, error: `JSON 解析失败：${e?.message || e}` };
-  }
-}
-
-// compat 映射（定稿表）：Hana 模型条目 → pi-ai Model 字段
-function mapModel(raw, api) {
-  const m = raw && typeof raw === "object" ? raw : {};
-  const compat = m.compat && typeof m.compat === "object" ? m.compat : {};
-  const out = {
-    id: String(m.id || ""),
-    name: String(m.name || m.id || ""),
-    input: Array.isArray(m.input)
-      ? m.input.filter((x) => x === "text" || x === "image")
-      : ["text"],
-    contextWindow:
-      Number.isInteger(m.contextWindow) && m.contextWindow > 0
-        ? m.contextWindow
-        : DEFAULT_CONTEXT_WINDOW,
-    maxTokens:
-      Number.isInteger(m.maxTokens) && m.maxTokens > 0
-        ? m.maxTokens
-        : DEFAULT_MAX_TOKENS,
-    reasoning: m.reasoning === true,
-  };
-  // defaultThinkingLevel → pi-ai thinking 级别（直通，非法值丢弃保解析不炸）
-  if (
-    typeof m.defaultThinkingLevel === "string" &&
-    THINKING_LEVELS.includes(m.defaultThinkingLevel)
-  ) {
-    out.defaultThinkingLevel = m.defaultThinkingLevel;
-  }
-  // compat 映射仅对 openai-completions 协议生效（pi-ai 其余协议无这些开关）
-  if (api === "openai-completions") {
-    const c = {};
-    if (
-      typeof compat.thinkingFormat === "string" &&
-      THINKING_FORMATS.includes(compat.thinkingFormat)
-    ) {
-      c.thinkingFormat = compat.thinkingFormat;
-    }
-    if (m.xhigh === true) c.supportsReasoningEffort = true;
-    // supportsDeveloperRole 必须直通（勿丢）：pi-ai openai-completions 在
-    // model.reasoning && compat.supportsDeveloperRole 时把 system 提示发成
-    // developer role，未传时回退检测值（标准模型默认 true）——sensenova 等
-    // 厂商 API 只认 system，Hana 配置里的 supportsDeveloperRole:false 就是要
-    // 压住它；丢了会 400（实测 "developer is not one of [...]"）
-    if (typeof compat.supportsDeveloperRole === "boolean") {
-      c.supportsDeveloperRole = compat.supportsDeveloperRole;
-    }
-    if (Object.keys(c).length > 0) out.compat = c;
-  }
-  // 丢弃：reasoningProfile / reasoningReplay /
-  // hanaVideoInput / hanaAudioInput（不进入 pi-ai Model）
-  return out;
-}
-
-// 读两文件 → route 目录（纯数据，不依赖 pi-ai）
-function readHostConfig(modelsPath, catalogPath) {
-  const result = { routes: [], skipped: [], errors: [] };
-  const modelsFile = readJsonFile(modelsPath);
-  if (modelsFile.error) {
-    result.errors.push(`models.json：${modelsFile.error}`);
-    return result;
-  }
-  const catalogFile = readJsonFile(catalogPath);
-  if (catalogFile.error) {
-    result.errors.push(`provider-catalog.json：${catalogFile.error}`);
-    return result;
-  }
-  const providers = modelsFile.value && modelsFile.value.providers;
-  const creds = (catalogFile.value && catalogFile.value.providers) || {};
-  if (!providers || typeof providers !== "object" || Array.isArray(providers)) {
-    result.errors.push("models.json 缺少 providers 对象");
-    return result;
-  }
-  for (const [id, p] of Object.entries(providers)) {
-    if (!p || typeof p !== "object") {
-      result.skipped.push({ id, reason: "条目非对象" });
-      continue;
-    }
-    // 凭据规则：models.json 的 apiKey 是引用，实际 api_key 从 catalog 对应条目直读；
-    // catalog 缺失的 provider 跳过并记日志（openai-codex / xai-oauth 即此情形）
-    const cred = creds[id];
-    const apiKey =
-      cred && typeof cred.api_key === "string" ? cred.api_key.trim() : "";
-    if (!apiKey) {
-      result.skipped.push({
-        id,
-        reason: "provider-catalog.json 无凭据（api_key）",
-      });
-      continue;
-    }
-    const baseURL = String(p.baseUrl || (cred && cred.base_url) || "").trim();
-    if (!baseURL) {
-      result.skipped.push({ id, reason: "baseURL 为空" });
-      continue;
-    }
-    const api =
-      String(p.api || (cred && cred.api) || "").trim() || "openai-completions";
-    if (
-      ![
-        "openai-completions",
-        "openai-responses",
-        "anthropic-messages",
-      ].includes(api)
-    ) {
-      result.skipped.push({
-        id,
-        reason: `协议 ${api} 不支持（本插件仅 openai-completions/openai-responses/anthropic-messages）`,
-      });
-      continue;
-    }
-    const models = (Array.isArray(p.models) ? p.models : [])
-      .map((m) => mapModel(m, api))
-      .filter((m) => m.id);
-    if (models.length === 0) {
-      result.skipped.push({ id, reason: "models 列表为空" });
-      continue;
-    }
-    result.routes.push({
-      id,
-      displayName: id,
-      baseURL,
-      api,
-      apiKey,
-      // 补全 pi-ai Model 必需字段（协议/归属/端点/成本），与 dsh-llm-pi-ai 的
-      // resolveRouteModels 同一姿势
-      models: models.map((m) => ({
-        ...m,
-        api,
-        provider: id,
-        baseUrl: baseURL,
-        cost: NO_COST,
-      })),
-    });
-  }
-  return result;
-}
-
 // ---- 路由 HTTP 辅助（宿主 push 通知入口 /api/hana-provider.refresh 用，同 dsh-hana-settings）----
 function readJsonBody(req) {
   return new Promise((resolve, reject) => {
@@ -400,14 +232,6 @@ export async function apply(ctx, config) {
       "openai-responses": () => deps.piAiResponses.openAIResponsesApi(),
       "anthropic-messages": () => deps.piAiAnthropic.anthropicMessagesApi(),
     };
-    const modelsPath = config && config.modelsPath;
-    const catalogPath = config && config.catalogPath;
-    if (!modelsPath || !catalogPath) {
-      ctx.logger.warn(
-        "[dsh-hana-provider] 配置缺少 modelsPath/catalogPath，插件停用（patch config 未渲染？）",
-      );
-      return;
-    }
     // 诊断日志：经 dsh-hana-logger 统一日志服务（inject ['hanaLogger']）写入本次会话日志，
     // 行格式 [<HH:mm:ss.SSS>] [provider] <内容>（与宿主侧 appendLog 一致）；
     // 服务未就绪/写失败静默（日志失败不阻断）
@@ -1119,23 +943,23 @@ export async function apply(ctx, config) {
       if (adapter !== null) adapter.replaceSnapshot(built);
     };
 
-    const refresh = (source = "启动/路由") => {
+    const refresh = (source, providerData) => {
       const t0 = Date.now();
-      const host = readHostConfig(modelsPath, catalogPath);
-      // 解析失败（文件缺失/损坏）：保留旧配置并记日志（首次则目录为空，插件静默降级）
-      if (host.errors.length > 0 && host.routes.length === 0) {
+      // providerData = { routes: 组装好的 route 目录 }（宿主 push 下发；B方案下
+      // 子进程不再读文件/不做组装，只接受宿主组装好的 routes）。routes 缺失 / 非数组 /
+      // 为空时：保留旧 snapshot 并记日志（维持「解析失败保留旧配置」语义）
+      const routes =
+        providerData && Array.isArray(providerData.routes)
+          ? providerData.routes
+          : null;
+      if (!routes || routes.length === 0) {
         ctx.logger.warn(
-          `[dsh-hana-provider] 读取宿主配置失败，保留旧配置：${host.errors.join("；")}`,
+          "[dsh-hana-provider] 收到空 routes（宿主持有 provider 缺失或未 push），保留旧 snapshot",
         );
-        providerLog(`refresh 失败（${source}）：${host.errors.join("；")}`);
+        providerLog(`refresh 收到空 routes（${source}），保留旧 snapshot`);
         return;
       }
-      for (const error of host.errors)
-        ctx.logger.warn(`[dsh-hana-provider] 宿主配置部分异常：${error}`);
-      for (const skipped of host.skipped)
-        ctx.logger.info(
-          `[dsh-hana-provider] 跳过 provider "${skipped.id}"：${skipped.reason}`,
-        );
+      const host = { routes, skipped: [], errors: [] };
       try {
         applySnapshot(host);
         const modelCount = [...snapshot.byId.values()].reduce(
@@ -1144,22 +968,21 @@ export async function apply(ctx, config) {
         );
         const elapsed = Date.now() - t0;
         ctx.logger.info(
-          `[dsh-hana-provider] 已同步 ${snapshot.byId.size} 个 provider（跳过 ${host.skipped.length}，异常 ${host.errors.length}）`,
+          `[dsh-hana-provider] 已同步 ${snapshot.byId.size} 个 provider（routes ${routes.length} 条）`,
         );
         providerLog(
-          `refresh 完成（${source}）：${snapshot.byId.size} 个 provider / ${modelCount} 个模型（跳过 ${host.skipped.length}，异常 ${host.errors.length}），耗时 ${elapsed}ms`,
+          `refresh 完成（${source}）：${snapshot.byId.size} 个 provider / ${modelCount} 个模型，耗时 ${elapsed}ms`,
         );
       } catch (e) {
         // replace 抛错（如 DUPLICATE_ADAPTER：与用户已有 provider 同名）：保留旧注册
         ctx.logger.error(
-          `[dsh-hana-provider] 应用配置失败，保留旧配置：${e?.message || e}`,
+          `[dsh-hana-provider] 应用配置失败，保留旧 snapshot：${e?.message || e}`,
         );
         providerLog(
-          `refresh 应用失败（${source}），保留旧配置：${e?.message || e}`,
+          `refresh 应用失败（${source}），保留旧 snapshot：${e?.message || e}`,
         );
       }
     };
-
     // ---- 宿主 push 通知路由（v0.10.7：宿主侧 ctx.resources.watch 感知配置变化后
     // POST /api/hana-provider.refresh 通知刷新；本插件不再自建 fs.watch）----
     // 路由经 webServer.register（kind: exact）注册——webserver 匹配 exact 优先于
@@ -1185,17 +1008,25 @@ export async function apply(ctx, config) {
           }
         };
 
-        // POST /api/hana-provider.refresh：宿主 push 通知 → 重读配置 refresh()
+        // POST /api/hana-provider.refresh：宿主 push 通知 → 从 body 取 route 目录 refresh()
         registerRoute("/api/hana-provider.refresh", async (req, res) => {
           try {
-            await readJsonBody(req);
+            const body = await readJsonBody(req);
+            const routes =
+              body && Array.isArray(body.routes) ? body.routes : null;
+            // B方案：body.routes = 宿主组装好的 route 目录；缺失/非数组时 refresh 保留旧 snapshot
+            refresh("宿主 push", { routes });
+            const routeNote = Array.isArray(body.routes)
+              ? "（" + body.routes.length + " 条 routes）"
+              : "（路由缺失）";
             providerLog(
-              "收到 /api/hana-provider.refresh 请求（宿主 push 通知）",
+              "收到 /api/hana-provider.refresh 请求（宿主 push" +
+                routeNote +
+                "）",
             );
-            refresh("宿主 push");
             json(res, { ok: true });
           } catch (e) {
-            providerLog(`路由处理失败：${e?.message || e}`);
+            providerLog("路由处理失败：" + (e?.message || e));
             json(res, { ok: false, error: e?.message || String(e) });
           }
         });
@@ -1211,9 +1042,22 @@ export async function apply(ctx, config) {
         };
       });
     });
-
-    // 启动时刷新一次（宿主 push 未建立/未触发时也有完整目录；随后靠路由通知增量刷新）
-    refresh("启动");
+    // 启动时 snapshot 置空：B方案下不在启动读文件/不依赖 patch data，
+    // 首个 provider 由宿主 web host 就绪后主动 push 填上（startWebHostFromPlugin /
+    // updateDsh 重启路径都主动推一次）。apply 阶段 adapter 保持 null，首个 routes 到达才注册。
+    // 兼容旧版：config.routesJSON（旧 patch 注入的 route 目录残留）仍可作初始 snapshot
+    // （optional 向后兼容，新代码不再写入）
+    if (config && Array.isArray(config.routesJSON)) {
+      ctx.logger.info(
+        `[dsh-hana-provider] 检测到旧版 config.routesJSON（${config.routesJSON.length} 条），用作初始 route 目录`,
+      );
+      refresh("旧版 routesJSON", { routes: config.routesJSON });
+    } else {
+      ctx.logger.info(
+        "[dsh-hana-provider] 启动 snapshot 为空，等待宿主 push 首批 route 目录",
+      );
+      providerLog("启动 snapshot 为空，等待宿主 push 首批 route 目录");
+    }
   } catch (e) {
     // 顶层兜底：apply 永不抛出（边界要求——不阻断 dsh 启动）
     ctx.logger.error(

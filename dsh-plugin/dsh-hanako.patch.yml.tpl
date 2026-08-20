@@ -17,8 +17,6 @@
     - id: dsh-hana-provider
       name: 'dsh-hana-provider'
       config:
-        modelsPath: '{{MODELS_PATH}}'
-        catalogPath: '{{CATALOG_PATH}}'
         dshPkgDir: '{{DSH_PKG_DIR}}'
 - insert:
     - id: dsh-hana-settings

@@ -150,6 +150,207 @@ function detectHostProviderPaths() {
   };
 }
 
+const DEFAULT_CONTEXT_WINDOW = 262144;
+const DEFAULT_MAX_TOKENS = 32768;
+const THINKING_LEVELS = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+];
+const THINKING_FORMATS = [
+  "openai",
+  "openrouter",
+  "deepseek",
+  "together",
+  "zai",
+  "qwen",
+  "chat-template",
+  "qwen-chat-template",
+  "string-thinking",
+  "ant-ling",
+];
+const NO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+
+// ---- 宿主 provider 直读（只读两文件，不写不改；从子进程整体迁移，逐字复制不改逻辑）----
+function readJsonFile(path) {
+  if (!existsSync(path)) return { value: null, error: `文件不存在：${path}` };
+  try {
+    return { value: JSON.parse(readFileSync(path, "utf8")), error: null };
+  } catch (e) {
+    return { value: null, error: `JSON 解析失败：${e?.message || e}` };
+  }
+}
+
+// compat 映射（定稿表）：Hana 模型条目 → pi-ai Model 字段
+function mapModel(raw, api) {
+  const m = raw && typeof raw === "object" ? raw : {};
+  const compat = m.compat && typeof m.compat === "object" ? m.compat : {};
+  const out = {
+    id: String(m.id || ""),
+    name: String(m.name || m.id || ""),
+    input: Array.isArray(m.input)
+      ? m.input.filter((x) => x === "text" || x === "image")
+      : ["text"],
+    contextWindow:
+      Number.isInteger(m.contextWindow) && m.contextWindow > 0
+        ? m.contextWindow
+        : DEFAULT_CONTEXT_WINDOW,
+    maxTokens:
+      Number.isInteger(m.maxTokens) && m.maxTokens > 0
+        ? m.maxTokens
+        : DEFAULT_MAX_TOKENS,
+    reasoning: m.reasoning === true,
+  };
+  // defaultThinkingLevel → pi-ai thinking 级别（直通，非法值丢弃保解析不炸）
+  if (
+    typeof m.defaultThinkingLevel === "string" &&
+    THINKING_LEVELS.includes(m.defaultThinkingLevel)
+  ) {
+    out.defaultThinkingLevel = m.defaultThinkingLevel;
+  }
+  // compat 映射仅对 openai-completions 协议生效（pi-ai 其余协议无这些开关）
+  if (api === "openai-completions") {
+    const c = {};
+    if (
+      typeof compat.thinkingFormat === "string" &&
+      THINKING_FORMATS.includes(compat.thinkingFormat)
+    ) {
+      c.thinkingFormat = compat.thinkingFormat;
+    }
+    if (m.xhigh === true) c.supportsReasoningEffort = true;
+    // supportsDeveloperRole 必须直通（勿丢）：pi-ai openai-completions 在
+    // model.reasoning && compat.supportsDeveloperRole 时把 system 提示发成
+    // developer role，未传时回退检测值（标准模型默认 true）——sensenova 等
+    // 厂商 API 只认 system，Hana 配置里的 supportsDeveloperRole:false 就是要
+    // 压住它；丢了会 400（实测 "developer is not one of [...]"）
+    if (typeof compat.supportsDeveloperRole === "boolean") {
+      c.supportsDeveloperRole = compat.supportsDeveloperRole;
+    }
+    if (Object.keys(c).length > 0) out.compat = c;
+  }
+  // 丢弃：reasoningProfile / reasoningReplay /
+  // hanaVideoInput / hanaAudioInput（不进入 pi-ai Model）
+  return out;
+}
+
+// 读两文件 → route 目录（纯数据，不依赖 pi-ai）
+function readHostConfig(modelsPath, catalogPath) {
+  const result = { routes: [], skipped: [], errors: [] };
+  const modelsFile = readJsonFile(modelsPath);
+  if (modelsFile.error) {
+    result.errors.push(`models.json：${modelsFile.error}`);
+    return result;
+  }
+  const catalogFile = readJsonFile(catalogPath);
+  if (catalogFile.error) {
+    result.errors.push(`provider-catalog.json：${catalogFile.error}`);
+    return result;
+  }
+  const providers = modelsFile.value && modelsFile.value.providers;
+  const creds = (catalogFile.value && catalogFile.value.providers) || {};
+  if (!providers || typeof providers !== "object" || Array.isArray(providers)) {
+    result.errors.push("models.json 缺少 providers 对象");
+    return result;
+  }
+  for (const [id, p] of Object.entries(providers)) {
+    if (!p || typeof p !== "object") {
+      result.skipped.push({ id, reason: "条目非对象" });
+      continue;
+    }
+    // 凭据规则：models.json 的 apiKey 是引用，实际 api_key 从 catalog 对应条目直读；
+    // catalog 缺失的 provider 跳过并记日志（openai-codex / xai-oauth 即此情形）
+    const cred = creds[id];
+    const apiKey =
+      cred && typeof cred.api_key === "string" ? cred.api_key.trim() : "";
+    if (!apiKey) {
+      result.skipped.push({
+        id,
+        reason: "provider-catalog.json 无凭据（api_key）",
+      });
+      continue;
+    }
+    const baseURL = String(p.baseUrl || (cred && cred.base_url) || "").trim();
+    if (!baseURL) {
+      result.skipped.push({ id, reason: "baseURL 为空" });
+      continue;
+    }
+    const api =
+      String(p.api || (cred && cred.api) || "").trim() || "openai-completions";
+    if (
+      ![
+        "openai-completions",
+        "openai-responses",
+        "anthropic-messages",
+      ].includes(api)
+    ) {
+      result.skipped.push({
+        id,
+        reason: `协议 ${api} 不支持（本插件仅 openai-completions/openai-responses/anthropic-messages）`,
+      });
+      continue;
+    }
+    const models = (Array.isArray(p.models) ? p.models : [])
+      .map((m) => mapModel(m, api))
+      .filter((m) => m.id);
+    if (models.length === 0) {
+      result.skipped.push({ id, reason: "models 列表为空" });
+      continue;
+    }
+    result.routes.push({
+      id,
+      displayName: id,
+      baseURL,
+      api,
+      apiKey,
+      // 补全 pi-ai Model 必需字段（协议/归属/端点/成本），与 dsh-llm-pi-ai 的
+      // resolveRouteModels 同一姿势
+      models: models.map((m) => ({
+        ...m,
+        api,
+        provider: id,
+        baseUrl: baseURL,
+        cost: NO_COST,
+      })),
+    });
+  }
+  return result;
+}
+
+// ---- 宿主侧 provider 路由组装（B方案：解析逻辑上移宿主侧）----
+// 背景：子进程不再读宿主两文件/不做组装，这些函数上移宿主侧；子进程只接受组装好的
+// route 目录。THINKING_LEVELS/THINKING_FORMATS/NO_COST 随映射函数一并上移。组装链路：
+// detectHostProviderPaths → readJsonFile → mapModel → readHostConfig → buildProviderRoutes
+// 缓存最新目录（读取失败保留旧 routes）。组装结果经 HTTP push（body 带 routes）传子进程。
+// 注：mapModel 用到的 DEFAULT_CONTEXT_WINDOW/DEFAULT_MAX_TOKENS 常量随迁移上移。
+function buildProviderRoutes() {
+  const g = getSingleton();
+  const host = detectHostProviderPaths();
+  const result = readHostConfig(host.modelsPath, host.catalogPath);
+  if (result.routes.length === 0 && result.errors.length > 0) {
+    const prev = Array.isArray(g.latestProviderRoutes)
+      ? g.latestProviderRoutes
+      : [];
+    if (prev.length > 0) {
+      console.warn(
+        "[dsh-run] 读取宿主 provider 配置失败，保留上次 routes：" +
+          result.errors.join("；"),
+      );
+      return { routes: prev, skipped: result.skipped, errors: result.errors };
+    }
+    console.warn(
+      "[dsh-run] 读取宿主 provider 配置失败（无上次缓存）：" +
+        result.errors.join("；"),
+    );
+    return result;
+  }
+  g.latestProviderRoutes = result.routes;
+  return result;
+}
+
 // 读 dsh-home/settings.yaml 的 agent-default-model（行级解析，零依赖）——
 // dsh 默认模型：dsh models 页设置后写回 settings.yaml（selectModel 同源）。
 // 返回 { provider, model } 或 null。
@@ -499,7 +700,6 @@ async function ensureWebHost(cfg) {
       `dsh 包未就绪：${cliBin} 不存在。请在插件数据目录 dsh-pkg 执行 npm i -P @deepseek-ai/dsh`,
     );
   }
-  const hostProvider = detectHostProviderPaths();
 
   const dshHome = join(cfg.dataDir, "dsh-home");
   // spawn 的 cwd 必须是已存在目录（无效 cwd 会让 Node 报误导性的 ENOENT）
@@ -574,18 +774,15 @@ async function ensureWebHost(cfg) {
   const patchTpl = join(PLUGIN_ROOT, "dsh-plugin", "dsh-hanako.patch.yml.tpl");
   // 渲染各插件的 config 依赖解析基座占位符——theme/provider/settings/logger 四段均以
   // 包名注册，不再有 file:// URL 占位符；包名经 ensureCordisJunctions 的 junction 解析。
-  // MODELS_PATH / CATALOG_PATH = 宿主 provider 两文件（provider 段）；DSH_PKG_DIR =
-  // dsh 包安装目录（provider/settings 段）；LOG_PATH = 本次会话日志文件路径（logger
-  // 段，四个内嵌插件经统一日志服务（dsh-hana-logger，inject ['hanaLogger']）写入同一
-  // 文件，src 前缀不变）；NPM_CLI_PATH / ELECTRON_NODE / DATA_DIR = settings 段
-  // 「检查与更新 DSH」链路（npm view 查远端版本 + 更新请求/结果文件写入数据目录）。
+  // v0.13.x B方案：provider 段不再注入 modelsPath/catalogPath（宿主不再经 patch 注入
+  // provider 数据，parse 逻辑上移宿主，route 目录改经 HTTP push 下发）——provider config
+  // 只剩 dshPkgDir（子进程解析 pi-ai 依赖用）。DSH_PKG_DIR = dsh 包安装目录
+  // （provider/settings 段）；LOG_PATH = 本次会话日志文件路径（logger 段，四个内嵌
+  // 插件经统一日志服务写入同一文件）；NPM_CLI_PATH / ELECTRON_NODE / DATA_DIR =
+  // settings 段「检查与更新 DSH」链路（npm view 查远端版本 + 更新请求/结果文件写入数据目录）。
   const renderPatchTpl = () => {
     const gen = join(cfg.dataDir, "dsh-hanako.patch.generated.yml");
     let content = readFileSync(patchTpl, "utf8")
-      .split("{{MODELS_PATH}}")
-      .join(hostProvider.modelsPath)
-      .split("{{CATALOG_PATH}}")
-      .join(hostProvider.catalogPath)
       .split("{{DSH_PKG_DIR}}")
       .join(cfg.dshPkgDir || resolveDshPkgDir(cfg))
       .split("{{LOG_PATH}}")
@@ -701,6 +898,12 @@ async function ensureWebHost(cfg) {
           web.ready = true;
           // v0.8.5: 新进程就绪：清掉上次退出记录（持久字段只反映最近一次退出）
           g.webLastExit = null;
+          // v0.13.1：B方案下子进程启动时 snapshot 为空，首批 provider 依赖宿主 push。
+          // 从这里（唯一新进程就绪点）主动推一次最新 routes——任意 spawn 路径
+          // （插件 onload / webui 手动启动 / dsh_run 进程兜底重启 / updateDsh 更新重启）
+          // 都保证有初始 push；内部有界重试覆盖子进程插件 apply() 晚于端口就绪的
+          // 路由空窗（失败不阻断，下轮配置变化/重启仍会触发）。不 await，页面/任务不阻塞。
+          pushProviderRefresh(port);
           return web;
         }
       } catch {
@@ -900,6 +1103,8 @@ async function updateDsh(cfg) {
     // 检查/更新桥接），ensureWebHost 本身不建 watch（只有 startWebHostFromPlugin 建），
     // 不重建则更新后设置页检查/更新请求不再触发宿主处理
     ensureProviderPushWatch(cfg);
+    // v0.13.1: 重启用进程后首批 provider 的初始 push 已由 ensureWebHost（唯一就绪点）
+    // 发出；此处只重建跟随 watch，不再重复 push。
     ensureUpdateWatch(cfg);
     // ⑤ 读新版本 → done（installDepsFromPlugin 已刷新 g.depsSmoke，优先用；无则直读 package.json）
     const version =
@@ -1088,29 +1293,77 @@ function onBridgeRequestChanged(dataDir, path, cfg) {
   }
 }
 
-// push dsh web host 刷新（回环调用 127.0.0.1:{port}，5s 超时；成功/失败都 console.log 简记，
-// 失败不阻断——web host 未起/端口未就绪时静默忽略，dsh 侧启动时已 refresh 一次）
+// push dsh web host 刷新（回环调用 127.0.0.1:{port}；结果写入统一会话日志 + console 简记，
+// 失败不阻断。v0.13.x B方案：body 携带组装好的 route 目录（buildProviderRoutes() 的
+// 最新 routes），子进程 applySnapshot 直接消费，不再自读宿主文件（buildProviderRoutes
+// 内部已处理「读取失败保留旧 routes」回退）。
+//
+// v0.13.1 有界重试 + 回环 fetch 直连：B方案下子进程启动时 snapshot 为空、首批 provider
+// 全依赖这次 push。但 dsh web host 的 /api/host.describe 就绪（宿主判定 ready）早于
+// 子进程内插件的 apply() 完成——dsh-hana-provider 的 apply 要先 await 动态导入
+// pi-ai/dsh-llm/dsh-timeout，之后才经 ctx.inject(['webServer']).effect 注册
+// /api/hana-provider.refresh 路由。启动 push 若只发一次，会打在路由注册前的空窗上
+// （404/连接拒绝），provider 快照将一直为空直到宿主配置变化触发下一轮 push——即
+// 「dsh-hana-provider 失效」。因此 push 改为对非 2xx（尤其 404）与网络错误按退避表
+// 重试，直到路由就绪送达。
+// 另：发送不经过 ctx.network.fetch——回环控制调用走全局 fetch（与 ensureWebHost
+// 就绪探测 / routes/webui.js probeHost 同一通道，实测可用）；宿主的 network 服务是
+// 出站/计费代理，代理策略可能拦截明文回环 POST，曾导致 push 静默永不送达。结果与
+// 异常统一写会话日志（g.appendLog hana 前缀，与插件诊断同一文件），不再只 console。
+const PROVIDER_PUSH_RETRY_DELAYS_MS = [300, 500, 800, 1200, 1800, 2500, 3000];
 async function pushProviderRefresh(port) {
   const g = getSingleton();
-  const network = g.network;
-  const doFetch =
-    network && typeof network.fetch === "function"
-      ? network.fetch.bind(network)
-      : fetch;
   const url = `http://127.0.0.1:${port}/api/hana-provider.refresh`;
+  const pushLog = (msg) => {
+    try {
+      // 统一会话日志（[ts] [hana] 行）：push 结果对用户可见（插件日志文件）
+      appendLog(g.logPath || g.web?.logPath, "hana", msg);
+    } catch {
+      /* 日志失败不阻断 */
+    }
+    console.log(msg);
+  };
+  let host;
   try {
-    const res = await doFetch(url, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: "{}",
-      signal: AbortSignal.timeout(5000),
-    });
-    console.log(
-      `[dsh-run] provider push ${res.ok ? "成功" : `失败（HTTP ${res.status}）`}：${url}`,
-    );
+    host = buildProviderRoutes();
   } catch (e) {
-    // web host 未起 / 端口未就绪：静默忽略（dsh 侧启动时已 refresh 一次，功能不受影响）
-    console.log(`[dsh-run] provider push 未送达（${e?.message || e}）：${url}`);
+    // routes 组装异常（防御性）：本轮 push 放弃，下轮变化/重启再试
+    pushLog(
+      `[dsh-run] provider routes 组装失败，本轮 push 放弃：${e?.message || e}`,
+    );
+    return;
+  }
+  let lastNote = "未知错误";
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ routes: host.routes }),
+        signal: AbortSignal.timeout(2000),
+      });
+      if (res.ok) {
+        pushLog(
+          `[dsh-run] provider push 成功（${host.routes.length} 条 routes，第 ${attempt + 1} 次尝试）：${url}`,
+        );
+        return;
+      }
+      lastNote = `HTTP ${res.status}`;
+      if (attempt === PROVIDER_PUSH_RETRY_DELAYS_MS.length) {
+        pushLog(`[dsh-run] provider push 失败（${lastNote}）：${url}`);
+        return;
+      }
+    } catch (e) {
+      // 网络错误（连接拒绝/超时等）：同样进退避重试；全失败静默忽略不阻断
+      lastNote = e?.message || String(e);
+      if (attempt === PROVIDER_PUSH_RETRY_DELAYS_MS.length) {
+        pushLog(`[dsh-run] provider push 未送达（${lastNote}）：${url}`);
+        return;
+      }
+    }
+    await new Promise((r) =>
+      setTimeout(r, PROVIDER_PUSH_RETRY_DELAYS_MS[attempt]),
+    );
   }
 }
 
@@ -1135,6 +1388,8 @@ getSingleton().startWebHost = async function startWebHostFromPlugin(
     await ensureWebHost(cfg);
     // v0.10.7: web host 就绪后建立宿主侧 provider 跟随 push watch（幂等：先清理旧 watch 再建）
     ensureProviderPushWatch(cfg);
+    // v0.13.1：首批 provider 的初始 push 已收敛进 ensureWebHost（唯一就绪点，含重试），
+    // 此处不再重复推；后续每次 resource.changed 经防抖 watch 增量 push。
     // v0.13.0: DSH 检查/更新桥接 watch（幂等）：dsh 设置页「DSH 版本」块写
     // update-request.json → 宿主 checkDshUpdate / updateDsh（单一事实源）
     ensureUpdateWatch(cfg);
