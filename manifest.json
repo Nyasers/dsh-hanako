@@ -32,15 +32,6 @@
   ],
   "entry": "index.js",
   "contributes": {
-    "tools": [
-      "./tools/dsh-run.js",
-      "./tools/dsh-update.js",
-      "./tools/dsh-install.js",
-      "./tools/dsh-approve.js",
-      "./tools/dsh-cancel.js",
-      "./tools/dsh-ops.js",
-      "./tools/dsh-search.js"
-    ],
     "configuration": {
       "title": "DSHana 设置",
       "properties": {

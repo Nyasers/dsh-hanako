@@ -21,21 +21,15 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { zstdDecompressSync } from "node:zlib";
+// 卡片前端资产（构建期 asset/source 内联为字符串；样式/脚本免构建机路径、零磁盘读）
+import cardCss from "../assets/card.css";
+import cardJs from "../assets/card.js";
+// 卡片页面 HTML 模板（构建期 template-loader 经 doT 编译为自包含渲染函数）
+import { render as cardOpHtml } from "../assets/card-op.jinja2";
+import { render as cardDepHtml } from "../assets/card-dep.jinja2";
 
-const APP = path.join(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "..",
-  "app",
-);
-
-function readCardAssets() {
-  return {
-    css: fs.readFileSync(path.join(APP, "card.css"), "utf-8"),
-    js: fs.readFileSync(path.join(APP, "card.js"), "utf-8"),
-  };
-}
+const CARD_ASSETS = { css: cardCss, js: cardJs };
 
 // ---- 会话 jsonl 恢复（唯一事实源：op Map 退役后一切任务状态都从这里重建）----
 // dsh 会话日志 = <dataDir>/dsh-home/sessions/<cwd分组>/<sessionId>/session.jsonl.zstd，
@@ -315,8 +309,8 @@ export default function registerCardRoutes(app, ctx) {
   const base = "/api/plugins/" + ctx.pluginId;
 
   // 卡片页（iframe 内容）：opId 参数（兼容旧卡片）+ sessionId/rpcId（重启恢复定位）
-  app.get("/card/op", (c) => {
-    const assets = readCardAssets();
+    app.get("/card/op", (c) => {
+    const assets = CARD_ASSETS;
     const opId = String(c.req.query("opId") || "");
     const sessionId = String(c.req.query("sessionId") || "");
     const rpcId = String(c.req.query("rpcId") || "");
@@ -324,21 +318,20 @@ export default function registerCardRoutes(app, ctx) {
     const hc = c.req.query("hana-css") || "";
     const th = c.req.query("hana-theme") || "inherit";
     const hcLink = hc ? `<link rel="stylesheet" href="${esc(hc)}">` : "";
-    return c.html(`<!DOCTYPE html>
-<html lang="zh">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>dsh 任务</title>
-${hcLink}
-<style>${assets.css}<\/style>
-</head>
-<body data-hana-theme="${esc(th)}">
-<div id="dsh-root" data-op="${esc(opId)}" data-session="${esc(sessionId)}" data-rpc="${esc(rpcId)}" data-timeout="${esc(timeoutMs)}"></div>
-<script>window.__API="${base}";<\/script>
-<script>${assets.js}<\/script>
-</body>
-</html>`);
+    // 页面模板来自 src/assets/card-op.jinja2（asset/source 内联，占位符保留）
+    return c.html(
+      cardOpHtml({
+        hcLink,
+        assets,
+        esc,
+        th,
+        opId,
+        sessionId,
+        rpcId,
+        timeoutMs,
+        base,
+      }),
+    );
   });
 
   // SSE 推送源（卡片主链路）：先推 baseline（jsonl 恢复快照，含全量 output），
@@ -518,27 +511,23 @@ ${hcLink}
   }
 
   // 安装/升级卡片页（iframe 内容）：taskId 定位 g.depTasks 条目
-  app.get("/card/dep", (c) => {
-    const assets = readCardAssets();
+    app.get("/card/dep", (c) => {
+    const assets = CARD_ASSETS;
     const taskId = String(c.req.query("taskId") || "");
     const hc = c.req.query("hana-css") || "";
     const th = c.req.query("hana-theme") || "inherit";
     const hcLink = hc ? `<link rel="stylesheet" href="${esc(hc)}">` : "";
-    return c.html(`<!DOCTYPE html>
-<html lang="zh">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>DSH 安装/升级</title>
-${hcLink}
-<style>${assets.css}<\/style>
-</head>
-<body data-hana-theme="${esc(th)}">
-<div id="dsh-root" data-kind="dep" data-task="${esc(taskId)}"></div>
-<script>window.__API="${base}";<\/script>
-<script>${assets.js}<\/script>
-</body>
-</html>`);
+    // 页面模板来自 src/assets/card-dep.jinja2（asset/source 内联，占位符保留）
+    return c.html(
+      cardDepHtml({
+        hcLink,
+        assets,
+        esc,
+        th,
+        taskId,
+        base,
+      }),
+    );
   });
 
   // 安装/升级卡片 SSE 推送源：进程内数据（g.depTasks），定时推快照；

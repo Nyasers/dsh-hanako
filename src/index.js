@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// index.js — dsh-hanako 生命周期
+// src/index.js — dsh-hanako 生命周期 + bundle 收敛入口（单 bundle 形态）
 // 四件事：
 //  1. onload 最前初始化统一日志（插件会话边界：时间戳会话文件，旧日志 zstd 压缩保留；挂单例 logPath/appendLog，
 //     dsh-run.js 与 dsh-hana-provider 复用同一日志文件）
@@ -16,7 +16,7 @@
 //  4. 插件卸载/重载时回收常驻 web host 子进程。
 // 单例挂在 globalThis.__dshHanako（tools/dsh-run.js 的 rspack bundle 内联 app/lifecycle.js，
 // mountLifecycle 挂 closeProcess/collectDiagnostics/updateDsh/startWebHost/installDeps/verifyDeps/
-// checkDshUpdate），这里不 import 插件文件，避免 Hana 的模块缓存导致清理逻辑读取到旧模块。
+// checkDshUpdate）。本文件为 bundle 收敛入口：静态 import 全部插件模块（单 bundle 内无模块缓存问题）。
 import {
   existsSync,
   mkdirSync,
@@ -30,6 +30,24 @@ import {
 } from "node:fs";
 import { zstdCompressSync } from "node:zlib";
 import { join, dirname } from "node:path";
+
+// ---- bundle 收敛 ----（单 bundle 形态）
+// 生命周期能力：src/lifecycle.js 顶层 mountLifecycle() 在 import 时即挂单例
+import "./lifecycle.js";
+// 7 个工具模块（ESM 导出 name/description/parameters/execute(+sessionPermission)）
+import * as dshRun from "./tools/dsh-run.js";
+import * as dshUpdate from "./tools/dsh-update.js";
+import * as dshInstall from "./tools/dsh-install.js";
+import * as dshApprove from "./tools/dsh-approve.js";
+import * as dshCancel from "./tools/dsh-cancel.js";
+import * as dshOps from "./tools/dsh-ops.js";
+import * as dshSearch from "./tools/dsh-search.js";
+// 路由工厂（默认导出）
+import registerWebuiRoutes from "./routes/webui.js";
+import registerCardRoutes from "./routes/card.js";
+
+// 工具清单（registerTool 消费普通契约；宿主自动加 pluginId_ 前缀）
+const HANAKO_TOOLS = [dshRun, dshUpdate, dshInstall, dshApprove, dshCancel, dshOps, dshSearch];
 
 // ---- 统一日志（时间戳会话文件 + 旧日志 zstd 压缩保留）----
 // DSHana 插件全量运行日志：每次插件会话创建 <YYYYMMDD-HHmmss-SSS>.log 真实文件（文件名
@@ -116,6 +134,11 @@ function compressArchivedLogs(logsDir) {
   return count;
 }
 
+
+// routes 具名导出：dist/routes/*.js 壳 import { webuiRoute } from "../index.js" 转发
+export const webuiRoute = registerWebuiRoutes;
+export const cardRoute = registerCardRoutes;
+
 export default class DshHanakoPlugin {
   async onload() {
     const { log, config, dataDir } = this.ctx;
@@ -166,6 +189,30 @@ export default class DshHanakoPlugin {
     }
     if (this.ctx?.network && !g.network) {
       g.network = this.ctx.network;
+    }
+
+    // ---- 工具注册（registerTool）----
+    // 单 bundle：宿主不再扫描 tools/ 目录，onload 里逐工具 ctx.registerTool 注册。
+    // registerTool 返回清理函数时交 this.register（卸载逆序自动清理）。
+    for (const tool of HANAKO_TOOLS) {
+      try {
+        const unregisterTool = this.ctx.registerTool?.(tool);
+        if (typeof unregisterTool === "function") this.register(unregisterTool);
+        g.appendLog?.(
+          "hana",
+          `工具注册:${tool?.name || "?"}（ctx.registerTool）`,
+        );
+      } catch (e) {
+        this.ctx.log?.warn?.(
+          "[dsh-hanako] registerTool failed:",
+          tool?.name || "",
+          e?.message || e,
+        );
+        g.appendLog?.(
+          "hana",
+          `工具注册失败:${tool?.name || "?"}（${e?.message || e}）`,
+        );
+      }
     }
     this.register(() => {
       if (g && typeof g.closeProcess === "function") {

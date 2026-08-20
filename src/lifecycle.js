@@ -53,14 +53,14 @@ import {
   ELECTRON_NODE,
   ELECTRON_NODE_ENV,
   IS_WIN,
-} from "../tools/lib/state.js";
+} from "./tools/lib/state.js";
 import {
   resolveDshPkgDir,
   installDepsFromPlugin,
   verifyDepsSmoke,
   readDshInstalledVersion,
-} from "../tools/lib/install.js";
-import { checkDshUpdate } from "../tools/lib/check.js";
+} from "./tools/lib/install.js";
+import { checkDshUpdate } from "./tools/lib/check.js";
 
 const STDERR_CAP = 8192;
 const PORT_READY_TIMEOUT_MS = 60000; // web host 端口就绪等待上限

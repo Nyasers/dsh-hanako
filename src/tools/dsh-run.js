@@ -36,7 +36,7 @@ import {
 // 生命周期能力（web host 拉起 / config.json 引导）——本模块只做任务提交，这两者对单例/web host
 // 的依赖经 app/lifecycle.js 转发（lifecycle.js 顶层 mountLifecycle 已把 closeProcess / collectDiagnostics /
 // updateDsh / startWebHost / installDeps / verifyDeps / checkDshUpdate 挂到 globalThis 单例）。
-import { ensureWebHost, ensureConfigJson } from "../app/lifecycle.js";
+import { ensureWebHost, ensureConfigJson } from "../lifecycle.js";
 
 // ---- 本地审批应答（自动放行/超时拒绝共用；信封构造同 tools/dsh-approve.js，不 import 避免模块耦合）----
 // POST {base}/api/respond，client-response 信封（rpcId 路由 web host pending 表），校验 j.accepted。
