@@ -82,7 +82,7 @@ window.__ModuleLoader__.load({
       ".hs-select{flex:1;min-width:0;height:30px;padding:0 8px;border:1px solid var(--dsw-alias-border-l1,#d8d8d8);border-radius:8px;background:var(--dsw-alias-bg-base,#ffffff);color:var(--dsw-alias-label-primary,#1f2329);font-family:inherit;font-size:13px;line-height:20px}" +
       ".hs-select:focus{outline:none;border-color:var(--dsw-alias-button-primary-fill,#537d96)}" +
       // ---- 版本信息面板（DSH 版本卡片：本地/最新版本 双行信息块）----
-      ".hs-info{display:flex;flex-direction:column;gap:8px;padding:10px 12px;background:var(--dsw-alias-bg-hover,#f7f8fa);border-radius:8px}" +
+      ".hs-info{display:flex;flex-direction:column;gap:8px;padding:10px 12px;background: var(--dsw-alias-bg-module-platform,#EFE8DB);border-radius:8px}" +
       ".hs-info-row{display:flex;align-items:center;justify-content:space-between;gap:12px}" +
       ".hs-info-label{flex:none;color:var(--dsw-alias-label-secondary,#5a5f66);font-size:12px}" +
       ".hs-info-value{min-width:0;color:var(--dsw-alias-label-primary,#1f2329);font-size:13px;font-variant-numeric:tabular-nums;word-break:break-all;text-align:right}" +
