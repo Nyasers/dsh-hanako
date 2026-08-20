@@ -7,17 +7,27 @@
 // 经其 /api 网关提交任务（session.create → events.mux 订阅 → session.prompt），
 // 实时事件流驱动卡片 Markdown 输出。web UI 天然可见插件全部任务。
 //
-// 模块结构（v0.13.0 lib 提取 + 生命周期分离）：
+// 模块结构（v0.13.0 lib 提取 + 生命周期分离 + 本文件第二次细分 纯协议/纯函数/零状态 → lib）：
 //   lib/state.js        getSingleton（globalThis 单例）+ 环境常量（IS_WIN / ELECTRON_NODE /
 //                       ELECTRON_NODE_ENV / PLUGIN_ROOT / manifestDefaults）+ g.depTasks 默认
 //   lib/install.js      resolveDshPkgDir / installDepsFromPlugin / verifyDepsSmoke /
 //                       semver 比较（parseSemver / compareSemver）/ readDshInstalledVersion
 //   lib/check.js        checkDshUpdate（npmViewLatest + 本地版本直读 + semver 比较）
+//   lib/config.js       配置解析（纯解析零状态）：readDshDefaultModel / readDshDefaultPreset /
+//                       resolveReasoningEffort / resolveApprovalTimeoutMs / resolveDefaultCwd
+//   lib/wake.js         deferred 唤醒协议 + 审批挂起通知：registerDeferredWake /
+//                       resolveDeferredWake / failDeferredWake / notifyApprovalWake
+//                       （dsh-run/dsh-install/dsh-update 三入口共享，消除三重复）
+//   lib/protocol.js     dsh web /api 网关协议层（纯协议零状态）：nextRpcId / callUnary / openMux /
+//                       textFromChunk / textFromMessageBlocks / SUMMARY_HEAD/TAIL / buildSummary
 //   app/lifecycle.js     web host 生命周期（启动/自检/更新/三条 watch）——原在本文件，现分离挪入
-//                    本文件瘦身为纯任务提交流程模块，经静态 import 使用其中的 ensureWebHost /
-//                    ensureConfigJson，并保持单例挂载（lifecycle.js 顶层 mountLifecycle 负责）。
-// 任务提交链路保留在本文件：readDshDefault* / resolve* / deferred 唤醒 / 审批应答 / nextRpcId /
-// callUnary / openMux / textFrom* / buildSummary / cacheToolCall / submitTask / doExecute / execute。
+//                    本文件收敛为「有状态任务提交核心 + 工具契约」，经静态 import 使用其中的
+//                    ensureWebHost / ensureConfigJson，并保持单例挂载（lifecycle.js 顶层
+//                    mountLifecycle 负责）。
+// 本文件保留（有状态任务提交核心 + 工具契约）：nextOpId / createOpEntry / respondApprovalLocal /
+// approvalTimers / toolCallCache / cacheToolCall / submitTask / doExecute / execute / 工具契约
+// （name / description / parameters / sessionPermission）。这些与审批状态机（g.ops 协调状态、
+// approvalTimers / toolCallCache 缓存）紧耦合，拆出去要跨模块传递大量运行状态，保留在此。
 //
 // 为什么是这种分发（历史约束）：Hana 以带 ?t= 时间戳的 URL 加载 tools/*.js（热更新缓存破坏），
 // 但 tools 内部静态 import 的相对模块是无 query 的固定 URL，Node ESM 按 URL 缓存、永不刷新。
@@ -27,192 +37,33 @@
 // globalThis.__dshHanako，供 index.js 卸载清理。
 //
 // 权限：external_side_effect（调用 dsh 编码 agent 执行任务，消耗 Hana 宿主 provider 额度，Auto 模式送审）。
-import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getSingleton, PLUGIN_ROOT, manifestDefaults } from "./lib/state.js";
 import { resolveDshPkgDir } from "./lib/install.js";
+import {
+  readDshDefaultModel,
+  readDshDefaultPreset,
+  resolveReasoningEffort,
+  resolveApprovalTimeoutMs,
+  resolveDefaultCwd,
+} from "./lib/config.js";
+import {
+  registerDeferredWake,
+  resolveDeferredWake,
+  failDeferredWake,
+  notifyApprovalWake,
+} from "./lib/wake.js";
+import {
+  callUnary,
+  openMux,
+  textFromChunk,
+  textFromMessageBlocks,
+  buildSummary,
+} from "./lib/protocol.js";
 // 生命周期能力（web host 拉起 / config.json 引导）——本模块只做任务提交，这两者对单例/web host
 // 的依赖经 app/lifecycle.js 转发（lifecycle.js 顶层 mountLifecycle 已把 closeProcess / collectDiagnostics /
 // updateDsh / startWebHost / installDeps / verifyDeps / checkDshUpdate 挂到 globalThis 单例）。
 import { ensureWebHost, ensureConfigJson } from "../app/lifecycle.js";
-
-// 读 dsh-home/settings.yaml 的 agent-default-model（行级解析，零依赖）——
-// dsh 默认模型：dsh models 页设置后写回 settings.yaml（selectModel 同源）。
-// 返回 { provider, model } 或 null。
-function readDshDefaultModel(dshHome) {
-  try {
-    const f = join(dshHome, "settings.yaml");
-    if (!existsSync(f)) return null;
-    const lines = readFileSync(f, "utf8").split(/\r?\n/);
-    let inBlock = false;
-    const out = {};
-    for (const line of lines) {
-      if (/^agent-default-model\s*:/.test(line)) {
-        inBlock = true;
-        continue;
-      }
-      if (!inBlock) continue;
-      const m = line.match(/^(\s+)([A-Za-z]+)\s*:\s*(.*)$/);
-      if (!m) break; // 无缩进或非键行 = 出块（子项缩进 ≥1 空格均视为块内，2 空格标准缩进正常解析）
-      const k = m[2];
-      const v = m[3].trim();
-      if (v) out[k] = v.replace(/^['"]|['"]$/g, "");
-    }
-    return out.provider ? out : null;
-  } catch {
-    return null;
-  }
-}
-
-// 读 dsh-home/settings.yaml 的 agent-presets.default（行级解析，零依赖）——
-// dsh 默认 agent 预设：Web UI 设置后写回 settings.yaml。返回预设字符串或 null。
-function readDshDefaultPreset(dshHome) {
-  try {
-    const f = join(dshHome, "settings.yaml");
-    if (!existsSync(f)) return null;
-    const lines = readFileSync(f, "utf8").split(/\r?\n/);
-    let inBlock = false;
-    for (const line of lines) {
-      if (/^agent-presets\s*:/.test(line)) {
-        inBlock = true;
-        continue;
-      }
-      if (!inBlock) continue;
-      const m = line.match(/^(\s+)default\s*:\s*(.*)$/);
-      if (!m) {
-        if (!/^\s/.test(line)) break; // 无缩进 = 出块（顶层键）
-        continue; // 块内其他键，继续找 default
-      }
-      const v = m[2].trim().replace(/^['"]|['"]$/g, "");
-      if (v) return v;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-// reasoningEffort 解析（v0.9.5：全局配置已移除，只接受工具显式参数，无配置回退；
-// 不传时由 dsh 默认处理）。返回显式值或 null。
-function resolveReasoningEffort(explicit) {
-  const v = String(explicit ?? "").trim();
-  return v || null;
-}
-
-// approvalTimeoutMs 解析（v0.5.12 起为唯一审批配置）：优先直读 dataDir/config.json 的
-// global.approvalTimeoutMs（设置界面改动即时生效）：数字 > 0 采用；0 或负数 = 用户显式禁用
-// 超时拒绝（返回 0，调用方判断不挂计时器）；非数字/缺失回退配置快照 cfg.approvalTimeoutMs
-// （manifest 默认 30000），同样 0/负数 = 禁用。
-function resolveApprovalTimeoutMs(cfg) {
-  try {
-    const cf = join(cfg.dataDir, "config.json");
-    if (existsSync(cf)) {
-      const j = JSON.parse(readFileSync(cf, "utf8"));
-      const v = j?.global?.approvalTimeoutMs;
-      if (typeof v === "number" && Number.isFinite(v)) {
-        return v > 0 ? v : 0; // 数字合法即采用（0/负数=禁用，不回退快照复活超时）
-      }
-    }
-  } catch {
-    /* 读配置失败忽略 */
-  }
-  const v = Number(cfg.approvalTimeoutMs);
-  if (Number.isFinite(v) && v > 0) return v;
-  return 0; // 快照缺失/非数字/0/负数：禁用超时拒绝（0，调用方判断）
-}
-
-// defaultCwd 解析（「配置单一事实源」哲学，补齐直读兜底）：优先直读
-// dataDir/config.json 的 global.defaultCwd（设置界面改动即时生效；Agent 直改文件同样生效），
-// 无则回退配置快照/空。工具显式传 cwd 时在 doExecute 内优先，不受影响。
-function resolveDefaultCwd(cfg) {
-  try {
-    const cf = join(cfg.dataDir, "config.json");
-    if (existsSync(cf)) {
-      const j = JSON.parse(readFileSync(cf, "utf8"));
-      const d = j?.global?.defaultCwd;
-      if (typeof d === "string" && d.trim()) return d.trim();
-    }
-  } catch {
-    /* 读配置失败忽略 */
-  }
-  return String(cfg.defaultCwd || "");
-}
-// ---- deferred 唤醒（宿主原生后台任务通道，HRD wake.js 同协议）----
-// 工具发起时 deferred:register（登记 + 投递策略）→ 终态 resolve/fail → 宿主投递
-// <hana-background-result> 给 Agent 会话（默认唤醒回合，结果结构化直达）。
-// 容错纪律：唤醒是终态的旁路通知，任何失败都不抛回调用方（终局落盘不受影响）。
-async function registerDeferredWake({ bus, sessionPath, taskId, label }) {
-  if (!bus?.request || !sessionPath || !taskId) return false;
-  try {
-    await bus.request("deferred:register", {
-      taskId,
-      sessionPath,
-      meta: {
-        type: "dsh-run",
-        label: String(label || ""),
-        deliveryIntent: "trigger_parent_turn",
-        notifyAgentOnFailure: true,
-      },
-    });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function resolveDeferredWake({ bus, taskId, result }) {
-  if (!bus?.request || !taskId) return false;
-  try {
-    await bus.request("deferred:resolve", { taskId, result });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function failDeferredWake({ bus, taskId, error }) {
-  if (!bus?.request || !taskId) return false;
-  try {
-    await bus.request("deferred:fail", { taskId, error });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-// ---- 审批挂起通知（宿主 deferred 通道，独立 taskId 不占用任务完成通道）----
-// dsh 会话触发 approval/requested 时任务挂起等应答；插件把审批上下文投递给宿主，
-// Agent 收到后调用 dsh_approve 工具应答（allowed-once / rejected）。
-// 容错纪律同任务回调：通知失败不影响任务，审批仍可在 dsh Web UI 人工处理。
-async function notifyApprovalWake({ bus, sessionPath, opId, approval, task }) {
-  if (!bus?.request || !sessionPath) return;
-  const taskId = `${opId}::approval::${approval.approvalId}`;
-  try {
-    await bus.request("deferred:register", {
-      taskId,
-      sessionPath,
-      meta: {
-        type: "dsh-approval",
-        label: `dsh 审批: ${approval.toolName || "tool"}`,
-      },
-    });
-    await bus.request("deferred:resolve", {
-      taskId,
-      result: {
-        kind: "dsh-approval",
-        opId,
-        sessionId: approval.sessionId,
-        approvalId: approval.approvalId,
-        toolName: approval.toolName,
-        callId: approval.callId,
-        reason: approval.reason ?? null,
-        args: approval.args ?? null, // v0.5.12: tool/call 参数原文（命令/路径），Agent 审批决策依据
-        taskPreview: String(task ?? "").slice(0, 120),
-      },
-    });
-  } catch {
-    /* 通知失败忽略（审批仍可在 web UI 处理）*/
-  }
-}
 
 // ---- 本地审批应答（自动放行/超时拒绝共用；信封构造同 tools/dsh-approve.js，不 import 避免模块耦合）----
 // POST {base}/api/respond，client-response 信封（rpcId 路由 web host pending 表），校验 j.accepted。
@@ -283,164 +134,6 @@ function createOpEntry(opId, { task }) {
     cancelledRequested: false,
   });
   return opId;
-}
-// ---- HTTP RPC 客户端（dsh web /api 网关，fetch 载波）----
-// Unary：POST /api/<method>，body = { type:"client-request", rpcId, method, payload }
-// 响应 ServerResponse：rpcId 回显 + result.ok/value 或 result.ok=false + error。
-function nextRpcId() {
-  return `r_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-}
-
-async function callUnary(base, method, payload, signal, meta) {
-  const rpcId = nextRpcId();
-  const res = await fetch(`${base}/api/${method}`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ type: "client-request", rpcId, method, payload }),
-    signal,
-  });
-  if (!res.ok) throw new Error(`dsh /api/${method} HTTP ${res.status}`);
-  const full = await res.json();
-  if (!full || full.rpcId !== rpcId)
-    throw new Error(`dsh /api/${method} rpcId 不匹配`);
-  if (!full.result || !full.result.ok) {
-    const e = full.result?.error || {};
-    throw new Error(
-      `dsh ${method} 失败：${e.code || "unknown"} ${e.message || ""}`,
-    );
-  }
-  // meta.rpcId 回传：会话 jsonl 的 user/message 事件 data.source.rpcId 与此相同，
-  // 供 op 快照记录后用 sessionId+rpcId 从 jsonl 精确恢复（重启不丢、零映射文件）
-  if (meta && typeof meta === "object") meta.rpcId = rpcId;
-  return full.result.value;
-}
-
-// ---- 事件流（/api/events.mux，WebSocket 通道）----
-// dsh 的事件流要求 WebSocket 升级（GET 返回 426 Upgrade Required，浏览器 UI 即走 WS）。
-// Node 24 内置全局 WebSocket；帧为 JSON，payload 即 MuxFrame。
-async function* openMux(base, signal) {
-  if (typeof WebSocket !== "function") {
-    throw new Error("宿主环境无全局 WebSocket，无法订阅 dsh 事件流");
-  }
-  const url = base.replace(/^http/, "ws") + "/api/events.mux";
-  const ws = new WebSocket(url);
-  const queue = [];
-  const waiters = [];
-  let wsError = null;
-  let wsClosed = false;
-  ws.onmessage = (ev) => {
-    let frame = {};
-    let envelope = null;
-    try {
-      envelope = JSON.parse(ev.data);
-      frame = envelope?.payload || envelope || {};
-    } catch {
-      return;
-    }
-    // server-request 信封（approval/requested 等应答类帧）：外层 rpcId 补进 frame——
-    // dsh web host 的 /api/respond 靠 client-response 信封的 rpcId 路由 pending 表，
-    // 审批帧的 rpcId 只在外层，只取 payload 会丢（审批应答就断链）。
-    if (
-      envelope &&
-      typeof envelope === "object" &&
-      typeof envelope.rpcId === "string" &&
-      typeof frame.rpcId !== "string"
-    ) {
-      frame.rpcId = envelope.rpcId;
-    }
-    if (!frame || typeof frame.type !== "string") return;
-    if (waiters.length) waiters.shift()(frame);
-    else queue.push(frame);
-  };
-  ws.onerror = () => {
-    wsError = new Error("dsh events.mux WebSocket 错误");
-  };
-  ws.onclose = () => {
-    wsClosed = true;
-    while (waiters.length) waiters.shift()(null);
-  };
-  if (signal?.aborted) {
-    try {
-      ws.close();
-    } catch {}
-    throw Object.assign(new Error("dsh_run 已取消"), { code: "DSH_ABORTED" });
-  }
-  const onAbort = () => {
-    try {
-      ws.close();
-    } catch {}
-  };
-  signal?.addEventListener("abort", onAbort, { once: true });
-  await new Promise((resolve, reject) => {
-    ws.onopen = resolve;
-    ws.onerror = () => reject(wsError || new Error("dsh events.mux 连接失败"));
-  });
-  try {
-    while (true) {
-      if (queue.length) {
-        yield queue.shift();
-        continue;
-      }
-      if (wsError) throw wsError;
-      if (wsClosed) return;
-      const frame = await new Promise((resolve) => waiters.push(resolve));
-      if (frame === null) return;
-      yield frame;
-    }
-  } finally {
-    signal?.removeEventListener("abort", onAbort);
-    try {
-      ws.close();
-    } catch {
-      /* 已关闭 */
-    }
-  }
-}
-
-// 从 assistant/chunk 提取文本增量（宽松：delta/block 里任何 {type:"text",text} 都收）
-function textFromChunk(chunk) {
-  if (!chunk || typeof chunk !== "object") return "";
-  const c = chunk.chunk || chunk;
-  const t = c?.delta?.text ?? c?.block?.text ?? c?.text;
-  return typeof t === "string" ? t : "";
-}
-
-// 从 assistant/message 提取文本（content block 数组里 type==="text" 的 text 拼接）
-function textFromMessageBlocks(content) {
-  if (!Array.isArray(content)) return "";
-  return content
-    .filter((b) => b && b.type === "text" && typeof b.text === "string")
-    .map((b) => b.text)
-    .join("");
-}
-
-// ---- 回调摘要构建（PTC 式压缩：中间步骤不进 Agent 上下文）----
-// 参考 dsh PTC 模式（Code Mode SDK：一次程序执行替代多次工具往返）的思路：
-// 中间过程是噪音，最终结论才是信号。完整输出保留在 op 快照（卡片可查）
-// 与 dsh web UI（sessionId 定位），回调只带最终结论摘要。
-// 摘要锚点：最后一条 assistant/message 的文本，即 dsh 对任务的最终汇报。
-const SUMMARY_HEAD = 1500;
-const SUMMARY_TAIL = 600;
-
-function buildSummary(output, finalText) {
-  const full = String(output ?? "");
-  const candidate = String(finalText ?? "").trim();
-  if (candidate) {
-    return {
-      text: candidate,
-      summaryOf: "final-message",
-      fullLength: full.length,
-    };
-  }
-  if (full.length > SUMMARY_HEAD + SUMMARY_TAIL) {
-    const hidden = full.length - SUMMARY_HEAD - SUMMARY_TAIL;
-    return {
-      text: `${full.slice(0, SUMMARY_HEAD)}\n\n…[中间过程 ${hidden} 字符已折叠，完整输出见 op 快照 / dsh web UI]…\n\n${full.slice(-SUMMARY_TAIL)}`,
-      summaryOf: "head-tail",
-      fullLength: full.length,
-    };
-  }
-  return { text: full, summaryOf: "full", fullLength: full.length };
 }
 
 // v0.5.9: 缓存 tool/call 帧的参数原文（内容级白名单匹配的数据源）。

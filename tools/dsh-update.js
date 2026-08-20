@@ -16,53 +16,18 @@
 //     g.depsInstallLog + update-result.json，见 routes/card.js /ops/dep-stream），
 //     完成/失败经宿主 deferred 通道唤醒 Agent 带回结果；wait=true 同步等待直接返回。
 // 并发防护：更新执行中（g.updating）重复调用返回状态不重复执行（能力层内防护）。
-// 与 dsh-run.js 同一纪律：本工具不静态 import dsh-run.js（Hana 以 ?t= 时间戳加载
-// tools，静态 import 会命中 Node ESM 固定 URL 缓存读到旧模块，见 dsh-run.js 头部
-// 注释），经 globalThis 单例（g.checkDshUpdate / g.updateDsh / g.bus）调用；
-// deferred 唤醒协议（register/resolve/fail）同 dsh-run.js 内联实现，不跨模块 import。
-
-// ---- deferred 唤醒（宿主原生后台任务通道，协议同 dsh-run.js）----
-// 工具发起时 deferred:register（登记 + 投递策略）→ 终态 resolve/fail → 宿主投递
-// <hana-background-result> 给 Agent 会话（默认唤醒回合，结果结构化直达）。
-// 容错纪律：唤醒是终态的旁路通知，任何失败都不抛回调用方（能力层结果不受影响）。
-async function registerDeferredWake({ bus, sessionPath, taskId, label }) {
-  if (!bus?.request || !sessionPath || !taskId) return false;
-  try {
-    await bus.request("deferred:register", {
-      taskId,
-      sessionPath,
-      meta: {
-        type: "dsh-update",
-        label: String(label || ""),
-        deliveryIntent: "trigger_parent_turn",
-        notifyAgentOnFailure: true,
-      },
-    });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function resolveDeferredWake({ bus, taskId, result }) {
-  if (!bus?.request || !taskId) return false;
-  try {
-    await bus.request("deferred:resolve", { taskId, result });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function failDeferredWake({ bus, taskId, error }) {
-  if (!bus?.request || !taskId) return false;
-  try {
-    await bus.request("deferred:fail", { taskId, error });
-    return true;
-  } catch {
-    return false;
-  }
-}
+// 与 dsh-run.js 同一分发纪律：本工具不静态 import dsh-run.js（Hana 以 ?t= 时间戳加载
+// tools，静态 import 会命中 Node ESM 固定 URL 缓存读到旧模块，见 dsh-run.js 头部注释），
+// 经 globalThis 单例（g.checkDshUpdate / g.updateDsh / g.bus）调用；
+// deferred 唤醒协议（register/resolve/fail）不再各自内联，统一 import 共享的 ./lib/wake.js
+// （v0.13.x 三入口 dsh-run/dsh-install/dsh-update 共用一份，消除三重复；meta.type 由调用方
+// 传入保留本工具标识 dsh-update）。lib/wake.js 是纯协议零状态模块，rspack 入口静态 import
+// 内联进 bundle，?t= 重载即刷新，无"静态 import 固定 URL 缓存"问题。
+import {
+  registerDeferredWake,
+  resolveDeferredWake,
+  failDeferredWake,
+} from "./lib/wake.js";
 
 function buildCheckText(r) {
   const local = r?.localVersion || "未安装";
@@ -190,6 +155,7 @@ async function doExecute(input, ctx) {
     sessionPath,
     taskId,
     label: "DSH 更新（npm i @deepseek-ai/dsh latest，重启 web host）",
+    type: "dsh-update",
   });
   g.updateDsh(cfg)
     .then((r) => {
