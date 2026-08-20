@@ -10,11 +10,13 @@
 //     invoke / 特殊路径可能缺失，双兜底；resources/network：dsh-run.js 宿主侧
 //     provider 跟随 push 链路使用——ctx.resources.watch 感知配置变化 + ctx.network.fetch
 //     回环调用 dsh web host，存在才存，与 bus 同模式）
-//  3. onload 时拉起 dsh web host（随插件加载即启动，不等首次工具调用；
-//     tools 文件可能晚于 onload 被宿主加载，先轮询等单例方法就绪）
+//  3. onload 时异步拉起 dsh web host（fire-and-forget：随插件加载即后台启动，不等首次工具调用；
+//     tools 文件可能晚于 onload 被宿主加载，做一次 <1s 简短轮询等单例方法就绪后触发启动，
+//     不 await 端口就绪，避免拖住宿主启动；失败记 webLastError，工具调用时重试）
 //  4. 插件卸载/重载时回收常驻 web host 子进程。
-// 单例挂在 globalThis.__dshHanako（tools/dsh-run.js 写入），这里不 import 插件文件，
-// 避免 Hana 的模块缓存导致清理逻辑读取到旧模块。
+// 单例挂在 globalThis.__dshHanako（tools/dsh-run.js 的 rspack bundle 内联 app/lifecycle.js，
+// mountLifecycle 挂 closeProcess/collectDiagnostics/updateDsh/startWebHost/installDeps/verifyDeps/
+// checkDshUpdate），这里不 import 插件文件，避免 Hana 的模块缓存导致清理逻辑读取到旧模块。
 import {
   existsSync,
   mkdirSync,
@@ -171,37 +173,60 @@ export default class DshHanakoPlugin {
       }
     });
 
-    // 拉起 dsh web host（随插件生命周期：加载即启动，卸载即回收）
-    // tools 模块由宿主在激活期间 import（注册工具），可能晚于本 onload；
-    // 轮询最多 5s 等单例方法挂上，再触发启动。启动失败不阻塞加载（工具调用时重试）。
-    const deadline = Date.now() + 5000;
-    const tryStart = async () => {
-      while (Date.now() < deadline) {
-        if (g && typeof g.startWebHost === "function") {
-          const ok = await g.startWebHost(config, dataDir);
-          log.info(
-            `[dsh-hanako] dsh web host ${ok ? "已随插件启动" : "启动未就绪（工具调用时将重试）"}`,
+    // 拉起 dsh web host（随插件生命周期：加载即启动，卸载即回收）——异步 fire-and-forget：
+    // onload 立即返回，不 await 端口就绪（ensureWebHost 有 60s 端口就绪等待，onload 不能被拖住）。
+    // tools 模块由宿主在激活期间 import（注册工具），可能晚于本 onload；这里只做一次简短（<1s）
+    // 轮询等单例方法挂上，再触发启动；触发后不 await 其结果（fire-and-forget，内部 try/catch
+    // 记 g.webLastError / g.webLastLogPath，不抛到 onload）。启动失败不阻塞加载——首次工具调用
+    // （dsh_run execute 内 ensureWebHost）或 /webui/start 手动启动时仍会可靠重试。
+    const waitMount = (async () => {
+      for (let i = 0; i < 20; i++) {
+        // 最多约 1s 等工具模块挂载（远小于旧的 5s 轮询与 60s 端口就绪等待）
+        if (g && typeof g.startWebHost === "function") return true;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      return false;
+    })();
+    waitMount
+      .then((mounted) => {
+        if (!mounted) {
+          log.warn(
+            "[dsh-hanako] 1s 内未等到工具模块加载，dsh web host 将随首次工具调用启动",
           );
           g.appendLog?.(
             "hana",
-            `dsh web host 启动${ok ? "成功（已随插件启动）" : "未就绪（工具调用时将重试）"}`,
+            "1s 内未等到工具模块加载，dsh web host 将随首次工具调用启动",
           );
           return;
         }
-        await new Promise((r) => setTimeout(r, 100));
-      }
-      log.warn(
-        "[dsh-hanako] 5s 内未等到工具模块加载，dsh web host 将随首次工具调用启动",
-      );
-      g.appendLog?.(
-        "hana",
-        "5s 内未等到工具模块加载，dsh web host 将随首次工具调用启动",
-      );
-    };
-    tryStart().catch((e) => {
-      log.warn?.("[dsh-hanako] web host 启动异常:", e?.message || String(e));
-      g.appendLog?.("hana", `web host 启动异常：${e?.message || String(e)}`);
-    });
+        // fire-and-forget：不 await 端口就绪（避免 ensureWebHost 60s 等拖住宿主启动）。
+        // startWebHostFromPlugin 内部已 try/catch 记 webLastError 返回布尔，这里双兜底。
+        Promise.resolve(g.startWebHost(config, dataDir)).then(
+          (ok) => {
+            log.info(
+              `[dsh-hanako] dsh web host ${ok ? "已随插件异步启动" : "启动未就绪（工具调用时将重试）"}`,
+            );
+            g.appendLog?.(
+              "hana",
+              `dsh web host 启动${ok ? "成功（已随插件异步启动）" : "未就绪（工具调用时将重试）"}`,
+            );
+          },
+          (e) => {
+            log.warn?.(
+              "[dsh-hanako] web host 启动异常:",
+              e?.message || String(e),
+            );
+            g.appendLog?.(
+              "hana",
+              `web host 启动异常：${e?.message || String(e)}`,
+            );
+          },
+        );
+      })
+      .catch((e) => {
+        log.warn?.("[dsh-hanako] web host 启动异常:", e?.message || String(e));
+        g.appendLog?.("hana", `web host 启动异常：${e?.message || String(e)}`);
+      });
 
     log.info("[dsh-hanako] loaded");
     g.appendLog?.("hana", "plugin loaded");
