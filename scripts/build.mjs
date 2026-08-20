@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// scripts/build.mjs — dsh-hanako rspack 构建（v0.6.0 轻量化分化）
+// scripts/build.mjs — dsh-hanako rspack 构建（轻量化分化）
 // 产物：dist/index.js + dist/tools/*.js（ESM bundle，压缩），插件本体零依赖打包。
 // 用法：
 //   node scripts/build.mjs                       # 本地已装 @rspack/core 时
@@ -16,7 +16,7 @@ import fs from "fs-extra";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 // rspack 解析：RSPACK_ENV 指向构建环境（推荐），否则本地 node_modules
-// v0.7.1: rspack 2.x 为 ESM-only（type:module，exports 无 require 入口），require() 加载报
+// rspack 2.x 为 ESM-only（type:module，exports 无 require 入口），require() 加载报
 // MODULE_NOT_FOUND；改动态 import，且目录 URL 不被 ESM 支持（ERR_UNSUPPORTED_DIR_IMPORT），
 // 需按包 exports/main 解析到实际入口文件——CJS 旧版与 ESM 新版均兼容。
 function resolveRspackEntry(coreDir) {
@@ -46,7 +46,7 @@ if (envDir) {
 const rspack = rspackPkg.rspack ?? rspackPkg.default?.rspack;
 
 // 入口：生命周期 index.js + 7 个工具文件（宿主按 manifest 路径加载，保持子目录结构；
-// v0.13.0 lib 提取：tools/lib/*.js 经相对 import 被 rspack 内联进各入口 bundle）
+// lib 提取：tools/lib/*.js 经相对 import 被 rspack 内联进各入口 bundle）
 const entryNames = [
   "index",
   "tools/dsh-run",
@@ -64,8 +64,8 @@ const entries = Object.fromEntries(
 // 构建前收集会被 rspack 内联进 bundle 的全部源码 file:// URL（entry + tools/lib/* 等
 // 相对 import 的内联模块），构建后产物里出现的这些字面量一律替换回 import.meta.url：
 // rspack 会把 import.meta.url 静态化为「构建机」上的源码绝对路径，分发到对方机器后
-// 路径失效。v0.13.0 lib 提取回归：tools/lib/state.js 的路径未被替换（此前仅收集 entry
-// URL），CI 出包后产物残留 /home/runner/... 构建机路径，Windows 上模块顶层
+// 路径失效。曾因仅收集 entry URL 导致 tools/lib/state.js 路径未替换（回归）——
+// 此时产物残留 /home/runner/... 构建机路径，Windows 上模块顶层
 // fileURLToPath 直接抛错、能力层挂载不执行。替换后 import.meta.url 指向 bundle 自身
 // 位置（dist/tools/xxx.js），向上找 manifest.json 的定位逻辑从 tools/ 一步即达插件根，
 // 语义不变。
@@ -154,7 +154,7 @@ walk(join(ROOT, "dist"));
 
 // 构建后强制校验：产物中不得残留任何带引号的 file:// 字面量（rspack 把内联模块的
 // import.meta.url 静态化为构建机绝对路径即泄漏成此形态，分发后路径失效）。
-// v0.13.1 回归防护：收集范围再全也有漏网可能，这里兜底——CI 出包残留即构建失败。
+// 回归防护：收集范围再全也有漏网可能，这里兜底——CI 出包残留即构建失败。
 function assertNoStaticFileUrl(root) {
   const offenders = [];
   const scan = (dir) => {

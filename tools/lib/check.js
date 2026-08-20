@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// tools/lib/check.js — DSH 版本检查共用模块（v0.13.0 lib 提取）
+// tools/lib/check.js — DSH 版本检查共用模块（lib 提取）
 // 从 tools/dsh-run.js 剥离：npmViewLatest（spawn npm view 查远端版本）+ checkDshUpdate
 // （本地版本 + 远端版本 → { localVersion, latestVersion, updateAvailable, error? }）。
 // 依赖 lib/install.js 的 verifyDepsSmoke 缓存（g.depsSmoke）+ 本地版本直读

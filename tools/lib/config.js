@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// tools/lib/config.js — dsh-hanako 配置解析共用模块（v0.13.x lib 提取）
+// tools/lib/config.js — dsh-hanako 配置解析共用模块（lib 提取）
 // 从 tools/dsh-run.js 剥离的纯解析/零状态函数：默认模型/预设（settings.yaml 行级）、
 // reasoningEffort、审批超时、defaultCwd（config.json / 配置快照）。全部零宿主状态
 // （不碰 globalThis 单例，只读文件/参数），dsh-run.js 静态 import。
@@ -70,14 +70,14 @@ export function readDshDefaultPreset(dshHome) {
   }
 }
 
-// reasoningEffort 解析（v0.9.5：全局配置已移除，只接受工具显式参数，无配置回退；
+// reasoningEffort 解析（全局配置已移除，只接受工具显式参数，无配置回退；
 // 不传时由 dsh 默认处理）。返回显式值或 null。
 export function resolveReasoningEffort(explicit) {
   const v = String(explicit ?? "").trim();
   return v || null;
 }
 
-// approvalTimeoutMs 解析（v0.5.12 起为唯一审批配置）：优先直读 dataDir/config.json 的
+// approvalTimeoutMs 解析（唯一审批配置）：优先直读 dataDir/config.json 的
 // global.approvalTimeoutMs（设置界面改动即时生效）：数字 > 0 采用；0 或负数 = 用户显式禁用
 // 超时拒绝（返回 0，调用方判断不挂计时器）；非数字/缺失回退配置快照 cfg.approvalTimeoutMs
 // （manifest 默认 30000），同样 0/负数 = 禁用。

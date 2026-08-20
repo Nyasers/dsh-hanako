@@ -64,7 +64,7 @@ import { checkDshUpdate } from "../tools/lib/check.js";
 
 const STDERR_CAP = 8192;
 const PORT_READY_TIMEOUT_MS = 60000; // web host 端口就绪等待上限
-// ---- 统一日志（v0.10.8 定稿：时间戳会话文件，index.js onload 初始化）----
+// ---- 统一日志（时间戳会话文件，index.js onload 初始化）----
 // 当前会话日志 = <dataDir>/logs/<YYYYMMDD-HHmmss-SSS>.log 时间戳会话文件——DSHana 插件
 // 全量运行日志（index.js 生命周期 + web host 进程 stdout/stderr + dsh-hana-provider
 // 诊断 + dsh-run 工具关键路径）；旧日志由 index.js onload zstd 压缩为 .log.zst 全部保留。
@@ -402,7 +402,7 @@ export function ensureConfigJson(cfg) {
   }
 }
 // ---- web host 生命周期：spawn dsh web（DSH_HOME 锁进插件数据目录）----
-// v0.13.0: dsh 依赖位置解析（resolveDshPkgDir）已提取到 lib/install.js——数据目录
+// dsh 依赖位置解析（resolveDshPkgDir）已提取到 lib/install.js——数据目录
 // dsh-pkg/ 优先（Agent npm i @deepseek-ai/dsh 部署的轻量分发形态），插件安装目录
 // node_modules 兑底（现役 zip 自带形态）。DSH_HOME 恒在数据目录。
 export async function ensureWebHost(cfg) {
@@ -448,11 +448,11 @@ export async function ensureWebHost(cfg) {
   // 当前会话日志 = 时间戳会话文件（index.js onload 已初始化单例 g.logPath）。
   // 单例优先；index.js 未初始化（冷启动边缘）时兜底自建。写进 web/logLastExit/错误消息供诊断。
   const logPath = g.logPath || newWebLogPath(cfg.dataDir);
-  // v0.5.11: 会话全文搜索 overlay（dsh 默认 openAt: never 禁用搜索，需 --patch 覆盖为 first-search）
-  // v0.8.1: 主题注入 overlay；v0.9.3: 宿主 provider 跟随 overlay——多份 patch 合并为
+  // 会话全文搜索 overlay（dsh 默认 openAt: never 禁用搜索，需 --patch 覆盖为 first-search）
+  // 主题注入 overlay + 宿主 provider 跟随 overlay——多份 patch 合并为
   // dsh-plugin/dsh-hanako.patch.yml.tpl 单一模板：段1 session-query 静态配置块 + 段2 theme
-  // insert + 段3 provider insert（v0.9.5 起恒渲染：hostProvider 恒开跟随宿主，无关闭选项）
-  // + 段4 settings insert（v0.9.5 起恒挂载；v0.13.0 改名 dsh-hana-settings 并注入
+  // insert + 段3 provider insert（恒渲染：hostProvider 恒开跟随宿主，无关闭选项）
+  // + 段4 settings insert（恒挂载；改名 dsh-hana-settings 并注入
   // 「检查与更新 DSH」链路 config：dshPkgDir/npmCliPath/electronNode/dataDir）。
   // cordis 插件加载：theme/provider/settings/logger 四段均以包名注册（dsh client 模块发现
   // 按 loader entry 的 name 做 require.resolve('<name>/package.json')，file:// 无法解析），
@@ -462,7 +462,7 @@ export async function ensureWebHost(cfg) {
   // 启动前渲染模板（占位符→实际路径）到数据目录 dsh-hanako.patch.generated.yml；launcher
   // flag（--profile/--patch）必须位于应用参数（--port）之前。模板缺失/渲染失败时不挂
   // 任何 patch 记 warn（会话全文搜索保持上游默认禁用），不阻断 dsh 启动。
-  // v0.9.5 正规化升级：dsh-hana-settings 前身 dsh-hana-default-model 先行改包名注册；
+  // 正规化升级：dsh-hana-settings 前身 dsh-hana-default-model 先行改包名注册；
   // 本版 theme/provider 一并正规化——dsh client 模块发现按
   // require.resolve('<name>/package.json') 找 package.json 的 dsh.client 声明，file://
   // 形式无法解析。包名解析锚点是 $DSH_HOME/profiles（baseUrl 父目录的 node_modules），
@@ -514,7 +514,7 @@ export async function ensureWebHost(cfg) {
   const patchTpl = join(PLUGIN_ROOT, "dsh-plugin", "dsh-hanako.patch.yml.tpl");
   // 渲染各插件的 config 依赖解析基座占位符——theme/provider/settings/logger 四段均以
   // 包名注册，不再有 file:// URL 占位符；包名经 ensureCordisJunctions 的 junction 解析。
-  // v0.13.x B方案：provider 段不再注入 modelsPath/catalogPath（宿主不再经 patch 注入
+  // B方案：provider 段不再注入 modelsPath/catalogPath（宿主不再经 patch 注入
   // provider 数据，parse 逻辑上移宿主，route 目录改经 HTTP push 下发）——provider config
   // 只剩 dshPkgDir（子进程解析 pi-ai 依赖用）。DSH_PKG_DIR = dsh 包安装目录
   // （provider/settings 段）；LOG_PATH = 本次会话日志文件路径（logger 段，四个内嵌
@@ -527,7 +527,7 @@ export async function ensureWebHost(cfg) {
       .join(cfg.dshPkgDir || resolveDshPkgDir(cfg))
       .split("{{LOG_PATH}}")
       .join(logPath)
-      // v0.13.0: dsh-hana-settings「检查与更新 DSH」链路占位符（npm-cli.js 路径 /
+      // dsh-hana-settings「检查与更新 DSH」链路占位符（npm-cli.js 路径 /
       // 宿主 electron node / 插件数据目录）
       .split("{{NPM_CLI_PATH}}")
       .join(join(PLUGIN_ROOT, "node_modules", "npm", "bin", "npm-cli.js"))
@@ -563,7 +563,7 @@ export async function ensureWebHost(cfg) {
     {
       cwd: cfg.dataDir,
       stdio: ["ignore", "pipe", "pipe"],
-      // v0.9.5: 恒不注入 API Key 环境变量——凭据由 dsh-hana-provider 插件直读
+      // 恒不注入 API Key 环境变量——凭据由 dsh-hana-provider 插件直读
       // 宿主 provider-catalog.json（dsh models 页/任务均走 Hana 宿主 provider）
       env: {
         ...ELECTRON_NODE_ENV,
@@ -583,7 +583,7 @@ export async function ensureWebHost(cfg) {
     stderr: "",
     readyPromise: null,
   };
-  // v0.10.7: stdout/stderr 全量落盘（src=out/err；stderr 另保留内存尾部供诊断界面）。
+  // stdout/stderr 全量落盘（src=out/err；stderr 另保留内存尾部供诊断界面）。
   // 写入优先用单例 appendLog（index.js 提供，行格式一致 [ts] [src] 内容），
   // 无单例时回退本模块 appendLog（两者写同一 logPath）
   const emitLog = (src, d) => {
@@ -601,7 +601,7 @@ export async function ensureWebHost(cfg) {
     web.ready = false;
     web.stderr += `\n[dsh web 退出 code=${code} signal=${signal}]`;
     emitLog("hana", `dsh web 退出 code=${code} signal=${signal}`);
-    // v0.8.5: 退出信息记入单例持久字段（随后 g.web 摘除，局部 web.stderr 会丢）——
+    // 退出信息记入单例持久字段（随后 g.web 摘除，局部 web.stderr 会丢）——
     // 进程被外部杀掉（kill / Stop-Process）时诊断仍能区分「已退出」而非误报「尚未启动」
     g.webLastExit = {
       code,
@@ -636,9 +636,9 @@ export async function ensureWebHost(cfg) {
         });
         if (r.ok) {
           web.ready = true;
-          // v0.8.5: 新进程就绪：清掉上次退出记录（持久字段只反映最近一次退出）
+          // 新进程就绪：清掉上次退出记录（持久字段只反映最近一次退出）
           g.webLastExit = null;
-          // v0.13.1：B方案下子进程启动时 snapshot 为空，首批 provider 依赖宿主 push。
+          // B方案下子进程启动时 snapshot 为空，首批 provider 依赖宿主 push。
           // 从这里（唯一新进程就绪点）主动推一次最新 routes——任意 spawn 路径
           // （插件 onload / webui 手动启动 / dsh_run 进程兜底重启 / updateDsh 更新重启）
           // 都保证有初始 push；内部有界重试覆盖子进程插件 apply() 晚于端口就绪的
@@ -660,7 +660,7 @@ export async function ensureWebHost(cfg) {
   return readyPromise;
 }
 
-// ---- 宿主侧 provider 跟随 push 链路（v0.10.7：fs.watch → ctx.resources.watch + HTTP push）----
+// ---- 宿主侧 provider 跟随 push 链路（fs.watch → ctx.resources.watch + HTTP push）----
 // 语义：dsh-hana-provider 插件不再自建 fs.watch（Windows rename 原子替换等平台坑一并消除）——
 // 宿主侧经 ctx.resources.watch 感知 models.json / provider-catalog.json 变化（bus 派发
 // resource.changed，resourceKey 格式 local_fs:<path>），防抖 300ms（与旧实现同 DEBOUNCE
@@ -782,7 +782,7 @@ function ensureProviderPushWatch(cfg) {
     `[dsh-run] provider 热跟随 watch 已建立（${paths.length} 文件），宿主配置变化将 push dsh 刷新`,
   );
 }
-// ---- DSH 检查能力（v0.13.0：checkDshUpdate / npmViewLatest / semver 比较 / 本地版本
+// ---- DSH 检查能力（checkDshUpdate / npmViewLatest / semver 比较 / 本地版本
 // 直读已提取到 lib/check.js + lib/install.js，经 getSingleton 挂 g.checkDshUpdate 供
 // Agent 工具 dsh_update / DSHana 标签页 webui 路由 / 设置页桥接三面共用，单一事实源）----
 
@@ -842,7 +842,7 @@ export async function updateDsh(cfg) {
     // 检查/更新桥接），ensureWebHost 本身不建 watch（只有 startWebHostFromPlugin 建），
     // 不重建则更新后设置页检查/更新请求不再触发宿主处理
     ensureProviderPushWatch(cfg);
-    // v0.13.1: 重启用进程后首批 provider 的初始 push 已由 ensureWebHost（唯一就绪点）
+    // 重启用进程后首批 provider 的初始 push 已由 ensureWebHost（唯一就绪点）
     // 发出；此处只重建跟随 watch，不再重复 push。
     ensureUpdateWatch(cfg);
     // ⑤ 读新版本 → done（installDepsFromPlugin 已刷新 g.depsSmoke，优先用；无则直读 package.json）
@@ -884,7 +884,7 @@ export async function updateDsh(cfg) {
     g.updating = false;
   }
 }
-// ---- 宿主侧 DSH 检查/更新桥接 watch（v0.13.0：dsh 设置页「DSH 版本」块 → 宿主能力层）----
+// ---- 宿主侧 DSH 检查/更新桥接 watch（dsh 设置页「DSH 版本」块 → 宿主能力层）----
 // 语义：dsh-hana-settings 插件写 <dataDir>/update-request.json（state: 'check-requested'
 // 请求版本检查 / 'requested' 请求更新），宿主侧经 ctx.resources.watch 感知变化（bus 派发
 // resource.changed，resourceKey 格式 local_fs:<path>）→ 读文件按 state 分发：
@@ -1031,11 +1031,11 @@ function onBridgeRequestChanged(dataDir, path, cfg) {
   }
 }
 // push dsh web host 刷新（回环调用 127.0.0.1:{port}；结果写入统一会话日志 + console 简记，
-// 失败不阻断。v0.13.x B方案：body 携带组装好的 route 目录（buildProviderRoutes() 的
+// 失败不阻断。B方案：body 携带组装好的 route 目录（buildProviderRoutes() 的
 // 最新 routes），子进程 applySnapshot 直接消费，不再自读宿主文件（buildProviderRoutes
 // 内部已处理「读取失败保留旧 routes」回退）。
 //
-// v0.13.1 有界重试 + 回环 fetch 直连：B方案下子进程启动时 snapshot 为空、首批 provider
+// 有界重试 + 回环 fetch 直连：B方案下子进程启动时 snapshot 为空、首批 provider
 // 全依赖这次 push。但 dsh web host 的 /api/host.describe 就绪（宿主判定 ready）早于
 // 子进程内插件的 apply() 完成——dsh-hana-provider 的 apply 要先 await 动态导入
 // pi-ai/dsh-llm/dsh-timeout，之后才经 ctx.inject(['webServer']).effect 注册
@@ -1115,18 +1115,18 @@ getSingleton().startWebHost = async function startWebHostFromPlugin(
     if (v !== undefined && v !== null && v !== "") cfg[k] = v;
   }
   cfg.dataDir = ctxDataDir || join(PLUGIN_ROOT, "data");
-  // v0.10.2: 插件初始化（拉起 web host）即自动生成 config.json（不存在时按 manifest 默认值）
+  // 插件初始化（拉起 web host）即自动生成 config.json（不存在时按 manifest 默认值）
   ensureConfigJson(cfg);
   // 单例记数据目录（dsh_ops 经 g.dataDir 定位 dsh 会话缓存等数据文件）
   getSingleton().dataDir = cfg.dataDir;
   if (!cfg.dshPkgDir) cfg.dshPkgDir = resolveDshPkgDir(cfg);
   try {
     await ensureWebHost(cfg);
-    // v0.10.7: web host 就绪后建立宿主侧 provider 跟随 push watch（幂等：先清理旧 watch 再建）
+    // web host 就绪后建立宿主侧 provider 跟随 push watch（幂等：先清理旧 watch 再建）
     ensureProviderPushWatch(cfg);
-    // v0.13.1：首批 provider 的初始 push 已收敛进 ensureWebHost（唯一就绪点，含重试），
+    // 首批 provider 的初始 push 已收敛进 ensureWebHost（唯一就绪点，含重试），
     // 此处不再重复推；后续每次 resource.changed 经防抖 watch 增量 push。
-    // v0.13.0: DSH 检查/更新桥接 watch（幂等）：dsh 设置页「DSH 版本」块写
+    // DSH 检查/更新桥接 watch（幂等）：dsh 设置页「DSH 版本」块写
     // update-request.json → 宿主 checkDshUpdate / updateDsh（单一事实源）
     ensureUpdateWatch(cfg);
     return true;
@@ -1136,7 +1136,7 @@ getSingleton().startWebHost = async function startWebHostFromPlugin(
     g.webLastError = String(e?.message || e).slice(0, 1500);
     if (g.web?.stderr)
       g.webLastError += `\n[dsh web stderr] ${g.web.stderr.slice(-800)}`;
-    // v0.10.7: 失败也记日志路径（诊断界面可跳完整日志；g.web 在启动失败后可能已摘除，
+    // 失败也记日志路径（诊断界面可跳完整日志；g.web 在启动失败后可能已摘除，
     // 从 webLastExit 取兜底）
     const logPath = g.web?.logPath || g.webLastExit?.logPath || null;
     if (logPath) g.webLastLogPath = logPath;
@@ -1145,12 +1145,12 @@ getSingleton().startWebHost = async function startWebHostFromPlugin(
   }
 };
 
-// v0.13.0: installDepsFromPlugin / verifyDepsSmoke 已提取到 lib/install.js（本文件顶部
+// installDepsFromPlugin / verifyDepsSmoke 已提取到 lib/install.js（本文件顶部
 // import），这里显式挂单例（getSingleton 本体在 lib/state.js 不再逐函数赋值；mountSingleton
 // 与 lib 侧挂载保持同款幂等语义）。routes/webui.js 经 g.installDeps / g.verifyDeps 调用。
 getSingleton().installDeps = installDepsFromPlugin;
 getSingleton().verifyDeps = verifyDepsSmoke;
-// ---- 连接失败自检（v0.8.3: 插件页 web host 未就绪时的诊断数据源）----
+// ---- 连接失败自检（插件页 web host 未就绪时的诊断数据源）----
 // 供 routes/webui.js 使用（经单例 globalThis.__dshHanako.collectDiagnostics 挂载，
 // 不静态 import 本模块——Hana 带 ?t= 加载 tools，静态 import 会命中 Node ESM 固定
 // URL 缓存读到旧模块，见文件头注释；与 index.js 经单例取 closeProcess 同一套纪律）。
@@ -1170,7 +1170,7 @@ export function collectWebDiagnostics(cfg = {}) {
       g.dataDir ||
       (g.web?.dshHome ? dirname(g.web.dshHome) : "");
     const diagCfg = { ...cfg, dataDir };
-    // v0.8.8: 不再自动触发运行级检测（去掉 maybeTriggerDepsSmoke）——检测改为「进标签页
+    // 不再自动触发运行级检测（去掉 maybeTriggerDepsSmoke）——检测改为「进标签页
     // 自动一次 + 手动「检测依赖」按钮」，经 GET /webui/verify-deps 路由驱动；g.depsSmoke
     // 只存最近一次检测结果供诊断展示（不随 3s 轮询重复 spawn）。
     out.checks.push(buildDepsDiagCheck(g, diagCfg));
@@ -1222,7 +1222,7 @@ function buildDepsDiagCheck(g, cfg) {
   const installing = Boolean(g.depsInstalling);
   const installError = String(g.depsInstallError || "").slice(0, 300);
   const installLog = String(g.depsInstallLog || "").slice(-800);
-  const installAt = g.depsInstallAt || null; // v0.8.8: 最近一次 npm i 输出时间（实时进度）
+  const installAt = g.depsInstallAt || null; // 最近一次 npm i 输出时间（实时进度）
   // 运行级验证状态（verifyDepsSmoke 缓存；非敏感：布尔/版本号/截断错误文本）
   const smoke = g.depsSmoke || null;
   const verifyRunning = Boolean(smoke?.running);
@@ -1233,7 +1233,7 @@ function buildDepsDiagCheck(g, cfg) {
       : null;
   const verifyVersion = smoke?.version ?? null;
   const verifyAt = smoke?.at ?? null;
-  // v0.13.0: 当前版本（运行级验证缓存优先，无则直读 dsh-pkg package.json）+ 版本检查
+  // 当前版本（运行级验证缓存优先，无则直读 dsh-pkg package.json）+ 版本检查
   // 状态（g.checkResult 缓存：最近一次 checkDshUpdate 结果）+ 更新状态（g.updating /
   // g.updateError + update-result.json 文件内容）。只回非敏感布尔/版本号/截断文本。
   const currentVersion =
@@ -1269,7 +1269,7 @@ function buildDepsDiagCheck(g, cfg) {
     installAt,
     pkgDir,
     cliBin,
-    // v0.13.0: 版本/检查/更新状态（deps 卡片版本行 + 检查更新/更新 DSH 按钮）
+    // 版本/检查/更新状态（deps 卡片版本行 + 检查更新/更新 DSH 按钮）
     version: currentVersion,
     check: {
       latest: checkResult?.latestVersion ?? null,
@@ -1285,7 +1285,7 @@ function buildDepsDiagCheck(g, cfg) {
     fix: "",
   };
   if (installing) {
-    // v0.8.8: 安装中（含重装场景 installed 仍可能为 true）优先——实时进度
+    // 安装中（含重装场景 installed 仍可能为 true）优先——实时进度
     // installLog 尾部由前端 .diag-progress 展示（随轮询刷新）
     check.detail = "正在安装依赖…（npm i，进度见下方）";
     check.fix = "";
@@ -1300,7 +1300,7 @@ function buildDepsDiagCheck(g, cfg) {
     check.fix =
       "依赖缺失：点击本卡片「安装依赖」按钮自动在插件数据目录 dsh-pkg 执行 npm i @deepseek-ai/dsh（完成后自动验证）；或确认插件目录 node_modules 解压完整";
   } else if (!smoke) {
-    // v0.8.8: 未检测过（进标签页自动检测一次 / 手动「检测依赖」；ok 暂算 installed）
+    // 未检测过（进标签页自动检测一次 / 手动「检测依赖」；ok 暂算 installed）
     check.detail = "dsh 包已就绪，点击「检测依赖」验证依赖完整性";
   } else if (verifyRunning) {
     // 检测进行中：ok 暂 true，结果由检测接口返回后刷新
@@ -1337,7 +1337,7 @@ function buildProcessDiagCheck(g, out) {
   const stderr = String(web?.stderr || lastExit?.stderr || "").slice(-800); // stderr 尾部截断 ≤800
   const lastError = String(g.webLastError || "").slice(-800);
   const lastErrorAt = g.webLastErrorAt || "";
-  // v0.10.7: 本次会话日志路径（当前 web / 退出记录 / 失败记录，三级兜底）
+  // 本次会话日志路径（当前 web / 退出记录 / 失败记录，三级兜底）
   const logPath = web?.logPath || lastExit?.logPath || g.webLastLogPath || null;
   const check = {
     key: "process",
@@ -1453,7 +1453,7 @@ export async function closeProcess() {
     await new Promise((r) => setTimeout(r, 200));
   }
 }
-// ---- 单例挂载（v0.x.x：原 tools/dsh-run.js 的 mountSingleton 迁入本模块；g.startWebHost 已在上方
+// ---- 单例挂载（原 tools/dsh-run.js 的 mountSingleton 迁入本模块；g.startWebHost 已在上方
 // startWebHostFromPlugin 处单独赋值，这里只挂其余生命周期能力——closeProcess / collectDiagnostics /
 // updateDsh / installDeps / verifyDeps / checkDshUpdate）。routes/webui.js、index.js、tools/dsh-*.js 均经
 // globalThis 单例调用，不静态 import 本模块（见文件头「分发形态」）。

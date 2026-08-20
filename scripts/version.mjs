@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// scripts/version.mjs — dsh-hanako 版本 bump 自动化（v0.13.4 基建）
+// scripts/version.mjs — dsh-hanako 版本 bump 自动化
 //
 // 使用时机：所有功能改动已提交、工作区干净、确认要发版时。工作区有未提交改动
 // 直接拒绝（bump 是发版动作，不允许混入其他改动）。
 //
 // 职责边界：只做版本号的机械同步——package.json（单一事实源）bump → manifest.json
-// 同步（v0.13.1~0.13.3 手改漏同步的坑）→ package-lock.json 同步（对齐 npm i 重写
-// lock 树的版本语义，此前 v0.14.0 曾单独 commit bump，漏掉会残留旧版 lock）→
+// 同步（防手改漏同步的坑）→ package-lock.json 同步（对齐 npm i 重写
+// lock 树的版本语义，漏掉会残留旧版 lock）→
 // pack 校验（版本一致性强制校验）→ commit + annotated tag。push 手动（tag 触发 CI 发布）。
 // 不碰 CHANGELOG：条目描述是发版内容，由发版人在 bump 前写好并提交（本脚本只在
 // 版本号层面保证契约一致，CHANGELOG 是否齐全由人负责）。
@@ -94,7 +94,7 @@ function main() {
   }
   console.log(`[version] 1/5 package.json -> ${next}`);
 
-  // 2) manifest.json 同步（v0.13.1~0.13.3 漏同步的坑，脚本保证同步）
+  // 2) manifest.json 同步（脚本保证同步，防漏）
   if (!dryRun) {
     const manifest = read("manifest.json");
     manifest.version = next;

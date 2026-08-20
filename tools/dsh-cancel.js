@@ -6,7 +6,7 @@
 // POST /api/session.cancel（client-request 信封，rpcId 回显校验）中断运行中的任务会话。
 // cancel 后 dsh 会发 turn/end（reason.kind=aborted），事件循环判 outcome.stopReason === "aborted"
 // → throw DSH_ABORTED → promise.catch 以 aborted 终态收尾（deferred fail 带「dsh_run 已取消」唤醒 Agent）。
-// v0.10.46（op Map 退役）：任务状态零存储（jsonl 唯一事实源），取消优先按 sessionId 直接定位会话——
+// 任务状态零存储（jsonl 唯一事实源），取消优先按 sessionId 直接定位会话——
 // sessionId 从 dsh_run 回调/卡片 URL 取；未传 sessionId 时兼容按 opId 从运行期协调状态（g.ops 残留，
 // 仅存审批/取消状态 + sessionId）反查，miss 则报错提示传 sessionId。工具侧先标记
 // cancelledRequested = true，防 cancel 导致 mux 断流时事件循环把取消误判为完成

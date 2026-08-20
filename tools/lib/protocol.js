@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// tools/lib/protocol.js — dsh web /api 网关协议层共用模块（v0.13.x lib 提取）
+// tools/lib/protocol.js — dsh web /api 网关协议层共用模块（lib 提取）
 // 从 tools/dsh-run.js 剥离的纯协议/纯函数：HTTP RPC 客户端、事件流（WS mux）、文本
 // 提取与回调摘要构建。全部零宿主状态（不碰 globalThis 单例），dsh-run.js 静态 import。
 //

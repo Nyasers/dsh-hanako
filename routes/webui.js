@@ -8,8 +8,8 @@
 //   POST /webui/start        手动启动 web host（process 卡片「手动启动」按钮；ready/starting/触发启动三态）
 //   POST /webui/install-deps 自动安装 dsh 依赖（deps 卡片「安装依赖」按钮；installing/触发安装）
 //   GET  /webui/verify-deps  运行级依赖检测（node cliBin --version；进标签页自动一次 + 手动「检测依赖」按钮）
-//   GET  /webui/check-update 版本检查（v0.13.0: deps 卡片「检查更新」按钮；经宿主能力层 g.checkDshUpdate）
-//   POST /webui/update-dsh   更新 DSH（v0.13.0: deps 卡片「更新 DSH」按钮；经宿主能力层 g.updateDsh，
+//   GET  /webui/check-update 版本检查（deps 卡片「检查更新」按钮；经宿主能力层 g.checkDshUpdate）
+//   POST /webui/update-dsh   更新 DSH（deps 卡片「更新 DSH」按钮；经宿主能力层 g.updateDsh，
 //                            异步触发，更新会重启 web host、正在执行的任务中断）
 //
 // 机制：与 routes/card.js 同构——宿主把 app 挂在 /api/plugins/<pluginId> 命名空间下，
@@ -18,7 +18,7 @@
 // 每 3s 轮询本插件的 /webui/health，就绪后动态挂载 iframe。脚本首行 postMessage ready
 // 是宿主原始握手（参照 PLUGINS.md；插件 bundle 不含 @hana/plugin-sdk，不依赖它）。
 //
-// 连接失败自检（v0.8.3）：web host 未就绪时逐项检查 ① nodejs 配置 ② dsh 依赖
+// 连接失败自检：web host 未就绪时逐项检查 ① nodejs 配置 ② dsh 依赖
 // ③ DSH 进程状态，明确指出哪一项坏了、为什么、怎么修。诊断由服务端收集（Node 侧
 // 才能读 config.json、进程单例与 fs 状态；浏览器 iframe 读不到插件进程）——收集函数
 // 挂在 globalThis 单例（tools/dsh-run.js 的 collectDiagnostics），这里经单例调用而
@@ -94,9 +94,8 @@ function buildShell({
   colorScheme,
   diagnostics,
 }) {
-  // v0.13.2 曾给 dsh-frame 显式声明 sandbox/allow（allow-downloads 等 token + clipboard/fullscreen
-  // 权限），期望绕过宿主沙箱限制；实测证明跨源继承链（宿主插件 iframe 与主窗口跨源且无 allow）
-  // 下内层声明无法生效，属无效方案，v0.13.3 整体回滚为裸嵌（见 CHANGELOG）。
+  // dsh-frame 保持裸嵌（曾尝试显式声明 sandbox/allow 绕过宿主沙箱，实测跨源继承链
+  // 下内层声明无法生效，属无效方案已回滚，见 CHANGELOG）。
   // 剪贴板问题的正规解法是 dsh-hana-clipboard 插件（tapIndex 注入桥 → 宿主 capability）
   // + 下方壳页面桥（hostRequest + __dshCopy 监听）。
   const iframe = ready
@@ -118,7 +117,7 @@ ${hcLink}
 html,body{height:100%;margin:0}
 html{color-scheme:${colorScheme}}
 iframe#dsh-frame{width:100%;height:100%;border:0;display:block}
-/* v0.8.5: 诊断区全部改用宿主 hana 主题 CSS 变量（hcLink 注入样式表定义，变量清单见
+/* 诊断区全部改用宿主 hana 主题 CSS 变量（hcLink 注入样式表定义，变量清单见
  * 下方主题桥 postMessage 的 vars）；fallback 用纸张风色值，明暗随宿主主题，不再用
  * 硬编码色板与 prefers-color-scheme media query。 */
 #dsh-pending{position:fixed;inset:0;display:none;align-items:center;justify-content:center;font-family:system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;font-size:14px;color:var(--text,#2A2622);background:var(--bg,#F5EFE4);padding:24px;box-sizing:border-box;overflow:auto}
@@ -162,8 +161,8 @@ window.parent.postMessage({ type: "ready" }, "*");
   var api = ${JSON.stringify(api)};
   var initDiag = ${initDiag};
   var frame = document.getElementById("dsh-frame");
-  // v0.13.3: dsh WebUI 剪贴板桥——dsh 前端复制被宿主插件 iframe 权限链拦截时
-  // （navigator.clipboard 抛 NotAllowedError，跨源继承 deny，详见 CHANGELOG v0.13.2/0.13.3），
+  // dsh WebUI 剪贴板桥——dsh 前端复制被宿主插件 iframe 权限链拦截时
+  // （navigator.clipboard 抛 NotAllowedError，跨源继承 deny，详见 CHANGELOG），
   // dsh 页面（跨源 iframe）postMessage 到这里，壳页面经宿主 capability clipboard.writeText
   // 写剪贴板（参照 hana-remote-dev 卡片实现；manifest ui.hostCapabilities 声明后宿主才放行）。
   // 宿主主窗口上下文执行 navigator.clipboard，不受插件 iframe Permissions-Policy 链限制。
@@ -221,7 +220,7 @@ window.parent.postMessage({ type: "ready" }, "*");
     var sess = params.get("pluginSurfaceSession");
     return sess ? { "X-Hana-Plugin-Surface-Session": sess } : {};
   }
-  // v0.8.3: 连接失败自检渲染——服务端收集的 checks 列表（每项：状态图标/检查项名/
+  // 连接失败自检渲染——服务端收集的 checks 列表（每项：状态图标/检查项名/
   // 详情/修复指引）；escHtml 兜底转义（诊断文本含路径与 stderr，需防注入）
   function escHtml(s) {
     return String(s == null ? "" : s)
@@ -246,11 +245,11 @@ window.parent.postMessage({ type: "ready" }, "*");
         + '<span class="diag-mark">' + mark + '</span>'
         + '<div class="diag-body">'
         + '<div class="diag-name">' + escHtml(d.name) + '</div>'
-        + (d.key === "deps" && d.version ? '<div class="diag-detail">' + escHtml(versionLine(d)) + '</div>' : "") // v0.13.0: deps 版本行（当前/最新/可更新）
+        + (d.key === "deps" && d.version ? '<div class="diag-detail">' + escHtml(versionLine(d)) + '</div>' : "") // deps 版本行（当前/最新/可更新）最新/可更新）
         + (d.detail ? '<div class="diag-detail">' + escHtml(d.detail) + '</div>' : "")
-        + (d.key === "deps" && d.installing ? progressHtml(d) : "") // v0.8.8: 安装实时进度
-        + (d.key === "deps" && d.updating ? updateProgressHtml(d) : "") // v0.13.0: 更新 DSH 进度/结果
-        + (d.key === "process" && d.logPath ? '<div class="diag-logpath">本次会话日志：' + escHtml(d.logPath) + '</div>' : "") // v0.10.8: 时间戳会话文件路径
+        + (d.key === "deps" && d.installing ? progressHtml(d) : "") // 安装实时进度
+        + (d.key === "deps" && d.updating ? updateProgressHtml(d) : "") // 更新 DSH 进度/结果
+        + (d.key === "process" && d.logPath ? '<div class="diag-logpath">本次会话日志：' + escHtml(d.logPath) + '</div>' : "") // 时间戳会话日志路径件路径
         + (d.fix ? '<div class="diag-fix">修复：' + escHtml(d.fix) + '</div>' : "")
         + actionButtonHtml(d)
         + '</div></li>';
@@ -258,10 +257,10 @@ window.parent.postMessage({ type: "ready" }, "*");
     list.innerHTML = html;
     syncActionButtons(diag); // 按检查项状态刷新卡片内操作按钮（启动中/安装中禁用，失败/缺失可用）
   }
-  // v0.8.6: 操作按钮嵌入诊断卡片（data-check 定位，事件委托在列表上）——
+  // 操作按钮嵌入诊断卡片（data-check 定位，事件委托在列表上）——
   // process 卡片：进程未在跑（从未启动/启动失败/已退出）→「手动启动 web host」；
   // 启动中（alive=true 未 ready）→ 禁用「启动中…」；健康（ready+alive）不渲染按钮。
-  //   v0.8.8: t2（依赖）未通过（deps.ok=false / installing / verifyRunning）时启动按钮
+  //   t2（依赖）未通过（deps.ok=false / installing / verifyRunning）时启动按钮
   //   不开放——禁用 + msg「依赖未就绪，请先安装/重新安装依赖」。
   // deps 卡片：依赖缺失 →「安装依赖」；已装 → 常驻「检测依赖」（verify-deps，检测中禁用
   // 「检测中…」）；存在但运行级验证失败 → 另加「重新安装依赖」（install-deps action）。
@@ -294,12 +293,12 @@ window.parent.postMessage({ type: "ready" }, "*");
           html += '<button type="button" class="diag-btn" data-action="install-deps" data-check="deps"'
             + (d.installing ? " disabled" : "") + '>' + (d.installing ? "安装中…" : "重新安装依赖") + '</button>';
         }
-        // 常驻「检测依赖」（v0.8.8: 检测中/安装中禁用）
+        // 常驻「检测依赖」（检测中/安装中禁用）
         if (!d.installing) {
           html += '<button type="button" class="diag-btn" data-action="verify-deps" data-check="deps"'
             + (d.verifyRunning ? " disabled" : "") + '>' + (d.verifyRunning ? "检测中…" : "检测依赖") + '</button>';
         }
-        // v0.13.0: 「检查更新」常驻（检查中/更新中/安装中禁用）；「更新 DSH」仅可更新时出现
+        // 「检查更新」常驻（检查中/更新中/安装中禁用）；「更新 DSH」仅可更新时出现
         // （更新中禁用显示「更新中…」）。两者共用 deps 卡片的 diag-btn-msg 提示区。
         if (!d.installing) {
           html += '<button type="button" class="diag-btn" data-action="check-update" data-check="deps"'
@@ -329,7 +328,7 @@ window.parent.postMessage({ type: "ready" }, "*");
     }
     return null;
   }
-  // v0.8.8: 安装/检测进度时间格式化（HH:MM:SS）
+  // 安装/检测进度时间格式化（HH:MM:SS）
   function fmtTime(iso) {
     if (!iso) return "";
     var t = new Date(iso);
@@ -337,13 +336,13 @@ window.parent.postMessage({ type: "ready" }, "*");
     var p = function (n) { return (n < 10 ? "0" : "") + n; };
     return p(t.getHours()) + ":" + p(t.getMinutes()) + ":" + p(t.getSeconds());
   }
-  // v0.8.8: deps 安装中实时进度块（npm i 输出尾部 + 更新时间，随 3s 轮询刷新滚动）
+  // deps 安装中实时进度块（npm i 输出尾部 + 更新时间，随 3s 轮询刷新滚动）
   function progressHtml(d) {
     var html = '<pre class="diag-progress">' + escHtml(d.installLog || "正在准备…") + '</pre>';
     if (d.installAt) html += '<div class="diag-progress-time">更新于 ' + escHtml(fmtTime(d.installAt)) + '</div>';
     return html;
   }
-  // v0.13.0: deps 版本行（当前版本 / 最新版本 / 可更新状态，数据源 = 诊断 version/check 字段）
+  // deps 版本行（当前版本 / 最新版本 / 可更新状态，数据源 = 诊断 version/check 字段）
   function versionLine(d) {
     var s = "当前版本 " + (d.version ? "v" + d.version : "未安装");
     var c = d.check;
@@ -354,7 +353,7 @@ window.parent.postMessage({ type: "ready" }, "*");
     if (c && c.error) s += " · 检查失败：" + c.error;
     return s;
   }
-  // v0.13.0: 更新 DSH 进度/结果块（update-result.json 内容，随 3s 轮询刷新）
+  // 更新 DSH 进度/结果块（update-result.json 内容，随 3s 轮询刷新）
   function updateProgressHtml(d) {
     var r = d.updateResult || null;
     var text = "正在更新 DSH…（将重启 DSHana，正在执行的任务会中断）";
@@ -436,7 +435,7 @@ window.parent.postMessage({ type: "ready" }, "*");
         verifyBtn.textContent = "检测依赖";
       }
     }
-    // v0.13.0: 「检查更新」/「更新 DSH」按钮状态同步（以诊断 checking/updating 为准；
+    // 「检查更新」/「更新 DSH」按钮状态同步（以诊断 checking/updating 为准；
     // 按钮处理器自身已做乐观禁用，这里兜底页面刷新/轮询后状态一致）
     var checkBtn = listBtn("deps", "check-update");
     if (checkBtn && deps) {
@@ -506,7 +505,7 @@ window.parent.postMessage({ type: "ready" }, "*");
         setBtnMsg("deps", "安装请求超时或网络错误，请重试");
       });
   }
-  // v0.8.8: 运行级依赖检测（GET /webui/verify-deps，只读）——进标签页自动一次 + 手动
+  // 运行级依赖检测（GET /webui/verify-deps，只读）——进标签页自动一次 + 手动
   // 「检测依赖」按钮。服务端 await 检测（≤10s），结果写入 g.depsSmoke；拿到 ok 响应后
   // 触发一次 health 读取诊断刷新 deps 卡片（检测中显示「正在检测依赖完整性…」，结果
   // 回来显示通过/失败）。不随 3s 轮询重复触发。
@@ -551,7 +550,7 @@ window.parent.postMessage({ type: "ready" }, "*");
   function verifyDeps() {
     runVerifyDeps(listBtn("deps", "verify-deps"));
   }
-  // v0.13.0: 版本检查（GET /webui/check-update，只读）——「检查更新」按钮。服务端
+  // 版本检查（GET /webui/check-update，只读）——「检查更新」按钮。服务端
   // await 检查（npm view ≤~15s，官方源失败自动重试 npmmirror），结果缓存进 g.checkResult
   // 并写 check-result.json；拿到 ok 响应后触发一次 health 读取诊断刷新 deps 卡片
   // （版本行显示最新版本/可更新状态，update-dsh 按钮按需出现）。
@@ -582,7 +581,7 @@ window.parent.postMessage({ type: "ready" }, "*");
         setBtnMsg("deps", "检查请求超时或网络错误，请重试");
       });
   }
-  // v0.13.0: 更新 DSH（POST /webui/update-dsh）——「更新 DSH」按钮。点击前 confirm 提示
+  // 更新 DSH（POST /webui/update-dsh）——「更新 DSH」按钮。点击前 confirm 提示
   // （更新会重启 web host，正在执行的任务中断）；触发后服务端异步执行（停 web host →
   // npm i latest → 起 web host），页面靠 3s 轮询诊断刷新 updateProgressHtml（updating/
   // done/error）与按钮状态。
@@ -648,7 +647,7 @@ window.parent.postMessage({ type: "ready" }, "*");
   window.addEventListener("beforeunload", function () {
     if (pollTimer) clearTimeout(pollTimer);
   });
-  // v0.8.1: 主题桥——dsh 页面（跨源 iframe）postMessage 索取 Hana 主题，
+  // 主题桥——dsh 页面（跨源 iframe）postMessage 索取 Hana 主题，
   // 这里回传主题 id（location.search hana-theme）+ 实时变量值（hana-css 已
   // link，getComputedStyle 读到当前主题生效值）；注入脚本与内置表合并后覆盖。
   window.addEventListener("message", function (e) {
@@ -685,7 +684,7 @@ window.parent.postMessage({ type: "ready" }, "*");
     renderDiagList(initDiag); // 首屏即渲染服务端带回的初始自检（null 时显示占位）+ 同步卡片内按钮
     var diagList = document.getElementById("diag-list");
     if (diagList) diagList.addEventListener("click", onDiagClick); // 卡片按钮事件委托
-    autoVerifyDeps(); // v0.8.8: 进标签页依赖运行级检测一次（结果经 refreshDiag 进 deps 卡片）
+    autoVerifyDeps(); // 进标签页依赖运行级检测一次（结果经 refreshDiag 进 deps 卡片）
     poll();
   }
 })();
@@ -787,7 +786,7 @@ export default function registerWebuiRoutes(app, ctx) {
     }
   });
 
-  // 运行级依赖检测（v0.8.8: deps 卡片「检测依赖」按钮 + 进标签页自动一次；GET 只读）：
+  // 运行级依赖检测（deps 卡片「检测依赖」按钮 + 进标签页自动一次；GET 只读）：
   // 检测中（g.depsSmoke.running）→ {ok:true,running:true}；否则 await verifyDepsSmoke(cfg)
   // （≤10s 返回）→ {ok:true, verified, version, error, running:false}。结果写入 g.depsSmoke，
   // 前端随后经 health 读取诊断刷新 deps 卡片。单例缺失/无函数/异常一律容错回 {ok:false}。
@@ -818,7 +817,7 @@ export default function registerWebuiRoutes(app, ctx) {
     }
   });
 
-  // 版本检查（v0.13.0: deps 卡片「检查更新」按钮 + Agent 工具 dsh_update 共用能力层；
+  // 版本检查（deps 卡片「检查更新」按钮 + Agent 工具 dsh_update 共用能力层；
   // GET 只读）：检查中（g.checking）→ {ok:true,running:true}；否则 await
   // g.checkDshUpdate(cfg)（npm view ≤~15s，官方源失败重试 npmmirror）→
   // {ok:true, localVersion, latestVersion, updateAvailable, error?}。结果缓存进
@@ -849,7 +848,7 @@ export default function registerWebuiRoutes(app, ctx) {
     }
   });
 
-  // 更新 DSH（v0.13.0: deps 卡片「更新 DSH」按钮 + Agent 工具 dsh_update 共用能力层）：
+  // 更新 DSH（deps 卡片「更新 DSH」按钮 + Agent 工具 dsh_update 共用能力层）：
   // 更新中（g.updating）→ {ok:true,state:"updating"}；否则异步触发 g.updateDsh(cfg)
   // （不 await 其完成——npm i 可能耗时数分钟，前端轮询 health 诊断/设置页
   // update-result.json 看进度）→ {ok:true,state:"updating"}。更新会重启 web host，

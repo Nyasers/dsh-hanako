@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// tools/lib/state.js — dsh-hanako 宿主侧共用状态与环境常量（v0.13.0 lib 提取）
+// tools/lib/state.js — dsh-hanako 宿主侧共用状态与环境常量（lib 提取）
 // 从 tools/dsh-run.js 剥离：globalThis 单例初始化（getSingleton）+ 环境事实（IS_WIN /
 // ELECTRON_NODE / ELECTRON_NODE_ENV / PLUGIN_ROOT / manifestDefaults）。
 //
-// 为什么抽 lib（v0.13.0）：安装/检查/更新能力层（install.js / check.js）与 dsh_run
+// 为什么抽 lib：安装/检查/更新能力层（install.js / check.js）与 dsh_run
 // web host 管理（dsh-run.js）共用同一批状态与常量；tools 分发形态 = rspack bundle
 // （build.mjs 入口内联 import），lib 代码被内联进 dist/tools/*.js，?t= 重载即整体刷新，
 // 无「静态 import 固定 URL 缓存」问题（该约束只影响源码形态，且与旧「单文件」纪律
@@ -28,7 +28,7 @@ export const ELECTRON_NODE = process.execPath;
 export const ELECTRON_NODE_ENV = { ...process.env, ELECTRON_RUN_AS_NODE: 1 };
 
 const __here = dirname(fileURLToPath(import.meta.url));
-// v0.6.0: PLUGIN_ROOT 向上查找含 manifest.json 的目录——源码形态（tools/lib/ 下）与
+// PLUGIN_ROOT 向上查找含 manifest.json 的目录——源码形态（tools/lib/ 下）与
 // rspack bundle 形态（dist/tools/ 下内联）都能正确定位插件根。
 export let PLUGIN_ROOT = __here;
 while (!existsSync(join(PLUGIN_ROOT, "manifest.json"))) {
@@ -56,8 +56,8 @@ export const manifestDefaults = (() => {
 })();
 
 // ---- 常驻 web host 单例（globalThis 跨模块共享，index.js 卸载清理时读取）----
-// v0.10.46：g.ops 不再是任务状态注册表（jsonl 唯一事实源），仅存审批/取消运行期协调状态。
-// v0.13.0：g.depTasks = 安装/升级卡片任务登记表（Map：taskId → { taskId, kind:
+// g.ops 不再是任务状态注册表（jsonl 唯一事实源），仅存审批/取消运行期协调状态。
+// g.depTasks = 安装/升级卡片任务登记表（Map：taskId → { taskId, kind:
 // install|update, state: running|ok|error, log, at, result }），tools/dsh-install.js 与
 // tools/dsh-update.js 异步流程登记，routes/card.js /ops/dep-stream 读取。
 // 函数挂载由各定义模块负责（见文件头注释），本函数只做初始化 + 字段兜底。

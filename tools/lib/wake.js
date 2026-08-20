@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// tools/lib/wake.js — 宿主 deferred 唤醒协议共用模块（v0.13.x lib 提取）
+// tools/lib/wake.js — 宿主 deferred 唤醒协议共用模块（lib 提取）
 // 从 tools/dsh-run.js 剥离：registerDeferredWake / resolveDeferredWake / failDeferredWake /
 // notifyApprovalWake。原三份内联副本（tools/dsh-run.js / tools/dsh-install.js /
 // tools/dsh-update.js 各自内联一份，头注释明言"同 dsh-run.js 内联实现，不跨模块
@@ -93,7 +93,7 @@ async function notifyApprovalWake({ bus, sessionPath, opId, approval, task }) {
         toolName: approval.toolName,
         callId: approval.callId,
         reason: approval.reason ?? null,
-        args: approval.args ?? null, // v0.5.12: tool/call 参数原文（命令/路径），Agent 审批决策依据
+        args: approval.args ?? null, // tool/call 参数原文（命令/路径），Agent 审批决策依据
         taskPreview: String(task ?? "").slice(0, 120),
       },
     });

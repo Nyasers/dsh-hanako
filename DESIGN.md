@@ -126,6 +126,16 @@ dsh 的 `/api/events.mux` **要求 WebSocket 升级**：GET 返回 `426 Upgrade 
 - **DSH 检查/更新能力层**（v0.13.0）：`tools/lib/` 提取后挂单例 `g.checkDshUpdate` / `g.updateDsh` / `g.installDeps` / `g.verifyDeps`（Agent 工具 dsh_install/dsh_update、webui 路由、dsh 设置页桥接四面共用，单一事实源）——`checkDshUpdate`（lib/check.js）：本地版本（verifyDepsSmoke 缓存优先/直读 dsh-pkg package.json）+ 远端版本（`npm view @deepseek-ai/dsh version`，官方源失败重试 npmmirror，15s 超时）+ zero-dep semver 比较 → `{ localVersion, latestVersion, updateAvailable, error? }`，结果写 `check-result.json`；`updateDsh`（dsh-run.js，组合 lib 的 installDepsFromPlugin/verifyDepsSmoke）：停 web host → npm i latest → 起 web host → 读新版本 → 写 `update-result.json { state: done|error, version?, error?, at }`；`installDepsFromPlugin` / `verifyDepsSmoke`（lib/install.js）：依赖部署与运行级验证；并发防护 `g.checking` / `g.updating` / `g.depsInstalling`（进行中重复调用返回状态不重复执行）
 - **进程单例挂 `globalThis.__dshHanako`**：`index.js` 卸载清理时读取（不 import 插件文件，避免读到旧模块缓存）
 - **宿主 tools 模块缓存**：宿主按插件 id 缓存 tools 模块，**改代码后必须重启 Hana 才加载新 tools**
+- **dsh-run 模块结构**（任务提交链路收敛）：`tools/dsh-run.js` 是有状态任务提交核心 + 工具契约（submitTask 事件循环 / 审批状态机 / doExecute / execute / name / description / parameters / sessionPermission），纯协议/解析/唤醒已剥离：
+  - `lib/state.js` — getSingleton（globalThis 单例）+ 环境常量（IS_WIN / ELECTRON_NODE / ELECTRON_NODE_ENV / PLUGIN_ROOT / manifestDefaults）+ g.depTasks 默认
+  - `lib/install.js` — resolveDshPkgDir / installDepsFromPlugin / verifyDepsSmoke / semver 比较 / readDshInstalledVersion
+  - `lib/check.js` — checkDshUpdate（npmViewLatest + 本地版本直读 + semver 比较）
+  - `lib/config.js` — 配置解析（纯解析零状态）：readDshDefaultModel / readDshDefaultPreset / resolveReasoningEffort / resolveApprovalTimeoutMs / resolveDefaultCwd
+  - `lib/wake.js` — deferred 唤醒协议 + 审批挂起通知：registerDeferredWake / resolveDeferredWake / failDeferredWake / notifyApprovalWake（dsh-run / dsh-install / dsh-update 三入口共享，消除三重复；meta.type 由调用方传入保留各自标识）
+  - `lib/protocol.js` — dsh web /api 网关协议层（纯协议零状态）：nextRpcId / callUnary / openMux / textFromChunk / textFromMessageBlocks / SUMMARY_HEAD/TAIL / buildSummary
+  - `app/lifecycle.js` — web host 生命周期（启动/自检/更新/三条 watch）：原在本文件，分离后独立，经静态 import 供 dsh-run 使用 ensureWebHost / ensureConfigJson，顶层 mountLifecycle 挂单例字段
+  - **保留在 dsh-run**：nextOpId / createOpEntry / respondApprovalLocal / approvalTimers / toolCallCache / cacheToolCall / submitTask / doExecute / execute / 工具契约——与审批状态机（g.ops 协调状态 / approvalTimers / toolCallCache）紧耦合，拆出要跨模块传递大量运行状态，保留在此
+- **分发纪律（历史约束）**：Hana 以带 ?t= 时间戳的 URL 加载 tools/*.js（热更新缓存破坏），但 tools 内部静态 import 的相对模块是无 query 的固定 URL，Node ESM 按 URL 缓存、永不刷新。分发形态宿主加载 dist/tools/*.js（rspack bundle，build.mjs 入口内联 import），?t= 重载即刷新；因此 rspack 入口（dsh-run 等）可静态 import lib 与本插件 app/lifecycle.js（内联进 bundle）。非 bundle 侧（routes/webui.js、index.js）保持经 globalThis 单例调用
 
 ## 已知限制
 

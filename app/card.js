@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Nyasers
 //
 // card.js — dsh 任务反馈卡片前端（iframe 内执行）
-// v0.10.46 架构改造：卡片链路从「HTTP 轮询 + op Map」改为「SSE 服务端推送 + jsonl 唯一事实源」。
+// 架构：卡片链路从「HTTP 轮询 + op Map」改为「SSE 服务端推送 + jsonl 唯一事实源」。
 // 启动即连 GET /ops/stream（EventSource，带 token，参照 apiUrl 拼接）：
 //   baseline 事件 = 插件按 sessionId+rpcId 从会话 jsonl 重建的快照（含全量 output；运行中窗口
 //                  归一化为 running + 部分输出）——渲染快照并种子本地状态；
@@ -12,7 +12,7 @@
 // 超时本地判定：URL data-timeout + 基线 startedAt 本地倒计时（插件侧 AbortController 照常终止）。
 // 轮询已移除；EventSource 建立失败（如插件重启后 DSH 未就绪）回退请求一次 /ops/status。
 // 输出是 Markdown（dsh 报告型输出），用内联轻量渲染器实时转 HTML。
-// v0.13.0: 卡片类型分支——data-kind="dep"（/card/dep）= 安装/升级卡片（DSH 安装/DSH 升级，
+// 卡片类型分支——data-kind="dep"（/card/dep）= 安装/升级卡片（DSH 安装/DSH 升级，
 // 数据源 = 宿主单例 g.depTasks + g.depsInstallLog，SSE /ops/dep-stream，非 dsh 会话无 jsonl），
 // 走 initDepCard 独立状态机；缺省 = 任务卡片（/card/op）。两分支在文件顶部按 kind 分流。
 // 含 mini host SDK（@hana/plugin-sdk 协议兼容，免构建）：ui.resize 高度自适应。
@@ -28,7 +28,7 @@
   // 分支 return 后不执行，提前声明保证 dep 路径也能取到）
   var LOOPBACK_TOKEN = pageParams.get("token") || "";
   var SURFACE_SESSION = pageParams.get("pluginSurfaceSession") || "";
-  // v0.13.0: 卡片类型分支——data-kind="dep" = 安装/升级卡片（/card/dep，数据源
+  // 卡片类型分支——data-kind="dep" = 安装/升级卡片（/card/dep，数据源
   // /ops/dep-stream 宿主单例 g.depTasks + g.depsInstallLog，非 dsh 会话无 jsonl）；
   // 缺省 = 任务卡片（/card/op，jsonl 恢复 + DSH 实时事件）。initDepCard 为函数声明
   // （提升），可复用下方 apiUrl/apiFetch/reportSize/esc/fmt* 公共辅助。
@@ -76,7 +76,7 @@
   var HOST_ORIGIN = pageParams.get("hana-host-origin") || "*";
   function reportSize() {
     try {
-      // +16px 余量：实测 v0.447.4 宿主 card iframe = 上报 - 16（上报 584→iframe 568，600→584），
+      // +16px 余量：实测宿主 card iframe = 上报 - 16（上报 584→iframe 568，600→584），
       // 补回宿主减去的 16 让 iframe 贴合 html（内容顶满 600 时上报 616 → iframe 600）
       var h = Math.ceil(document.body ? document.body.scrollHeight : 0) + 16;
       if (!h || h < 40) h = 40;
@@ -883,7 +883,7 @@
     reportSize();
   }
 
-  // ── 安装/升级卡片（v0.13.0：data-kind="dep"，/card/dep）──
+  // ── 安装/升级卡片（data-kind="dep"，/card/dep）──
   // 数据源 = 宿主单例 g.depTasks（tools/dsh-install.js / tools/dsh-update.js 异步流程
   // 登记）+ g.depsInstallLog（npm 实时日志尾部）。链路：SSE /ops/dep-stream（首帧 +
   // 每 1s 快照，终态推送后关闭）；EventSource 建立失败回退一次 /ops/dep-status。

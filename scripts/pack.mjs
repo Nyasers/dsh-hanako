@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// scripts/pack.mjs — dsh-hanako v0.6.0 轻量化打包
+// scripts/pack.mjs — dsh-hanako 轻量化打包
 // 交付物 = 代码 bundle（dist/）+ 配置 + 技能 + 卡片资源 + lockfile，零依赖（Agent npm ci 装）。
 // 流程：build（rspack）→ 复制交付清单 → zip → SHA256。
 // 用法：node scripts/pack.mjs [version]   （如 node scripts/pack.mjs 0.6.0；缺省用 package.json 的 version）
@@ -18,14 +18,14 @@ import fs from "fs-extra";
 const require = createRequire(import.meta.url);
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 // 版本单一事实源：package.json（唯一来源，不支持命令行传版本——显式传版本容易与
-// manifest 不同步，见 v0.13.1~0.13.3 教训；版本同步用 scripts/version.mjs 自动化）
+// manifest 不同步（历史教训）；版本同步用 scripts/version.mjs 自动化）
 const version = fs.readJsonSync(join(ROOT, "package.json")).version;
 if (!version)
   throw new Error(
     "package.json version 缺失",
   );
 
-// v0.13.4 防回归：版本一致性强制校验（v0.13.1~0.13.3 手改只 bump package.json，
+// 防回归：版本一致性强制校验（历史曾手改只 bump package.json，
 // manifest.json version 停在 0.13.0，发布包内版本与 tag 不一致）。
 // 打包版本必须同时等于 manifest.json 的 version，否则拒绝出包——
 // 版本同步是发版契约，手改漏同步在这里被拦截（建议用 scripts/version.mjs 自动化 bump）。

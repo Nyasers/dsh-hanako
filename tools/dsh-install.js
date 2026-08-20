@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// tools/dsh-install.js — dsh 依赖安装/验证工具（v0.13.0）
+// tools/dsh-install.js — dsh 依赖安装/验证工具
 // 宿主能力层（tools/lib/install.js installDepsFromPlugin / verifyDepsSmoke，经单例
 // g.installDeps / g.verifyDeps 调用）的 Agent 入口，辅助依赖缺失场景（dsh_run 报
 // 「dsh 包未就绪」、DSHana 标签页不可用等）：
@@ -17,7 +17,7 @@
 // 并发防护：依赖安装中（g.depsInstalling）重复 install 返回 { ok:false, state:'installing' }。
 // 与 dsh-run.js 同一分发纪律：本工具经 globalThis 单例
 // （g.installDeps / g.verifyDeps / g.startWebHost / g.depTasks / g.depsInstallLog）调用能力层；
-// deferred 唤醒协议（register/resolve/fail）不再各自内联，统一 import 共享的 ./lib/wake.js（v0.13.x
+// deferred 唤醒协议（register/resolve/fail）不再各自内联，统一 import 共享的 ./lib/wake.js（
 // 三入口 dsh-run/dsh-install/dsh-update 共用一份，消除三重复；meta.type 由调用方传入保留本工具
 // 标识 dsh-install）。lib/wake.js 是纯协议零状态模块，rspack 入口静态 import 内联进 bundle，
 // ?t= 重载即刷新，无"静态 import 固定 URL 缓存"问题。

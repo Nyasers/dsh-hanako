@@ -31,7 +31,7 @@ import {
 import { zstdCompressSync } from "node:zlib";
 import { join, dirname } from "node:path";
 
-// ---- 统一日志（v0.10.8 定稿：时间戳会话文件 + 旧日志 zstd 压缩保留）----
+// ---- 统一日志（时间戳会话文件 + 旧日志 zstd 压缩保留）----
 // DSHana 插件全量运行日志：每次插件会话创建 <YYYYMMDD-HHmmss-SSS>.log 真实文件（文件名
 // = 应用层生成的创建时刻，毫秒级唯一，不受 NTFS CreationTime 怪癖影响）；诊断面板/
 // 错误信息直接引用该会话文件路径（g.logPath）。

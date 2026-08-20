@@ -1,40 +1,13 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// tools/dsh-run.js — dsh_run 工具（任务提交链路）+ 生命周期能力挂载转发
+// tools/dsh-run.js — dsh_run 工具（有状态任务提交核心 + 工具契约）
 // 把任务交给 DeepSeek Harness（dsh）的 web host（--profile web）执行：
-// 插件 spawn dsh web（DSH_HOME 指向插件数据目录，账本随插件生命周期），
-// 经其 /api 网关提交任务（session.create → events.mux 订阅 → session.prompt），
-// 实时事件流驱动卡片 Markdown 输出。web UI 天然可见插件全部任务。
-//
-// 模块结构（v0.13.0 lib 提取 + 生命周期分离 + 本文件第二次细分 纯协议/纯函数/零状态 → lib）：
-//   lib/state.js        getSingleton（globalThis 单例）+ 环境常量（IS_WIN / ELECTRON_NODE /
-//                       ELECTRON_NODE_ENV / PLUGIN_ROOT / manifestDefaults）+ g.depTasks 默认
-//   lib/install.js      resolveDshPkgDir / installDepsFromPlugin / verifyDepsSmoke /
-//                       semver 比较（parseSemver / compareSemver）/ readDshInstalledVersion
-//   lib/check.js        checkDshUpdate（npmViewLatest + 本地版本直读 + semver 比较）
-//   lib/config.js       配置解析（纯解析零状态）：readDshDefaultModel / readDshDefaultPreset /
-//                       resolveReasoningEffort / resolveApprovalTimeoutMs / resolveDefaultCwd
-//   lib/wake.js         deferred 唤醒协议 + 审批挂起通知：registerDeferredWake /
-//                       resolveDeferredWake / failDeferredWake / notifyApprovalWake
-//                       （dsh-run/dsh-install/dsh-update 三入口共享，消除三重复）
-//   lib/protocol.js     dsh web /api 网关协议层（纯协议零状态）：nextRpcId / callUnary / openMux /
-//                       textFromChunk / textFromMessageBlocks / SUMMARY_HEAD/TAIL / buildSummary
-//   app/lifecycle.js     web host 生命周期（启动/自检/更新/三条 watch）——原在本文件，现分离挪入
-//                    本文件收敛为「有状态任务提交核心 + 工具契约」，经静态 import 使用其中的
-//                    ensureWebHost / ensureConfigJson，并保持单例挂载（lifecycle.js 顶层
-//                    mountLifecycle 负责）。
-// 本文件保留（有状态任务提交核心 + 工具契约）：nextOpId / createOpEntry / respondApprovalLocal /
-// approvalTimers / toolCallCache / cacheToolCall / submitTask / doExecute / execute / 工具契约
-// （name / description / parameters / sessionPermission）。这些与审批状态机（g.ops 协调状态、
-// approvalTimers / toolCallCache 缓存）紧耦合，拆出去要跨模块传递大量运行状态，保留在此。
-//
-// 为什么是这种分发（历史约束）：Hana 以带 ?t= 时间戳的 URL 加载 tools/*.js（热更新缓存破坏），
-// 但 tools 内部静态 import 的相对模块是无 query 的固定 URL，Node ESM 按 URL 缓存、永不刷新。
-// 分发形态宿主加载的是 dist/tools/*.js（rspack bundle，build.mjs 入口内联 import），?t= 重载即刷新；
-// 因此 rspack 入口（dsh-run 等）可以静态 import lib 与本插件的 app/lifecycle.js（内联进 bundle）。
-// 非 bundle 侧（routes/webui.js、index.js）保持经 globalThis 单例调用。进程单例挂
-// globalThis.__dshHanako，供 index.js 卸载清理。
+// 经 /api 网关提交任务（session.create → events.mux 订阅 → session.prompt），
+// 实时事件流驱动卡片输出。本文件收敛为「有状态提交核心」——与审批状态机
+// （g.ops / approvalTimers / toolCallCache）紧耦合的代码保留在此；纯协议/解析/唤醒
+// 已剥离到 lib/*.js，web host 生命周期在 app/lifecycle.js。
+// 完整模块结构与分发纪律见 DESIGN.md「架构」。
 //
 // 权限：external_side_effect（调用 dsh 编码 agent 执行任务，消耗 Hana 宿主 provider 额度，Auto 模式送审）。
 import { join } from "node:path";
@@ -100,7 +73,7 @@ async function respondApprovalLocal(base, approval, outcome) {
 // timer 是运行时对象；终态清理见 submitTask 的 finally）。所有审批都会挂表（0=禁用除外）。
 const approvalTimers = new Map();
 
-// v0.5.9→v0.5.12: tool/call 参数缓存（审批决策信息源，由内容级白名单匹配数据源转型）：
+// tool/call 参数缓存（审批决策信息源）：
 // key = `${opId}::${callId}`，value = { name, args }（args 为命令原文/目标路径的 JSON 字符串
 // 或对象，通知时转字符串）。运行期缓存不落盘（审批都是运行期的，落盘无意义）；终态清理同
 // approvalTimers（见 submitTask 的 finally）。审批到达时按 approval.callId 反查，把「具体
@@ -108,7 +81,7 @@ const approvalTimers = new Map();
 // 工具名或 model 自述（bash/pwsh 都能执行任意命令，工具名说明不了安全）。
 const toolCallCache = new Map();
 
-// ---- 运行期协调状态（v0.10.46：op Map 退役，不再存任务快照）----
+// ---- 运行期协调状态（任务状态零存储，op Map 仅存审批/取消协调字段）----
 // 任务状态（status/output/summary/usage/耗时）不再保存在插件内存：jsonl（dsh 会话日志）是
 // 唯一事实源，卡片经 /ops/stream 从 jsonl 重建基线 + 转发 DSH 实时事件，插件零任务状态。
 // g.ops 仅保留「审批/取消」运行期协调状态：opId → { task, sessionId, approvalPending,
@@ -136,7 +109,7 @@ function createOpEntry(opId, { task }) {
   return opId;
 }
 
-// v0.5.9: 缓存 tool/call 帧的参数原文（内容级白名单匹配的数据源）。
+// 缓存 tool/call 帧的参数原文（审批决策信息源）。
 // payload 兼容两种帧形：session/event 包裹的 tool/call 事件（ev.data={name,arguments,callId}）
 // 或直发帧（frame.data={name,arguments,callId}，宿主 backscanArgs 同款字段结构）。
 // arguments 是 JSON 字符串时原样存（子串匹配足够），对象则序列化；无 callId 的帧不缓存。
@@ -160,7 +133,7 @@ function cacheToolCall(opId, payload) {
 // ---- 任务提交：注册运行期协调状态 + 后台执行（不 await）----
 // 返回 { opId, promise, ready }：opId 立即可用（构造卡片 route / deferred taskId），
 // promise 在后台跑：session.create → events.mux 订阅 → session.prompt → 事件循环 → 终态。
-// v0.10.46：任务状态零存储（op Map 退役）——collected/blocksSeq/usageTotal 仅用于回调返回，
+// 任务状态零存储——collected/blocksSeq/usageTotal 仅用于回调返回，
 // 卡片状态由 /ops/stream 从 jsonl 重建 + 实时事件转发呈现。
 function submitTask(
   cfg,
@@ -325,7 +298,7 @@ function submitTask(
             if (!d) continue;
             if (ev.type === "assistant/chunk") {
               sawChunk = true;
-              // v0.9.4.1: 错误透传——finish 帧 reason=error（如 429/400）直接带真实信息
+              // 错误透传——finish 帧 reason=error（如 429/400）直接带真实信息
               const c = d?.chunk;
               if (c?.type === "finish" && c.reason?.kind === "error") {
                 const f = c.reason.failure || c.reason.error || {};
@@ -386,11 +359,11 @@ function submitTask(
                     (usageTotal.reasoningTokens || 0) + u.reasoningTokens;
               }
             } else if (ev.type === "tool/call") {
-              // v0.5.9: 缓存工具调用参数原文（session/event 包裹的 tool/call 事件，
+              // 缓存工具调用参数原文（session/event 包裹的 tool/call 事件，
               // d = { name, arguments, callId }），审批到达时按 callId 反查做内容级匹配。
               cacheToolCall(opId, d);
             } else if (ev.type === "tool/code-dispatch-start") {
-              // v0.5.13: code preset 子调用分发事件（d = { rootCallId, parentCallId,
+              // code preset 子调用分发事件（d = { rootCallId, parentCallId,
               // subCallId, name, arguments }）：run_code 内联的工具调用（如 write）以子调用
               // 形式派发，参数不产生独立 tool/call 帧；按 subCallId 缓存（形如 `root:code:N`），
               // 审批帧 callId 即该 subCallId，可精确反查到命令/路径原文。
@@ -428,7 +401,7 @@ function submitTask(
             // 路由所需的 rpcId）存进运行期协调状态（g.ops 条目，非任务快照），并触发
             // 宿主 deferred 通知（独立 taskId，不占用任务完成通道），Agent 收到后
             // 调用 dsh_approve 工具应答；无人应答仍可在 dsh Web UI 人工处理。
-            // v0.5.12：审批固定形态——挂起 → deferred 通知 Agent（附 tool/call 参数原文，
+            // 审批固定形态——挂起 → deferred 通知 Agent（附 tool/call 参数原文，
             // 见 notifyApprovalWake）→ Agent 用 dsh_approve 应答；无人应答超时自动拒绝
             // （approvalTimeoutMs，默认 30s 应答方失联检测，0=禁用）。不再有白名单自动放行
             // 或 manual/auto 模式切换：全部审批都交 Agent 处理。
@@ -446,9 +419,9 @@ function submitTask(
                 at: new Date().toISOString(),
                 status: "pending",
               };
-              // v0.5.12→v0.5.13: 审批通知附带 tool/call 参数原文（命令/路径，按 callId 从
+              // 审批通知附带 tool/call 参数原文（命令/路径，按 callId 从
               // toolCallCache 反查）——Agent 决策看「具体执行了什么」，而不是只听 model 自述
-              // reason。v0.5.13: code preset 下子调用（subCallId 形如 `root:code:N`）的参数在
+              // reason。code preset 下子调用（subCallId 形如 `root:code:N`）的参数在
               // tool/code-dispatch-start 事件里，已按 subCallId 精确缓存；若仍 miss（子调用
               // 事件未到/直发帧形态），剥 `:code:N` 后缀回退到 run_code 根调用（args 为整段
               // 代码原文，兜底呈现）。
@@ -473,7 +446,7 @@ function submitTask(
                 )
               ) {
                 op.pendingApprovals.push(approval);
-                // v0.5.12 统一流程：所有审批都通知 Agent 应答（不区分 manual/auto，无白名单）。
+                // 统一流程：所有审批都通知 Agent 应答（不区分 manual/auto，无白名单）。
                 // 通知附带命令/路径原文（approval.args）；挂起后暂停执行超时计时（外部决策等待
                 // 不计入执行时间），并挂审批超时拒绝计时器（approvalTimeoutMs，0=禁用）。
                 notifyApprovalWake({
@@ -523,7 +496,7 @@ function submitTask(
             // 审批解决（allowed-once / rejected / cancelled 一律视为已解决）：仅当
             // 无任何 status==="pending" 的审批时才恢复计时（pending 计数语义——多审批
             // 交错时 A 解决但 B 仍挂起则不恢复）。dsh_approve 工具应答已把项标为
-            // "answered" 时不再覆写，但同样不参与 pending 计数。v0.5.8：item 变为非
+            // "answered" 时不再覆写，但同样不参与 pending 计数。item 变为非
             // pending（resolved/answered）即清掉该审批的超时拒绝计时器（防触发重复应答）。
             const g = getSingleton();
             const op = g.ops.get(opId);
@@ -548,7 +521,7 @@ function submitTask(
               }
             }
           } else if (frame.type === "tool/call") {
-            // v0.5.9: 直发 tool/call 帧（frame.data = { name, arguments, callId }，
+            // 直发 tool/call 帧（frame.data = { name, arguments, callId }，
             // 宿主 backscanArgs 同款字段结构）：同样缓存参数原文（frame.data 缺失时回退帧字段）。
             cacheToolCall(opId, frame.data ?? frame);
           } else if (frame.type === "stream/error") {
@@ -689,7 +662,7 @@ function submitTask(
       ac.abort();
       if (timer) clearTimeout(timer);
       if (signal && rejectAbort) signal.removeEventListener("abort", onAbort);
-      // v0.5.8: 任务终态清理本 op 的审批超时拒绝计时器（防泄漏）。任务已结束（正常
+      // 任务终态清理本 op 的审批超时拒绝计时器（防泄漏）。任务已结束（正常
       // 终态/取消/超时），挂起的审批由 web host 侧会话收尾自然失效，无需再自动拒绝。
       for (const [key, t] of approvalTimers) {
         if (key.startsWith(`${opId}::`)) {
@@ -697,11 +670,11 @@ function submitTask(
           approvalTimers.delete(key);
         }
       }
-      // v0.5.9: 同样清理本 op 的 tool/call 参数缓存（运行期缓存只活到任务终态，防泄漏）
+      // 同样清理本 op 的 tool/call 参数缓存（运行期缓存只活到任务终态，防泄漏）
       for (const key of toolCallCache.keys()) {
         if (key.startsWith(`${opId}::`)) toolCallCache.delete(key);
       }
-      // v0.10.46: 删除运行期协调状态条目（op Map 退役：任务状态零存储，条目仅活到终态）
+      // 删除运行期协调状态条目（任务状态零存储，条目仅活到终态）
       try {
         getSingleton().ops.delete(opId);
       } catch {
@@ -797,11 +770,11 @@ async function doExecute(input, ctx) {
   // 插件数据目录（宿主注入）：DSH_HOME 数据根落在这里（账本随插件生命周期）
   const dataDir = ctx.dataDir || join(PLUGIN_ROOT, "data");
   cfg.dataDir = dataDir;
-  // v0.10.2: 首次工具调用即自动生成 config.json（不存在时按 manifest 默认值；幂等，失败静默）
+  // 首次工具调用即自动生成 config.json（不存在时按 manifest 默认值；幂等，失败静默）
   ensureConfigJson(cfg);
   // 单例记数据目录（dsh_ops 经 g.dataDir 定位 dsh 会话缓存等数据文件）
   getSingleton().dataDir = dataDir;
-  // v0.6.0: dsh 依赖位置——数据目录 dsh-pkg/（Agent npm i @deepseek-ai/dsh 部署）优先，插件根兑底
+  // dsh 依赖位置——数据目录 dsh-pkg/（Agent npm i @deepseek-ai/dsh 部署）优先，插件根兑底
   if (!cfg.dshPkgDir) cfg.dshPkgDir = resolveDshPkgDir(cfg);
 
   // resume 时 cwd 可空：会话的 cwd 已在创建时定死，复用会话沿用其已有 cwd（提交层 resume 自动查询会话已有 cwd 并显式传入）
@@ -818,7 +791,7 @@ async function doExecute(input, ctx) {
     dataDir: cfg.dataDir,
     reasoningEffort: cfg.reasoningEffort,
     webPort: cfg.webPort,
-    // v0.5.12: 审批配置收敛为唯一键 approvalTimeoutMs（超时兜底，0=禁用；manifest 默认 30000）
+    // 审批配置唯一键 approvalTimeoutMs（超时兜底，0=禁用；manifest 默认 30000）
     approvalTimeoutMs: cfg.approvalTimeoutMs,
   };
   const taskParams = {

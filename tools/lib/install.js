@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// tools/lib/install.js — dsh 依赖部署/验证共用模块（v0.13.0 lib 提取）
+// tools/lib/install.js — dsh 依赖部署/验证共用模块（lib 提取）
 // 从 tools/dsh-run.js 剥离：resolveDshPkgDir / installDepsFromPlugin / verifyDepsSmoke
 // + semver 比较辅助（parseSemver / compareSemver）+ 本地版本直读（readDshInstalledVersion）。
 // 状态经 lib/state.js 的 getSingleton 访问（g.depsInstalling / g.depsInstallLog /
@@ -31,7 +31,7 @@ import {
   IS_WIN,
 } from "./state.js";
 
-// ---- 依赖安装日志通道（v0.13.0 统一）----
+// ---- 依赖安装日志通道（统一）----
 // installDepsFromPlugin 内部 emitLog(s, src)：同一份文本同时进
 //   ① 内存尾环 g.depsInstallLog（≤DEPS_LOG_CAP=8000，卡片/诊断界面实时读尾部；
 //      旧实现 npm 流式累积不设上限，长安装内存无界增长）
@@ -40,7 +40,7 @@ import {
 // 旧「命令完成后一次性 g.appendLog("npm", out)」废弃——npm 输出逐 chunk 实时写。
 const DEPS_LOG_CAP = 8000;
 
-// v0.6.0: dsh 依赖位置两形态——① 数据目录 dsh-pkg/（Agent npm i @deepseek-ai/dsh 部署的轻量分发形态，
+// dsh 依赖位置两形态——① 数据目录 dsh-pkg/（Agent npm i @deepseek-ai/dsh 部署的轻量分发形态，
 // 优先）；② 插件安装目录 node_modules（现役 zip 自带形态，兑底）。DSH_HOME 恒在数据目录。
 export function resolveDshPkgDir(cfg) {
   if (cfg?.dataDir) {
@@ -103,7 +103,7 @@ export function readDshInstalledVersion(cfg) {
   }
 }
 
-// ---- 依赖自主部署（v0.8.6: deps 缺失项「安装依赖」按钮的后端逻辑）----
+// ---- 依赖自主部署（deps 缺失项「安装依赖」按钮的后端逻辑）----
 // 参照技能文档 dsh-hanako/SKILL.md 依赖自主部署章节：部署目标恒为数据目录 dsh-pkg
 // （升级安装会清插件目录 node_modules，数据目录随插件生命周期保留；不部署到插件根），
 // 把插件根的 package.json 复制进去，在 pkgDir 下创建指向宿主 electron node 的代理脚本，
@@ -200,7 +200,7 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir) {
         },
       );
       let out = ""; // 仅用于错误信息提取（失败时拼进错误文本）
-      // v0.13.0: npm 输出逐 chunk 实时进统一日志通道（emitLog：内存尾环 ≤DEPS_LOG_CAP
+      // npm 输出逐 chunk 实时进统一日志通道（emitLog：内存尾环 ≤DEPS_LOG_CAP
       // + 会话日志 src=npm 实时写，行规范化 \r\n/\r → \n——取代旧「命令完成后一次性
       // g.appendLog("npm", out)」）；每次 data 刷新 depsInstallAt——前端 3s 轮询 health
       // 随诊断刷新 installLog 尾部，呈现实时进度
@@ -247,7 +247,7 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir) {
     }
     g.depsInstallError = null;
     milestone("[完成] " + cliBin);
-    // v0.8.7: 部署成功后强制运行级重验（清旧缓存，await 刷新——安装流程本身就是等待场景）
+    // 部署成功后强制运行级重验（清旧缓存，await 刷新——安装流程本身就是等待场景）
     g.depsSmoke = null;
     await verifyDepsSmoke(cfg);
     return { ok: true, state: "installed", cliBin };
@@ -260,7 +260,7 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir) {
   }
 }
 
-// ---- 依赖运行级完整性验证（v0.8.7: deps 存在性之外的加载冒烟）----
+// ---- 依赖运行级完整性验证（deps 存在性之外的加载冒烟）----
 // dsh 是 cordis 生态，模块图挂大量 peer 依赖（dsh-agent/dsh-llm-deepseek/dsh-tool-* 等）：
 // npm i 中断 / install script 失败未回滚 / --omit=peer 误用都会造成「入口文件在、依赖缺」
 // 的假就绪，运行时才抛 ERR_MODULE_NOT_FOUND。文件存在 ≠ 依赖完整。
@@ -269,7 +269,7 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir) {
 // 0.1.0-rc.6」同款逻辑）。能跑 = 依赖图完整。
 // 防并发/防轮询风暴：结果缓存到单例 g.depsSmoke = { ok, version, error, stderr, at, running }；
 // running=true 时直接返回当前缓存不重复 spawn（spawn 一次 --version 数百 ms，3s 轮询 ×
-// 每次 spawn 不可接受，必须缓存 + running 标志）。v0.8.8 起触发时机：进标签页自动一次 +
+// 每次 spawn 不可接受，必须缓存 + running 标志）。触发时机：进标签页自动一次 +
 // 手动「检测依赖」按钮（经 GET /webui/verify-deps 驱动）/ installDeps 部署成功后强制重验。
 export async function verifyDepsSmoke(cfg) {
   const g = getSingleton();

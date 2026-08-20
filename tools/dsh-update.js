@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// tools/dsh-update.js — dsh 安装/检查/更新工具（v0.13.0）
+// tools/dsh-update.js — dsh 安装/检查/更新工具
 // 宿主能力层（tools/dsh-run.js checkDshUpdate / updateDsh）的 Agent 入口，三个消费面
 // （Agent 工具 / DSHana 标签页 webui 路由 / dsh 设置页桥接）共用同一能力层：
 //   action=check（默认）：查本地版本（运行级验证缓存优先，无则直读 dsh-pkg
@@ -20,7 +20,7 @@
 // tools，静态 import 会命中 Node ESM 固定 URL 缓存读到旧模块，见 dsh-run.js 头部注释），
 // 经 globalThis 单例（g.checkDshUpdate / g.updateDsh / g.bus）调用；
 // deferred 唤醒协议（register/resolve/fail）不再各自内联，统一 import 共享的 ./lib/wake.js
-// （v0.13.x 三入口 dsh-run/dsh-install/dsh-update 共用一份，消除三重复；meta.type 由调用方
+// （三入口 dsh-run/dsh-install/dsh-update 共用一份，消除三重复；meta.type 由调用方
 // 传入保留本工具标识 dsh-update）。lib/wake.js 是纯协议零状态模块，rspack 入口静态 import
 // 内联进 bundle，?t= 重载即刷新，无"静态 import 固定 URL 缓存"问题。
 import {

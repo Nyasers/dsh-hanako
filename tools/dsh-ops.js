@@ -12,7 +12,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __here = dirname(fileURLToPath(import.meta.url));
-// v0.6.0: PLUGIN_ROOT 向上查找含 manifest.json 的目录——源码形态（tools/ 下）与
+// PLUGIN_ROOT 向上查找含 manifest.json 的目录——源码形态（tools/ 下）与
 // rspack bundle 形态（dist/tools/ 下）都能正确定位插件根（与 tools/dsh-run.js 同款定位）。
 let PLUGIN_ROOT = __here;
 while (!existsSync(join(PLUGIN_ROOT, "manifest.json"))) {

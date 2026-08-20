@@ -6,11 +6,11 @@
 //   GET /ops/stream?sessionId=&rpcId=&timeoutMs=     SSE 推送源（卡片主链路：基线快照 + DSH 实时事件转发）
 //   GET /ops/status?opId=&sessionId=&rpcId=          兜底状态 JSON（EventSource 建立失败时卡片回退一次；仅 jsonl 恢复路径）
 //   GET /ops/output?opId=&sessionId=&rpcId=          兜底全量输出 JSON（兼容旧卡片懒加载；仅 jsonl 恢复路径）
-//   GET /card/dep?taskId=                            安装/升级卡片页面（v0.13.0：dsh_install/dsh_update 异步流程，data-kind="dep"）
-//   GET /ops/dep-stream?taskId=                      安装/升级卡片 SSE 推送源（v0.13.0：进程内 g.depTasks + g.depsInstallLog）
-//   GET /ops/dep-status?taskId=                      安装/升级卡片兜底状态 JSON（v0.13.0）
+//   GET /card/dep?taskId=                            安装/升级卡片页面（dsh_install/dsh_update 异步流程，data-kind="dep"）
+//   GET /ops/dep-stream?taskId=                      安装/升级卡片 SSE 推送源（进程内 g.depTasks + g.depsInstallLog）
+//   GET /ops/dep-status?taskId=                      安装/升级卡片兜底状态 JSON
 //
-// v0.10.46 架构改造：卡片链路从「HTTP 轮询 + op Map」改为「SSE 服务端推送 + jsonl 唯一事实源」。
+// 架构：卡片链路从「HTTP 轮询 + op Map」改为「SSE 服务端推送 + jsonl 唯一事实源」。
 // 三层：卡片（iframe EventSource）<-> 插件（routes 转发）<-> DSH（events.mux WebSocket）。
 // 插件零任务状态：op Map 退役（tools/dsh-run.js 不再写任务快照），dsh 会话日志
 // （<dataDir>/dsh-home/sessions/<cwd分组>/<sessionId>/session.jsonl.zstd）为唯一事实源。
@@ -184,7 +184,7 @@ function rebuildOpFromLog(dataDir, sessionId, rpcId) {
   const textLen = msgTexts.join("").length;
   const taskText = textFromBlocks(prompt.data?.content);
   const startedAt = new Date(prompt.time).toISOString();
-  // v0.10.46：窗口无 turn/end = 任务未进入终态（仍在运行 / 重启时被杀）——
+  // 窗口无 turn/end = 任务未进入终态（仍在运行 / 重启时被杀）——
   // jsonl 唯一事实源语义：没有终态事件就是未完成，快照归一化为 running（部分输出），
   // 卡片据此保持运行态展示（SSE 实时事件随后接管；本地超时倒计时兜底）。
   if (!turnEnd) {
@@ -237,13 +237,13 @@ function rebuildOpFromLog(dataDir, sessionId, rpcId) {
     usage,
     output,
     outputLength: textLen || output.length,
-    outputPreview: output.slice(-1024), // 预览 1KB（v0.10.41：300→1KB，滚动摘要显示量更足）
+    outputPreview: output.slice(-1024), // 预览 1KB（滚动摘要显示量更足）
     recovered: true,
   };
 }
 
 // 恢复缓存（按 rpcId，上限 20 条）：旧卡片轮询 stop 前会多次请求，避免重复解压大日志。
-// v0.10.46：运行中快照不缓存——每次连接重建，避免断线重连拿到过期基线（运行中状态在 jsonl 里是增量事实）。
+// 运行中快照不缓存——每次连接重建，避免断线重连拿到过期基线（运行中状态在 jsonl 里是增量事实）。
 const recoveredCache = new Map();
 function cachedRebuild(dataDir, sessionId, rpcId) {
   const key = sessionId + "::" + rpcId;
@@ -259,7 +259,7 @@ function cachedRebuild(dataDir, sessionId, rpcId) {
   return op;
 }
 
-/** 取操作快照（v0.10.46：op Map 已退役，仅 jsonl 恢复路径；sessionId+rpcId 为定位键）。
+/** 取操作快照（op Map 已退役，仅 jsonl 恢复路径；sessionId+rpcId 为定位键）。
  * 恢复快照补齐 timeoutMs：URL 携带（会话日志无该配置项），仅当快照无值时覆盖。
  * includeFull=true 时额外带全量 output（/ops/stream 基线需要）。 */
 function readOp({ sessionId, rpcId, timeoutMs }, includeFull) {
@@ -303,7 +303,7 @@ function readOp({ sessionId, rpcId, timeoutMs }, includeFull) {
     error: op.error,
     summary: op.summary ?? null, // { text, summaryOf, fullLength } | null
     usage: op.usage ?? null, // DeepSeek adapter usage { inputTokens, outputTokens, cacheReadTokens, reasoningTokens } | null
-    outputPreview: previewText.slice(-1024), // 预览 1KB（v0.10.41：300→1KB，滚动摘要显示量更足）
+    outputPreview: previewText.slice(-1024), // 预览 1KB（滚动摘要显示量更足）
     outputLength:
       op.outputLength ?? (isBlocks ? previewText.length : output.length),
   };
@@ -475,7 +475,7 @@ ${hcLink}
     });
   });
 
-  // ── 安装/升级卡片（v0.13.0：数据源 = 宿主单例 g.depTasks + g.depsInstallLog）──
+  // ── 安装/升级卡片（数据源 = 宿主单例 g.depTasks + g.depsInstallLog）──
   // dsh_install / dsh_update 异步流程登记 g.depTasks（Map：taskId → { taskId, kind:
   // install|update, state: running|ok|error, log, at, result }）；本卡片非 dsh 会话、
   // 无 jsonl，状态与 npm 实时日志全在宿主进程内。三条链路与任务卡片同构：
