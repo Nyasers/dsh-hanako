@@ -1,21 +1,22 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// scripts/template-loader.mjs — rspack loader：HTML 模板构建期编译（doT）
-// 目标：构建期把 src/assets/*.jinja2 编译成「自包含渲染函数」JS 模块，运行时零依赖。
-// 源码 .jinja2 原样保留（含注释/多行，可读），一切处理只发生在编译期（本 loader 内对模板
-// 内容副本操作，不写回源文件）。
+// scripts/template-loader.mjs — rspack loader：HTML 模板构建期编译（doT + html-minifier-terser）
+// 目标：构建期把 src/assets/*.jinja2 编译成「自包含渲染函数」JS 模块，运行时零依赖
+// （bundle 不含任何模板库），dependencies 恒空；产物只是普通渲染函数。
 //
-// 压行安全（编译期）：doT 默认 strip:true 把模板压成单行 —— 壳页模板 <script> 内的多行 JS 中，
-// 行注释 // … 在单行里会吞掉其后代码（v0.15.3 回归：壳页主题桥/剪贴板桥/轮询被吞，内层 iframe 的
-// DSH WebUI 不跟随主题）。故编译前对 <script> 块做词法注释剥离（strip-js-comments.mjs：字符串/
-// 正则内不误删，注释以空格原位替换），随后 strip:true 压行 —— 删除注释在编译期完成，源文件零
-// 改动，产物保留单行体积收益且无吞码风险。
-// 为何不用 terser 剥注释：模板 <script> 内含 doT 插值 {{= it.xxx }}，terser 将其解析为非法 JS
-// 直接报 Unexpected token；strip-js-comments 是字符级处理（只识别 /*、// 与字符串边界），对
-// {{ }} 无感，天然兼容模板语法。
+// 编译期处理（源文件 .jinja2 零改动）：
+// 1. html-minifier-terser 先对模板整体压缩：
+//    - ignoreCustomFragments 保护 doT 插值 {{= it.xxx }} / {{ }}（整体占位，不动）
+//    - minifyJS（terser，compress/mangle 全关）压缩 <script>：正确移除 JS 行注释，
+//      不会出现 `单行 + // 注释吞掉其后代码`（v0.15.3/0.15.4 回归根因：壳页主题桥/
+//      剪贴板桥/轮询被吞，内层 iframe DSH WebUI 不跟随主题）
+//    - collapseWhitespace 压成单行（体积最优）
+// 2. 压缩结果交给 doT 编译为自包含渲染函数（产物无模板引擎引用）。
+// 为何用手写词法不行：JS 含正则字面量内的引号（如 /</ g 等）会让手写状态机串态；
+// html-minifier-terser 内嵌 terser 是成熟 JS 解析器，字符串/正则边界完美。
 import dot from "dot";
-import { stripJsComments } from "./strip-js-comments.mjs";
+import { minify as htmlMinify } from "html-minifier-terser";
 
 export default async function templateLoader(content) {
   const callback = this.async();
@@ -25,21 +26,22 @@ export default async function templateLoader(content) {
       callback(null, content);
       return;
     }
-    // 编译期预处理：仅对 <script> 块内 JS 剥注释（字符串内不误删）；HTML/CSS/{{ }} 插值段不动
-    const cleaned = String(content).replace(
-      /<script([^>]*)>([\s\S]*?)<\/script>/g,
-      (m, attrs, body) =>
-        "<script" + attrs + ">" + stripJsComments(body) + "</script>",
-    );
+    // 编译期压缩：保护 {{ }} 插值 + terser 剥 JS 注释 + 压行
+    const minified = await htmlMinify(String(content), {
+      ignoreCustomFragments: [/{{[\s\S]*?}}/],
+      collapseWhitespace: true,
+      removeComments: true,
+      minifyJS: { compress: false, mangle: false },
+      minifyCSS: false,
+    });
     dot.templateSettings.strip = true;
     let fn;
     try {
-      fn = dot.template(cleaned);
+      fn = dot.template(minified);
     } catch (err) {
       throw new Error("doT 模板编译失败（" + p + "）：" + err.message);
     }
     const body = fn.toString();
-    // 输出 default+具名导出 render：大模板未被内联时走模块引用，具名导出避免 default interop 歧义
     const out =
       "function render" +
       body.slice(body.indexOf("(")) +
