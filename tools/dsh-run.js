@@ -210,7 +210,22 @@ function mapModel(raw, api) {
     typeof m.defaultThinkingLevel === "string" &&
     THINKING_LEVELS.includes(m.defaultThinkingLevel)
   ) {
-    out.defaultThinkingLevel = m.defaultThinkingLevel;
+    // 宿主词汇归一：宿主侧把 xhigh 归一目为 max 档（host eT），dsh 侧同样归一
+    out.defaultThinkingLevel =
+      m.defaultThinkingLevel === "xhigh" ? "max" : m.defaultThinkingLevel;
+  }
+  // 思考强度列表口径对齐宿主 h$()（Hana host bundle 的 VH/h$/bI）：
+  //   宿主列表 = 显式 thinkingLevels || mj([off,medium,high])，xhigh:true → 追加 max；
+  //   宿主词汇无 minimal（minimal/low 不进入列表，host Hme 集只认 off/low/medium/high/
+  //   xhigh/max）。用 pi-ai 的 thinkingLevelMap 复刻：minimal/low → null（列表裁剪，
+  //   见 pi-ai getSupportedThinkingLevels 的 mapped===null 排除），xhigh:true → max
+  //   映射（xhigh 在宿主侧即为 max 档）。efforts 列表随 getSupportedThinkingLevels
+  //   自动对齐：off/medium/high（无 xhigh）或 off/medium/high/max（xhigh）；请求层
+  //   reasoning_effort 同样经 thinkingLevelMap 直通（max → "max"）。
+  if (m.reasoning === true) {
+    const tlm = { minimal: null, low: null };
+    if (m.xhigh === true) tlm.max = "max";
+    out.thinkingLevelMap = tlm;
   }
   // compat 映射仅对 openai-completions 协议生效（pi-ai 其余协议无这些开关）
   if (api === "openai-completions") {
