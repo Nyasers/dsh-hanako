@@ -57,15 +57,26 @@ export function resolveDshPkgDir(cfg) {
 }
 
 // ---- 零依赖 semver 比较（major.minor.patch 三段数字逐个比；预发布 -rc.x 视为低于同版本正式版）----
+// pre 字段：null 表示正式版（无预发布后缀）；对象 { kind, num } 表示预发布。
+//   kind="rc" 且 num 为 rc 序号（如 "0.1.0-rc.6" → { kind:"rc", num:6 }）；
+//   其余非数字预发布后缀（如 "-beta"、"-alpha"）kind="pre"、num=0（视为更旧），
+//   避免误分析成 rc 或崩溃。compareSemver 三段相同时：正式版 > 任一预发布；
+//   同为预发布则先比 rc 序号，能区分 0.1.0-rc.6 < 0.1.0-rc.7。
 export function parseSemver(v) {
   const s = String(v || "").trim();
-  const m = s.match(/^(\d+)\.(\d+)\.(\d+)/);
+  const m = s.match(/^(\d+)\.(\d+)\.(\d+)([\s\S]*)$/);
   if (!m) return null;
+  const tail = m[4];
+  let pre = null;
+  if (tail) {
+    const rc = tail.match(/^-rc\.(\d+)/i);
+    pre = rc ? { kind: "rc", num: Number(rc[1]) } : { kind: "pre", num: 0 };
+  }
   return {
     major: Number(m[1]),
     minor: Number(m[2]),
     patch: Number(m[3]),
-    pre: /-/.test(s.slice(m[0].length)),
+    pre,
   };
 }
 
@@ -76,8 +87,12 @@ export function compareSemver(a, b) {
   if (pa.major !== pb.major) return pa.major < pb.major ? -1 : 1;
   if (pa.minor !== pb.minor) return pa.minor < pb.minor ? -1 : 1;
   if (pa.patch !== pb.patch) return pa.patch < pb.patch ? -1 : 1;
-  // 三段相同：正式版（无预发布后缀）> 预发布（-rc.x 等）
-  if (pa.pre !== pb.pre) return pa.pre ? -1 : 1;
+  // 三段相同
+  if (!pa.pre && !pb.pre) return 0; // 都无预发布后缀 → 相等
+  if (!pa.pre) return 1; // a 正式版 > b 预发布
+  if (!pb.pre) return -1; // a 预发布 < b 正式版
+  // 都是预发布：先比序号（含 rc 序号；非 rc 按 num=0 更旧）
+  if (pa.pre.num !== pb.pre.num) return pa.pre.num < pb.pre.num ? -1 : 1;
   return 0;
 }
 

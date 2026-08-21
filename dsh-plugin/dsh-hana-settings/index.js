@@ -93,15 +93,24 @@ function json(res, body) {
 }
 
 // ---- 零依赖 semver 比较（major.minor.patch 三段数字逐个比；预发布 -rc.x 视为低于同版本正式版）----
+// pre 字段：null 表示正式版（无预发布后缀）；对象 { kind, num } 表示预发布。
+//   kind="rc" 且 num 为 rc 序号（如 "0.1.0-rc.6" → { kind:"rc", num:6 }）；
+//   其余非数字预发布后缀（如 "-beta"、"-alpha"）kind="pre"、num=0（视为更旧）。
 function parseVersion(v) {
   const s = String(v || "").trim();
-  const m = s.match(/^(\d+)\.(\d+)\.(\d+)/);
+  const m = s.match(/^(\d+)\.(\d+)\.(\d+)([\s\S]*)$/);
   if (!m) return null;
+  const tail = m[4];
+  let pre = null;
+  if (tail) {
+    const rc = tail.match(/^-rc\.(\d+)/i);
+    pre = rc ? { kind: "rc", num: Number(rc[1]) } : { kind: "pre", num: 0 };
+  }
   return {
     major: Number(m[1]),
     minor: Number(m[2]),
     patch: Number(m[3]),
-    pre: /-/.test(s.slice(m[0].length)),
+    pre,
   };
 }
 
@@ -112,8 +121,11 @@ function compareVersions(a, b) {
   if (pa.major !== pb.major) return pa.major < pb.major ? -1 : 1;
   if (pa.minor !== pb.minor) return pa.minor < pb.minor ? -1 : 1;
   if (pa.patch !== pb.patch) return pa.patch < pb.patch ? -1 : 1;
-  // 三段相同：正式版（无预发布后缀）> 预发布（-rc.x 等）
-  if (pa.pre !== pb.pre) return pa.pre ? -1 : 1;
+  // 三段相同
+  if (!pa.pre && !pb.pre) return 0;
+  if (!pa.pre) return 1;
+  if (!pb.pre) return -1;
+  if (pa.pre.num !== pb.pre.num) return pa.pre.num < pb.pre.num ? -1 : 1;
   return 0;
 }
 
