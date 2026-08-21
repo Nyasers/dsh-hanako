@@ -40,6 +40,261 @@ function esc(v) {
     .replace(/>/g, "&gt;");
 }
 
+/** 反向代理 dsh web host：插件页 iframe 不再直连 127.0.0.1，改经本插件 route 同源转发。
+ * 路径设计：挂在 `/api/plugins/<pluginId>/web/...`（相对注册 `/web/*`），1:1 映射到
+ * `http://127.0.0.1:<port>/<rest>`。目标 = 浏览器端不再产生任何对 127.0.0.1 的直连请求
+ * （HTML/CSS/JS/字体/图片的 GET 全量资源 + JSON API 的 POST 等），全部回落到插件命名空间。
+ *
+ * 关于 dsh SPA 的路径改写（为什么要做 HTML 重写）：
+ *   - dsh web frontend 的 index.html 用「根绝对路径」引用资源：`/assets/...`、
+ *     `/favicon.svg`、`/manifest.webmanifest`。若不做任何处理，浏览器把 iframe 文档
+ *     （origin = 宿主）里这些 `/assets/...` 解析到宿主根路径，不会经过代理 → UI 直接坏掉。
+ *   - 但 dsh 的 JS bundle 内部用「相对路径」引用分包（`./vendor-xxx.js`、
+ *     `assets/langs/xxx.js`）。因此只要把 HTML 里的根绝对资源前缀改写为代理前缀，整个
+ *     资源图就经代理回流（JS 相对解析落在自身的代理目录下）。
+ *   - 本实现只改写 HTML（text/html）里少数已知根绝对资源前缀（assets/favicon/manifest），
+ *     不动 JS/CSS 字节（相对引用天然走代理），最小化误伤面。
+ *
+ * 流式回传与响应头纪律：
+ *   - GET 全量资源用 `c.body(res.body)` 流式（不落缓冲，字体/大 JS 低内存）；POST 同理。
+ *   - 复制状态码、content-type 与关键非 hop-by-hop 头；去掉 hop-by-hop 头（connection/
+ *     transfer-encoding/upgrade/te/trailer 等）。逐条删除 content-length —— 流式回传时
+ *     浏览器/宿主会按 chunked 传输，残留 content-length 会与分块传输冲突。
+ *   - HTML 因需改写而读全文（index.html 毕竟很小），此时一并去掉 content-encoding（已解压）
+ *     与 content-length。
+ *   - set-cookie 用 getSetCookie() 保真（Node≥18.14；宿主 electron Node 满足）。
+ *
+ * 容错：未就绪/连接失败时返回友好 HTML（不抛异常、不外泄日志），复用 probeHost 探测做
+ * 一次就绪确认，并附带 webLastError（如有）便于排障；上游请求 header 不转发 host（回写
+ * 127.0.0.1:port）避免宿主侧浏览器信任围栏误判。 */
+const PROXY_PREFIX = "/web";
+// 请求侧 hop-by-hop + 不应回传的上游 host（Node fetch 从 URL 自行设置 Host）
+const REQUEST_HOP = new Set([
+  "host",
+  "content-length",
+  "connection",
+  "keep-alive",
+  "transfer-encoding",
+  "upgrade",
+  "te",
+  "trailer",
+  "proxy-authorization",
+  "proxy-authenticate",
+  "expect",
+]);
+// 响应侧 hop-by-hop + 由流式传输接管/由镜像内容取代的头部
+const RESPONSE_HOP = new Set([
+  "connection",
+  "keep-alive",
+  "transfer-encoding",
+  "upgrade",
+  "te",
+  "trailer",
+  "proxy-authorization",
+  "proxy-authenticate",
+]);
+// 已知根绝对资源前缀（index.html 里出现的全部；改写为代理前缀后子资源经代理回流）。
+// 注意 HTML_ROOT_ASSET 必须用 (src|href)="..." 的标签属性形式——若用宽松的
+// /"\/(assets\/|...)/g 会误伤 __DSH_BOOT__ 里 url 字段（那些是独立一类，见 HTML_BOOT_ENTRY_URL）。
+const HTML_ROOT_ASSET =
+  /\b(src|href)="\/(assets\/|favicon\.svg|manifest\.webmanifest)/gi;
+// __DSH_BOOT__ 的 entries 数组里每个入口形如 "url":"/plugins/<id>/client.js?rev=..."。
+// dsh 前端插件系统 boot 代码读该 JSON 后 document.createElement('script').src = entry.url
+// 加载（不走 fetch），因此必须在 HTML 文本层改写成代理前缀，否则浏览器把 /plugins/...
+// 解析到宿主根路径、绕开代理 → UI 无法加载。
+const HTML_BOOT_ENTRY_URL = /("url":")\/(plugins\/)/g;
+
+/** 把 HTML 里的根绝对引用改写为代理前缀（只针对 HTML；JS/CSS 相对引用天然走代理无需动）。
+ * 两类改写：
+ *   ① 标签属性 src/href 的根绝对资源（/assets/…、/favicon.svg、/manifest.webmanifest）
+ *   ② __DSH_BOOT__ 里 boot 入口的 "url":"/plugins/…"（dsh 插件系统前端加载入口）
+ * HTML_BOOT_ENTRY_URL 在 HTML_ROOT_ASSET 之后应用，两者模式不重叠（属性 vs url 字段）。 */
+function rewriteHtmlForProxy(html, proxyBase) {
+  return html
+    .replace(
+      HTML_ROOT_ASSET,
+      (m, attr, rest) => `${attr}="${proxyBase}/${rest}`,
+    )
+    .replace(
+      HTML_BOOT_ENTRY_URL,
+      (m, quote, rest) => `${quote}${proxyBase}/${rest}`,
+    );
+}
+
+/** 注入 <head> 最前（__DSH_BOOT__ 之前）的 boot 前置脚本——一个自包含 IIFE，patch 全局
+ *  fetch/EventSource/WebSocket/XMLHttpRequest，把「以 / 开头的根绝对路径」重写到代理前缀。
+ * 这样 dsh 前端运行时里编译期字符串字面量的根绝对 API 请求（readSse("/api/events.mux")、
+ * postJson(`/api/${method}`)）在运行时被拦截改写，无需 dsh 支持 basePath（其 resolveBase
+ * 用 location.origin 拼装，无 base path 配置点，见 routes/webui.js 头部代理说明）。
+ *
+ * 动因为何选运行时 patch 而非 HTML 改写：这些 /api/* 前缀只以 JS 字符串字面量形式出现在
+ * 已混淆/分包的 bundle 字节里（客户端 JS 里无固定可安全匹配的文本签名），HTML 文本层无
+ * 法安全全局替换（会误伤普通字符串内容），故必须注入前置脚本在全局 API 层兜底。脚本自包含、
+ * 零外部依赖、IIFE + 局部变量不污染全局命名；代理前缀在注入时代入实际 base（不硬编码）。
+ *
+ * @returns 注入后的完整 HTML */
+function injectBootPreface(html, proxyBase) {
+  const body = BOOT_PREFACE.replace(/@__BOOT_PROXY__@/g, proxyBase);
+  // 包 <script> 标签；模板内任何 </script> 立即打断序列化，转义为 <\/script> 防提前闭合
+  const script =
+    "<script>" + body.replace(/<\/script>/gi, "<\\/script>") + "</script>";
+  // 在 <head> 开口标签之后插入（此时 __DSH_BOOT__ script 尚未执行，patch 先行生效）；
+  // 找不到 <head>（异常 HTML）时原样返回。
+  if (!/<head[^>]*>/i.test(html)) return html;
+  return html.replace(/<head[^>]*>/i, (m) => m + script);
+}
+
+// boot 前置脚本模板（@__BOOT_PROXY__@ 占位在 injectBootPreface 时替换为实际 base）。
+// IIFE 完整包住，仅改写根绝对路径；相对路径自然落 iframe 代理目录无需动；跨源绝对 URL
+// 跳过（保持第三方出站能力）。
+//   rewrite 规则：
+//     - 非字符串 / 空串：原样（Request 等对象在此层不处理，由各 patch 内部分支处理）
+//     - 不以 / 开头：原样跳过（相对路径天然在代理目录下）
+//     - 已以代理前缀开头：原样（防二次加前缀）
+//     - 其余以 / 开头的根绝对路径：PROXY + u
+//   另对「完整同源绝对 URL」（location.origin + path）做保守处理：仅当 origin 匹配时
+//   提取 path 走 rewrite 再拼回，异常/跨源 try-catch 跳过。
+//   fetch：input 为 string 直接 rewrite；input 为 Request 时仅同源才重建（保留 method/
+//   headers/body），跨源或解析失败跳过。
+//   EventSource：new OES(rewrite(url), cfg)——dsh 事件流（/api/events.mux SSE）走这里，最关键。
+//   WebSocket / XHR.open：防御性 patch（dsh UI 当前未确认使用，但第三方插件脚本可能用到）。
+const BOOT_PREFACE = `(function(){
+  "use strict";
+  var PROXY = "@__BOOT_PROXY__@";
+  function rewrite(u){
+    if (typeof u !== "string" || u === "") return u;
+    if (u.charAt(0) === "/") {
+      if (u === PROXY || u.indexOf(PROXY + "/") === 0) return u;
+      return PROXY + u;
+    }
+    // 完整同源绝对 URL（location.origin + 路径）：仅 origin 匹配才改路径段，其余原样
+    var o = location.origin;
+    if (o && u.indexOf(o) === 0) {
+      var rest = u.slice(o.length);
+      if (rest && rest.charAt(0) === "/" &&
+          rest !== PROXY && rest.indexOf(PROXY + "/") !== 0) {
+        return o + PROXY + rest;
+      }
+    }
+    return u;
+  }
+  var oFetch = window.fetch;
+  if (typeof oFetch === "function") {
+    window.fetch = function(input, init){
+      if (typeof input === "string") { input = rewrite(input); }
+      else if (input && input.url !== undefined) {
+        try {
+          if (typeof input.url === "string" &&
+              input.url.indexOf(location.origin) === 0) {
+            var pu = new URL(input.url);
+            input = new Request(rewrite(pu.pathname + pu.search), input);
+          }
+        } catch (e) { /* 跨源/异常跳过 */ }
+      }
+      return oFetch.call(this, input, init);
+    };
+  }
+  var OES = window.EventSource;
+  if (typeof OES === "function") {
+    var esWrap = function(url, cfg){ return new OES(rewrite(url), cfg); };
+    try { Object.setPrototypeOf(esWrap, OES); } catch (e) { /* 静态常量为非必须，忽略 */ }
+    window.EventSource = esWrap;
+  }
+  var OWS = window.WebSocket;
+  if (typeof OWS === "function") {
+    var wsWrap = function(url, proto){
+      return proto === undefined ? new OWS(rewrite(url)) : new OWS(rewrite(url), proto);
+    };
+    try { Object.setPrototypeOf(wsWrap, OWS); } catch (e) { /* 同上 */ }
+    window.WebSocket = wsWrap;
+  }
+  var xhr = window.XMLHttpRequest;
+  if (xhr && xhr.prototype && xhr.prototype.open) {
+    var xOpen = xhr.prototype.open;
+    xhr.prototype.open = function(method, url){
+      arguments[1] = rewrite(url);
+      return xOpen.apply(this, arguments);
+    };
+  }
+})();`;
+
+/** 代理到 dsh web host（GET 全量资源 + POST JSON API）。subPath 含前导 /，对应
+ * 127.0.0.1:<port><subPath><query>。任何失败走友好 JSON/HTML 容错，本 handler 不抛异常。 */
+async function proxyToDsh(c, ctx, port, subPath) {
+  const g = globalThis.__dshHanako;
+  // method 需在 try/catch 两侧可见（catch 里按 method 决定回 JSON 还是 HTML 错误），
+  // 故提到函数顶部声明；hasBody 同理在 try 内使用。
+  const method = String(c?.req?.method || "GET").toUpperCase();
+  try {
+    const upstream = `http://127.0.0.1:${port}${subPath}${new URL(c.req.url).search}`;
+    const reqHeaders = new Headers();
+    for (const [k, v] of c.req.raw.headers) {
+      if (!REQUEST_HOP.has(k.toLowerCase())) reqHeaders.set(k, v);
+    }
+    reqHeaders.set("host", `127.0.0.1:${port}`);
+    const hasBody = method !== "GET" && method !== "HEAD";
+    const upstreamRes = await fetch(upstream, {
+      method,
+      headers: reqHeaders,
+      body: hasBody ? c.req.raw.body : undefined,
+      ...(hasBody ? { duplex: "half" } : {}),
+      redirect: "manual", // 不跟随：把 3xx 连同 Location 原样回传给浏览器（dsh 一般不重定向）
+    });
+
+    const headers = new Headers();
+    upstreamRes.headers.forEach((v, k) => {
+      if (!RESPONSE_HOP.has(k.toLowerCase())) headers.set(k, v);
+    });
+    // set-cookie 保真（getSetCookie 仅 Node≥18.14；缺失时退化为普通 append）
+    if (typeof upstreamRes.headers.getSetCookie === "function") {
+      const sc = upstreamRes.headers.getSetCookie();
+      if (sc.length) {
+        headers.delete("set-cookie");
+        for (const s of sc) headers.append("set-cookie", s);
+      }
+    }
+    headers.delete("content-length"); // 流式/改写后由传输层接管，避免与 chunked 冲突
+
+    const ct = String(upstreamRes.headers.get("content-type") || "").toLowerCase();
+    if (ct.includes("text/html")) {
+      // HTML 需改写到代理前缀：读全文（index.html 很小），此时也去掉 content-encoding。
+      // 改写（标签属性资源 + __DSH_BOOT__ boot 入口 url）后再注入 <head> 最前的
+      // boot 前置脚本（patch 全局 API 兜底 /api/* 等运行时地址），见函数注释。
+      const proxyBase = "/api/plugins/" + ctx.pluginId + PROXY_PREFIX;
+      let html = rewriteHtmlForProxy(await upstreamRes.text(), proxyBase);
+      html = injectBootPreface(html, proxyBase);
+      headers.delete("content-encoding");
+      return c.html(html, upstreamRes.status, Object.fromEntries(headers));
+    }
+    // 其余资源（JS/CSS/字体/图片/API JSON）：流式回传，保留原 content-type/encoding
+    return c.body(upstreamRes.body, upstreamRes.status, Object.fromEntries(headers));
+  } catch (e) {
+    // 连接失败/未就绪：友好容错（含就绪确认 + 最近一次启动错误，不抛异常）
+    const ready = await probeHost(port, ctx.log).catch(() => false);
+    const lastErr = g?.webLastError || null;
+    const state = ready ? "dsh web host 已就绪但转发失败" : "dsh web host 未就绪";
+    const detail = e?.message || String(e);
+    // API 类请求（POST 或 /api/ 路径）回 JSON 错误（前端 fetch JSON 解析）；文档类回 HTML 页
+    if (method === "POST" || /^\/api\//i.test(subPath)) {
+      return c.json(
+        { ok: false, error: state + "：" + detail, webLastError: lastErr },
+        502,
+      );
+    }
+    return c.html(
+      `<!doctype html><html lang="zh"><head><meta charset="utf-8"><meta name="color-scheme" content="light dark">
+<title>DSHana 代理不可用</title></head><body style="font-family:system-ui,Segoe UI,Microsoft YaHei,sans-serif;padding:24px">
+<h2>${state}</h2><p style="color:#8a3b2f">${esc(detail)}</p>${
+        lastErr
+          ? `<p>最近启动错误：${esc(typeof lastErr === "string" ? lastErr : lastErr?.message || String(lastErr))}</p>`
+          : ""
+      }
+<p>返回 DSHana 标签页等待就绪后自动进入。</p></body></html>`,
+      502,
+    );
+  }
+}
+
 /** 探测 dsh web host 是否就绪（host.describe RPC，1.5s 超时；任何失败视为未就绪） */
 async function probeHost(port, log) {
   try {
@@ -101,8 +356,12 @@ function buildShell({
   // 下内层声明无法生效，属无效方案已回滚，见 CHANGELOG）。
   // 剪贴板问题的正规解法是 dsh-hana-clipboard 插件（tapIndex 注入桥 → 宿主 capability）
   // + 下方壳页面桥（hostRequest + __dshCopy 监听）。
+  // iframe 不再直连 127.0.0.1：src 指向插件自身的 /web/ 代理 route（同源），由
+  // proxyToDsh 转发到 dsh web host，页面后续资源/API 请求全走代理（浏览器端零直连）。
+  // 代理前缀与壳页面 attach() 动态挂载用的 api（= base）拼接一致。
+  const webProxy = api + PROXY_PREFIX + "/";
   const iframe = ready
-    ? `<iframe id="dsh-frame" src="http://127.0.0.1:${port}/"></iframe>`
+    ? `<iframe id="dsh-frame" src="${esc(webProxy)}"></iframe>`
     : `<iframe id="dsh-frame"></iframe>`;
   // 嵌入首帧自检 JSON：把 </ 转义成 <\/，防诊断文本（路径/stderr）里的 </script> 提前闭合脚本
   const initDiag = diagnostics
@@ -301,5 +560,29 @@ export default function registerWebuiRoutes(app, ctx) {
       ctx.log?.warn?.("[dsh-hanako] 更新 DSH 失败:", e?.message || String(e));
       return c.json({ ok: false, error: "更新请求失败，请稍后重试" });
     }
+  });
+
+  // ── 反向代理 dsh web host（插件页 iframe 同源载体，替代浏览器直连 127.0.0.1）──
+  // 挂在 `app.all(PROXY_PREFIX)` 与 `app.all(PROXY_PREFIX + "/*")`：前者对应根 `/web`
+  // （→ host 根 `/`），后者对应 `/web/<rest>`（1:1 映射到 host `<rest>`）。支持 GET 全量
+  // 资源（HTML/CSS/JS/字体/图片）与 POST JSON API，统一走 proxyToDsh（流式回传 + 头纪律
+  // + HTML 根绝对资源改写 + 未就绪友好容错）。本代理在宿主 Node 内 fetch 回环 127.0.0.1
+  // （与 probeHost/tools 同链路），不受 manifest network.allowedHosts 约束（那是对
+  // ctx.network.fetch 的外部主机白名单）；已确认宿主 route 层无对 /api/plugins/* 子路径
+  // 的额外拦截（仅剥离 surface-session/agent 身份头，与本代理无关）。
+  // WebSocket 说明：宿主插件 route 走 `pluginApp.fetch()`（纯 HTTP Request/Response），
+  // 无 upgradeWebSocket 接线（chat WS 是单独 route，插件 route 不支持 WS 升级），因此
+  // card.js 的 events.mux WebSocket 无法经本代理 route 转发，保持 Node 侧直连（宿主环境
+  // 连接非浏览器直连，无 CORS/混合内容问题）。如需 WS 走代理须宿主为插件 route 提供
+  // upgrade 通道，属宿主能力缺口，不在本迭代范围。
+  app.all(PROXY_PREFIX, (c) => proxyToDsh(c, ctx, port, "/"));
+  app.all(PROXY_PREFIX + "/*", (c) => {
+    const u = new URL(c.req.url);
+    // 剥掉 /web 前缀得到 host 相对路径；剥不掉（异常路径）时兜底到根
+    const sub =
+      u.pathname.startsWith(PROXY_PREFIX + "/")
+        ? u.pathname.slice(PROXY_PREFIX.length) || "/"
+        : "/";
+    return proxyToDsh(c, ctx, port, sub);
   });
 }

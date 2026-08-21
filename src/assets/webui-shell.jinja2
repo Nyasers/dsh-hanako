@@ -265,7 +265,9 @@
     function attach() {
       // 就绪即停轮询：显式清掉 pending 定时器（不依赖递归链隐式断开）
       if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
-      frame.src = "http://127.0.0.1:{{= it.port }}/";
+      // iframe 指向插件自身 /web/ 代理 route（同源），由插件 route 转发到 dsh web host，
+      // 浏览器不再直连 127.0.0.1（HTML/资源/API 全走代理，见 routes/webui.js proxyToDsh）。
+      frame.src = api + "/web/";
       document.body.setAttribute("data-pending", "0");
       startThemePush();
     }
