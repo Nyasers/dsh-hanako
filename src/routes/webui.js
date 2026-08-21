@@ -108,16 +108,25 @@ const HTML_BOOT_ENTRY_URL = /("url":")\/(plugins\/)/g;
  * 两类改写：
  *   ① 标签属性 src/href 的根绝对资源（/assets/…、/favicon.svg、/manifest.webmanifest）
  *   ② __DSH_BOOT__ 里 boot 入口的 "url":"/plugins/…"（dsh 插件系统前端加载入口）
- * HTML_BOOT_ENTRY_URL 在 HTML_ROOT_ASSET 之后应用，两者模式不重叠（属性 vs url 字段）。 */
-function rewriteHtmlForProxy(html, proxyBase) {
+ * HTML_BOOT_ENTRY_URL 在 HTML_ROOT_ASSET 之后应用，两者模式不重叠（属性 vs url 字段）。
+ *
+ * sessQuery：可选，宿主 surface session 凭证（形如 "pluginSurfaceSession=<enc>"，不含前导
+ * 分隔符）。设定后改写出的每个资源 URL 都附加该凭证 query（已有 query 用 &、否则 ?）——
+ * 宿主反代对 /api/plugins/* 全局鉴权且只认 query 通道（X-Hana-Plugin-Surface-Session 头对
+ * 静态资源无效，src/href 加载也无法加 header），故静态资源必须把凭证写进 URL query。
+ * 凭证仅在「浏览器→宿主」段携带，宿主转发前剥离，不会传给 dsh host。 */
+function rewriteHtmlForProxy(html, proxyBase, sessQuery) {
+  const q = sessQuery || "";
+  const joinQuery = (rest) =>
+    q ? (rest.indexOf("?") === -1 ? "?" : "&") + q : "";
   return html
     .replace(
       HTML_ROOT_ASSET,
-      (m, attr, rest) => `${attr}="${proxyBase}/${rest}`,
+      (m, attr, rest) => `${attr}="${proxyBase}/${rest}${joinQuery(rest)}`,
     )
     .replace(
       HTML_BOOT_ENTRY_URL,
-      (m, quote, rest) => `${quote}${proxyBase}/${rest}`,
+      (m, quote, rest) => `${quote}${proxyBase}/${rest}${joinQuery(rest)}`,
     );
 }
 
@@ -163,7 +172,10 @@ function injectBootPreface(html, proxyBase) {
 //
 // 凭证（surface session）附加 —— 宿主对所有 /api/plugins/* route（含本代理 /web/*）做全局
 // 鉴权，要求 principal 满足至少一个宿主 plugin surface session（header/query 凭证），否则
-// missing_credential 403。因此文档内请求（fetch/EventSource/XHR）必须带凭证才能经代理访问。
+// missing_credential 403。实测宿主对实时代理 route **只认 query 通道**（X-Hana-Plugin-Surface-
+// Session 头无效），故文档内所有请求（fetch/EventSource/XHR）一律以 **URL query**（pluginSurfaceSession=）
+// 附加凭证（header 仅作双保险，宿主接受其一即可）；静态资源（src/href）无法加 header，必须
+// 靠服务端 rewriteHtmlForProxy 把凭证写进改写后的资源 URL query。
 // 凭证来源 = 本文档 location.search 的 pluginSurfaceSession（壳页面 attach() 注入 iframe
 // src query，见 webui-shell.jinja2）。凭证仅在「浏览器→宿主」段携带，宿主 proxyToPlugin
 // 转发前会剥离该 header/query，不会传给 dsh host。凭证缺失时各附加分支直接跳过（不改造
@@ -213,13 +225,15 @@ const BOOT_PREFACE = `(function(){
   var oFetch = window.fetch;
   if (typeof oFetch === "function") {
     window.fetch = function(input, init){
-      if (typeof input === "string") { input = rewrite(input); }
+      // 凭证以 URL query 附加（宿主对 /api/plugins/* 只认 query 通道，header 无效）；
+      // 同时保留 header（双保险，宿主接受其一即可）。
+      if (typeof input === "string") { input = withSessionQuery(rewrite(input)); }
       else if (input && input.url !== undefined) {
         try {
           if (typeof input.url === "string" &&
               input.url.indexOf(location.origin) === 0) {
             var pu = new URL(input.url);
-            input = new Request(rewrite(pu.pathname + pu.search), input);
+            input = new Request(withSessionQuery(rewrite(pu.pathname + pu.search)), input);
           }
         } catch (e) { /* 跨源/异常跳过 */ }
       }
@@ -245,9 +259,9 @@ const BOOT_PREFACE = `(function(){
   if (xhr && xhr.prototype && xhr.prototype.open) {
     var xOpen = xhr.prototype.open;
     xhr.prototype.open = function(method, url){
-      arguments[1] = rewrite(url);
+      // 凭证以 URL query 附加（宿主只认 query 通道）+ header 双保险
+      arguments[1] = withSessionQuery(rewrite(url));
       var r = xOpen.apply(this, arguments);
-      // 凭证以 header 附加（XHR 支持 setRequestHeader；无凭证跳过）
       if (SESS !== "") { try { this.setRequestHeader(SESS_HEADER, SESS); } catch (e) { /* header 被拒/只读 */ } }
       return r;
     };
@@ -297,7 +311,20 @@ async function proxyToDsh(c, ctx, port, subPath) {
       // 改写（标签属性资源 + __DSH_BOOT__ boot 入口 url）后再注入 <head> 最前的
       // boot 前置脚本（patch 全局 API 兜底 /api/* 等运行时地址），见函数注释。
       const proxyBase = "/api/plugins/" + ctx.pluginId + PROXY_PREFIX;
-      let html = rewriteHtmlForProxy(await upstreamRes.text(), proxyBase);
+      // 取宿主 surface session 凭证（宿主对 /api/plugins/* 只认 query 通道；src/href 静态
+      // 资源无法加 header，只能把凭证写进改写出的资源 URL query）。来源：入站 /web/ 请求
+      // query 优先，其次同名 header（宿主转发前是否剥离因版本而异，两种都兜底）。
+      let sessQuery = "";
+      try {
+        const reqUrl = new URL(c.req.url);
+        const tok =
+          reqUrl.searchParams.get(BOOT_SESS_QUERY) ||
+          String(c.req.raw?.headers?.[BOOT_SESS_HEADER.toLowerCase()] || "");
+        sessQuery = tok ? `${BOOT_SESS_QUERY}=${encodeURIComponent(tok)}` : "";
+      } catch {
+        /* 忽略 */
+      }
+      let html = rewriteHtmlForProxy(await upstreamRes.text(), proxyBase, sessQuery);
       html = injectBootPreface(html, proxyBase);
       headers.delete("content-encoding");
       return c.html(html, upstreamRes.status, Object.fromEntries(headers));

@@ -1,0 +1,10 @@
+{
+  "name": "dsh-hana-proxy",
+  "version": "0.16.0",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "cordis": {
+    "name": "dsh-hana-proxy"
+  }
+}

@@ -467,8 +467,8 @@ export async function ensureWebHost(cfg) {
   // require.resolve('<name>/package.json') 找 package.json 的 dsh.client 声明，file://
   // 形式无法解析。包名解析锚点是 $DSH_HOME/profiles（baseUrl 父目录的 node_modules），
   // 启动前统一建 junction：$DSH_HOME/profiles/node_modules/
-  // <dsh-hana-theme|dsh-hana-provider|dsh-hana-settings|dsh-hana-logger> → 插件安装目录
-  // dsh-plugin/<同名包>（与 dsh 自维护的 junction farm 同机制；dsh 的
+  // <dsh-hana-theme|dsh-hana-provider|dsh-hana-settings|dsh-hana-logger|dsh-hana-proxy>
+  // → 插件安装目录 dsh-plugin/<同名包>（与 dsh 自维护的 junction farm 同机制；dsh 的
   // healProfilesModuleFallback 只管理自身依赖闭包，不碰外来 link）。
   // 无条件重建：每次启动删旧建新（不比较 readlink）——junction 状态无条件收敛到当前
   // 代码期望，杜绝一切残留（悬空 junction / 指向旧路径）导致的解析失败；与 patch 每次
@@ -482,6 +482,7 @@ export async function ensureWebHost(cfg) {
       "dsh-hana-settings",
       "dsh-hana-logger",
       "dsh-hana-clipboard",
+      "dsh-hana-proxy",
     ];
     for (const pkg of packages) {
       const link = join(dshHome, "profiles", "node_modules", pkg);

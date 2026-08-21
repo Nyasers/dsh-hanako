@@ -26,3 +26,6 @@
         npmCliPath: '{{NPM_CLI_PATH}}'
         electronNode: '{{ELECTRON_NODE}}'
         dataDir: '{{DATA_DIR}}'
+- insert:
+    - id: dsh-hana-proxy
+      name: 'dsh-hana-proxy'
