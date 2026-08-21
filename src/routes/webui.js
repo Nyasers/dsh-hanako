@@ -134,7 +134,9 @@ function rewriteHtmlForProxy(html, proxyBase) {
  *
  * @returns 注入后的完整 HTML */
 function injectBootPreface(html, proxyBase) {
-  const body = BOOT_PREFACE.replace(/@__BOOT_PROXY__@/g, proxyBase);
+  const body = BOOT_PREFACE.replace(/@__BOOT_PROXY__@/g, proxyBase)
+    .replace(/@__BOOT_SESS_HEADER__@/g, BOOT_SESS_HEADER)
+    .replace(/@__BOOT_SESS_QUERY__@/g, BOOT_SESS_QUERY);
   // 包 <script> 标签；模板内任何 </script> 立即打断序列化，转义为 <\/script> 防提前闭合
   const script =
     "<script>" + body.replace(/<\/script>/gi, "<\\/script>") + "</script>";
@@ -144,23 +146,38 @@ function injectBootPreface(html, proxyBase) {
   return html.replace(/<head[^>]*>/i, (m) => m + script);
 }
 
-// boot 前置脚本模板（@__BOOT_PROXY__@ 占位在 injectBootPreface 时替换为实际 base）。
-// IIFE 完整包住，仅改写根绝对路径；相对路径自然落 iframe 代理目录无需动；跨源绝对 URL
-// 跳过（保持第三方出站能力）。
+// boot 脚本模板（注入时把 @__BOOT_PROXY__@ / @__BOOT_SESS_HDR__@ / @__BOOT_SESS_QUERY__@
+// 替换为实际值）。IIFE 完整包住，仅改写根绝对路径与附加凭证；相对路径自然落 iframe
+// 代理目录无需动；跨源绝对 URL 跳过（保持第三方出站能力）。
 //   rewrite 规则：
 //     - 非字符串 / 空串：原样（Request 等对象在此层不处理，由各 patch 内部分支处理）
 //     - 不以 / 开头：原样跳过（相对路径天然在代理目录下）
 //     - 已以代理前缀开头：原样（防二次加前缀）
 //     - 其余以 / 开头的根绝对路径：PROXY + u
-//   另对「完整同源绝对 URL」（location.origin + path）做保守处理：仅当 origin 匹配时
-//   提取 path 走 rewrite 再拼回，异常/跨源 try-catch 跳过。
+//   另对「完整同源绝对 URL」（location.origin + 路径）做保守处理：仅当 origin 匹配时提取
+//   路径段走 rewrite 再拼回，异常/跨源 try-catch 跳过。
 //   fetch：input 为 string 直接 rewrite；input 为 Request 时仅同源才重建（保留 method/
 //   headers/body），跨源或解析失败跳过。
 //   EventSource：new OES(rewrite(url), cfg)——dsh 事件流（/api/events.mux SSE）走这里，最关键。
 //   WebSocket / XHR.open：防御性 patch（dsh UI 当前未确认使用，但第三方插件脚本可能用到）。
+//
+// 凭证（surface session）附加 —— 宿主对所有 /api/plugins/* route（含本代理 /web/*）做全局
+// 鉴权，要求 principal 满足至少一个宿主 plugin surface session（header/query 凭证），否则
+// missing_credential 403。因此文档内请求（fetch/EventSource/XHR）必须带凭证才能经代理访问。
+// 凭证来源 = 本文档 location.search 的 pluginSurfaceSession（壳页面 attach() 注入 iframe
+// src query，见 webui-shell.jinja2）。凭证仅在「浏览器→宿主」段携带，宿主 proxyToPlugin
+// 转发前会剥离该 header/query，不会传给 dsh host。凭证缺失时各附加分支直接跳过（不改造
+// 原先 rewrite 行为，保持向后兼容）。
+const BOOT_SESS_HEADER = "X-Hana-Plugin-Surface-Session";
+const BOOT_SESS_QUERY = "pluginSurfaceSession";
 const BOOT_PREFACE = `(function(){
   "use strict";
   var PROXY = "@__BOOT_PROXY__@";
+  var SESS_HEADER = "@__BOOT_SESS_HEADER__@";
+  var SESS_QUERY = "@__BOOT_SESS_QUERY__@";
+  // surface session 凭证（宿主签发 12h TTL；壳页面经 iframe src query 注入本文档）。
+  // 空串表示无凭证 → withSessionQuery/withSessionHeader 全部跳过（对原行为零改动）。
+  var SESS = new URLSearchParams(location.search).get(SESS_QUERY) || "";
   function rewrite(u){
     if (typeof u !== "string" || u === "") return u;
     if (u.charAt(0) === "/") {
@@ -178,6 +195,21 @@ const BOOT_PREFACE = `(function(){
     }
     return u;
   }
+  // 给 URL 附加凭证 query（EventSource/WebSocket 无 setRequestHeader 能力，只能走 query）。
+  // 已带 query 用 & 连接、无则 ?；凭证缺失原样返回。
+  function withSessionQuery(u){
+    if (SESS === "" || typeof u !== "string") return u;
+    return u + (u.indexOf("?") === -1 ? "?" : "&")
+      + SESS_QUERY + "=" + encodeURIComponent(SESS);
+  }
+  // 把凭证 header 合并进 fetch init.headers（多形态：undefined/数组/对象/Headers 统一为
+  // Headers）；调用方已有同名 header 不覆盖；无凭证原样返回 init（对原行为零改动）。
+  function withSessionHeader(init){
+    if (SESS === "") return init;
+    var h = new Headers(init && init.headers ? init.headers : undefined);
+    if (!h.has(SESS_HEADER)) h.set(SESS_HEADER, SESS);
+    return Object.assign({}, init || {}, { headers: h });
+  }
   var oFetch = window.fetch;
   if (typeof oFetch === "function") {
     window.fetch = function(input, init){
@@ -191,19 +223,20 @@ const BOOT_PREFACE = `(function(){
           }
         } catch (e) { /* 跨源/异常跳过 */ }
       }
-      return oFetch.call(this, input, init);
+      return oFetch.call(this, input, withSessionHeader(init));
     };
   }
   var OES = window.EventSource;
   if (typeof OES === "function") {
-    var esWrap = function(url, cfg){ return new OES(rewrite(url), cfg); };
+    var esWrap = function(url, cfg){ return new OES(withSessionQuery(rewrite(url)), cfg); };
     try { Object.setPrototypeOf(esWrap, OES); } catch (e) { /* 静态常量为非必须，忽略 */ }
     window.EventSource = esWrap;
   }
   var OWS = window.WebSocket;
   if (typeof OWS === "function") {
     var wsWrap = function(url, proto){
-      return proto === undefined ? new OWS(rewrite(url)) : new OWS(rewrite(url), proto);
+      var u = withSessionQuery(rewrite(url));
+      return proto === undefined ? new OWS(u) : new OWS(u, proto);
     };
     try { Object.setPrototypeOf(wsWrap, OWS); } catch (e) { /* 同上 */ }
     window.WebSocket = wsWrap;
@@ -213,7 +246,10 @@ const BOOT_PREFACE = `(function(){
     var xOpen = xhr.prototype.open;
     xhr.prototype.open = function(method, url){
       arguments[1] = rewrite(url);
-      return xOpen.apply(this, arguments);
+      var r = xOpen.apply(this, arguments);
+      // 凭证以 header 附加（XHR 支持 setRequestHeader；无凭证跳过）
+      if (SESS !== "") { try { this.setRequestHeader(SESS_HEADER, SESS); } catch (e) { /* header 被拒/只读 */ } }
+      return r;
     };
   }
 })();`;
@@ -337,7 +373,9 @@ function readDiagnostics(ctx, cfg, port) {
   return null;
 }
 
-/** 插件页 HTML 壳：ready=true 直接内联 iframe；否则提示区（标题 + 自检列表 + 重试）+ 轮询 health 后动态挂载
+/** 插件页 HTML 壳：ready=true 由壳页面加载后立即 attach() 挂载 iframe（src 含 surface session
+ * 凭证）；否则提示区（标题 + 自检列表 + 重试）+ 轮询 health 后动态挂载。两种情况 iframe 均不带
+ * 内联 src（统一由 attach() 设置），保证 ready=true 的初始导航也带宿主凭证。
  * colorScheme：按宿主 hana-theme 映射的 color-scheme（dark/light）。dsh 主题为
  * system 时通过 prefers-color-scheme 解析，Chromium 会让跨源 iframe 继承父页面
  * 的 color-scheme，因此 dsh 会跟随宿主主题；dsh 内显式选了 light/dark 则不受影响。
@@ -356,13 +394,11 @@ function buildShell({
   // 下内层声明无法生效，属无效方案已回滚，见 CHANGELOG）。
   // 剪贴板问题的正规解法是 dsh-hana-clipboard 插件（tapIndex 注入桥 → 宿主 capability）
   // + 下方壳页面桥（hostRequest + __dshCopy 监听）。
-  // iframe 不再直连 127.0.0.1：src 指向插件自身的 /web/ 代理 route（同源），由
-  // proxyToDsh 转发到 dsh web host，页面后续资源/API 请求全走代理（浏览器端零直连）。
-  // 代理前缀与壳页面 attach() 动态挂载用的 api（= base）拼接一致。
-  const webProxy = api + PROXY_PREFIX + "/";
-  const iframe = ready
-    ? `<iframe id="dsh-frame" src="${esc(webProxy)}"></iframe>`
-    : `<iframe id="dsh-frame"></iframe>`;
+  // iframe 不再直连 127.0.0.1，src 也**不在此拼写**：宿主对本代理 route（/api/plugins/*）
+  // 全局鉴权，ready=true 时的初始导航（/web/ → host 根）同样要求凭证，因此 src 统一由壳
+  // 页面浏览器侧 attach() 设置（指向插件自身 /web/ 代理 route 并携带宿主 surface session
+  // 凭证，见 webui-shell.jinja2 的 attach()）。此处 iframe 恒留空 src，等 attach() 挂载。
+  const iframe = `<iframe id="dsh-frame"></iframe>`;
   // 嵌入首帧自检 JSON：把 </ 转义成 <\/，防诊断文本（路径/stderr）里的 </script> 提前闭合脚本
   const initDiag = diagnostics
     ? JSON.stringify(diagnostics).replace(/<\//g, "<\\/")

@@ -267,13 +267,21 @@
       if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
       // iframe 指向插件自身 /web/ 代理 route（同源），由插件 route 转发到 dsh web host，
       // 浏览器不再直连 127.0.0.1（HTML/资源/API 全走代理，见 routes/webui.js proxyToDsh）。
-      frame.src = api + "/web/";
+      // 宿主对本代理 route 全局鉴权——初始导航（/web/ → host 根）也必须在 URL query 里带
+      // surface session 凭证，否则丢 missing_credential 403；此 query 由宿主 proxyToPlugin
+      // 转发前剥离，不会传给 dsh host。无凭证时退化为纯 /web/（保持向后兼容）。
+      var sess = surfaceSessionQuery();
+      frame.src = api + "/web/" + (sess ? "?pluginSurfaceSession=" + encodeURIComponent(sess) : "");
       document.body.setAttribute("data-pending", "0");
       startThemePush();
     }
+    // 宿主签发的 surface session 凭证（本页 URL query 由宿主 iframe ticket 下发）。空串
+    // 表示无凭证。surfaceSessionQuery 复用于 iframe src 注入（attach）与文档请求 header。
+    function surfaceSessionQuery() {
+      return new URLSearchParams(location.search).get("pluginSurfaceSession") || "";
+    }
     function surfaceHeaders() {
-      var params = new URLSearchParams(location.search);
-      var sess = params.get("pluginSurfaceSession");
+      var sess = surfaceSessionQuery();
       return sess ? { "X-Hana-Plugin-Surface-Session": sess } : {};
     }
     // 连接失败自检渲染——服务端收集的 checks 列表（每项：状态图标/检查项名/
@@ -757,6 +765,8 @@
       if (diagList) diagList.addEventListener("click", onDiagClick); // 卡片按钮事件委托
       autoVerifyDeps(); // 进标签页依赖运行级检测一次（结果经 refreshDiag 进 deps 卡片）
       poll();
+    } else {
+      attach(); // ready=true：页面加载后立即挂载 iframe（src 由 attach() 在此带入凭证）
     }
 }) ();
   </script>
