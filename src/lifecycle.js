@@ -557,9 +557,12 @@ export async function ensureWebHost(cfg) {
   const patchArgs = patchFiles.flatMap((p) => ["--patch", p]);
   // 四段 cordis 插件均以包名注册，spawn 前确保 junction 就绪（幂等）
   ensureCordisJunctions(dshHome);
+  // launcher flag（--profile/--patch）必须位于应用参数（--port）之前；且 --patch 是
+  // 顶层 dsh 选项，必须位于 --profile 之前（dsh 0.1.x：--profile 之后的参数视为
+  // web app 参数，--patch 会被 web app 拒为 unknown option）
   const child = spawn(
     ELECTRON_NODE,
-    [cliBin, "--profile", "web", ...patchArgs, "--port", String(port)],
+    [cliBin, ...patchArgs, "--profile", "web", "--port", String(port)],
     {
       cwd: cfg.dataDir,
       stdio: ["ignore", "pipe", "pipe"],
