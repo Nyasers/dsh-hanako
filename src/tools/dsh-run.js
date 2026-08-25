@@ -823,9 +823,8 @@ async function doExecute(input, ctx) {
       : "");
   const cardBase = {
     route: `/card/op?opId=${encodeURIComponent(opId)}${locQuery}`,
-    title: `dsh ${wait ? "任务" : "运行中"}`,
+    title: `DSH ${wait ? "任务" : "运行中"}`,
     description: String(input.task ?? "").slice(0, 80),
-    aspectRatio: "16:1",
   };
 
   // 异步模式：注册 deferred（完成后宿主唤醒，结果后台送达）

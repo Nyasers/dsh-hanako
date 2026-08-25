@@ -2,16 +2,15 @@
    Copyright (c) 2026 Nyasers */
 /* dsh-runner 任务反馈卡片样式（host 主题变量，跨主题可用） */
 /* iframe body 整体背景（--tool-bg 宿主注入时生效，未定义回退透明）
-   flex column + max-height 600（border-box 含 padding）：内容短时 body 贴合、长时顶满 600，
-   摘要区 flex 收缩到剩余空间内部滚动（纯 CSS 按需拉长，body 总高锁 600） */
-/* body：保留默认 margin 8px（视觉呼吸感），max-height 584 + margin 16 = html 600（宿主上限） */
+   flex column、不再锁高：宿主 0.686.15 不再消费 ui.resize 高度上报，卡片初始高度
+   由宿主 aspect-ratio（number）决定，iframe 内按需滚动查看完整内容 */
+/* body：保留默认 margin 8px（视觉呼吸感），去掉 max-height（移除 600 钳制，内容完整展开） */
 body {
   background: var(--tool-bg, transparent);
   margin: 8px;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  max-height: 584px;
 }
 #dsh-root {
   flex: 0 1 auto;
@@ -168,7 +167,7 @@ body {
 .dsh-output.open {
   display: block;
 }
-/* 摘要/输出共用容器：flex 收缩项（min-height:0 + overflow 滚动，纯 CSS 按需拉长，body 锁 600）；运行中（.live）隐藏滚动条并固定滚底跟随最新输出，终态与完整输出恢复正常滚动 */
+/* 摘要/输出共用容器：min-height:0 + overflow 滚动（body 不再锁高，长内容在 iframe 内滚动查看）；运行中（.live）隐藏滚动条并固定滚底跟随最新输出，终态与完整输出恢复正常滚动 */
 .dsh-summary {
   flex: 0 1 auto;
   min-height: 0;

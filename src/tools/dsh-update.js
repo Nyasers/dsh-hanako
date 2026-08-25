@@ -204,8 +204,7 @@ async function doExecute(input, ctx) {
       card: {
         route: "/card/dep?taskId=" + encodeURIComponent(taskId),
         title: "DSH 升级",
-        description: "npm i @deepseek-ai/dsh（更新）",
-        aspectRatio: "16:1",
+        description: "npm i @deepseek-ai/dsh",
       },
     },
   };

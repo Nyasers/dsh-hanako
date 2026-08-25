@@ -246,7 +246,6 @@ async function doExecute(input, ctx) {
         route: "/card/dep?taskId=" + encodeURIComponent(taskId),
         title: "DSH 安装",
         description: "npm i @deepseek-ai/dsh",
-        aspectRatio: "16:1",
       },
     },
   };
