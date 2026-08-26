@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// dsh-hana-settings 前端 client 模块（v0.13.0 由 dsh-hana-default-model 改名升级；
-// UI 重排 v0.13.0：单一「DSHana 设置」分页 = 设置中心式布局）：
+// @dsh-hanako/settings 前端 client 模块（v0.13.0 由 default-model 插件改名升级并
+// UI 重排；v0.18.1 统一收敛 @dsh-hanako scope，版本检查改 dsh 侧直查）：
 // 设置面板「DSHana 设置」分页原生渲染——不再用 tapIndex DOM 注入，而是按 dsh client
 // 插件规范注册 settings.section slot（ledger 驱动导航：ui-settings-general 的
 // useSections 直接投影 ctx.slots.entries("settings.section")，注册即出现在设置面板
@@ -20,14 +20,14 @@
 //      provider → model → 思考强度（reasoning.efforts，无 reasoning 的模型不显示思考
 //      下拉）三级联动；当前默认回显（POST /api/hana-settings.read）；保存
 //      （POST /api/hana-settings.save）→ agentDefaultModel 服务写 settings.yaml。
-//   ② DSH 版本卡片：@deepseek-ai/dsh 版本检查与更新（v0.13.0 走宿主能力层桥接，单一
-//      事实源——Agent 工具 dsh_update / DSHana 标签页 / 本分页共用宿主侧
-//      checkDshUpdate / updateDsh）——挂载时自动调一次 POST /api/hana-settings.check-version
-//      （本地版本后端直读 dsh-pkg package.json 零延迟；远端版本经 update-request.json
-//      桥接请求宿主检查，结果写 check-result.json 读回；宿主检查未完成返回
-//      { state:'pending' } 由前端轮询），显示本地/最新版本与状态；「检查更新」手动刷新；
+//   ② DSH 版本卡片：@deepseek-ai/dsh 版本检查与更新（v0.18.1 起检查改 **dsh 侧直查**——
+//      后端 spawn 宿主 electron node + pnpm.cjs 执行 `pnpm view @deepseek-ai/dsh version`，
+//      官方源失败重试 npmmirror，不再经宿主桥接；更新仍写 update-request.json 由宿主
+//      5s 轮询执行）——挂载时自动调一次 POST /api/hana-settings.check-version
+//      （本地版本后端直读 dsh-pkg package.json 零延迟；远端版本后端 spawn 直查，慢时
+//      返回 pending 由前端轮询兜底），显示本地/最新版本与状态；「检查更新」手动刷新；
 //      「更新到最新」（仅 updateAvailable 时可用，两段式确认）→ POST
-//      /api/hana-settings.request-update 写更新请求文件，宿主侧 watch 到后自动
+//      /api/hana-settings.request-update 写更新请求文件，宿主侧 5s 轮询到后自动
 //      npm i latest + 重启 web host（web host 重启窗口连接失败视为仍在更新，
 //      继续轮询）；更新期间每 2s 轮询 POST /api/hana-settings.update-status
 //      （读 update-result.json）直到 done/error，轮询计时器卸载时清理。
@@ -41,7 +41,7 @@
 // （不在 ApiProxy 契约内），组件里直接 fetch。
 
 window.__ModuleLoader__.load({
-  id: "dsh-hana-settings",
+  id: "@dsh-hanako/settings",
   factory: (require) => {
     var module = { exports: {} };
     var exports = module.exports;
@@ -101,7 +101,7 @@ window.__ModuleLoader__.load({
       ".hs-status.hs-info{color:var(--dsw-alias-label-secondary,#5a5f66)}" +
       ".hs-status-line{white-space:pre-wrap;word-break:break-all}" +
       ".hs-current{margin-top:2px;padding-top:8px;border-top:1px solid var(--dsw-alias-border-l1,#f0f0f0);color:var(--dsw-alias-label-secondary,#5a5f66);font-size:12px;line-height:18px}";
-    const tagId = "dsh-hana-settings/HanaSettingsSection.css";
+    const tagId = "@dsh-hanako/settings/HanaSettingsSection.css";
     // JSON.stringify 自带引号（选择器属性值引号），外面不能再套引号（否则 style[data-plugin-css=""...""] 非法选择器）
     if (
       typeof document !== "undefined" &&
@@ -110,7 +110,7 @@ window.__ModuleLoader__.load({
       ) === null
     ) {
       const tag = document.createElement("style");
-      tag.dataset.plugin = "dsh-hana-settings";
+      tag.dataset.plugin = "@dsh-hanako/settings";
       tag.dataset.pluginCss = tagId;
       tag.textContent = CSS;
       document.head.appendChild(tag);
@@ -141,7 +141,7 @@ window.__ModuleLoader__.load({
       // ---- DSH 版本卡片 ----
       versionTitle: "DSH 版本",
       versionSub:
-        "@deepseek-ai/dsh 版本检查与更新（检查走宿主能力层，与 dsh_update 工具 / DSHana 标签页一致）",
+        "@deepseek-ai/dsh 版本检查与更新（检查 dsh 侧直查远端 registry，结果与 dsh_update 工具 / DSHana 标签页一致）",
       versionLocal: "本地版本",
       versionLatest: "最新版本",
       versionNone: "未安装",
@@ -182,7 +182,7 @@ window.__ModuleLoader__.load({
       // ---- DSH version card ----
       versionTitle: "DSH Version",
       versionSub:
-        "@deepseek-ai/dsh version check & update (host capability layer, same as dsh_update tool / DSHana tab)",
+        "@deepseek-ai/dsh version check & update (check queries the registry directly from dsh, same result as dsh_update tool / DSHana tab)",
       versionLocal: "Local version",
       versionLatest: "Latest version",
       versionNone: "not installed",
@@ -504,15 +504,18 @@ window.__ModuleLoader__.load({
     }
 
     // ---- DSH 版本卡片：@deepseek-ai/dsh 版本检查与更新（设置中心分组卡片二）----
-    // v0.13.0 桥接设计：远端版本检查走宿主能力层单一事实源——本分页 POST
-    // /api/hana-settings.check-version，后端写 update-request.json { state:'check-requested' }
-    // 桥接请求（宿主 ensureUpdateWatch → checkDshUpdate → 结果写 check-result.json），
-    // 后端短等后读回；本地版本后端直读 dsh-pkg package.json（零延迟，挂载即显示）。
-    // 返回 value 形状：{ localVersion, latestVersion?, updateAvailable?, error?, at? } 或
-    // { state:'pending', localVersion }（宿主检查尚未完成，前端轮询直至结果）。
+    // v0.18.1 起检查改 **dsh 侧直查**：本分页 POST /api/hana-settings.check-version，
+    // 后端 spawn 宿主 electronNode + pnpm.cjs 执行 `pnpm view @deepseek-ai/dsh version`
+    // （官方源失败重试 npmmirror，15s 超时）→ 返回 { localVersion, latestVersion,
+    // updateAvailable, error? }；本地版本后端直读 dsh-pkg package.json（零延迟，
+    // 挂载即显示）。不再写 update-request.json / 读 check-result.json（v0.18.1 起
+    // 废弃宿主桥接——resources.watch 链路不可靠曾致检查永不完成）。
+    // 返回 value 形状：{ localVersion, latestVersion?, updateAvailable?, error? } 或
+    // { state:'pending', localVersion }（后端 spawn 慢时前端轮询兜底——保留 pending
+    // 分支，applyCheck 语义不变）。
     // 挂载时自动检查一次：先拿到本地版本即时显示，pending 则每 1.5s 轮询
-    // check-version 直至结果（CHECK_POLL_MAX 次上限，防宿主桥接失效时无限轮询）。
-    // 「更新到最新」→ request-update（宿主 watch 到后 npm i latest + 重启 web host）→
+    // check-version 直至结果（CHECK_POLL_MAX 次上限，防 spawn 慢/异常时无限轮询）。
+    // 「更新到最新」→ request-update（宿主 5s 轮询到后 npm i latest + 重启 web host）→
     // 每 2s 轮询 update-status 直到 done/error；web host 重启窗口连接失败（fetch reject /
     // 非 ok 响应）视为仍在更新，连续失败超过 UPDATE_POLL_MAX_FAILURES 次才放弃。
     const CHECK_POLL_INTERVAL_MS = 1500;
@@ -869,7 +872,7 @@ window.__ModuleLoader__.load({
       const t = ctx.locale.bind(NS);
       ctx.effect(
         () => ctx.locale.register(NS, { zh, en }),
-        "dsh-hana-settings: dictionaries",
+        "@dsh-hanako/settings: dictionaries",
       );
       const connection = ctx.get("connection");
       const injected = () => ({ api: connection.api });

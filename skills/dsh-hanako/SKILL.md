@@ -11,11 +11,11 @@ description: "dsh-hanako 插件（把 DeepSeek Harness 接进 Hana 的进程外 
 
 config.json 由宿主设置界面生成、**不随包分发**；defaultCwd 初始为空。按序完成：
 
-**0. 先看现状**：配置在 <宿主插件数据目录>/dsh-hanako/config.json（Windows 常见 %USERPROFILE%\.hanako\plugin-data\dsh-hanako\config.json）。**全新安装**：插件初始化自动生成默认配置（ensureConfigJson：无 config.json 时按 manifest 默认值生成 `{ schemaVersion, global, agents, sessions }`，已存在则不动，原子写 + 失败静默），无需手动保存，装完即可在设置界面看到默认值。**无需配置 API Key / 模型 / Node 路径**：凭据由 dsh-hana-provider 插件直读宿主 `provider-catalog.json`，模型跟随宿主 `models.json`（dsh models 页设置默认）；web host 使用宿主 electron 进程自身的 Node 运行时（`process.execPath`，`ELECTRON_RUN_AS_NODE=1`），**无需用户单独安装 Node.js**。
+**0. 先看现状**：配置在 <宿主插件数据目录>/dsh-hanako/config.json（Windows 常见 %USERPROFILE%\.hanako\plugin-data\dsh-hanako\config.json）。**全新安装**：插件初始化自动生成默认配置（ensureConfigJson：无 config.json 时按 manifest 默认值生成 `{ schemaVersion, global, agents, sessions }`，已存在则不动，原子写 + 失败静默），无需手动保存，装完即可在设置界面看到默认值。**无需配置 API Key / 模型 / Node 路径**：凭据由 @dsh-hanako/provider 插件直读宿主 `provider-catalog.json`，模型跟随宿主 `models.json`（dsh models 页设置默认）；web host 使用宿主 electron 进程自身的 Node 运行时（`process.execPath`，`ELECTRON_RUN_AS_NODE=1`），**无需用户单独安装 Node.js**。
 
 **1. defaultCwd（建议）**：为空且未传 cwd 时报 `cwd 不能为空`；设为项目沙箱目录。
 
-**2. 其余项默认可用**：approvalTimeoutMs（30000）/ webPort（3080）/ callbackMode（summary）/ defaultTimeoutMs（1800000）。agentPreset / reasoningEffort 不需要配置：工具不显式传时用 dsh 默认（dsh Web UI 可调 agent 预设与思考强度）。任务模型不需要配置：默认用 dsh 默认模型（settings.yaml `agent-default-model`），可在 **dsh 设置页「DSHana 设置」分页 → 「默认模型」卡片**直接配置（Provider/模型/思考强度三级联动，选项 = dsh 全部可用 provider，保存即生效），`dsh_run` 工具参数 `provider`/`model`/`reasoningEffort` 可显式覆盖（显式时 selectModel，dsh 会把所选模型写回全局默认 settings.yaml——显式指定即成为新默认）。**DSH 版本**：同分页「DSH 版本」卡片可检查 `@deepseek-ai/dsh` 版本并一键更新（或 Agent 用 `dsh_update` 工具 / 标签页 deps 卡片「检查更新」「更新 DSH」，三处共用同一宿主能力层）。
+**2. 其余项默认可用**：approvalTimeoutMs（30000）/ webPort（3080）/ callbackMode（summary）/ defaultTimeoutMs（1800000）。agentPreset / reasoningEffort 不需要配置：工具不显式传时用 dsh 默认（dsh Web UI 可调 agent 预设与思考强度）。任务模型不需要配置：默认用 dsh 默认模型（settings.yaml `agent-default-model`），可在 **dsh 设置页「DSHana 设置」分页 → 「默认模型」卡片**直接配置（Provider/模型/思考强度三级联动，选项 = dsh 全部可用 provider，保存即生效），`dsh_run` 工具参数 `provider`/`model`/`reasoningEffort` 可显式覆盖（显式时 selectModel，dsh 会把所选模型写回全局默认 settings.yaml——显式指定即成为新默认）。**DSH 版本**：同分页「DSH 版本」卡片可检查 `@deepseek-ai/dsh` 版本并一键更新（检查 dsh 侧直查远端 registry，更新走宿主能力层；Agent 用 `dsh_update` 工具 / 标签页 deps 卡片「检查更新」「更新 DSH」同结果）。
 
 **3. 配置生效铁律（实时）**：「改完都要重启 Hana」不成立：t1 依赖/t2 进程状态直读 config.json/单例实时；t2 手动启动链路 resolveDshPkgDir → spawn，直写后无需重启；仅旧进程存活（g.web.ready=true）需先杀进程或重启。
 
@@ -81,16 +81,16 @@ $node = <本机 node.exe 绝对路径，如 C:\Program Files\nodejs\node.exe>
 | `GET /webui/check-update` | 版本检查（deps 卡片「检查更新」；pnpm view，官方源失败重试 npmmirror） |
 | `POST /webui/update-dsh` | 更新 DSH（deps 卡片「更新 DSH」；停 web host → pnpm add latest → 起 web host，**正在执行的任务中断**） |
 
-## DSH 检查与更新（v0.13.0）
+## DSH 检查与更新（v0.13.0；v0.18.1 设置页检查改 dsh 侧直查）
 
-`@deepseek-ai/dsh` 版本检查与更新收敛为**宿主能力层单一事实源**（tools/lib/ `checkDshUpdate` / `updateDsh` / `installDepsFromPlugin` / `verifyDepsSmoke`，经单例挂载），消费面共用同一套逻辑，结果一致：
+`@deepseek-ai/dsh` 版本检查与更新收敛为**宿主能力层单一事实源**（tools/lib/ `checkDshUpdate` / `updateDsh` / `installDepsFromPlugin` / `verifyDepsSmoke`，经单例挂载），Agent 工具与标签页共用同一套逻辑，结果一致；dsh 设置页「DSH 版本」卡片 v0.18.1 起**检查改 dsh 侧直查**（同款 `pnpm view`），更新仍走宿主能力层：
 
 1. **Agent 工具 `dsh_update`**：`action=check`（默认）查 `{ localVersion, latestVersion, updateAvailable, error? }`，只读不改；`action=update` 执行完整更新（停 web host → pnpm add @deepseek-ai/dsh latest → 起 web host），默认异步（后台执行 + **升级卡片**实时日志，完成后宿主唤醒带回结果），`wait=true` 同步等待；更新会重启 web host、正在执行的任务会中断，`update` 前确认无运行中任务；更新执行中重复调用返回状态不重复执行
 2. **DSHana 标签页 deps 卡片**（web host 未就绪时可见）：版本行显示「当前版本 / 最新版本 / 可更新状态」+「检查更新」「更新 DSH」按钮（更新前两段式确认）；更新中显示进度（update-result.json 状态），完成显示「更新完成 vX，请重启 DSHana 使完全生效」；更新/安装期间页面自动退到诊断页显示进度，完成后自动切回并刷新
-3. **dsh 设置页「DSHana 设置」分页 → 「DSH 版本」卡片**：本地版本直读 dsh-pkg package.json（挂载即显示），远端版本经桥接（update-request.json → 宿主检查 → check-result.json 读回）；「更新到最新」→ 两段式确认 → 宿主执行更新 → 每 2s 轮询 update-status 直到 done/error
+3. **dsh 设置页「DSHana 设置」分页 → 「DSH 版本」卡片**：本地版本直读 dsh-pkg package.json（挂载即显示），远端版本 **dsh 侧直查**（后端 spawn 宿主 electron node + pnpm.cjs 执行 `pnpm view @deepseek-ai/dsh version`，官方源失败重试 npmmirror，15s 超时；v0.18.1 起不再经宿主桥接——修复了宿主 resources.watch 桥接不可靠导致检查永不完成的问题）；「更新到最新」→ 两段式确认 → 写 update-request.json（宿主 5s 轮询感知）→ 宿主执行更新 → 每 2s 轮询 update-status 直到 done/error
 4. **Agent 工具 `dsh_install`**（依赖缺失/安装场景）：`action=install`（默认）pnpm add @deepseek-ai/dsh 到 dsh-pkg（registry 兜底 + 自动运行级重验 + autoStart 自动拉起 web host），默认异步 + **安装卡片**实时日志 + 完成回调，`wait=true` 同步；`action=verify` 只检测依赖完整性（运行级冒烟）；安装中（`g.depsInstalling`）重复调用返回状态不重复执行
 
-**并发与一致性**：检查 `g.checking` / 更新 `g.updating` / 安装 `g.depsInstalling` 进行中重复请求跳过（watch 触发层 + 能力层双重防护）；检查结果缓存 `g.checkResult`（5s 时间窗防 pnpm view 重复跑）；更新结果写 `<dataDir>/update-result.json { state: done|error, version?, error?, at }`（设置页/标签页轮询读）。
+**并发与一致性**：检查 `g.checking` / 更新 `g.updating` / 安装 `g.depsInstalling` 进行中重复请求跳过（更新轮询触发层 + 能力层双重防护）；检查结果缓存 `g.checkResult`（内存，5s 时间窗防 pnpm view 重复跑；不再写 check-result.json 桥接文件）；更新结果写 `<dataDir>/update-result.json { state: done|error, version?, error?, at }`（设置页/标签页轮询读）。
 
 **安装/升级卡片（v0.13.0）**：dsh_install / dsh_update 异步流程渲染 iframe 卡片（`/card/dep`，与任务卡片同构）——登记宿主单例 `g.depTasks`（taskId → kind/state/log/at/result），SSE `/ops/dep-stream`（首帧快照 + 每 1s npm 日志实时滚动，终态关闭）+ 兜底 `/ops/dep-status`；显示标题（DSH 安装 / DSH 升级）+ 状态徽标 + 日志实时滚动 + 完成结果（「已安装 vX，web host 已自动启动」/「更新完成 vX，请重启 DSHana 使完全生效」/ 错误信息）。
 

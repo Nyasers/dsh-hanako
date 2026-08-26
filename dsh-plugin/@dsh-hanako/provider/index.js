@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// dsh-hana-provider — 让 dsh 直接复用 Hana 宿主的 provider 配置并完全跟随（v0.9.3）。
+// @dsh-hanako/provider — 让 dsh 直接复用 Hana 宿主的 provider 配置并完全跟随（v0.9.3）。
 //
 // 语义：dsh 启动器 --patch 只负责加载本插件本体（config 仅有 dshPkgDir，
 // 供依赖解析）；provider 数据绝不经 patch 注入，一律由宿主侧组装后经 HTTP push 下发：
@@ -13,7 +13,7 @@
 //     （不读文件、不依赖 patch data），首个 routes 由宿主 web host 就绪后主动 push 填上
 //   · 跟随：宿主侧 ctx.resources.watch 感知两文件变化（bus 派发 resource.changed）→ 防抖
 //     push 最新 routes → handle.replace() 原子更新；routes 缺失/为空保留旧 snapshot 记日志
-//   · 诊断日志：经 dsh-hana-logger 统一日志服务（inject ['hanaLogger']）写入本次会话日志
+//   · 诊断日志：经 @dsh-hanako/logger 统一日志服务（inject ['hanaLogger']）写入本次会话日志
 //     文件（宿主 patch config 注入 {{LOG_PATH}}），refresh 成功/失败/收到刷新请求写入
 //     同一文件（行格式 [<HH:mm:ss.SSS>] [provider] <内容>，与宿主侧 appendLog 一致）；
 //     服务未就绪/写失败时静默跳过（日志失败不阻断）
@@ -44,14 +44,14 @@
 // （同 dsh-llm-pi-ai 姿势）——cordis 服务注入经 inject 声明生效，无声明则 apply 内
 // ctx.llm / ctx.webServer 抛 "cannot get property llm without inject"（被下方 try/catch
 // 吞掉 → 插件静默停用）。webServer 用于注册 /api/hana-provider.refresh 路由（宿主 push
-// 通知入口），经 ctx.inject(['webServer'], ...) 取用；logger 为 dsh-hana-logger 统一日志
-// 服务（诊断日志写入本次会话日志，参考 dsh-hana-settings 写法）。
+// 通知入口），经 ctx.inject(['webServer'], ...) 取用；logger 为 @dsh-hanako/logger 统一日志
+// 服务（诊断日志写入本次会话日志，参考 @dsh-hanako/settings 写法）。
 // 另注意：勿给模块加 default 导出——Entry 加载器提取 default 会丢具名导出（inject 失效）。
 //
 // 容错纪律：apply 全程 try/catch 不抛出——依赖缺失/配置缺失/解析失败只记日志，
 // 插件降级为空操作，不阻断 dsh 启动（边界要求）。
 
-export const name = "dsh-hana-provider";
+export const name = "@dsh-hanako/provider";
 export const inject = ["llm", "webServer", "hanaLogger"];
 
 import { readFileSync } from "node:fs";
@@ -60,7 +60,7 @@ import { pathToFileURL } from "node:url";
 
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300000;
 
-const NS = "dsh-hana-provider";
+const NS = "@dsh-hanako/provider";
 const DEP_SPECS = {
   piAi: "@earendil-works/pi-ai",
   piAiCompletions: "@earendil-works/pi-ai/api/openai-completions.lazy",
@@ -120,9 +120,15 @@ function resolveCondition(cond, pkgDir, star) {
 
 async function loadDeps(config) {
   const bases = [];
+  const home = process.env.DSH_HOME;
+  // profiles/node_modules 优先：dsh 的 junction farm 全量依赖视图（与 dsh 运行时
+  // 一致）。pnpm 严格结构下 dsh-pkg/node_modules 只链接直接声明的依赖，间接依赖
+  // （@earendil-works/pi-ai 等）不在顶层——npm 扁平时代是幽灵依赖碰巧可用，
+  // pnpm 下必须走 profiles 全量视图，否则依赖解析失败、插件降级空转（已挂载但
+  // 供应商不注册、宿主 push /api/hana-provider.refresh 404）。
+  if (home) bases.push(join(home, "profiles"));
   if (config && typeof config.dshPkgDir === "string" && config.dshPkgDir)
     bases.push(config.dshPkgDir);
-  const home = process.env.DSH_HOME;
   if (home) bases.push(join(dirname(home), "dsh-pkg"));
   const out = {};
   for (const [key, spec] of Object.entries(DEP_SPECS)) {
@@ -154,7 +160,7 @@ async function loadDeps(config) {
   return out;
 }
 
-// ---- 路由 HTTP 辅助（宿主 push 通知入口 /api/hana-provider.refresh 用，同 dsh-hana-settings）----
+// ---- 路由 HTTP 辅助（宿主 push 通知入口 /api/hana-provider.refresh 用，同 @dsh-hanako/settings）----
 function readJsonBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -207,7 +213,7 @@ export async function apply(ctx, config) {
     const deps = await loadDeps(config);
     if (!deps || deps.error) {
       ctx.logger.error(
-        `[dsh-hana-provider] 依赖加载失败，插件停用：${deps?.error?.message || deps?.error || "未知错误"}`,
+        `[@dsh-hanako/provider] 依赖加载失败，插件停用：${deps?.error?.message || deps?.error || "未知错误"}`,
       );
       return;
     }
@@ -232,7 +238,7 @@ export async function apply(ctx, config) {
       "openai-responses": () => deps.piAiResponses.openAIResponsesApi(),
       "anthropic-messages": () => deps.piAiAnthropic.anthropicMessagesApi(),
     };
-    // 诊断日志：经 dsh-hana-logger 统一日志服务（inject ['hanaLogger']）写入本次会话日志，
+    // 诊断日志：经 @dsh-hanako/logger 统一日志服务（inject ['hanaLogger']）写入本次会话日志，
     // 行格式 [<HH:mm:ss.SSS>] [provider] <内容>（与宿主侧 appendLog 一致）；
     // 服务未就绪/写失败静默（日志失败不阻断）
     let loggerSvc = null;
@@ -691,7 +697,7 @@ export async function apply(ctx, config) {
         const route = this.current().byId.get(provider);
         if (route === undefined)
           throw new LlmError(
-            `dsh-hana-provider 不持有 provider "${provider}"`,
+            `@dsh-hanako/provider 不持有 provider "${provider}"`,
             "NO_ADAPTER",
           );
         return route;
@@ -701,7 +707,7 @@ export async function apply(ctx, config) {
         const found = route.models.find((m) => m.id === model);
         if (found === undefined)
           throw new LlmError(
-            `dsh-hana-provider: provider "${provider}" 无模型 "${model}"`,
+            `@dsh-hanako/provider: provider "${provider}" 无模型 "${model}"`,
             "UNKNOWN_MODEL",
           );
         return found;
@@ -743,18 +749,18 @@ export async function apply(ctx, config) {
         const route = snapshot.byId.get(options.provider);
         if (route === undefined)
           throw new LlmError(
-            `dsh-hana-provider 不持有 provider "${options.provider}"`,
+            `@dsh-hanako/provider 不持有 provider "${options.provider}"`,
             "NO_ADAPTER",
           );
         const model = route.models.find((m) => m.id === options.model);
         if (model === undefined)
           throw new LlmError(
-            `dsh-hana-provider: provider "${options.provider}" 无模型 "${options.model}"`,
+            `@dsh-hanako/provider: provider "${options.provider}" 无模型 "${options.model}"`,
             "UNKNOWN_MODEL",
           );
         if (options.stop !== undefined)
           throw new LlmError(
-            "dsh-hana-provider 不支持 GenerateOptions.stop",
+            "@dsh-hanako/provider 不支持 GenerateOptions.stop",
             "UNSUPPORTED_OPTION",
           );
         const requested =
@@ -835,7 +841,7 @@ export async function apply(ctx, config) {
             }
           } finally {
             if (!exhausted) {
-              consumer.abort("dsh-hana-provider 流消费停止");
+              consumer.abort("@dsh-hanako/provider 流消费停止");
               try {
                 await iterator.return(undefined);
               } catch {
@@ -858,7 +864,7 @@ export async function apply(ctx, config) {
             });
           throw error;
         } finally {
-          consumer.abort("dsh-hana-provider 流消费停止");
+          consumer.abort("@dsh-hanako/provider 流消费停止");
           try {
             watchdog[Symbol.dispose]();
           } catch {
@@ -954,7 +960,7 @@ export async function apply(ctx, config) {
           : null;
       if (!routes || routes.length === 0) {
         ctx.logger.warn(
-          "[dsh-hana-provider] 收到空 routes（宿主持有 provider 缺失或未 push），保留旧 snapshot",
+          "[@dsh-hanako/provider] 收到空 routes（宿主持有 provider 缺失或未 push），保留旧 snapshot",
         );
         providerLog(`refresh 收到空 routes（${source}），保留旧 snapshot`);
         return;
@@ -968,7 +974,7 @@ export async function apply(ctx, config) {
         );
         const elapsed = Date.now() - t0;
         ctx.logger.info(
-          `[dsh-hana-provider] 已同步 ${snapshot.byId.size} 个 provider（routes ${routes.length} 条）`,
+          `[@dsh-hanako/provider] 已同步 ${snapshot.byId.size} 个 provider（routes ${routes.length} 条）`,
         );
         providerLog(
           `refresh 完成（${source}）：${snapshot.byId.size} 个 provider / ${modelCount} 个模型，耗时 ${elapsed}ms`,
@@ -976,7 +982,7 @@ export async function apply(ctx, config) {
       } catch (e) {
         // replace 抛错（如 DUPLICATE_ADAPTER：与用户已有 provider 同名）：保留旧注册
         ctx.logger.error(
-          `[dsh-hana-provider] 应用配置失败，保留旧 snapshot：${e?.message || e}`,
+          `[@dsh-hanako/provider] 应用配置失败，保留旧 snapshot：${e?.message || e}`,
         );
         providerLog(
           `refresh 应用失败（${source}），保留旧 snapshot：${e?.message || e}`,
@@ -987,7 +993,7 @@ export async function apply(ctx, config) {
     // POST /api/hana-provider.refresh 通知刷新；本插件不再自建 fs.watch）----
     // 路由经 webServer.register（kind: exact）注册——webserver 匹配 exact 优先于
     // apiproxy 的 /api 前缀，冲突只发生在同 (kind, path) 重复注册（插件重载未清理场景），
-    // 此时降级记日志不阻断。错误统一返回 { ok:false, error } 结构（同 dsh-hana-settings）。
+    // 此时降级记日志不阻断。错误统一返回 { ok:false, error } 结构（同 @dsh-hanako/settings）。
     ctx.inject(["webServer"], (httpCtx) => {
       httpCtx.effect(() => {
         const disposers = [];
@@ -1000,7 +1006,7 @@ export async function apply(ctx, config) {
             // 重复注册（插件重载未清理）：降级记日志，不阻断
             try {
               ctx.logger?.warn?.(
-                `[dsh-hana-provider] 路由 ${path} 注册失败：${e?.message || e}`,
+                `[@dsh-hanako/provider] 路由 ${path} 注册失败：${e?.message || e}`,
               );
             } catch {
               /* 日志失败不阻断 */
@@ -1049,19 +1055,19 @@ export async function apply(ctx, config) {
     // （optional 向后兼容，新代码不再写入）
     if (config && Array.isArray(config.routesJSON)) {
       ctx.logger.info(
-        `[dsh-hana-provider] 检测到旧版 config.routesJSON（${config.routesJSON.length} 条），用作初始 route 目录`,
+        `[@dsh-hanako/provider] 检测到旧版 config.routesJSON（${config.routesJSON.length} 条），用作初始 route 目录`,
       );
       refresh("旧版 routesJSON", { routes: config.routesJSON });
     } else {
       ctx.logger.info(
-        "[dsh-hana-provider] 启动 snapshot 为空，等待宿主 push 首批 route 目录",
+        "[@dsh-hanako/provider] 启动 snapshot 为空，等待宿主 push 首批 route 目录",
       );
       providerLog("启动 snapshot 为空，等待宿主 push 首批 route 目录");
     }
   } catch (e) {
     // 顶层兜底：apply 永不抛出（边界要求——不阻断 dsh 启动）
     ctx.logger.error(
-      `[dsh-hana-provider] 插件初始化失败，已降级为空操作：${e?.message || e}`,
+      `[@dsh-hanako/provider] 插件初始化失败，已降级为空操作：${e?.message || e}`,
     );
   }
 }

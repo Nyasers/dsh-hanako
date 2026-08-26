@@ -10,7 +10,7 @@
 
 3. **验证**：装完让 Agent 跑一次 `dsh_run` 最小试任务验证，卡片不报 web host 错误即安装成功。
 
-**无需配置 API Key / 模型**：dsh 凭据由 dsh-hana-provider 插件直读 Hana 宿主 `provider-catalog.json`，模型跟随宿主 `models.json`。任务模型默认 = dsh 默认模型（`settings.yaml` 的 `agent-default-model`），可在 **dsh 设置页「DSHana 设置」分页**直接配置（页头下方「默认模型」卡片：Provider/模型/思考强度三级联动，保存即生效，见下文）；同分页的 **「DSH 版本」卡片**提供 `@deepseek-ai/dsh` 版本检查与一键更新（检查/更新走宿主能力层，Agent 工具 `dsh_update` 也可用）。`dsh_run` 工具参数 `provider` / `model` / `reasoningEffort` 可显式覆盖。
+**无需配置 API Key / 模型**：dsh 凭据由 @dsh-hanako/provider 插件直读 Hana 宿主 `provider-catalog.json`，模型跟随宿主 `models.json`。任务模型默认 = dsh 默认模型（`settings.yaml` 的 `agent-default-model`），可在 **dsh 设置页「DSHana 设置」分页**直接配置（页头下方「默认模型」卡片：Provider/模型/思考强度三级联动，保存即生效，见下文）；同分页的 **「DSH 版本」卡片**提供 `@deepseek-ai/dsh` 版本检查与一键更新（检查 dsh 侧直查远端 registry，更新走宿主能力层；Agent 工具 `dsh_update` 也可用）。`dsh_run` 工具参数 `provider` / `model` / `reasoningEffort` 可显式覆盖。
 
 安装遇到问题，把报错丢给 Agent 即可（技能里有完整排错表）。
 

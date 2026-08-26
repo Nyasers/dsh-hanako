@@ -4,7 +4,7 @@
 // src/index.js — dsh-hanako 生命周期 + bundle 收敛入口（单 bundle 形态）
 // 四件事：
 //  1. onload 最前初始化统一日志（插件会话边界：时间戳会话文件，旧日志 zstd 压缩保留；挂单例 logPath/appendLog，
-//     dsh-run.js 与 dsh-hana-provider 复用同一日志文件）
+//     dsh-run.js 与 @dsh-hanako/provider 复用同一日志文件）
 //  2. onload 时把插件实例 ctx 的 bus / resources / network 存进 globalThis 单例
 //     （bus：deferred 唤醒兜底来源，工具执行 ctx 的 bus 宿主按调用注入，但 dev
 //     invoke / 特殊路径可能缺失，双兜底；resources/network：dsh-run.js 宿主侧

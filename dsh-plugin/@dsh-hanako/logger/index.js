@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// dsh-hana-logger — DSHana 统一日志服务（v0.10.8）。
+// @dsh-hanako/logger — DSHana 统一日志服务（v0.10.8）。
 //
 // 语义：theme / provider / settings 三个内嵌 cordis 插件原本各自内联一份几乎相同的
 // 日志辅助函数（appendFileSync + 时间戳 + [src] 前缀），本插件收敛为单一实现——经 cordis
@@ -20,7 +20,7 @@
 
 import { appendFileSync } from "node:fs";
 
-export const name = "dsh-hana-logger";
+export const name = "@dsh-hanako/logger";
 export const provide = ["hanaLogger"];
 
 export function apply(ctx, config) {

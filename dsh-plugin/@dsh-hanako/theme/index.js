@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// dsh-hana-theme — 把 Hana 宿主主题「全量配色」注入 dsh Web UI（v0.8.1）。
+// @dsh-hanako/theme — 把 Hana 宿主主题「全量配色」注入 dsh Web UI（v0.8.1）。
 //
 // 语义：嵌入场景（DSHana 标签页）下 dsh 始终使用 Hana 配色——
 //   明暗：经壳页面 color-scheme 传导（dsh preference=system 时解析宿主明暗）
@@ -25,9 +25,9 @@
 // 语义色、toast/tooltip 深色浮层、工具栏半透明、反白文字/边框、骨架屏）。
 //
 // 依赖注入：webServer 服务（host 半部），与 dsh-client-ui-theme 同姿势；统一日志经
-// dsh-hana-logger 服务（inject ['hanaLogger']）写入本次会话日志（行格式 [theme]）。
+// @dsh-hanako/logger 服务（inject ['hanaLogger']）写入本次会话日志（行格式 [theme]）。
 
-export const name = "dsh-hana-theme";
+export const name = "@dsh-hanako/theme";
 export const inject = ["hanaLogger"];
 
 // 默认主题 fallback（Hana 默认 new-warm-paper；仅桥不可用时兜底）
@@ -144,14 +144,14 @@ function tokenCss(v) {
 }
 
 // 静态 fallback 写 body 层（压 presenter inline）；脚本启动即移除，仅无脚本时兜底
-const STATIC = `<style id="dsh-hana-theme">
+const STATIC = `<style id="@dsh-hanako/theme">
 body{${tokenCss(DEFAULT_THEME)}}
 </style>`;
 
 // 动态脚本：宿主声明（壳桥 vars）直接应用 + preference 边界。自包含。
-const BRIDGE = `<script id="dsh-hana-theme-bridge">
+const BRIDGE = `<script id="@dsh-hanako/theme-bridge">
 (function () {
-  var staticEl = document.getElementById("dsh-hana-theme");
+  var staticEl = document.getElementById("@dsh-hanako/theme");
   if (staticEl && staticEl.remove) staticEl.remove();
   var cur = null;
   var pref = null;
@@ -165,9 +165,9 @@ const BRIDGE = `<script id="dsh-hana-theme-bridge">
     return c;
   }
   function applyOrRemove() {
-    var st = document.getElementById("dsh-hana-theme-dyn");
+    var st = document.getElementById("@dsh-hanako/theme-dyn");
     if (pref === "system" && cur) {
-      if (!st) { st = document.createElement("style"); st.id = "dsh-hana-theme-dyn"; document.head.appendChild(st); }
+      if (!st) { st = document.createElement("style"); st.id = "@dsh-hanako/theme-dyn"; document.head.appendChild(st); }
       st.textContent = "body{" + cssOf(cur) + "}";
     } else if (st) {
       st.remove();
@@ -255,7 +255,7 @@ export function apply(ctx, config) {
     httpCtx.effect(() => {
       try {
         httpCtx.webServer.tapIndex((html) => {
-          if (html.includes('id="dsh-hana-theme"')) return html;
+          if (html.includes('id="@dsh-hanako/theme"')) return html;
           return html.replace("</head>", STATIC + BRIDGE + "</head>");
         });
         httpCtx.hanaLogger.log("theme", "主题注入 tapIndex 已注册");
@@ -263,7 +263,7 @@ export function apply(ctx, config) {
         httpCtx.hanaLogger.log("theme", `主题注入注册失败：${e?.message || e}`);
         try {
           ctx.logger?.warn?.(
-            `[dsh-hana-theme] tapIndex 注册失败：${e?.message || e}`,
+            `[@dsh-hanako/theme] tapIndex 注册失败：${e?.message || e}`,
           );
         } catch {
           /* 忽略 */
