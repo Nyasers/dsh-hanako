@@ -37,7 +37,7 @@ DSHana 标签内 dsh 主题与宿主 Hana 联动：
 3. **覆盖范围**：72 个 `--dsw-alias-*` + `--dsw-specific-*` token（bg 层次/遮罩/文字/brand/button/border/interactive/markdown/state/组件专用/滚动条），功能性颜色保留原生（照片查看器黑底、danger·warn 语义色、按钮反白文字、toast·tooltip 深色浮层、工具栏半透明、骨架屏、反白边框）
 4. **分发**：cordis 插件经 dsh-host-webserver `tapIndex` 注入 index 响应；插件本体在安装目录 `dsh-plugin/dsh-hana-theme/`（包名 `dsh-hana-theme` 注册，dsh-run.js 启动前在 `$DSH_HOME/profiles/node_modules` 建 junction 指向安装目录，与四内嵌插件（logger/theme/provider/settings）统一机制）
 
-**生效时机**：用户切 dsh 偏好或宿主切 Hana 主题后，**重开 DSHana 标签页生效**（主题 CSS 只在打开标签页时拉取一次；重开即拉最新主题，宿主新增/修改主题零适配）。
+**生效时机**：宿主切 Hana 主题后，壳页接宿主 `hana.theme.changed` 广播**实时跟随**，无需重开标签页（webui-shell 主题桥按新 cssUrl 换 link 重读变量，宿主新增/修改主题零适配）。用户切 dsh 偏好（`system`/`light`/`dark`）不触发宿主广播，仍在 dsh 侧处理，**重开标签页生效**。
 
 ### DSHana 设置分页（v0.9.5 默认模型 → v0.13.0 改名升级）
 
@@ -140,7 +140,7 @@ dsh 的 `/api/events.mux` **要求 WebSocket 升级**：GET 返回 `426 Upgrade 
 ## 已知限制
 
 - **bash 工具在 Windows 上可能 `E_ACCESSDENIED`**（dsh-bash-sandbox 创建 bash 服务实例失败，属 dsh 沙箱环境限制，非本插件问题）。文件系统工具（write/read/edit）在 workspace-write 沙箱下工作正常，Windows 上优先用文件系统工具
-- **主题跟随**：DSHana 标签内，dsh 偏好 `system`（默认）→ 跟随 Hana 当前主题（明暗 + 配色）；`light`/`dark` → dsh 内置原生配色。用户切 dsh 偏好或宿主切 Hana 主题后，**重开标签页生效**（主题 CSS 打开时拉取一次）
+- **主题跟随**：DSHana 标签内，dsh 偏好 `system`（默认）→ 跟随 Hana 当前主题（明暗 + 配色）；`light`/`dark` → dsh 内置原生配色。宿主切 Hana 主题后壳页接 `hana.theme.changed` 广播**实时跟随**（无需重开标签页）；用户切 dsh 偏好仍**重开标签页生效**（主题 CSS 打开时拉取一次）
 - 越界权限请求默认走审批自动化：插件捕获 approval/requested → deferred 通知 Agent → `dsh_approve` 应答；无人应答超时自动拒绝，兜底 dsh Web UI 人工审批
 - **同步模式（wait=true）无审批通知**：同步调用时 Agent 在等结果，审批挂起只能靠 dsh Web UI 人工处理（或超时）。长任务建议用异步模式
 - 默认每个任务新建独立 session；传 `sessionId` 可复用已有会话（resume，跨任务继承上下文）

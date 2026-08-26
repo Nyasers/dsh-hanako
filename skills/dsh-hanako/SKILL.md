@@ -120,7 +120,7 @@ dsh 请求越界权限时任务挂起，插件经 deferred 发 dsh-approval 通�
 
 ## 已知限制
 
-- 主题跟随：system 跟随宿主，light/dark 原生；切偏好/主题后重开标签页生效
+- 主题跟随：system 跟随宿主，light/dark 原生；宿主切 Hana 主题后壳页接 `hana.theme.changed` 广播**实时跟随**（无需重开），切 dsh 偏好仍**重开标签页生效**
 - bash 在 Windows 可能 E_ACCESSDENIED（dsh 沙箱限制）；文件工具正常，Windows 优先用
 - wait=true 同步模式无审批通知（只能 Web UI 或超时）；长任务建议异步
 - 越界权限默认走审批：deferred 通知 → dsh_approve 应答；30s 超时自动拒绝
