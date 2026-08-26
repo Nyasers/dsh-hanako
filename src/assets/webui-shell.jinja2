@@ -734,8 +734,68 @@
       var msg = { dshHanaTheme: readThemeVars() };
       try { dst.postMessage(msg, "*"); } catch (err) { /* 目标不可达忽略 */ }
     }
+    // —— 宿主主题实时跟随（feat/theme-live）——
+    // 宿主在 iframe 握手 ready 后，用进程级 MutationObserver 盯根节点 data-theme 与
+    // 样式表，主题一变即向插件 iframe 发 hana.theme.changed 协议事件（payload 含
+    // { theme, cssUrl }）。此前壳页只在挂载时读一次主题快照，宿主切主题后壳页不
+    // 感知、仍推旧快照，需重开标签页才生效。此分支收到实时通知后：按新 cssUrl 更新
+    // 自身主题 <link>（让 getComputedStyle 读到新变量）→ 经现有 readThemeVars() 重读
+    // → sendThemeTo(frame.contentWindow) 重推内层 dsh iframe（dsh-hana-theme 幂等，
+    // 收到新 vars 即重建样式）。与下方 1.5s 定时重推 / dshHanaThemeRequest 应答并存，
+    // 互不冲突（后者留作 fallback）。
+    function hanaThemeLink() {
+      // 精确锚定宿主 hana-css（href 固定带 /theme.css），避免误换 head 里其它样式表。
+      var links = document.head.querySelectorAll('link[rel="stylesheet"]');
+      for (var i = 0; i < links.length; i++) {
+        if (links[i].href && links[i].href.indexOf("/theme.css") !== -1) return links[i];
+      }
+      return null;
+    }
+    function pushThemeNow() {
+      var cw = frame && frame.contentWindow;
+      if (cw) sendThemeTo(cw);
+    }
+    function applyHostThemeChange(m) {
+      var p = (m && m.payload && typeof m.payload === "object") ? m.payload : (m || {});
+      var theme = p.theme || p.themeId || "";
+      var cssUrl = p.cssUrl || "";
+      // 更新壳页自身主题标记与 color-scheme：data-hana-theme 反映实时主题，color-scheme
+      // 让壳页诊断区与跨源 dsh iframe 继承的 prefers-color-scheme 跟随宿主明暗。
+      if (theme) {
+        document.body.setAttribute("data-hana-theme", theme);
+        var csMeta = document.querySelector('meta[name="color-scheme"]');
+        if (csMeta) csMeta.setAttribute("content", /midnight|dark/i.test(theme) ? "dark" : "light");
+      }
+      if (!cssUrl) { pushThemeNow(); return; }
+      // 按新 cssUrl 更新主题 <link>：宿主挂载时已注入 hana-css link 则换 href，否则
+      // 补建一个（宿主未传 hana-css 的兜底）。需等新样式表加载完再读 getComputedStyle，
+      // 否则读到的还是旧变量。
+      var link = hanaThemeLink();
+      var done = false;
+      function settle() { if (done) return; done = true; pushThemeNow(); }
+      if (!link) {
+        link = document.createElement("link");
+        link.rel = "stylesheet";
+        link.onload = settle;
+        link.onerror = settle;
+        link.href = cssUrl;
+        document.head.appendChild(link);
+      } else {
+        link.onload = settle;
+        link.onerror = settle;
+        if (link.href !== cssUrl) link.href = cssUrl;
+      }
+      // 兜底：跨源/缓存样式表 onload 可能不触发，300ms 后无论如何重推一次。
+      setTimeout(settle, 300);
+    }
     window.addEventListener("message", function (e) {
-      if (e.data && e.data.dshHanaThemeRequest) { sendThemeTo(e.source); }
+      var m = e.data;
+      if (m && m.dshHanaThemeRequest) { sendThemeTo(e.source); return; }
+      // 宿主实时主题变更（hana.plugin.ui 协议或事件名 hana.theme.changed，源自宿主父窗口）。
+      if (m && (m.type === "hana.theme.changed" || m.event === "hana.theme.changed")
+          && e.source === window.parent) {
+        applyHostThemeChange(m);
+      }
     });
     var activePushTimer = null;
     function startThemePush() {
