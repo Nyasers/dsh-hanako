@@ -1,10 +1,10 @@
 {
-  "name": "dsh-hana-provider",
+  "name": "@dsh-hanako/provider",
   "version": "0.14.0",
   "private": true,
   "type": "module",
   "main": "index.js",
   "cordis": {
-    "name": "dsh-hana-provider"
+    "name": "@dsh-hanako/provider"
   }
 }

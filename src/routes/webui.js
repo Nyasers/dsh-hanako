@@ -99,7 +99,7 @@ function buildShell({
 }) {
   // dsh-frame 保持裸嵌（曾尝试显式声明 sandbox/allow 绕过宿主沙箱，实测跨源继承链
   // 下内层声明无法生效，属无效方案已回滚，见 CHANGELOG）。
-  // 剪贴板问题的正规解法是 dsh-hana-clipboard 插件（tapIndex 注入桥 → 宿主 capability）
+  // 剪贴板问题的正规解法是 @dsh-hanako/clipboard 插件（tapIndex 注入桥 → 宿主 capability）
   // + 下方壳页面桥（hostRequest + __dshCopy 监听）。
   const iframe = ready
     ? `<iframe id="dsh-frame" src="http://127.0.0.1:${port}/"></iframe>`
@@ -252,7 +252,8 @@ export default function registerWebuiRoutes(app, ctx) {
   // GET 只读）：检查中（g.checking）→ {ok:true,running:true}；否则 await
   // g.checkDshUpdate(cfg)（npm view ≤~15s，官方源失败重试 npmmirror）→
   // {ok:true, localVersion, latestVersion, updateAvailable, error?}。结果缓存进
-  // g.checkResult 并写 check-result.json，前端随后经 health 读取诊断刷新 deps 卡片。
+  // g.checkResult（内存，不再写 check-result.json——v0.18.1 起设置页检查改 dsh 侧
+  // 直查），前端随后经 health 读取诊断刷新 deps 卡片。
   // 单例缺失/无函数/异常一律容错回 {ok:false}，本路由不抛异常。
   app.get("/webui/check-update", async (c) => {
     const g = globalThis.__dshHanako;

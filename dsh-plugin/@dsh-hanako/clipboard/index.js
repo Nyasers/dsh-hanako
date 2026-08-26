@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// dsh-hana-clipboard — dsh Web UI 剪贴板桥（v0.13.3）。
+// @dsh-hanako/clipboard — dsh Web UI 剪贴板桥（v0.13.3）。
 //
 // 语义：嵌入场景（DSHana 标签页）下，dsh 页面内 navigator.clipboard.writeText 会被
 // 宿主插件 iframe 的 Permissions-Policy 继承链拦截（宿主插件 iframe 与宿主主窗口
@@ -12,7 +12,7 @@
 // 写剪贴板 → 宿主主窗口上下文执行 navigator.clipboard，不受插件 iframe 权限链限制。
 //
 // 机制：
-//   1) tapIndex 向每个 index 响应注入 <script id="dsh-hana-clipboard-bridge">
+//   1) tapIndex 向每个 index 响应注入 <script id="@dsh-hanako/clipboard-bridge">
 //   2) 桥脚本仅嵌入场景启用（window.parent !== window）；顶层直接浏览 dsh UI 时
 //      clipboard 原生可用（self policy），桥保持静默（零行为差异）
 //   3) 覆盖 navigator.clipboard.writeText：先试原生（宿主未来放宽 iframe 权限后
@@ -28,9 +28,9 @@
 // ui.hostCapabilities 声明 clipboard.writeText。缺壳页面桥时桥消息无人响应 →
 // 2.5s 超时 reject → dsh UI 显示复制失败（不静默假装成功）。
 
-export const name = "dsh-hana-clipboard";
+export const name = "@dsh-hanako/clipboard";
 
-const BRIDGE = `<script id="dsh-hana-clipboard-bridge">
+const BRIDGE = `<script id="@dsh-hanako/clipboard-bridge">
 (function () {
   var isEmbedded = (function () {
     try { return window.parent !== window; } catch (e) { return false; }
@@ -68,11 +68,11 @@ export function apply(ctx) {
     httpCtx.effect(() => {
       try {
         httpCtx.webServer.tapIndex((html) => {
-          if (html.includes('id="dsh-hana-clipboard"')) return html;
+          if (html.includes('id="@dsh-hanako/clipboard"')) return html;
           return html.replace("</head>", BRIDGE + "</head>");
         });
       } catch (e) {
-        try { ctx.logger?.warn?.(`[dsh-hana-clipboard] tapIndex 注册失败：${e?.message || e}`); } catch { /* 忽略 */ }
+        try { ctx.logger?.warn?.(`[@dsh-hanako/clipboard] tapIndex 注册失败：${e?.message || e}`); } catch { /* 忽略 */ }
       }
     });
   });

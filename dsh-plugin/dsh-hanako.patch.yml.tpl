@@ -3,24 +3,24 @@
     path: ':memory:'
     openAt: first-search
 - insert:
-    - id: dsh-hana-logger
-      name: 'dsh-hana-logger'
+    - id: '@dsh-hanako/logger'
+      name: '@dsh-hanako/logger'
       config:
         logPath: '{{LOG_PATH}}'
 - insert:
-    - id: dsh-hana-clipboard
-      name: 'dsh-hana-clipboard'
+    - id: '@dsh-hanako/clipboard'
+      name: '@dsh-hanako/clipboard'
 - insert:
-    - id: dsh-hana-theme
-      name: 'dsh-hana-theme'
+    - id: '@dsh-hanako/theme'
+      name: '@dsh-hanako/theme'
 - insert:
-    - id: dsh-hana-provider
-      name: 'dsh-hana-provider'
+    - id: '@dsh-hanako/provider'
+      name: '@dsh-hanako/provider'
       config:
         dshPkgDir: '{{DSH_PKG_DIR}}'
 - insert:
-    - id: dsh-hana-settings
-      name: 'dsh-hana-settings'
+    - id: '@dsh-hanako/settings'
+      name: '@dsh-hanako/settings'
       config:
         dshPkgDir: '{{DSH_PKG_DIR}}'
         npmCliPath: '{{NPM_CLI_PATH}}'

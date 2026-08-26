@@ -8,13 +8,14 @@
 // （readDshInstalledVersion）+ semver 比较（compareSemver）；状态经 lib/state.js
 // getSingleton 访问（g.checking / g.checkResult / g.checkAt）。
 // 消费方：dsh-run.js（挂单例 g.checkDshUpdate）、tools/dsh-update.js、routes/webui.js
-// （/webui/check-update）、dsh 设置页桥接（ensureUpdateWatch → 本函数）。
+// （/webui/check-update）。dsh 设置页「DSH 版本」卡片 v0.18.1 起由 dsh 侧
+// @dsh-hanako/settings 内嵌直查远端（同款 spawn pnpm view），不再经本函数桥接。
 //
-// 容错纪律：远端版本查询全败只置 error 字段不抛（调用方按需降级）；写 check-result.json
-// 失败只 warn 不阻断。注释风格保持宿主侧（中文/双引号/分号）。
+// 容错纪律：远端版本查询全败只置 error 字段不抛（调用方按需降级）；结果只缓存
+// g.checkResult（内存，不再写 check-result.json 桥接文件——v0.18.1 起设置页检查
+// 改 dsh 侧直查，无跨进程读回需求）。注释风格保持宿主侧（中文/双引号/分号）。
 
 import { spawn } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getSingleton, PLUGIN_ROOT, ELECTRON_NODE } from "./state.js";
 import { readDshInstalledVersion, compareSemver } from "./install.js";
@@ -82,8 +83,9 @@ function npmViewLatest() {
 
 // ---- 检查 DSH 更新（能力层）：本地版本 + 远端版本 → { localVersion, latestVersion,
 // updateAvailable, error? }。并发防护：g.checking 进行中返回上次结果 + running 标志。
-// 结果写 <dataDir>/check-result.json（桥接文件，dsh 设置页 check-version 路由读它；
-// 附带 at 时间戳供新鲜度比较）。失败（npm view 全败）只置 error 字段不抛。----
+// 结果缓存 g.checkResult / g.checkAt（内存，供 dsh_update 工具与 /webui/check-update
+// 直读返回值；不再写 check-result.json——v0.18.1 起设置页检查改 dsh 侧直查）。
+// 失败（npm view 全败）只置 error 字段不抛。----
 export async function checkDshUpdate(cfg) {
   const g = getSingleton();
   if (g.checking) {
@@ -134,19 +136,6 @@ export async function checkDshUpdate(cfg) {
     );
     g.checkResult = result;
     g.checkAt = Date.now();
-    // 写桥接结果文件（dsh 设置页 check-version 路由读；at = 结果时间戳供新鲜度比较）
-    try {
-      mkdirSync(dataDir, { recursive: true });
-      writeFileSync(
-        join(dataDir, "check-result.json"),
-        JSON.stringify({ ...result, at: new Date().toISOString() }),
-        "utf8",
-      );
-    } catch (e) {
-      console.warn(
-        `[dsh-run] check-result.json 写入失败（${e?.message || e}）`,
-      );
-    }
     console.log(
       `[dsh-run] 版本检查：本地 ${localVersion || "未安装"} / 远端 ${latestVersion || "查询失败"}${updateAvailable ? "（可更新）" : ""}`,
     );

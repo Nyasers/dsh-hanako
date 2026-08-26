@@ -1,5 +1,5 @@
 {
-  "name": "dsh-hana-settings",
+  "name": "@dsh-hanako/settings",
   "version": "0.13.0",
   "private": true,
   "type": "module",
@@ -20,6 +20,6 @@
     }
   },
   "cordis": {
-    "name": "dsh-hana-settings"
+    "name": "@dsh-hanako/settings"
   }
 }
