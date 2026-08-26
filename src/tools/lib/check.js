@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Nyasers
 //
 // tools/lib/check.js — DSH 版本检查共用模块（lib 提取）
-// 从 tools/dsh-run.js 剥离：npmViewLatest（spawn npm view 查远端版本）+ checkDshUpdate
+// 从 tools/dsh-run.js 剥离：npmViewLatest（spawn pnpm view 查远端版本）+ checkDshUpdate
 // （本地版本 + 远端版本 → { localVersion, latestVersion, updateAvailable, error? }）。
 // 依赖 lib/install.js 的 verifyDepsSmoke 缓存（g.depsSmoke）+ 本地版本直读
 // （readDshInstalledVersion）+ semver 比较（compareSemver）；状态经 lib/state.js
@@ -10,7 +10,7 @@
 // 消费方：dsh-run.js（挂单例 g.checkDshUpdate）、tools/dsh-update.js、routes/webui.js
 // （/webui/check-update）、dsh 设置页桥接（ensureUpdateWatch → 本函数）。
 //
-// 容错纪律：npm view 全败只置 error 字段不抛（调用方按需降级）；写 check-result.json
+// 容错纪律：远端版本查询全败只置 error 字段不抛（调用方按需降级）；写 check-result.json
 // 失败只 warn 不阻断。注释风格保持宿主侧（中文/双引号/分号）。
 
 import { spawn } from "node:child_process";
@@ -19,18 +19,18 @@ import { join } from "node:path";
 import { getSingleton, PLUGIN_ROOT, ELECTRON_NODE } from "./state.js";
 import { readDshInstalledVersion, compareSemver } from "./install.js";
 
-// spawn npm view @deepseek-ai/dsh version（15s 超时 kill；官方源失败重试一次 npmmirror；
-// 仍失败 → { version:null, error }）。npm-cli.js 来自插件安装目录 node_modules/npm
+// spawn pnpm view @deepseek-ai/dsh version（15s 超时 kill；官方源失败重试一次 npmmirror；
+// 仍失败 → { version:null, error }）。pnpm.cjs 来自插件安装目录 node_modules/pnpm
 // （与 installDepsFromPlugin 同一来源）；spawn 目标 = 宿主 electron node。
 function npmViewLatest() {
-  const npmCli = join(PLUGIN_ROOT, "node_modules", "npm", "bin", "npm-cli.js");
+  const pnpmCli = join(PLUGIN_ROOT, "node_modules", "pnpm", "bin", "pnpm.cjs");
   const run = (registryArgs) => {
     return new Promise((resolve) => {
       let child = null;
       try {
         child = spawn(
           ELECTRON_NODE,
-          [npmCli, "view", "@deepseek-ai/dsh", "version", ...registryArgs],
+          [pnpmCli, "view", "@deepseek-ai/dsh", "version", ...registryArgs],
           { stdio: ["ignore", "pipe", "pipe"], windowsHide: true },
         );
       } catch (e) {

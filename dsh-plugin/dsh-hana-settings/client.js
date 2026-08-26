@@ -26,7 +26,7 @@
 //      （本地版本后端直读 dsh-pkg package.json 零延迟；远端版本经 update-request.json
 //      桥接请求宿主检查，结果写 check-result.json 读回；宿主检查未完成返回
 //      { state:'pending' } 由前端轮询），显示本地/最新版本与状态；「检查更新」手动刷新；
-//      「更新到最新」（仅 updateAvailable 时可用，点击 confirm 提示）→ POST
+//      「更新到最新」（仅 updateAvailable 时可用，两段式确认）→ POST
 //      /api/hana-settings.request-update 写更新请求文件，宿主侧 watch 到后自动
 //      npm i latest + 重启 web host（web host 重启窗口连接失败视为仍在更新，
 //      继续轮询）；更新期间每 2s 轮询 POST /api/hana-settings.update-status
@@ -154,6 +154,7 @@ window.__ModuleLoader__.load({
       localMissing: "本地未安装 dsh（依赖缺失，请先在 DSHana 标签页安装）",
       update: "更新到最新",
       updateConfirm: "更新将重启 DSHana，正在执行的任务会中断，确定继续？",
+      updateConfirmShort: "再次点击确认更新",
       updatingMsg: "更新中…（将重启 DSHana，正在执行的任务会中断）",
       updateDone: "更新完成 v",
       restartNote: "，请重启 DSHana 使完全生效",
@@ -196,6 +197,7 @@ window.__ModuleLoader__.load({
       update: "Update to latest",
       updateConfirm:
         "Updating will restart DSHana and interrupt running tasks. Continue?",
+      updateConfirmShort: "Click again to confirm",
       updatingMsg:
         "Updating… (DSHana will restart, running tasks will be interrupted)",
       updateDone: "Update complete v",
@@ -524,6 +526,8 @@ window.__ModuleLoader__.load({
       const { t } = props;
       const [checking, setChecking] = react.useState(false);
       const [updating, setUpdating] = react.useState(false);
+      const [armUpdate, setArmUpdate] = react.useState(false);
+      const armTimerRef = react.useRef(null);
       const [localVersion, setLocalVersion] = react.useState(null);
       const [latestVersion, setLatestVersion] = react.useState(null);
       const [updateAvailable, setUpdateAvailable] = react.useState(false);
@@ -644,7 +648,16 @@ window.__ModuleLoader__.load({
 
       const onUpdate = () => {
         if (updating || !updateAvailable) return;
-        if (!window.confirm(t("updateConfirm"))) return;
+        if (!armUpdate) {
+          // 两段式确认：宿主沙箱 iframe 无 allow-modals，window.confirm 被浏览器忽略
+          // （Ignored call to 'confirm()'），改二次点击确认；5s 无操作自动复位
+          setArmUpdate(true);
+          clearTimeout(armTimerRef.current);
+          armTimerRef.current = setTimeout(() => setArmUpdate(false), 5000);
+          return;
+        }
+        clearTimeout(armTimerRef.current);
+        setArmUpdate(false);
         setUpdating(true);
         setStatusBoth(t("updatingMsg"), "info");
         fetch("/api/hana-settings.request-update", {
@@ -806,7 +819,7 @@ window.__ModuleLoader__.load({
                     className: "hs-save",
                     disabled: !updateAvailable || checking || updating,
                     onClick: onUpdate,
-                    children: t("update"),
+                    children: armUpdate ? t("updateConfirmShort") : t("update"),
                   }),
                 ],
               }),

@@ -1,6 +1,6 @@
 ---
 name: dsh-hanako
-description: "dsh-hanako 插件（把 DeepSeek Harness 接进 Hana 的进程外 subagent 执行器）的配置辅助与使用指南。触发场景：dsh-hanako 刚装好需要配置 defaultCwd、依赖缺失需要安装（DSHana 标签页自装 / Agent 用 dsh_install 工具 / 手动 npm i）、标签页自检/自愈（安装依赖/手动启动/检测依赖/检查更新/更新 DSH）、web host 起不来（先看标签页自检 t1/t2）、dsh 任务失败排查、审批怎么应答、dsh_run/dsh_install/dsh_approve/dsh_cancel/dsh_ops/dsh_search/dsh_update 怎么用、默认模型怎么配（dsh 设置页「DSHana 设置」分页，provider/model/思考三级联动）、DSH 版本检查与更新（dsh_update 工具 / 设置页 DSH 版本块 / 标签页 deps 卡片）、安装/升级卡片（dsh_install / dsh_update 异步渲染 /card/dep 实时日志）、DeepSeek Harness 相关。遇到 dsh-hanako 相关需求优先读本技能再动手。"
+description: "dsh-hanako 插件（把 DeepSeek Harness 接进 Hana 的进程外 subagent 执行器）的配置辅助与使用指南。触发场景：dsh-hanako 刚装好需要配置 defaultCwd、依赖缺失需要安装（DSHana 标签页自装 / Agent 用 dsh_install 工具 / 手动 pnpm add）、标签页自检/自愈（安装依赖/手动启动/检测依赖/检查更新/更新 DSH）、web host 起不来（先看标签页自检 t1/t2）、dsh 任务失败排查、审批怎么应答、dsh_run/dsh_install/dsh_approve/dsh_cancel/dsh_ops/dsh_search/dsh_update 怎么用、默认模型怎么配（dsh 设置页「DSHana 设置」分页，provider/model/思考三级联动）、DSH 版本检查与更新（dsh_update 工具 / 设置页 DSH 版本块 / 标签页 deps 卡片）、安装/升级卡片（dsh_install / dsh_update 异步渲染 /card/dep 实时日志）、DeepSeek Harness 相关。遇到 dsh-hanako 相关需求优先读本技能再动手。"
 ---
 
 # dsh-hanako 配置辅助与使用指南
@@ -19,34 +19,34 @@ config.json 由宿主设置界面生成、**不随包分发**；defaultCwd 初�
 
 **3. 配置生效铁律（实时）**：「改完都要重启 Hana」不成立：t1 依赖/t2 进程状态直读 config.json/单例实时；t2 手动启动链路 resolveDshPkgDir → spawn，直写后无需重启；仅旧进程存活（g.web.ready=true）需先杀进程或重启。
 
-## 依赖自主部署（页面自装首选，Agent npm i 兜底）
+## 依赖自主部署（页面自装首选，Agent pnpm add 兜底）
 
-dsh 依赖（@deepseek-ai/dsh + node-pty/koffi）位置：**数据目录 dsh-pkg/**（优先，升级不丢依赖）→ 插件目录 node_modules（zip 自带，兑底）。部署 = 复制插件根 package.json 到部署目录 → 在 pkgDir 下创建指向宿主 electron node 的代理脚本（node.cmd/node）→ `node npm-cli.js i @deepseek-ai/dsh --omit=dev --loglevel=http`。npm-cli.js 来自插件安装目录 node_modules/npm/bin/npm-cli.js。
+dsh 依赖（@deepseek-ai/dsh + node-pty/koffi）位置：**数据目录 dsh-pkg/**（优先，升级不丢依赖）→ 插件目录 node_modules（zip 自带，兑底）。部署 = 在 pkgDir 写入**最小 package.json**（无 devDeps，插件根的 devDeps 是 rspack 构建树，不复制进部署目录）+ 复制插件根 `pnpm-workspace.yaml`（`allowBuilds` 白名单放行 dsh 树 build scripts）→ 在 pkgDir 下创建指向宿主 electron node 的代理脚本（node.cmd/node）→ 清理旧依赖残留（`package-lock.json` / `pnpm-lock.yaml` / 扁平 node_modules，npm 体系升级兼容）→ `node pnpm.cjs add @deepseek-ai/dsh --loglevel=http`。pnpm.cjs 来自插件安装目录 node_modules/pnpm/bin/pnpm.cjs。pnpm 11 的 `add` 命令不支持 `--omit` 旗标，最小 package.json 无 devDeps 即天然只装 dsh 运行时树。
 
-**页面自装（首选，v0.8.6+，无需 Agent）**：打开 DSHana 标签页（未就绪显示 t1/t2）→ deps 卡片点「安装依赖」→ 插件自动完成（复制 package.json 到 dsh-pkg → 创建 node 代理脚本（pkgDir/node.cmd → 宿主 electron node）→ `node npm-cli.js i @deepseek-ai/dsh --omit=dev --loglevel=http`，PATH 首部指向 pkgDir 让 install script 找到宿主 node，官方源失败自动重试 npmmirror → 校验 cliBin → 自动运行级重验 `node cliBin --version`）。安装中显示实时进度（npm 输出尾部+更新时间，3s 轮询刷新）；完成后无需重启，去 t2 点「手动启动」。验证失败（「存在但依赖不完整」）→ 点「重新安装依赖」；可随时点「检测依赖」重验。**t1→t2 门禁**：t1 未过（缺失/验证失败/安装中/检测中）时 t2 按钮禁用（msg「依赖未就绪，请先安装/重新安装依赖」）。
+**页面自装（首选，v0.8.6+，无需 Agent）**：打开 DSHana 标签页（未就绪显示 t1/t2）→ deps 卡片点「安装依赖」→ 插件自动完成（停 web host → 写最小 package.json + 复制 pnpm-workspace.yaml 到 dsh-pkg → 创建 node 代理脚本（pkgDir/node.cmd → 宿主 electron node）→ 清旧 npm 残留 → `node pnpm.cjs add @deepseek-ai/dsh --loglevel=http`，PATH 首部指向 pkgDir 让 install script 找到宿主 node，官方源失败自动重试 npmmirror → 校验 cliBin → 自动运行级重验 `node cliBin --version`）。安装中显示实时进度（pnpm 输出尾部+更新时间，3s 轮询刷新）；完成后无需重启，去 t2 点「手动启动」。验证失败（「存在但依赖不完整」）→ 点「重新安装依赖」；可随时点「检测依赖」重验。**t1→t2 门禁**：t1 未过（缺失/验证失败/安装中/检测中）时 t2 按钮禁用（msg「依赖未就绪，请先安装/重新安装依赖」）。
 
 **手动兜底仅用于标签页不可访问的情况**。手动命令详见下方。
 
-#### Agent 手动 npm i（兜底）
+#### Agent 手动 pnpm add（兜底）
 
 ```powershell
 # 部署目录（数据目录 dsh-pkg）
 $pkgDir = <数据目录>/dsh-pkg
-# npm-cli.js 来自插件安装目录
-$npmCli = <插件安装目录>/node_modules/npm/bin/npm-cli.js
+# pnpm.cjs 来自插件安装目录
+$pnpmCli = <插件安装目录>/node_modules/pnpm/bin/pnpm.cjs
 
 # 优先用本机已安装的 Node；无则需先创建 node 代理脚本指向宿主 electron node
 $node = <本机 node.exe 绝对路径，如 C:\Program Files\nodejs\node.exe>
-& $node $npmCli i @deepseek-ai/dsh --omit=dev --loglevel=http
+& $node $pnpmCli add @deepseek-ai/dsh --loglevel=http
 ```
 
-> **注意**：koffi/node-pty 的 install script 会起子进程调用 `node`。本机 Node 已在 PATH 中时直接可用；若 PATH 缺 node，报 `'node' is not recognized` 时需要创建代理脚本：
+> **注意**：koffi/node-pty 的 install script 会起子进程调用 `node`。本机 Node 已在 PATH 中时直接可用；若 PATH 缺 node，报 `'node' is not recognized` 时需要创建代理脚本。手动兜底前先停 web host（部署要删旧 node_modules，Windows 上被运行中进程加载的原生模块会锁文件）。
 
-- **--omit=dev**：剔除 rspack 构建树（~40MB）；`npm i @deepseek-ai/dsh` 只装 dsh 及其中间依赖（不需 lockfile，增量安装）；**不可用 --omit=peer**（跳过 dsh 的 peer → ERR_MODULE_NOT_FOUND）。npm-cli.js 定位：来自插件安装目录 node_modules/npm/bin/npm-cli.js（zip 不包含 node_modules，npm 包随宿主 electron 安装）。PATH 处理：代理脚本（pkgDir/node.cmd）将子进程 node 请求转发到宿主 electron node，PATH 首部指向 pkgDir 即可。
-- **registry 镜像**：默认源失败切 `--registry=https://registry.npmmirror.com`（或持久化 `npm config set registry https://registry.npmmirror.com`）；镜像只影响 registry 层，koffi/node-pty 产物同源。重跑前残留不完整先 `Remove-Item node_modules -Recurse -Force`。
+- **无 --omit 旗标**：pnpm 11 的 add 命令不支持 `--omit`（报 Unknown option: 'omit'）；部署目录用最小 package.json（无 devDeps），pnpm add 天然只装 dsh 运行时树，不装 rspack 构建树（~40MB）。**不可用 --omit=peer**（跳过 dsh 的 peer → ERR_MODULE_NOT_FOUND）。allowBuilds 放行由 pnpm-workspace.yaml 提供（package.json 的 allowScripts 在 pnpm 11 不再读取）。pnpm.cjs 定位：来自插件安装目录 node_modules/pnpm/bin/pnpm.cjs（zip 包含内置 pnpm）。PATH 处理：代理脚本（pkgDir/node.cmd）将子进程 node 请求转发到宿主 electron node，PATH 首部指向 pkgDir 即可。
+- **registry 镜像**：默认源失败切 `--registry=https://registry.npmmirror.com`（或持久化 `pnpm config set registry https://registry.npmmirror.com`）；镜像只影响 registry 层，koffi/node-pty 产物同源。重跑前残留不完整先 `Remove-Item node_modules -Recurse -Force`（会连带清 package-lock.json / pnpm-lock.yaml，全新构建）。
 - **部署后**：Agent 手动路径依赖就位后重启 Hana（tools 缓存）；页面自装无需重启。装完调一次 dsh_run 触发拉起。
 
-> **旧命令参考**：早期版本使用 `npm ci --omit=dev --no-audit --no-fund`（需完整 lockfile，复制 package-lock.json 到部署目录），现已改为 `npm i @deepseek-ai/dsh --omit=dev --loglevel=http`（只需 package.json 中 peerDependencies 声明，无 lockfile 也能增量安装）。
+> **旧命令参考**：npm 时代部署为 `node npm-cli.js i @deepseek-ai/dsh --omit=dev --loglevel=http`（复制插件根 package.json，含 devDeps 需 --omit 剔除）；pnpm 迁移后弃用（pnpm 11 add 无 --omit，改最小 package.json + pnpm add）。
 
 ## 配置完成后验证
 
@@ -61,7 +61,7 @@ $node = <本机 node.exe 绝对路径，如 C:\Program Files\nodejs\node.exe>
 |---|---|---|---|
 | `dsh_run(task, cwd?, timeout?, wait?, agentPreset?, reasoningEffort?, provider?, model?, sessionId?)` | 提交任务 | 默认异步（后台送达）；wait=true 同步；provider/model 显式覆盖模型（显式时 selectModel，写回 dsh 全局默认）；sessionId resume | [dsh-run 技能](dsh-run) |
 | `dsh_install(action?, wait?, autoStart?)` | 安装/验证 dsh 依赖 | action=install 安装（默认，registry 兜底 + 自动运行级重验 + autoStart 自动拉起 web host，渲染安装卡片）；action=verify 只检测完整性；异步默认 + 完成回调，wait=true 同步；安装中重复调用返回状态 | [dsh-install 技能](dsh-install) |
-| `dsh_update(action?, wait?)` | 检查/更新 DSH | action=check 查版本（默认）；action=update 完整更新（停 web host → npm i latest → 起 web host，**正在执行的任务会中断**，渲染升级卡片）；update 默认异步后台执行 + 完成回调，wait=true 同步；更新中重复调用返回状态不重复执行 | [dsh-update 技能](dsh-update) |
+| `dsh_update(action?, wait?)` | 检查/更新 DSH | action=check 查版本（默认）；action=update 完整更新（停 web host → pnpm add latest → 起 web host，**正在执行的任务会中断**，渲染升级卡片）；update 默认异步后台执行 + 完成回调，wait=true 同步；更新中重复调用返回状态不重复执行 | [dsh-update 技能](dsh-update) |
 | `dsh_approve(opId, approvalId, outcome?)` | 应答审批 | allowed-once 放行 / rejected 拒绝；通知带 args 命令原文 | [dsh-approve 技能](dsh-approve) |
 | `dsh_cancel(opId)` | 取消任务 | 误派/卡死止损；幂等 | [dsh-cancel 技能](dsh-cancel) |
 | `dsh_ops(limit?)` | 查会话清单与摘要 | 解析 dsh 会话缓存 session_projcache 可查；limit 默认 10；最新在前 | [dsh-ops 技能](dsh-ops) |
@@ -76,21 +76,21 @@ $node = <本机 node.exe 绝对路径，如 C:\Program Files\nodejs\node.exe>
 | `GET /webui` | 页面壳（就绪探测 + 主题 + 首帧自检） |
 | `GET /webui/health` | 就绪探测；未就绪附带 diagnostics（自检数据源，3s 轮询） |
 | `POST /webui/start` | 手动启动 web host（t3 按钮） |
-| `POST /webui/install-deps` | 安装依赖（npm i @deepseek-ai/dsh --omit=dev 到 dsh-pkg，创建 node 代理脚本，npmmirror 兜底；t1 按钮） |
+| `POST /webui/install-deps` | 安装依赖（pnpm add @deepseek-ai/dsh 到 dsh-pkg，停 host + 清旧残留 + 创建 node 代理脚本，npmmirror 兜底；t1 按钮） |
 | `GET /webui/verify-deps` | 运行级依赖检测（node cliBin --version；进页自动一次 + 手动） |
-| `GET /webui/check-update` | 版本检查（deps 卡片「检查更新」；npm view，官方源失败重试 npmmirror） |
-| `POST /webui/update-dsh` | 更新 DSH（deps 卡片「更新 DSH」；停 web host → npm i latest → 起 web host，**正在执行的任务中断**） |
+| `GET /webui/check-update` | 版本检查（deps 卡片「检查更新」；pnpm view，官方源失败重试 npmmirror） |
+| `POST /webui/update-dsh` | 更新 DSH（deps 卡片「更新 DSH」；停 web host → pnpm add latest → 起 web host，**正在执行的任务中断**） |
 
 ## DSH 检查与更新（v0.13.0）
 
 `@deepseek-ai/dsh` 版本检查与更新收敛为**宿主能力层单一事实源**（tools/lib/ `checkDshUpdate` / `updateDsh` / `installDepsFromPlugin` / `verifyDepsSmoke`，经单例挂载），消费面共用同一套逻辑，结果一致：
 
-1. **Agent 工具 `dsh_update`**：`action=check`（默认）查 `{ localVersion, latestVersion, updateAvailable, error? }`，只读不改；`action=update` 执行完整更新（停 web host → npm i @deepseek-ai/dsh latest → 起 web host），默认异步（后台执行 + **升级卡片**实时日志，完成后宿主唤醒带回结果），`wait=true` 同步等待；更新会重启 web host、正在执行的任务会中断，`update` 前确认无运行中任务；更新执行中重复调用返回状态不重复执行
-2. **DSHana 标签页 deps 卡片**（web host 未就绪时可见）：版本行显示「当前版本 / 最新版本 / 可更新状态」+「检查更新」「更新 DSH」按钮（更新前 confirm 提示）；更新中显示进度（update-result.json 状态），完成显示「更新完成 vX，请重启 DSHana 使完全生效」
-3. **dsh 设置页「DSHana 设置」分页 → 「DSH 版本」卡片**：本地版本直读 dsh-pkg package.json（挂载即显示），远端版本经桥接（update-request.json → 宿主检查 → check-result.json 读回）；「更新到最新」→ 宿主执行更新 → 每 2s 轮询 update-status 直到 done/error
-4. **Agent 工具 `dsh_install`**（依赖缺失/安装场景）：`action=install`（默认）npm i @deepseek-ai/dsh 到 dsh-pkg（registry 兜底 + 自动运行级重验 + autoStart 自动拉起 web host），默认异步 + **安装卡片**实时日志 + 完成回调，`wait=true` 同步；`action=verify` 只检测依赖完整性（运行级冒烟）；安装中（`g.depsInstalling`）重复调用返回状态不重复执行
+1. **Agent 工具 `dsh_update`**：`action=check`（默认）查 `{ localVersion, latestVersion, updateAvailable, error? }`，只读不改；`action=update` 执行完整更新（停 web host → pnpm add @deepseek-ai/dsh latest → 起 web host），默认异步（后台执行 + **升级卡片**实时日志，完成后宿主唤醒带回结果），`wait=true` 同步等待；更新会重启 web host、正在执行的任务会中断，`update` 前确认无运行中任务；更新执行中重复调用返回状态不重复执行
+2. **DSHana 标签页 deps 卡片**（web host 未就绪时可见）：版本行显示「当前版本 / 最新版本 / 可更新状态」+「检查更新」「更新 DSH」按钮（更新前两段式确认）；更新中显示进度（update-result.json 状态），完成显示「更新完成 vX，请重启 DSHana 使完全生效」；更新/安装期间页面自动退到诊断页显示进度，完成后自动切回并刷新
+3. **dsh 设置页「DSHana 设置」分页 → 「DSH 版本」卡片**：本地版本直读 dsh-pkg package.json（挂载即显示），远端版本经桥接（update-request.json → 宿主检查 → check-result.json 读回）；「更新到最新」→ 两段式确认 → 宿主执行更新 → 每 2s 轮询 update-status 直到 done/error
+4. **Agent 工具 `dsh_install`**（依赖缺失/安装场景）：`action=install`（默认）pnpm add @deepseek-ai/dsh 到 dsh-pkg（registry 兜底 + 自动运行级重验 + autoStart 自动拉起 web host），默认异步 + **安装卡片**实时日志 + 完成回调，`wait=true` 同步；`action=verify` 只检测依赖完整性（运行级冒烟）；安装中（`g.depsInstalling`）重复调用返回状态不重复执行
 
-**并发与一致性**：检查 `g.checking` / 更新 `g.updating` / 安装 `g.depsInstalling` 进行中重复请求跳过（watch 触发层 + 能力层双重防护）；检查结果缓存 `g.checkResult`（5s 时间窗防 npm view 重复跑）；更新结果写 `<dataDir>/update-result.json { state: done|error, version?, error?, at }`（设置页/标签页轮询读）。
+**并发与一致性**：检查 `g.checking` / 更新 `g.updating` / 安装 `g.depsInstalling` 进行中重复请求跳过（watch 触发层 + 能力层双重防护）；检查结果缓存 `g.checkResult`（5s 时间窗防 pnpm view 重复跑）；更新结果写 `<dataDir>/update-result.json { state: done|error, version?, error?, at }`（设置页/标签页轮询读）。
 
 **安装/升级卡片（v0.13.0）**：dsh_install / dsh_update 异步流程渲染 iframe 卡片（`/card/dep`，与任务卡片同构）——登记宿主单例 `g.depTasks`（taskId → kind/state/log/at/result），SSE `/ops/dep-stream`（首帧快照 + 每 1s npm 日志实时滚动，终态关闭）+ 兜底 `/ops/dep-status`；显示标题（DSH 安装 / DSH 升级）+ 状态徽标 + 日志实时滚动 + 完成结果（「已安装 vX，web host 已自动启动」/「更新完成 vX，请重启 DSHana 使完全生效」/ 错误信息）。
 
@@ -102,20 +102,20 @@ dsh 请求越界权限时任务挂起，插件经 deferred 发 dsh-approval 通�
 
 **web host 起不来先开 DSHana 标签页看自检**（t1 依赖存在性+运行级验证 / t2 进程状态）。**门禁链**：t1 未过（缺失/验证失败/安装中/检测中）→ t2「手动启动」锁（msg「依赖未就绪…」）。按 t1→t2 修。
 
-**诊断日志**：全部运行日志在会话日志文件 `<dataDir>/logs/<YYYYMMDD-HHmmss-SSS>.log`（DSHana 标签页 t2 诊断区显示路径；旧日志 onload 时 zstd 压缩为 `.log.zst` 全部保留）。行前缀 src：`out`/`err`（dsh web host stdout/stderr）、`provider`/`theme`/`settings`（内嵌插件诊断）、`hana`（插件生命周期 + 里程碑 `[依赖安装]`/`[依赖验证]`/`[版本检查]`/`[DSH 更新]`）、`npm`（npm i 原始输出**逐 chunk 实时落盘**，行规范化 `\r` 进度帧已折行）。npm i 失败 / 更新失败 / 依赖验证失败：先开会话日志看 `[npm]` 行 + 对应 `[hana]` 里程碑（含退出码/registry 重试/错误尾），再按下表处理。
+**诊断日志**：全部运行日志在会话日志文件 `<dataDir>/logs/<YYYYMMDD-HHmmss-SSS>.log`（DSHana 标签页 t2 诊断区显示路径；旧日志 onload 时 zstd 压缩为 `.log.zst` 全部保留）。行前缀 src：`out`/`err`（dsh web host stdout/stderr）、`provider`/`theme`/`settings`（内嵌插件诊断）、`hana`（插件生命周期 + 里程碑 `[依赖安装]`/`[依赖验证]`/`[版本检查]`/`[DSH 更新]`）、`pnpm`（pnpm add 原始输出**逐 chunk 实时落盘**，行规范化 `\r` 进度帧已折行）。pnpm add 失败 / 更新失败 / 依赖验证失败：先开会话日志看 `[pnpm]` 行 + 对应 `[hana]` 里程碑（含退出码/registry 重试/错误尾），再按下表处理。
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
-| 报 `dsh 包未就绪：...bin.js 不存在` | 依赖缺失 | 首选标签页 deps「安装依赖」；或 Agent 调 `dsh_install`（默认 install，自动重试 registry + 自动重验 + autoStart 拉起 web host，异步渲染安装卡片）；或手动 npm i @deepseek-ai/dsh（目录需 package.json） |
-| deps「存在但依赖不完整：ERR_MODULE_NOT_FOUND」 | 依赖图缺 peer（--omit=peer/中断假就绪） | 点「重新安装依赖」重跑 npm i（自动重验）；或「检测依赖」重验 |
+| 报 `dsh 包未就绪：...bin.js 不存在` | 依赖缺失 | 首选标签页 deps「安装依赖」；或 Agent 调 `dsh_install`（默认 install，自动重试 registry + 自动重验 + autoStart 拉起 web host，异步渲染安装卡片）；或手动 pnpm add @deepseek-ai/dsh（目录需 package.json） |
+| deps「存在但依赖不完整：ERR_MODULE_NOT_FOUND」 | 依赖图缺 peer（--omit=peer/中断假就绪） | 点「重新安装依赖」重跑 pnpm add（自动重验）；或「检测依赖」重验 |
 | 显示「正在检测依赖完整性…」/「检测中…」 | 运行级验证中（数百 ms~10s） | 等待（进页自动一次）或手动点「检测依赖」 |
 | t2 按钮禁用（msg「依赖未就绪…」） | t1 未过（缺失/验证失败/安装中/检测中） | 先完成 t1 再点「手动启动 web host」 |
-| 升级/重装后 web host 起不来 | 升级清掉插件目录 node_modules | 依赖部署到**数据目录 dsh-pkg/**（升级不丢），页面自装或 npm i @deepseek-ai/dsh；装完调 dsh_run 重试拉起 |
+| 升级/重装后 web host 起不来 | 升级清掉插件目录 node_modules | 依赖部署到**数据目录 dsh-pkg/**（升级不丢），页面自装或 pnpm add @deepseek-ai/dsh；装完调 dsh_run 重试拉起 |
 | 报 `dsh web 启动超时（...端口未就绪）` | 依赖未就绪或端口被占用 | 先确认 t1 依赖已安装；webPort 被占用时改端口 |
 | bash 报 `E_ACCESSDENIED` | dsh bash 沙箱 Windows 限制 | 改用文件系统工具（write/read/edit） |
-| npm i 下载失败/超时 | registry 网络 | 切 `--registry=https://registry.npmmirror.com`（页面自装已内置重试），仍失败查代理 |
-| 版本检查显示「检查失败」/「最新版本 未知」 | npm view 官方源 + npmmirror 都失败（网络/registry） | 稍后重试（能力层已自动重试镜像一次）；查代理/网络 |
-| 更新 DSH 后 web host 起不来 / 更新失败 | npm i 失败或 web host 重启失败 | 看 deps 卡片/设置页更新状态（update-result.json 的 error 字段）；按 t1→t2 自检修复后「手动启动 web host」 |
+| pnpm add 下载失败/超时 | registry 网络 | 切 `--registry=https://registry.npmmirror.com`（页面自装已内置重试），仍失败查代理 |
+| 版本检查显示「检查失败」/「最新版本 未知」 | pnpm view 官方源 + npmmirror 都失败（网络/registry） | 稍后重试（能力层已自动重试镜像一次）；查代理/网络 |
+| 更新 DSH 后 web host 起不来 / 更新失败 | pnpm add 失败或 web host 重启失败 | 看 deps 卡片/设置页更新状态（update-result.json 的 error 字段）；按 t1→t2 自检修复后「手动启动 web host」 |
 | 改了配置/代码不生效 | 宿主 tools 模块缓存 | 重启 Hana |
 
 ## 已知限制

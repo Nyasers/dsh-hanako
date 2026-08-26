@@ -437,7 +437,7 @@ export async function ensureWebHost(cfg) {
   );
   if (!existsSync(cliBin)) {
     throw new Error(
-      `dsh 包未就绪：${cliBin} 不存在。请在插件数据目录 dsh-pkg 执行 npm i -P @deepseek-ai/dsh`,
+      `dsh 包未就绪：${cliBin} 不存在。请在插件数据目录 dsh-pkg 执行 pnpm add @deepseek-ai/dsh`,
     );
   }
 
@@ -527,10 +527,10 @@ export async function ensureWebHost(cfg) {
       .join(cfg.dshPkgDir || resolveDshPkgDir(cfg))
       .split("{{LOG_PATH}}")
       .join(logPath)
-      // dsh-hana-settings「检查与更新 DSH」链路占位符（npm-cli.js 路径 /
+      // dsh-hana-settings「检查与更新 DSH」链路占位符（pnpm.cjs 路径 /
       // 宿主 electron node / 插件数据目录）
       .split("{{NPM_CLI_PATH}}")
-      .join(join(PLUGIN_ROOT, "node_modules", "npm", "bin", "npm-cli.js"))
+      .join(join(PLUGIN_ROOT, "node_modules", "pnpm", "bin", "pnpm.cjs"))
       .split("{{ELECTRON_NODE}}")
       .join(ELECTRON_NODE)
       .split("{{DATA_DIR}}")
@@ -562,7 +562,17 @@ export async function ensureWebHost(cfg) {
   // web app 参数，--patch 会被 web app 拒为 unknown option）
   const child = spawn(
     ELECTRON_NODE,
-    [cliBin, ...patchArgs, "--profile", "web", "--port", String(port)],
+    [
+      cliBin,
+      ...patchArgs,
+      "--profile",
+      "web",
+      "--port",
+      String(port),
+      // 不自动打开默认浏览器（dsh web app 默认会 open；插件以 iframe 内嵌，
+      // 更新/重启后弹浏览器是噪音，web app 参数须在 launcher flag 之后）
+      "--no-open",
+    ],
     {
       cwd: cfg.dataDir,
       stdio: ["ignore", "pipe", "pipe"],
@@ -829,7 +839,7 @@ export async function updateDsh(cfg) {
     await closeProcess();
     // ③ 装 latest（installDepsFromPlugin 内部有 g.depsInstalling 防并发；成功后
     // 会自动运行级重验刷新 g.depsSmoke）
-    log("执行 npm i @deepseek-ai/dsh（latest）…");
+    log("执行 pnpm add @deepseek-ai/dsh（latest）…");
     const install = await installDepsFromPlugin(cfg, dataDir);
     if (!install || !install.ok)
       throw new Error(install?.error || "依赖安装失败");
@@ -1301,7 +1311,7 @@ function buildDepsDiagCheck(g, cfg) {
       (checked.length > 1 ? "（已检查 " + checked.join("、") + "）" : "");
     if (installError) check.detail += "\n[上次安装失败] " + installError;
     check.fix =
-      "依赖缺失：点击本卡片「安装依赖」按钮自动在插件数据目录 dsh-pkg 执行 npm i @deepseek-ai/dsh（完成后自动验证）；或确认插件目录 node_modules 解压完整";
+      "依赖缺失：点击本卡片「安装依赖」按钮自动在插件数据目录 dsh-pkg 执行 pnpm add @deepseek-ai/dsh（完成后自动验证）；或确认插件目录 node_modules 解压完整";
   } else if (!smoke) {
     // 未检测过（进标签页自动检测一次 / 手动「检测依赖」；ok 暂算 installed）
     check.detail = "dsh 包已就绪，点击「检测依赖」验证依赖完整性";
@@ -1314,7 +1324,7 @@ function buildDepsDiagCheck(g, cfg) {
       "dsh 包存在但依赖不完整：" +
       (verifyError ? "\n" + verifyError : "运行级验证失败");
     check.fix =
-      "点击本卡片「重新安装依赖」按钮重新执行 npm i @deepseek-ai/dsh（自动部署到 dsh-pkg，完成后自动验证）";
+      "点击本卡片「重新安装依赖」按钮重新执行 pnpm add @deepseek-ai/dsh（自动部署到 dsh-pkg，完成后自动验证）";
   } else {
     // 存在 + 验证通过：能跑 = 依赖图完整
     check.detail =
@@ -1420,7 +1430,7 @@ function buildProcessDiagCheck(g, out) {
 function pickProcessFix(lastError, stderr, port) {
   const text = (lastError || "") + "\n" + (stderr || "");
   if (/dsh 包未就绪|cliBin|npm i/i.test(text)) {
-    return "按上方「dsh 依赖安装」项修复（数据目录 dsh-pkg 执行 npm i @deepseek-ai/dsh，完成后自动验证）";
+    return "按上方「dsh 依赖安装」项修复（数据目录 dsh-pkg 执行 pnpm add @deepseek-ai/dsh，完成后自动验证）";
   }
   if (/EADDRINUSE|address already in use|占用|bind/i.test(text)) {
     return "检查端口 " + port + " 是否被占用（释放后重启 Hana）";

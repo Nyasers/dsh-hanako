@@ -9,13 +9,6 @@
     "pack": "node scripts/pack.mjs",
     "version": "node scripts/version.mjs"
   },
-  "allowScripts": {
-    "@deepseek-ai/dsh-subprocess-local": true,
-    "@google/genai": true,
-    "koffi": true,
-    "node-pty": true,
-    "protobufjs": true
-  },
   "devDependencies": {
     "@rspack/core": "^2.1.10",
     "archiver": "^8.0.0",

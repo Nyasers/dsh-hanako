@@ -47,6 +47,7 @@ const staticItems = [
   "README.md",
   "package.json",
   "manifest.json",
+  "pnpm-workspace.yaml",
   "dsh-plugin",
   "skills",
   "node_modules/pnpm",

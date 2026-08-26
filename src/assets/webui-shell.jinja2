@@ -263,11 +263,21 @@
         .catch(function () { ack(false); });
     });
     function attach() {
-      // 就绪即停轮询：显式清掉 pending 定时器（不依赖递归链隐式断开）
+      // 就绪：停当前轮询定时器，按需挂载/刷新 iframe，切回主视图
       if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
-      frame.src = "http://127.0.0.1:{{= it.port }}/";
+      var wasPending = document.body.getAttribute("data-pending") === "1";
       document.body.setAttribute("data-pending", "0");
+      var base = "http://127.0.0.1:{{= it.port }}/";
+      // 首次挂载（src 空）或从诊断页切回（更新/停机后）：强制加载当前 web host
+      // （带时间戳 bust，避免相同 src 不触发重新加载，保证更新后拿到新版本 UI）；
+      // 已挂载且非 pending（检查/验证后的 refreshDiag）不重复 reload，不打断 dsh UI
+      if (wasPending || !frame.getAttribute("src")) {
+        frame.src = base + "?dshReload=" + Date.now();
+      }
       startThemePush();
+      // 低频兜底探测：iframe 挂载后不再高频轮询，但 web host 掉线（更新停机/进程
+      // 退出）时能自动退回诊断页；document.hidden 时 poll 内部已自动拉长间隔
+      pollTimer = setTimeout(poll, 5000);
     }
     function surfaceHeaders() {
       var params = new URLSearchParams(location.search);
@@ -499,7 +509,9 @@
       var updBtn = listBtn("deps", "update-dsh");
       if (updBtn && deps) {
         updBtn.disabled = deps.updating;
-        updBtn.textContent = deps.updating ? "更新中…" : "更新 DSH";
+        updBtn.textContent = deps.updating
+          ? "更新中…"
+          : (updateArmed ? "再次点击确认更新" : "更新 DSH");
       }
     }
     function startWebHost() {
@@ -635,17 +647,35 @@
           setBtnMsg("deps", "检查请求超时或网络错误，请重试");
         });
     }
-    // 更新 DSH（POST /webui/update-dsh）——「更新 DSH」按钮。点击前 confirm 提示
-    // （更新会重启 web host，正在执行的任务中断）；触发后服务端异步执行（停 web host →
-    // npm i latest → 起 web host），页面靠 3s 轮询诊断刷新 updateProgressHtml（updating/
-    // done/error）与按钮状态。
+    // 更新 DSH（POST /webui/update-dsh）——「更新 DSH」按钮。两段式确认
+    // （更新会重启 web host，正在执行的任务中断）：宿主沙箱 iframe 无 allow-modals，
+    // window.confirm 被浏览器忽略（Ignored call to 'confirm()'），改二次点击确认
+    // （5s 无操作自动复位）；触发后服务端异步执行（停 web host → pnpm add latest →
+    // 起 web host），页面靠 3s 轮询诊断刷新 updateProgressHtml（updating/done/error）
+    // 与按钮状态。
+    var updateArmed = false, updateArmTimer = null;
     function updateDsh() {
       var btn = listBtn("deps", "update-dsh");
       if (!btn || btn.disabled) return; // 幂等：已在更新中
-      if (!window.confirm("更新将重启 DSHana，正在执行的任务会中断，确定继续？")) return;
+      if (!updateArmed) {
+        updateArmed = true;
+        btn.textContent = "再次点击确认更新";
+        updateArmTimer = setTimeout(function () {
+          updateArmed = false;
+          var b = listBtn("deps", "update-dsh");
+          if (b && !b.disabled) b.textContent = "更新 DSH";
+        }, 5000);
+        return;
+      }
+      clearTimeout(updateArmTimer);
+      updateArmed = false;
       btn.disabled = true;
       btn.textContent = "更新中…";
       setBtnMsg("deps", "");
+      // 立即退回诊断页：更新期间 web host 会停机，这里主动切 pending，下一轮
+      // 3s 轮询 health 未就绪即经 deps 卡片 updateProgressHtml 渲染更新进度
+      document.body.setAttribute("data-pending", "1");
+      renderDiagList(null); // 清空旧诊断占位（下轮 poll 渲染更新进度）
       fetch(api + "/webui/update-dsh", {
         method: "POST",
         headers: surfaceHeaders(),
@@ -653,7 +683,7 @@
       })
         .then(function (r) { return r.json(); })
         .then(function (d) {
-          if (d && d.ok) { refreshDiag(); return; } // updating：保持禁用，轮询诊断刷新
+          if (d && d.ok) { return; } // updating：保持禁用，靠 3s 轮询渲染更新进度
           var b = listBtn("deps", "update-dsh");
           if (b) { b.disabled = false; b.textContent = "更新 DSH"; }
           setBtnMsg("deps", d && d.error ? d.error : "更新请求失败，请稍后重试");
@@ -689,9 +719,26 @@
       fetch(api + "/webui/health", { headers: surfaceHeaders(), signal: AbortSignal.timeout(3000) })
         .then(function (r) { return r.json(); })
         .then(function (d) {
-          if (d && d.ok) { attach(); }
+          if (d && d.ok) {
+            // health 就绪但更新/安装进行中（web host 尚未停机）：保持诊断页显示
+            // 进度，避免刚触发更新/安装时切回 iframe 又立刻退回的跳变
+            var diag = d && d.diagnostics ? d.diagnostics : null;
+            var busy = diag && diag.checks && diag.checks.some(function (c) {
+              return c.key === "deps" && (c.updating || c.installing);
+            });
+            if (busy) {
+              document.body.setAttribute("data-pending", "1");
+              renderDiagList(diag);
+              pollTimer = setTimeout(poll, 3000);
+              return;
+            }
+            attach();
+          }
           else {
-            // 未就绪：刷新自检列表（health 未就绪时附带 diagnostics 字段；为 null 时保留占位）
+            // 未就绪：退回诊断页（web host 停机/更新中/启动失败），刷新自检列表；
+            // health 未就绪时附带 diagnostics 字段（为 null 时保留占位）——更新中
+            // deps 卡片经 updateProgressHtml 显示实时进度
+            document.body.setAttribute("data-pending", "1");
             if (d && d.diagnostics) renderDiagList(d.diagnostics);
             pollTimer = setTimeout(poll, 3000);
           }
@@ -809,12 +856,17 @@
         else { clearInterval(activePushTimer); activePushTimer = null; }
       }, 1500);
     }
+    // 无论首帧就绪与否都启动轮询：未就绪态高频（3s 刷新自检与进度），就绪态低频
+    // 兜底（5s，web host 掉线/更新停机时自动退回诊断页）；诊断页按钮事件委托无条件
+    // 绑定（diag-list 元素恒在，从 iframe 态退回诊断页后按钮依旧可点）
+    var diagList = document.getElementById("diag-list");
+    if (diagList) diagList.addEventListener("click", onDiagClick);
     if (document.body.getAttribute("data-pending") === "1") {
       renderDiagList(initDiag); // 首屏即渲染服务端带回的初始自检（null 时显示占位）+ 同步卡片内按钮
-      var diagList = document.getElementById("diag-list");
-      if (diagList) diagList.addEventListener("click", onDiagClick); // 卡片按钮事件委托
       autoVerifyDeps(); // 进标签页依赖运行级检测一次（结果经 refreshDiag 进 deps 卡片）
       poll();
+    } else {
+      pollTimer = setTimeout(poll, 5000); // 就绪态：低频兜底探测
     }
 }) ();
   </script>

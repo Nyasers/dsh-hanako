@@ -35,7 +35,7 @@ function buildCheckText(r) {
     return `DSH 版本检查：本地 ${local}，远端版本查询失败（${r.error}）。可稍后重试或检查网络/registry。`;
   }
   if (r?.localVersion === null) {
-    return `DSH 版本检查：本地未安装 dsh，最新版本 v${r?.latestVersion || "?"}。请先安装依赖（DSHana 标签页「安装依赖」或 npm i @deepseek-ai/dsh）。`;
+    return `DSH 版本检查：本地未安装 dsh，最新版本 v${r?.latestVersion || "?"}。请先安装依赖（DSHana 标签页「安装依赖」或 pnpm add @deepseek-ai/dsh）。`;
   }
   if (r?.updateAvailable) {
     return `DSH 版本检查：本地 v${local}，最新 v${r.latestVersion}，可更新。`;
@@ -57,7 +57,7 @@ export const name = "dsh_update";
 
 export const description =
   "检查或更新 DeepSeek Harness（dsh）版本（宿主能力层单一事实源）：action=check（默认）查本地/远端版本与可更新状态，只读；" +
-  "action=update 执行完整更新（停 web host → npm i @deepseek-ai/dsh latest → 起 web host，正在执行的任务会中断）。" +
+  "action=update 执行完整更新（停 web host → pnpm add @deepseek-ai/dsh latest → 起 web host，正在执行的任务会中断）。" +
   "默认异步：后台执行 + 完成回调，wait=true 同步；更新中重复调用返回状态不重复执行。" +
   "完整调用手册见 SKILL: skills/dsh-update/SKILL.md";
 
@@ -68,12 +68,12 @@ export const parameters = {
       type: "string",
       enum: ["check", "update"],
       description:
-        "check=只查版本（默认，本地 + 远端 + 可更新判断，不修改任何东西）；update=执行完整更新（停 web host → npm i @deepseek-ai/dsh latest → 起 web host，正在执行的 dsh 任务会中断）",
+        "check=只查版本（默认，本地 + 远端 + 可更新判断，不修改任何东西）；update=执行完整更新（停 web host → pnpm add @deepseek-ai/dsh latest → 起 web host，正在执行的 dsh 任务会中断）",
     },
     wait: {
       type: "boolean",
       description:
-        "false（默认）= 异步：update 立即返回，更新在后台执行，完成后宿主唤醒带回结果；true = 同步：等更新跑完直接返回最终结果（npm i 可能耗时数分钟，会阻塞当前回合）",
+        "false（默认）= 异步：update 立即返回，更新在后台执行，完成后宿主唤醒带回结果；true = 同步：等更新跑完直接返回最终结果（pnpm add 可能耗时数分钟，会阻塞当前回合）",
     },
   },
   required: [],
@@ -84,7 +84,7 @@ export const sessionPermission = {
   describeSideEffect: () => ({
     kind: "external_api",
     summary:
-      "检查或更新 DeepSeek Harness（dsh）版本：更新会停止并重启 dsh web host（npm i @deepseek-ai/dsh，消耗网络），正在执行的 dsh 任务会中断",
+      "检查或更新 DeepSeek Harness（dsh）版本：更新会停止并重启 dsh web host（pnpm add @deepseek-ai/dsh，消耗网络），正在执行的 dsh 任务会中断",
     ruleId: "dsh-hanako-dsh-update",
   }),
 };
@@ -154,7 +154,7 @@ async function doExecute(input, ctx) {
     bus,
     sessionPath,
     taskId,
-    label: "DSH 更新（npm i @deepseek-ai/dsh latest，重启 web host）",
+    label: "DSH 更新（pnpm add @deepseek-ai/dsh latest，重启 web host）",
     type: "dsh-update",
   });
   g.updateDsh(cfg)
@@ -204,7 +204,7 @@ async function doExecute(input, ctx) {
       card: {
         route: "/card/dep?taskId=" + encodeURIComponent(taskId),
         title: "DSH 升级",
-        description: "npm i @deepseek-ai/dsh（更新）",
+        description: "pnpm add @deepseek-ai/dsh（更新）",
         aspectRatio: "16:1",
       },
     },
