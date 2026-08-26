@@ -1,6 +1,6 @@
 ---
 name: dsh-update
-description: "dsh_update 工具手册（源码 tools/dsh-update.js + tools/dsh-run.js 能力层核对）。触发场景：检查 @deepseek-ai/dsh 版本（action=check，本地 + 远端 + 可更新判断）、更新 DSH（action=update，停 web host → npm i latest → 起 web host，正在执行的任务会中断）、更新执行中重复调用返回状态、wait=true 同步等待、dsh 设置页「DSH 版本块」/ DSHana 标签页 deps 卡片与工具共用同一宿主能力层（单一事实源）。需要检查或更新 dsh 前先读本技能。"
+description: "dsh_update 工具手册（源码 tools/dsh-update.js + tools/dsh-run.js 能力层核对）。触发场景：检查 @deepseek-ai/dsh 版本（action=check，本地 + 远端 + 可更新判断）、更新 DSH（action=update，停 web host → pnpm add latest → 起 web host，正在执行的任务会中断）、更新执行中重复调用返回状态、wait=true 同步等待、dsh 设置页「DSH 版本块」/ DSHana 标签页 deps 卡片与工具共用同一宿主能力层（单一事实源）。需要检查或更新 dsh 前先读本技能。"
 ---
 
 # dsh_update 工具手册
@@ -13,14 +13,14 @@ description: "dsh_update 工具手册（源码 tools/dsh-update.js + tools/dsh-r
 
 | 参数 | 类型 | 语义 |
 |---|---|---|
-| `action` | string | `check`（默认）= 只查版本，只读不改动任何东西；`update` = 执行完整更新（停 web host → npm i @deepseek-ai/dsh latest → 起 web host，**正在执行的 dsh 任务会中断**） |
-| `wait` | boolean | `false`（默认）= 异步：update 立即返回，更新在后台执行，完成后宿主唤醒、结果后台送达；`true` = 同步：等更新跑完直接返回最终结果（npm i 可能耗时数分钟，阻塞当前回合） |
+| `action` | string | `check`（默认）= 只查版本，只读不改动任何东西；`update` = 执行完整更新（停 web host → pnpm add @deepseek-ai/dsh latest → 起 web host，**正在执行的 dsh 任务会中断**） |
+| `wait` | boolean | `false`（默认）= 异步：update 立即返回，更新在后台执行，完成后宿主唤醒、结果后台送达；`true` = 同步：等更新跑完直接返回最终结果（pnpm add 可能耗时数分钟，阻塞当前回合） |
 
 ## 行为（源码核实）
 
 **check**：本地版本（运行级验证 verifyDepsSmoke 缓存优先，无则直读 dsh-pkg package.json）+ 远端版本（`spawn npm view @deepseek-ai/dsh version`，官方源失败自动重试 `--registry=https://registry.npmmirror.com`，15s 超时 kill）→ zero-dep semver 比较（major.minor.patch 三段数字逐个比，预发布 `-rc.x` 视为低于同版本正式版）→ `{ localVersion, latestVersion, updateAvailable, error? }`。结果写 `<dataDir>/check-result.json` 并缓存 `g.checkResult`（DSHana 标签页/设置页读同一份）。
 
-**update**：① 写 `<dataDir>/update-result.json { state:'updating', at }` → ② 停 web host（closeProcess，Windows 文件锁前提：npm i 要替换被 web host 占用的 dsh 包文件）→ ③ `installDepsFromPlugin`（npm i @deepseek-ai/dsh latest，官方源失败重试 npmmirror）→ ④ 起 web host（ensureWebHost，失败不阻断结果上报，记 error 字段）→ ⑤ 读新版本 → 写 `{ state:'done', version, at }`；任一步失败写 `{ state:'error', error, at }`（截断 ≤1500）→ ⑥ 清 update-request.json（写回 idle 防重复触发）。**并发防护**：更新执行中（`g.updating`）重复调用返回 `{ ok:false, state:'updating' }` 不重复执行；检查（`g.checking`）同理。
+**update**：① 写 `<dataDir>/update-result.json { state:'updating', at }` → ② 停 web host（closeProcess，Windows 文件锁前提：pnpm add 要替换被 web host 占用的 dsh 包文件）→ ③ `installDepsFromPlugin`（pnpm add @deepseek-ai/dsh latest，官方源失败重试 npmmirror）→ ④ 起 web host（ensureWebHost，失败不阻断结果上报，记 error 字段）→ ⑤ 读新版本 → 写 `{ state:'done', version, at }`；任一步失败写 `{ state:'error', error, at }`（截断 ≤1500）→ ⑥ 清 update-request.json（写回 idle 防重复触发）。**并发防护**：更新执行中（`g.updating`）重复调用返回 `{ ok:false, state:'updating' }` 不重复执行；检查（`g.checking`）同理。
 
 **异步模式**：`update` 默认异步——立即返回「已后台执行」，经宿主 deferred 通道注册唤醒（taskId `dup_*`），完成后后台消息带回 `{ tool:'dsh_update', action:'update', status:'done', version }`（失败带 error）。
 

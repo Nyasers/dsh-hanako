@@ -6,7 +6,7 @@
 #
 # 三段式设计（继承 hana-remote-dev 骨架）:
 #   - create-release（仅 tag 场景）: 先建 pre-release（已存在则跳过，--generate-notes）
-#   - build（needs create-release）: ubuntu 单平台 npm ci + pack，tag 场景直传 zip + sha256
+#   - build（needs create-release）: ubuntu 单平台 pnpm install --frozen-lockfile + pack，tag 场景直传 zip + sha256
 #     （--clobber 幂等）；dispatch 手动场景无 tag 无 release，
 #     产物走 upload-artifact 3 天窗口给人下载
 #   - verify（仅 tag 场景, needs build）: 单点收尾查 release 资产 zip + sha256 齐全，
@@ -16,13 +16,14 @@
 #   - hana-remote-dev 交付物带平台 .node 二进制（node-gyp 本机编译、copy-native 打包），
 #     必须三平台各产各的，资产名带平台后缀并发上传（防同名覆盖竞态）。
 #   - dsh-hanako 交付物是纯 JS bundle + 静态资源，pack.mjs 不打包 node_modules
-#     （安装方 npm ci 时本机编译 dsh 的 native 子依赖），zip 内容平台无关 →
+#     （安装方 pnpm i 时本机编译 dsh 的 native 子依赖），zip 内容平台无关 →
 #     单平台（ubuntu）构建即可：无平台矩阵、无平台后缀资产（与本地 releases/ 命名一致），
-#     省 CI 用量；安装方的 native 依赖由 Agent 侧 npm ci 本机编译，不归发布 CI 管
+#     省 CI 用量；安装方的 native 依赖由 Agent 侧 pnpm i 本机编译，不归发布 CI 管
 #   - 无 native 交付物 → 无 verify-native 环节（pack 失败即无 zip，构建天然 fail-closed）
 #   - 依赖类型划分（dsh → peerDependencies）：构建仅需 @rspack/core（devDependencies），
-#     dsh 是安装方运行时依赖、构建不引用 → CI 用 npm ci --omit=peer 只装 dev 树
-#     （实测 11 包 2s vs 全量 538 包 38s，产物字节一致）；安装方 npm ci 默认自动装 peer，
+#     dsh 是安装方运行时依赖、构建不引用 → CI 用 pnpm install --frozen-lockfile 装 dev 树
+#     （原 npm ci --omit=peer 的跳过 peer 优化在 pnpm 11 无对应 --omit=peer CLI 旗标，
+#     改用全量 frozen 安装，构建产物一致）；安装方 pnpm i 默认自动装 peer，
 #     dsh 行为不变。不用 optionalDependencies：rspack 的 native binding 自身是 optional
 #     依赖，--omit=optional 会误伤它（npm/cli#4828 同源）
 #   - 资产名版本段带 v 前缀（pack.mjs 产 dsh-hanako-v<ver>.zip），与 tag 名格式一致 →
@@ -78,22 +79,26 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # 显式装 pnpm（读 package.json packageManager 字段钉版本），不依赖 runner 预装 corepack
+      - uses: pnpm/action-setup@v4
+
       - name: Setup Node.js
         uses: actions/setup-node@v5
         with:
           node-version-file: .nvmrc
-          cache: npm
+          cache: pnpm
 
-      # 依赖安装（只装 dev 树）：dsh 声明为 peerDependencies（安装方 npm ci 自动装；
-      # 构建期用 --omit=peer 跳过，仅装 @rspack/core + binding，实测 11 包 2s vs
-      # 全量 538 包 38s，产物字节一致）。不用 optionalDependencies：rspack 的 native
-      # binding 本身就是 optional 依赖，--omit=optional 会误伤它（npm/cli#4828 同源）
+      # 依赖安装（装 dev 构建树）：dsh 声明为 peerDependencies（安装方 pnpm i 自动装；
+      # 构建期不必装 dsh 树，只需 @rspack/core + binding）。pnpm 11 不支持「--omit=peer」
+      # 这个 CLI 写法（报 Unknown option: 'omit'），故改用 pnpm install --frozen-lockfile
+      # 装全量 dev 树（构建产物与 npm ci --omit=peer 时一致）。不用 optionalDependencies：
+      # rspack 的 native binding 本身就是 optional 依赖，--omit=optional 会误伤它（npm/cli#4828 同源）
       - name: Install dev dependencies
-        run: npm ci --omit=peer
+        run: pnpm install --frozen-lockfile
 
       # pack 内部自动 build（rspack）+ 复制交付清单 + zip + sha256
       - name: Package
-        run: npm run pack
+        run: pnpm run pack
 
       # tag 场景直传 zip + sha256 到 release（--clobber 幂等，重复推送/补传不报错）。
       # dispatch 手动场景无 tag 无 release，本步跳过，产物仍走下方 artifact 3 天窗口

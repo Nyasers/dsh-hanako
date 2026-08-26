@@ -153,12 +153,13 @@ export default function registerWebuiRoutes(app, ctx) {
     );
   });
 
-  // 轻量就绪探测端点（浏览器端重试轮询复用同一探测逻辑；未就绪时附带自检诊断字段便于排障）
+  // 轻量就绪探测端点（浏览器端重试轮询复用同一探测逻辑；恒附带自检诊断字段——
+  // 就绪时也带：前端就绪态低频兜底探测需感知 deps 的更新/安装进行中状态（避免
+  // 更新/安装触发瞬间的页面跳变），未就绪时供排障。diagnostics 为 null 时下一轮补上）
   app.get("/webui/health", async (c) => {
     const ready = await probeHost(port, ctx.log);
     const body = { ok: ready, port, timestamp: Date.now() };
-    // 未就绪时附带诊断（可为 null——工具模块冷启动未加载，下一轮轮询补上）；就绪时保持轻量
-    if (!ready) body.diagnostics = readDiagnostics(ctx, cfg, port);
+    body.diagnostics = readDiagnostics(ctx, cfg, port);
     return c.json(body);
   });
 

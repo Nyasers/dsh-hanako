@@ -45,7 +45,7 @@ function buildInstallText(r) {
     return `DSH 依赖安装完成：v${r.version || "?"}${start}。`;
   }
   if (r && r.state === "installing") {
-    return "DSH 依赖安装已在执行中（npm i @deepseek-ai/dsh），请稍候查看安装卡片或 DSHana 标签页。";
+    return "DSH 依赖安装已在执行中（pnpm add @deepseek-ai/dsh），请稍候查看安装卡片或 DSHana 标签页。";
   }
   return `DSH 依赖安装失败：${(r && r.error) || "未知错误"}`;
 }
@@ -53,7 +53,7 @@ function buildInstallText(r) {
 export const name = "dsh_install";
 
 export const description =
-  "安装或验证 DeepSeek Harness（dsh）依赖：action=install（默认）npm i @deepseek-ai/dsh 到数据目录 dsh-pkg（registry 兜底 + 自动运行级重验 + autoStart 拉起 web host，渲染安装卡片）；" +
+  "安装或验证 DeepSeek Harness（dsh）依赖：action=install（默认）pnpm add @deepseek-ai/dsh 到数据目录 dsh-pkg（registry 兜底 + 自动运行级重验 + autoStart 拉起 web host，渲染安装卡片）；" +
   "action=verify 只检测依赖完整性（运行级冒烟，只读）。" +
   "适用场景：dsh_run 报「dsh 包未就绪」、DSHana 标签页依赖缺失。" +
   "默认异步：后台执行 + 完成回调，wait=true 同步；安装中重复调用返回状态不重复执行。" +
@@ -66,12 +66,12 @@ export const parameters = {
       type: "string",
       enum: ["install", "verify"],
       description:
-        "install=安装依赖（默认，npm i @deepseek-ai/dsh 到 dsh-pkg，registry 兜底 + 自动重验 + autoStart）；verify=只检测依赖完整性（运行级冒烟，只读）",
+        "install=安装依赖（默认，pnpm add @deepseek-ai/dsh 到 dsh-pkg，registry 兜底 + 自动重验 + autoStart）；verify=只检测依赖完整性（运行级冒烟，只读）",
     },
     wait: {
       type: "boolean",
       description:
-        "false（默认）= 异步：install 立即返回，后台执行 + 安装卡片实时日志，完成后宿主唤醒带回结果；true = 同步：等安装跑完直接返回最终结果（npm i 可能耗时数分钟，会阻塞当前回合）",
+        "false（默认）= 异步：install 立即返回，后台执行 + 安装卡片实时日志，完成后宿主唤醒带回结果；true = 同步：等安装跑完直接返回最终结果（pnpm add 可能耗时数分钟，会阻塞当前回合）",
     },
     autoStart: {
       type: "boolean",
@@ -87,7 +87,7 @@ export const sessionPermission = {
   describeSideEffect: () => ({
     kind: "external_api",
     summary:
-      "安装或验证 DeepSeek Harness（dsh）依赖：npm i @deepseek-ai/dsh（消耗网络，写入插件数据目录 dsh-pkg），可选自动启动 dsh web host",
+      "安装或验证 DeepSeek Harness（dsh）依赖：pnpm add @deepseek-ai/dsh（消耗网络，写入插件数据目录 dsh-pkg），可选自动启动 dsh web host",
     ruleId: "dsh-hanako-dsh-install",
   }),
 };
@@ -160,7 +160,7 @@ async function doExecute(input, ctx) {
       content: [
         {
           type: "text",
-          text: "DSH 依赖安装已在执行中（npm i @deepseek-ai/dsh），请稍候查看安装卡片或 DSHana 标签页",
+          text: "DSH 依赖安装已在执行中（pnpm add @deepseek-ai/dsh），请稍候查看安装卡片或 DSHana 标签页",
         },
       ],
       details: { dsh: { action: "install", state: "installing" } },
@@ -194,7 +194,7 @@ async function doExecute(input, ctx) {
     bus,
     sessionPath,
     taskId,
-    label: "DSH 依赖安装（npm i @deepseek-ai/dsh）",
+    label: "DSH 依赖安装（pnpm add @deepseek-ai/dsh）",
     type: "dsh-install",
   });
   doInstall()
@@ -237,7 +237,7 @@ async function doExecute(input, ctx) {
     content: [
       {
         type: "text",
-        text: "DSH 依赖安装已在后台执行（npm i @deepseek-ai/dsh，registry 兜底 + 自动运行级重验），完成后后台消息带回结果；进度与实时日志见上方安装卡片",
+        text: "DSH 依赖安装已在后台执行（pnpm add @deepseek-ai/dsh，registry 兜底 + 自动运行级重验），完成后后台消息带回结果；进度与实时日志见上方安装卡片",
       },
     ],
     details: {
@@ -245,7 +245,7 @@ async function doExecute(input, ctx) {
       card: {
         route: "/card/dep?taskId=" + encodeURIComponent(taskId),
         title: "DSH 安装",
-        description: "npm i @deepseek-ai/dsh",
+        description: "pnpm add @deepseek-ai/dsh",
         aspectRatio: "16:1",
       },
     },
