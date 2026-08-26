@@ -2,6 +2,7 @@
   "name": "dsh-hanako",
   "version": "0.17.1",
   "private": true,
+  "packageManager": "pnpm@11.24.0",
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",
@@ -22,7 +23,7 @@
     "dot": "^1.1.3",
     "fs-extra": "^11.4.0",
     "html-minifier-terser": "^7.2.0",
-    "npm": "^12.0.2",
+    "pnpm": "^11.24.0",
     "terser": "^5.50.0"
   }
 }

@@ -7,9 +7,11 @@
 // 直接拒绝（bump 是发版动作，不允许混入其他改动）。
 //
 // 职责边界：只做版本号的机械同步——package.json（单一事实源）bump → manifest.json
-// 同步（防手改漏同步的坑）→ package-lock.json 同步（对齐 npm i 重写
-// lock 树的版本语义，漏掉会残留旧版 lock）→
-// pack 校验（版本一致性强制校验）→ commit + annotated tag。push 手动（tag 触发 CI 发布）。
+// 同步（防手改漏同步的坑）→ pack 校验（版本一致性强制校验）→ commit + annotated tag。
+// push 手动（tag 触发 CI 发布）。
+// 说明：pnpm-lock.yaml 不含该包自身 version（lockfileVersion 仅记录依赖解析树与
+// importers 的依赖声明，根包版本不落在 lock 里），故 bump 只同步 package.json +
+// manifest.json，pnpm-lock.yaml 无需（也无法）同步 version，交由 pnpm install 自动维护。
 // 不碰 CHANGELOG：条目描述是发版内容，由发版人在 bump 前写好并提交（本脚本只在
 // 版本号层面保证契约一致，CHANGELOG 是否齐全由人负责）。
 //
@@ -92,7 +94,7 @@ function main() {
     pkg.version = next;
     write("package.json", pkg);
   }
-  console.log(`[version] 1/5 package.json -> ${next}`);
+  console.log(`[version] 1/4 package.json -> ${next}`);
 
   // 2) manifest.json 同步（脚本保证同步，防漏）
   if (!dryRun) {
@@ -100,32 +102,22 @@ function main() {
     manifest.version = next;
     write("manifest.json", manifest);
   }
-  console.log(`[version] 2/5 manifest.json -> ${next}`);
+  console.log(`[version] 2/4 manifest.json -> ${next}`);
 
-  // 2.5) package-lock.json 同步（npm i 时 npm 会重写 lockfile 树；此处对 lock 的顶层
-  //    version 与 packages[""] 的 version 做机械对齐，让 bump 与 npm i 的 lock
-  //    语义一致，避免发版后残留旧版 lockfile）
-  if (!dryRun) {
-    const lock = read("package-lock.json");
-    if (lock?.packages?.[""]) {
-      lock.version = next;
-      lock.packages[""].version = next;
-      write("package-lock.json", lock);
-    }
-  }
-  console.log(`[version] ${dryRun ? "[dry-run] " : ""}2.5/5 package-lock.json -> ${next}`);
+  // 2.5) pnpm-lock.yaml 不同步版本（见文件头：pnpm-lock 不含根包 version，bump 只同步
+  //    package.json + manifest.json；lock 由 pnpm install 自动维护，不做机械对齐）
 
   // 3) pack 验证（内含版本一致性强制校验：package.json == manifest.json == 打包版本，
   //    不一致直接 fail；打包版本只读 package.json，不传参）
-  run(`node scripts/pack.mjs`, "4/5 打包验证");
+  run(`node scripts/pack.mjs`, "3/4 打包验证");
 
   // 4) git commit + annotated tag（CHANGELOG 由发版人自行维护，bump 前写好并提交；
-  //    本脚本只提交版本号三个文件）
-  run(`git add package.json manifest.json package-lock.json`, "git add");
+  //    本脚本只提交版本号两个文件）
+  run(`git add package.json manifest.json`, "git add");
   run(`git commit -m "chore: bump v${next}"`, "git commit");
   run(`git tag -a v${next} -m "v${next}"`, `git tag -a v${next}`);
 
-  console.log(`\n[version] ✅ v${next} bump 完成（package.json + manifest.json + package-lock.json 对齐）。推送（tag 触发 CI 发布）：`);
+  console.log(`\n[version] ✅ v${next} bump 完成（package.json + manifest.json 对齐）。推送（tag 触发 CI 发布）：`);
   console.log(`  git push origin master --tags`);
 }
 

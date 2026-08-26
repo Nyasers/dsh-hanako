@@ -34,13 +34,13 @@ import {
 // ---- 依赖安装日志通道（统一）----
 // installDepsFromPlugin 内部 emitLog(s, src)：同一份文本同时进
 //   ① 内存尾环 g.depsInstallLog（≤DEPS_LOG_CAP=8000，卡片/诊断界面实时读尾部；
-//      旧实现 npm 流式累积不设上限，长安装内存无界增长）
-//   ② 会话日志文件（持久诊断：src=npm 记 npm i 原始输出、src=hana 记里程碑
+//      旧实现 pnpm 流式累积不设上限，长安装内存无界增长）
+//   ② 会话日志文件（持久诊断：src=pnpm 记 pnpm i 原始输出、src=hana 记里程碑
 //      [依赖安装]…；g.appendLog 行规范化 \r\n/\r → \n 逐行加前缀，见 index.js）。
-// 旧「命令完成后一次性 g.appendLog("npm", out)」废弃——npm 输出逐 chunk 实时写。
+// 旧「命令完成后一次性 g.appendLog("pnpm", out)」废弃——pnpm 输出逐 chunk 实时写。
 const DEPS_LOG_CAP = 8000;
 
-// dsh 依赖位置两形态——① 数据目录 dsh-pkg/（Agent npm i @deepseek-ai/dsh 部署的轻量分发形态，
+// dsh 依赖位置两形态——① 数据目录 dsh-pkg/（Agent pnpm i @deepseek-ai/dsh 部署的轻量分发形态，
 // 优先）；② 插件安装目录 node_modules（现役 zip 自带形态，兑底）。DSH_HOME 恒在数据目录。
 export function resolveDshPkgDir(cfg) {
   if (cfg?.dataDir) {
@@ -122,14 +122,14 @@ export function readDshInstalledVersion(cfg) {
 // 参照技能文档 dsh-hanako/SKILL.md 依赖自主部署章节：部署目标恒为数据目录 dsh-pkg
 // （升级安装会清插件目录 node_modules，数据目录随插件生命周期保留；不部署到插件根），
 // 把插件根的 package.json 复制进去，在 pkgDir 下创建指向宿主 electron node 的代理脚本，
-// 然后执行 npm i @deepseek-ai/dsh --omit=dev --loglevel=http。
+// 然后执行 pnpm i @deepseek-ai/dsh --omit=dev --loglevel=http。
 // 关键：PATH 首部指向 pkgDir——代理脚本（node.cmd/node）将子进程 node 请求转发到宿主 electron node，
 // koffi/node-pty 的 install script 经 cmd 起子进程 node 时就能找到宿主 electron node。
 // --omit=dev 剔除 rspack 构建树（peer 自动装默认开启，保留 dsh 树）。
 // registry 默认官方源，失败自动重试 npmmirror。部署是长任务：本函数异步
 // 执行不 await（调用方立即返回，页面靠轮询诊断刷新）；状态记单例 g.depsInstalling /
 // g.depsInstallError / g.depsInstallAt / g.depsInstallLog（内存尾环 ≤DEPS_LOG_CAP，
-// npm 输出与里程碑同通道 emitLog 实时写，见文件头「依赖安装日志通道」）。
+// pnpm 输出与里程碑同通道 emitLog 实时写，见文件头「依赖安装日志通道」）。
 export async function installDepsFromPlugin(ctxConfig, ctxDataDir) {
   const g = getSingleton();
   // 部署中并发调用直接返回（路由侧也会先查 g.depsInstalling，这里是直调兜底）
@@ -145,7 +145,7 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir) {
   g.depsInstallAt = new Date().toISOString();
   g.depsInstallLog = "";
   // 统一日志通道（见文件头）：同一份文本进内存尾环（≤DEPS_LOG_CAP，实时）+ 会话日志
-  // 文件（src=npm 原始输出 / src=hana 里程碑）。每次写入刷新 depsInstallAt（前端
+  // 文件（src=pnpm 原始输出 / src=hana 里程碑）。每次写入刷新 depsInstallAt（前端
   // installing 态显示「更新于 HH:MM:SS」、3s 轮询 health 随诊断刷新 installLog 尾部）。
   const emitLog = (s, src) => {
     const text = String(s);
@@ -171,7 +171,7 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir) {
       throw new Error("插件根缺少 package.json：" + srcPkg);
     copyFileSync(srcPkg, join(pkgDir, "package.json"));
     milestone("Copied package.json to " + pkgDir);
-    // 3. 创建 node 代理，定位 npm-cli.js
+    // 3. 创建 node 代理，定位 pnpm.cjs
     if (IS_WIN) {
       const script = join(pkgDir, "node.cmd");
       const content = `@"${ELECTRON_NODE}" %*\n`;
@@ -182,22 +182,22 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir) {
       writeFileSync(script, content, { mode: 0o755 });
     }
     milestone("Created proxy node at " + pkgDir);
-    const npmCli = join(
+    const pnpmCli = join(
       PLUGIN_ROOT,
       "node_modules",
-      "npm",
+      "pnpm",
       "bin",
-      "npm-cli.js",
+      "pnpm.cjs",
     );
-    if (!existsSync(npmCli)) {
-      throw new Error("npm-cli.js 不存在：" + npmCli);
+    if (!existsSync(pnpmCli)) {
+      throw new Error("pnpm.cjs 不存在：" + pnpmCli);
     }
-    // 4. npm i @deepseek-ai/dsh：--omit=dev 剔除构建树；PATH 首部指向 pkgDir（代理脚本 node.cmd/node 让 install script 找到宿主 electron node）
+    // 4. pnpm i @deepseek-ai/dsh：--omit=dev 剔除构建树；PATH 首部指向 pkgDir（代理脚本 node.cmd/node 让 install script 找到宿主 electron node）
     const run = async (registryArgs) => {
       const child = spawn(
         ELECTRON_NODE,
         [
-          npmCli,
+          pnpmCli,
           "i",
           "@deepseek-ai/dsh",
           "--omit=dev",
@@ -215,21 +215,21 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir) {
         },
       );
       let out = ""; // 仅用于错误信息提取（失败时拼进错误文本）
-      // npm 输出逐 chunk 实时进统一日志通道（emitLog：内存尾环 ≤DEPS_LOG_CAP
-      // + 会话日志 src=npm 实时写，行规范化 \r\n/\r → \n——取代旧「命令完成后一次性
-      // g.appendLog("npm", out)」）；每次 data 刷新 depsInstallAt——前端 3s 轮询 health
+      // pnpm 输出逐 chunk 实时进统一日志通道（emitLog：内存尾环 ≤DEPS_LOG_CAP
+      // + 会话日志 src=pnpm 实时写，行规范化 \r\n/\r → \n——取代旧「命令完成后一次性
+      // g.appendLog("pnpm", out)」）；每次 data 刷新 depsInstallAt——前端 3s 轮询 health
       // 随诊断刷新 installLog 尾部，呈现实时进度
       const cap = (d) => {
         const text = String(d).replace(/\r\n/g, "\n").replace(/\r/g, "\n");
         out += text;
-        emitLog(text, "npm");
+        emitLog(text, "pnpm");
       };
       child.stdout.on("data", cap);
       child.stderr.on("data", cap);
       const code = await new Promise((res) => child.once("close", res));
       if (code !== 0)
         throw new Error(
-          "npm i 失败 @deepseek-ai/dsh（exit " +
+          "pnpm i 失败 @deepseek-ai/dsh（exit " +
             code +
             "）：" +
             (out.slice(-300) || "无输出"),
@@ -253,7 +253,7 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir) {
     );
     if (!existsSync(cliBin)) {
       throw new Error(
-        "npm i 完成但未找到 dsh 包：" +
+        "pnpm i 完成但未找到 dsh 包：" +
           cliBin +
           " 不存在（部署目录 " +
           pkgDir +
@@ -277,7 +277,7 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir) {
 
 // ---- 依赖运行级完整性验证（deps 存在性之外的加载冒烟）----
 // dsh 是 cordis 生态，模块图挂大量 peer 依赖（dsh-agent/dsh-llm-deepseek/dsh-tool-* 等）：
-// npm i 中断 / install script 失败未回滚 / --omit=peer 误用都会造成「入口文件在、依赖缺」
+// pnpm i 中断 / install script 失败未回滚 / --omit=peer 误用都会造成「入口文件在、依赖缺」
 // 的假就绪，运行时才抛 ERR_MODULE_NOT_FOUND。文件存在 ≠ 依赖完整。
 // 可靠检测 = 运行级验证「node <cliBin> --version」：node 沿 import 图加载整个 cordis 模块树，
 // 任何依赖缺失都会抛错且退出码非 0（技能文档「部署后验证 node lib/bin.js --version 应输出
