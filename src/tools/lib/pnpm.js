@@ -20,9 +20,10 @@
 //
 // 导出：PNPM_VERSION（版本常量）/ ensurePnpm（幂等引导，返回 pnpm 入口绝对路径）
 // / tryHostChannel（宿主通道探测占位）/ runPnpm（spawn 宿主 node + pnpm 入口封装）。
-// 消费方：lib/install.js（installDepsFromPlugin 部署 dsh 依赖树）、lib/check.js
-// （npmViewLatest 查远端版本）、src/lifecycle.js（patch 模板 {{NPM_CLI_PATH}} 占位符
-// 渲染 = ensurePnpm 结果，@dsh-hanako/settings 侧检查链路同用）。
+// 消费方（v0.18.2 收敛）：lib/install.js（installDepsFromPlugin 部署 dsh 依赖树 +
+// verifyDepsSmoke 的 pnpm 引导检查）。lib/check.js（npmViewLatest）与 src/lifecycle.js
+// （patch 模板 {{NPM_CLI_PATH}} 占位符）v0.18.2 起退出——版本检查改 HTTP 直查 npm
+// registry（pnpm view 语义等价），patch 模板不再注入 pnpm 入口（settings 侧检查链路同改）。
 //
 // 零运行时依赖：只用 node 内置模块（fs/path/crypto/https/child_process），不引入任何
 // npm 依赖（rspack externalsPresets.node 下保持外部 import）。容错纪律：引导失败抛
@@ -52,7 +53,8 @@ import {
 // 解析失败回退硬编码（与 packageManager 同步的兜底值；升级 pnpm 版本时两处都要改）。
 // ---- 运行时引导配置（静态，版本与文件 sha256 同源）----
 // 版本单一事实源 = 本对象；与 package.json 的 packageManager 字段（构建期 pnpm）解耦：
-// 运行时引导的 pnpm 只服务 pnpm view / pnpm add 两条路径，锁 11.24.0 足够；升级 pnpm
+// 运行时引导的 pnpm 只服务 pnpm add（依赖部署）路径——v0.18.2 起 pnpm view（版本检查）
+// 改 HTTP 直查 npm registry（pnpm view 语义等价），锁 11.24.0 足够；升级 pnpm
 // 时需同时改 version 与对应文件 sha256（实测本地 node_modules/pnpm/dist/* 后更新）。
 // 版本与校验放同一对象，从结构上杜绝「动态版本 × 静态校验」不同步导致的
 // 误导性失败（改 packageManager 只影响构建，不会静默让运行时引导对不上 hash）。

@@ -310,6 +310,7 @@
           + '<div class="diag-body">'
           + '<div class="diag-name">' + escHtml(d.name) + '</div>'
           + (d.key === "deps" && d.version ? '<div class="diag-detail">' + escHtml(versionLine(d)) + '</div>' : "") // deps 版本行（当前/最新/可更新）最新/可更新）
+          + (d.key === "deps" && d.pnpmChecked ? '<div class="diag-detail">' + escHtml(pnpmLine(d)) + '</div>' : "") // deps 卡片 pnpm 引导状态行（独立子项，不进依赖就绪判定）
           + (d.detail ? '<div class="diag-detail">' + escHtml(d.detail) + '</div>' : "")
           + (d.key === "deps" && d.installing ? progressHtml(d) : "") // 安装实时进度
           + (d.key === "deps" && d.updating ? updateProgressHtml(d) : "") // 更新 DSH 进度/结果
@@ -416,6 +417,16 @@
       }
       if (c && c.error) s += " · 检查失败：" + c.error;
       return s;
+    }
+    // deps 卡片 pnpm 引导状态行（独立子项：就绪/未就绪 + 原因；不并入「dsh 依赖就绪」
+    // 判定——web host 启动不依赖 pnpm，patch 已去注入。数据源 = 诊断 pnpmReady/
+    // pnpmVersion/pnpmError（verifyDepsSmoke 与 dsh 冒烟并行检查，pnpm 缺失自动重下自愈）；
+    // settings「检查与更新 DSH」卡片不展示 pnpm 状态）
+    function pnpmLine(d) {
+      if (d.pnpmReady) {
+        return "pnpm 引导：就绪" + (d.pnpmVersion ? "（v" + d.pnpmVersion + "）" : "");
+      }
+      return "pnpm 引导：未就绪" + (d.pnpmError ? "（原因：" + d.pnpmError + "）" : "");
     }
     // 更新 DSH 进度/结果块（update-result.json 内容，随 3s 轮询刷新）
     function updateProgressHtml(d) {
