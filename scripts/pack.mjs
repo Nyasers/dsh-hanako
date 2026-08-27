@@ -3,7 +3,8 @@
 //
 // scripts/pack.mjs — dsh-hanako 轻量化打包（适配单 bundle 收敛架构；构建脚本不随源码编译）
 // 交付物 = 代码 bundle（dist/）+ 配置 + 技能 + cordis 插件 + lockfile，零依赖（Agent pnpm i 装，
-// 内置 pnpm 经 node_modules/pnpm 提供，供 tools/lib/install.js 部署 @deepseek-ai/dsh）。
+// pnpm 运行时引导：tools/lib/pnpm.js ensurePnpm 下载单文件 pnpm.mjs 到数据目录 pnpm-dist/，
+// 供 tools/lib/install.js 部署 @deepseek-ai/dsh）。
 // 流程：build（rspack 单 bundle）→ 复制交付清单 → zip → SHA256。
 // 用法：node scripts/pack.mjs [version]（缺省用 package.json 的 version）
 // 产出：releases/dsh-hanako-v<version>.zip + .sha256；铺平目录 _tmp/pkg/（zip 中间原料，可清空）
@@ -50,17 +51,16 @@ const staticItems = [
   "pnpm-workspace.yaml",
   "dsh-plugin",
   "skills",
-  "node_modules/pnpm",
 ];
 const distDir = join(ROOT, "dist");
 for (const item of staticItems) {
   const src = join(ROOT, item);
   if (!fs.pathExistsSync(src)) throw new Error(`静态项不存在：${item}`);
-  // dereference: true —— pnpm 的 node_modules 用符号链接/junction 指向虚拟仓库
-  // （node_modules/pnpm → .pnpm/pnpm@…/node_modules/pnpm）。默认 dereference:false 会把
-  // 这个链接原样复制进 zip，交付后即成断链；dereference 才能把真实 pnpm 文件打进 zip，
-  // 供 tools/lib/install.js 用 node 执行 node_modules/pnpm/bin/pnpm.cjs（"内置 pnpm"）。
-  // 其它静态项（LICENSE/README/package.json/manifest/dsh-plugin/skills）均为真实实体，不受影响。
+  // dereference: true —— 历史为内置 pnpm 的符号链接复制（node_modules/pnpm →
+  // .pnpm/pnpm@…/node_modules/pnpm，zip 内置 pnpm）；现版本起 pnpm 改运行时引导
+  // （tools/lib/pnpm.js ensurePnpm 下载单文件到数据目录 pnpm-dist/），不再打包
+  // node_modules/pnpm——其余静态项（LICENSE/README/package.json/manifest/dsh-plugin/
+  // skills）均为真实实体，dereference 恒为 no-op，保留无害。
   fs.copySync(src, join(distDir, item), {
     dereference: true,
     filter: (srcPath) => {

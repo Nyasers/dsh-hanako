@@ -15,70 +15,50 @@
 // g.checkResult（内存，不再写 check-result.json 桥接文件——v0.18.1 起设置页检查
 // 改 dsh 侧直查，无跨进程读回需求）。注释风格保持宿主侧（中文/双引号/分号）。
 
-import { spawn } from "node:child_process";
-import { join } from "node:path";
-import { getSingleton, PLUGIN_ROOT, ELECTRON_NODE } from "./state.js";
+import { getSingleton } from "./state.js";
+import { ensurePnpm, runPnpm } from "./pnpm.js";
 import { readDshInstalledVersion, compareSemver } from "./install.js";
 
 // spawn pnpm view @deepseek-ai/dsh version（15s 超时 kill；官方源失败重试一次 npmmirror；
-// 仍失败 → { version:null, error }）。pnpm.cjs 来自插件安装目录 node_modules/pnpm
-// （与 installDepsFromPlugin 同一来源）；spawn 目标 = 宿主 electron node。
-function npmViewLatest() {
-  const pnpmCli = join(PLUGIN_ROOT, "node_modules", "pnpm", "bin", "pnpm.cjs");
-  const run = (registryArgs) => {
-    return new Promise((resolve) => {
-      let child = null;
-      try {
-        child = spawn(
-          ELECTRON_NODE,
-          [pnpmCli, "view", "@deepseek-ai/dsh", "version", ...registryArgs],
-          { stdio: ["ignore", "pipe", "pipe"], windowsHide: true },
-        );
-      } catch (e) {
-        resolve({ ok: false, error: e?.message || String(e) });
-        return;
-      }
-      let out = "";
-      let err = "";
-      child.stdout.on("data", (d) => {
-        out = (out + String(d)).slice(-800);
-      });
-      child.stderr.on("data", (d) => {
-        err = (err + String(d)).slice(-800);
-      });
-      const timer = setTimeout(() => {
-        try {
-          child.kill();
-        } catch {
-          /* 已退出 */
-        }
-      }, 15000);
-      child.once("close", (code) => {
-        clearTimeout(timer);
-        const version = out.trim();
-        if (code === 0 && version) resolve({ ok: true, version });
-        else
-          resolve({
-            ok: false,
-            error: (err || out || `退出码 ${code}`).trim().slice(0, 300),
-          });
-      });
-    });
-  };
-  return (async () => {
+// 仍失败 → { version:null, error }）。pnpm 入口 = 运行时引导（lib/pnpm.js ensurePnpm：
+// 下载 pnpm-{version} 单文件 pnpm.mjs 到数据目录 pnpm-dist/，与 installDepsFromPlugin
+// 同一来源；zip 不再内置 node_modules/pnpm）；spawn 目标 = 宿主 electron node
+// （ELECTRON_RUN_AS_NODE=1，runPnpm 封装）。
+async function npmViewLatest() {
+  let pnpmCli;
+  try {
+    pnpmCli = await ensurePnpm();
+  } catch (e) {
+    return { version: null, error: "pnpm 引导失败：" + (e?.message || e) };
+  }
+  const run = async (registryArgs) => {
     try {
-      const first = await run([]);
-      if (first.ok) return { version: first.version, error: null };
-      const second = await run(["--registry=https://registry.npmmirror.com"]);
-      if (second.ok) return { version: second.version, error: null };
+      const r = await runPnpm(
+        ["view", "@deepseek-ai/dsh", "version", ...registryArgs],
+        { pnpmCli, timeoutMs: 15000 },
+      );
+      const version = r.stdout.trim();
+      if (r.code === 0 && version) return { ok: true, version };
       return {
-        version: null,
-        error: second.error || first.error || "查询失败",
+        ok: false,
+        error: (r.stderr || r.stdout || `退出码 ${r.code}`).trim().slice(0, 300),
       };
     } catch (e) {
-      return { version: null, error: e?.message || String(e) };
+      return { ok: false, error: e?.message || String(e) };
     }
-  })();
+  };
+  try {
+    const first = await run([]);
+    if (first.ok) return { version: first.version, error: null };
+    const second = await run(["--registry=https://registry.npmmirror.com"]);
+    if (second.ok) return { version: second.version, error: null };
+    return {
+      version: null,
+      error: second.error || first.error || "查询失败",
+    };
+  } catch (e) {
+    return { version: null, error: e?.message || String(e) };
+  }
 }
 
 // ---- 检查 DSH 更新（能力层）：本地版本 + 远端版本 → { localVersion, latestVersion,

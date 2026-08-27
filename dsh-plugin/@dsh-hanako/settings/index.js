@@ -17,7 +17,8 @@
 //   ② DSH 版本卡片：@deepseek-ai/dsh 版本检查与更新。本地版本 dsh 侧直读 dsh-pkg
 //      package.json（零延迟，挂载即显示）；远端版本 **dsh 侧直查**（v0.18.1 起不再走
 //      宿主桥接——宿主 resources.watch 链路不可靠，曾致检查请求写入后无人消费、前端
-//      永久 pending）：本插件 spawn 宿主 electronNode + pnpm.cjs 执行
+//      永久 pending）：本插件 spawn 宿主 electronNode + pnpm 单文件入口（npmCliPath，
+//      运行时引导产物）执行
 //      `pnpm view @deepseek-ai/dsh version`（官方源失败自动重试 npmmirror，15s 超时
 //      kill），结果即最新版本。「更新到最新」仍写 { state:'requested' } 到
 //      <dataDir>/update-request.json，宿主 5s 轮询感知后执行完整更新（停 web host →
@@ -40,8 +41,9 @@
 // 的 /api 前缀，冲突只会发生在同 (kind, path) 重复注册（插件重载未清理场景），此时
 // 降级记日志不阻断。错误统一返回 { ok:false, error } 结构。
 //
-// config 注入：dshPkgDir（dsh 包安装目录）、npmCliPath（宿主插件安装目录
-// node_modules/pnpm/bin/pnpm.cjs，即 {{NPM_CLI_PATH}} 渲染路径）、electronNode（宿主
+// config 注入：dshPkgDir（dsh 包安装目录）、npmCliPath（运行时引导的 pnpm 单文件入口：
+// 宿主 lib/pnpm.js ensurePnpm 下载 pnpm.mjs 到数据目录 pnpm-dist/，即 {{NPM_CLI_PATH}}
+// 渲染路径）、electronNode（宿主
 // electron 进程的 node 可执行文件）、dataDir（宿主插件数据目录）——由宿主 patch 模板
 // 渲染（{{DSH_PKG_DIR}}/{{NPM_CLI_PATH}}/{{ELECTRON_NODE}}/{{DATA_DIR}}，见
 // dsh-hanako.patch.yml.tpl / src/lifecycle.js）。v0.18.1 起 npmCliPath / electronNode
@@ -131,7 +133,7 @@ function compareVersions(a, b) {
 }
 
 // ---- 远端版本直查（v0.18.1 起替代宿主桥接；语义与宿主 lib/check.js npmViewLatest 一致）----
-// spawn 宿主 electron node + 宿主 pnpm.cjs（config 注入字段 electronNode / npmCliPath，
+// spawn 宿主 electron node + pnpm 单文件入口（config 注入字段 electronNode / npmCliPath，
 // 即 patch 模板 {{ELECTRON_NODE}} / {{NPM_CLI_PATH}} 渲染路径）执行
 // `pnpm view @deepseek-ai/dsh version`（单字段输出 = 纯版本号，trim 即可）；15s 超时
 // kill；官方源失败自动重试 --registry=https://registry.npmmirror.com。仍失败返回
@@ -302,7 +304,7 @@ export function apply(ctx, config) {
         });
 
         // POST /api/hana-settings.check-version：本地版本直读（零延迟）+ 远端版本
-        // dsh 侧直查——spawn 宿主 electronNode + pnpm.cjs 执行 `pnpm view
+        // dsh 侧直查——spawn 宿主 electronNode + pnpm 单文件入口执行 `pnpm view
         // @deepseek-ai/dsh version`（官方源失败重试 npmmirror，15s 超时 kill），
         // 响应 { ok:true, value:{ localVersion, latestVersion, updateAvailable, error? } }。
         // 不再写 update-request.json / 读 check-result.json（v0.18.1 起废弃宿主桥接：

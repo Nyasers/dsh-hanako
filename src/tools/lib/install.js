@@ -31,6 +31,7 @@ import {
   ELECTRON_NODE_ENV,
   IS_WIN,
 } from "./state.js";
+import { ensurePnpm, runPnpm } from "./pnpm.js";
 
 // ---- 依赖安装日志通道（统一）----
 // installDepsFromPlugin 内部 emitLog(s, src)：同一份文本同时进
@@ -191,7 +192,7 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir) {
     );
     copyFileSync(srcWs, join(pkgDir, "pnpm-workspace.yaml"));
     milestone("写最小 package.json + pnpm-workspace.yaml 到 " + pkgDir);
-    // 3. 创建 node 代理，定位 pnpm.cjs
+    // 3. 创建 node 代理；pnpm 入口 = 运行时引导（lib/pnpm.js ensurePnpm）
     if (IS_WIN) {
       const script = join(pkgDir, "node.cmd");
       const content = `@"${ELECTRON_NODE}" %*\n`;
@@ -202,15 +203,15 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir) {
       writeFileSync(script, content, { mode: 0o755 });
     }
     milestone("Created proxy node at " + pkgDir);
-    const pnpmCli = join(
-      PLUGIN_ROOT,
-      "node_modules",
-      "pnpm",
-      "bin",
-      "pnpm.cjs",
-    );
-    if (!existsSync(pnpmCli)) {
-      throw new Error("pnpm.cjs 不存在：" + pnpmCli);
+    // pnpm 不再内置（zip 摘除 node_modules/pnpm）：运行时下载 pnpm-{version} 单文件
+    // pnpm.mjs 到数据目录 pnpm-dist/（缓存独立于 dsh-pkg）。引导失败（网络/校验）与
+    // 旧「pnpm.cjs 不存在」语义区分：抛可读错误（含两个 CDN 提示），由外层 catch 记入
+    // g.depsInstallError——不再有「pnpm 缺失」分支（pnpm 已无内置形态）。
+    let pnpmCli;
+    try {
+      pnpmCli = await ensurePnpm({ dataDir });
+    } catch (e) {
+      throw new Error("pnpm 引导失败：" + (e?.message || e));
     }
     // ---- npm → pnpm 升级兼容清理 ----
     // 旧版本 dsh-install 用 npm i 部署 dsh-pkg，会留下 package-lock.json 和扁平的
@@ -238,42 +239,33 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir) {
     // 5. pnpm add @deepseek-ai/dsh：最小 package.json 无 devDeps 无需 omit；allowBuilds 放行
     //    build scripts；PATH 首部指向 pkgDir（代理脚本 node.cmd/node 让 install script 找到宿主 electron node）
     const run = async (registryArgs) => {
-      const child = spawn(
-        ELECTRON_NODE,
-        [
-          pnpmCli,
-          "add",
-          "@deepseek-ai/dsh",
-          "--loglevel=http",
-          ...registryArgs,
-        ],
-        {
-          cwd: pkgDir,
-          stdio: ["ignore", "pipe", "pipe"],
-          env: {
-            ...ELECTRON_NODE_ENV,
-            PATH: pkgDir + delimiter + (process.env.PATH || ""),
-          },
-          windowsHide: true,
-        },
-      );
-      let out = ""; // 仅用于错误信息提取（失败时拼进错误文本）
+      let out = ""; // 仅用于错误信息提取（失败时拼进错误文本）；cap 尾环 ≤64KB
       // pnpm 输出逐 chunk 实时进统一日志通道（emitLog：内存尾环 ≤DEPS_LOG_CAP
       // + 会话日志 src=pnpm 实时写，行规范化 \r\n/\r → \n——取代旧「命令完成后一次性
       // g.appendLog("pnpm", out)」）；每次 data 刷新 depsInstallAt——前端 3s 轮询 health
       // 随诊断刷新 installLog 尾部，呈现实时进度
       const cap = (d) => {
         const text = String(d).replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-        out += text;
+        out = (out + text).slice(-65536);
         emitLog(text, "pnpm");
       };
-      child.stdout.on("data", cap);
-      child.stderr.on("data", cap);
-      const code = await new Promise((res) => child.once("close", res));
-      if (code !== 0)
+      const r = await runPnpm(
+        ["add", "@deepseek-ai/dsh", "--loglevel=http", ...registryArgs],
+        {
+          pnpmCli,
+          cwd: pkgDir,
+          env: {
+            ...ELECTRON_NODE_ENV,
+            PATH: pkgDir + delimiter + (process.env.PATH || ""),
+          },
+          onStdout: cap,
+          onStderr: cap,
+        },
+      );
+      if (r.code !== 0)
         throw new Error(
           "pnpm add 失败 @deepseek-ai/dsh（exit " +
-            code +
+            r.code +
             "）：" +
             (out.slice(-300) || "无输出"),
         );

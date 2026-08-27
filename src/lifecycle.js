@@ -65,6 +65,7 @@ import {
   readDshInstalledVersion,
 } from "./tools/lib/install.js";
 import { checkDshUpdate } from "./tools/lib/check.js";
+import { ensurePnpm } from "./tools/lib/pnpm.js";
 
 const STDERR_CAP = 8192;
 const PORT_READY_TIMEOUT_MS = 60000; // web host 端口就绪等待上限
@@ -564,17 +565,32 @@ export async function ensureWebHost(cfg) {
   // （provider/settings 段）；LOG_PATH = 本次会话日志文件路径（logger 段，四个内嵌
   // 插件经统一日志服务写入同一文件）；NPM_CLI_PATH / ELECTRON_NODE / DATA_DIR =
   // settings 段「检查与更新 DSH」链路（npm view 查远端版本 + 更新请求/结果文件写入数据目录）。
-  const renderPatchTpl = () => {
+  const renderPatchTpl = async () => {
     const gen = join(cfg.dataDir, "dsh-hanako.patch.generated.yml");
+    // {{NPM_CLI_PATH}} = 运行时引导的 pnpm 单文件入口（lib/pnpm.js ensurePnpm：下载
+    // pnpm-{version} 单文件 pnpm.mjs 到数据目录 pnpm-dist/，幂等；首次触发下载）。
+    // 生成模板前 await 确保引导就绪（异步性：ensurePnpm 首次会触发下载）；失败
+    // （离线/CDN 不可达）时该占位符置空——settings「检查与更新 DSH」链路降级为
+    // 「查询失败」（npmViewLatest 对缺失 npmCliPath 已有错误分支），其余 patch 段
+    // （session-query/theme/provider/logger/settings）照常渲染，不因 pnpm 引导失败
+    // 丢掉整份 patch。
+    let pnpmCli = "";
+    try {
+      pnpmCli = await ensurePnpm({ dataDir: cfg.dataDir });
+    } catch (e) {
+      console.warn(
+        `[dsh-run] pnpm 引导失败（${e?.message || e}）：{{NPM_CLI_PATH}} 置空，设置页版本检查将降级为「查询失败」`,
+      );
+    }
     let content = readFileSync(patchTpl, "utf8")
       .split("{{DSH_PKG_DIR}}")
       .join(cfg.dshPkgDir || resolveDshPkgDir(cfg))
       .split("{{LOG_PATH}}")
       .join(logPath)
-      // @dsh-hanako/settings「检查与更新 DSH」链路占位符（pnpm.cjs 路径 /
+      // @dsh-hanako/settings「检查与更新 DSH」链路占位符（pnpm 单文件入口 /
       // 宿主 electron node / 插件数据目录）
       .split("{{NPM_CLI_PATH}}")
-      .join(join(PLUGIN_ROOT, "node_modules", "pnpm", "bin", "pnpm.cjs"))
+      .join(pnpmCli)
       .split("{{ELECTRON_NODE}}")
       .join(ELECTRON_NODE)
       .split("{{DATA_DIR}}")
@@ -584,7 +600,7 @@ export async function ensureWebHost(cfg) {
   };
   if (existsSync(patchTpl)) {
     try {
-      patchFiles.push(renderPatchTpl());
+      patchFiles.push(await renderPatchTpl());
     } catch (e) {
       // 渲染失败（读模板/写数据目录异常）：不挂任何 patch 记 warn（dsh 启动不受影响，
       // 会话全文搜索保持上游默认禁用）

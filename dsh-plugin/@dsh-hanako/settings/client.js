@@ -21,7 +21,7 @@
 //      下拉）三级联动；当前默认回显（POST /api/hana-settings.read）；保存
 //      （POST /api/hana-settings.save）→ agentDefaultModel 服务写 settings.yaml。
 //   ② DSH 版本卡片：@deepseek-ai/dsh 版本检查与更新（v0.18.1 起检查改 **dsh 侧直查**——
-//      后端 spawn 宿主 electron node + pnpm.cjs 执行 `pnpm view @deepseek-ai/dsh version`，
+//      后端 spawn 宿主 electron node + pnpm 单文件入口（npmCliPath，运行时引导产物）执行 `pnpm view @deepseek-ai/dsh version`，
 //      官方源失败重试 npmmirror，不再经宿主桥接；更新仍写 update-request.json 由宿主
 //      5s 轮询执行）——挂载时自动调一次 POST /api/hana-settings.check-version
 //      （本地版本后端直读 dsh-pkg package.json 零延迟；远端版本后端 spawn 直查，慢时
@@ -505,7 +505,8 @@ window.__ModuleLoader__.load({
 
     // ---- DSH 版本卡片：@deepseek-ai/dsh 版本检查与更新（设置中心分组卡片二）----
     // v0.18.1 起检查改 **dsh 侧直查**：本分页 POST /api/hana-settings.check-version，
-    // 后端 spawn 宿主 electronNode + pnpm.cjs 执行 `pnpm view @deepseek-ai/dsh version`
+    // 后端 spawn 宿主 electronNode + pnpm 单文件入口（npmCliPath，运行时引导产物）
+    // 执行 `pnpm view @deepseek-ai/dsh version`
     // （官方源失败重试 npmmirror，15s 超时）→ 返回 { localVersion, latestVersion,
     // updateAvailable, error? }；本地版本后端直读 dsh-pkg package.json（零延迟，
     // 挂载即显示）。不再写 update-request.json / 读 check-result.json（v0.18.1 起

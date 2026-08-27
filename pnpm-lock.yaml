@@ -26,9 +26,6 @@ importers:
       html-minifier-terser:
         specifier: ^7.2.0
         version: 7.2.0
-      pnpm:
-        specifier: ^11.24.0
-        version: 11.24.0
       terser:
         specifier: ^5.50.0
         version: 5.50.0
@@ -350,11 +347,6 @@ packages:
 
   pascal-case@3.1.2:
     resolution: {integrity: sha512-uWlGT3YSnK9x3BQJaOdcZwrnV6hPpd8jFH1/ucpiLRPh/2zCVJKS19E4GvYHvaCcACn3foXZ0cLB9Wrx1KGe5g==}
-
-  pnpm@11.24.0:
-    resolution: {integrity: sha512-vSfjRel23LC+C3oSKCF7BJqBfiGx81XJDb59xGZxiVqLwebQbCRVRQXqk+oLRfSJon7Bv7yN5qlln8oPFvoAAA==}
-    engines: {node: '>=22.13'}
-    hasBin: true
 
   process-nextick-args@2.0.1:
     resolution: {integrity: sha512-3ouUOpQhtgrbOa17J7+uxOTpITYWaGP7/AhoR3+A+/1e9skrzelGi/dXzEYyvbxubEF6Wn2ypscTKiKJFFn1ag==}
@@ -727,8 +719,6 @@ snapshots:
     dependencies:
       no-case: 3.0.4
       tslib: 2.8.1
-
-  pnpm@11.24.0: {}
 
   process-nextick-args@2.0.1: {}
 
