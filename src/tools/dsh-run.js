@@ -11,6 +11,10 @@
 // toolCallCache）紧耦合的代码保留在此；纯协议/解析/唤醒已剥离到 lib/*.js，
 // web host 生命周期在 app/lifecycle.js。
 // 完整模块结构与分发纪律见 DESIGN.md「架构」。
+// dataDir 解析：ctx.dataDir（宿主 onload 注入）→ g.dataDir（单例，onload 已正确初始化）
+// → PLUGIN_ROOT/data（冷启动兜底）。工具调用 ctx 通常没有 dataDir，回退链经单例兜底；
+// 回退值绝不写回单例（防污染 g.dataDir → 卡片 readOp / dsh_ops 定位错目录），
+// 详见 doExecute 内注释。
 //
 // 权限：external_side_effect（调用 dsh 编码 agent 执行任务，消耗 Hana 宿主 provider 额度，Auto 模式送审）。
 import { join } from "node:path";
@@ -773,13 +777,21 @@ async function doExecute(input, ctx) {
   for (const [k, v] of Object.entries(ctx.config || {})) {
     if (v !== undefined && v !== null && v !== "") cfg[k] = v;
   }
-  // 插件数据目录（宿主注入）：DSH_HOME 数据根落在这里（账本随插件生命周期）
-  const dataDir = ctx.dataDir || join(PLUGIN_ROOT, "data");
+  // 插件数据目录（宿主注入）：DSH_HOME 数据根落在这里（账本随插件生命周期）。
+  // 回退链对齐 dsh-update/dsh-install 的 ctx.dataDir || g.dataDir：宿主只对 onload
+  // 生命周期 ctx 注入 dataDir，工具调用 ctx 通常没有（缺 g.dataDir 兜底会回退到
+  // PLUGIN_ROOT/data 并把错误值写进单例，污染 g.dataDir → 卡片 readOp / dsh_ops
+  // 全落到不存在的 dsh-home → 404「任务记录不存在」）。
+  const g = getSingleton();
+  const dataDir = ctx.dataDir || g.dataDir || join(PLUGIN_ROOT, "data");
   cfg.dataDir = dataDir;
   // 首次工具调用即自动生成 config.json（不存在时按 manifest 默认值；幂等，失败静默）
   ensureConfigJson(cfg);
-  // 单例记数据目录（dsh_ops 经 g.dataDir 定位 dsh 会话缓存等数据文件）
-  getSingleton().dataDir = dataDir;
+  // 单例记数据目录（dsh_ops 经 g.dataDir 定位 dsh 会话缓存等数据文件）——
+  // 只在显式注入（ctx.dataDir 非空）或单例为空（冷启动兜底）时写入；ctx.dataDir
+  // 为空且单例已有值时保留单例原值，绝不把 PLUGIN_ROOT/data 回退值覆盖进去。
+  if (ctx.dataDir && ctx.dataDir !== g.dataDir) g.dataDir = ctx.dataDir;
+  else if (!g.dataDir) g.dataDir = dataDir;
   // dsh 依赖位置——数据目录 dsh-pkg/（Agent npm i @deepseek-ai/dsh 部署）优先，插件根兑底
   if (!cfg.dshPkgDir) cfg.dshPkgDir = resolveDshPkgDir(cfg);
 
