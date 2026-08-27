@@ -51,7 +51,7 @@ async function callUnary(base, method, payload, signal, meta) {
 // Node 24 内置全局 WebSocket；帧为 JSON，payload 即 MuxFrame。
 async function* openMux(base, signal) {
   if (typeof WebSocket !== "function") {
-    throw new Error("宿主环境无全局 WebSocket，无法订阅 dsh 事件流");
+    throw new Error("宿主环境无全局 WebSocket，无法订阅 DSH 事件流");
   }
   const url = base.replace(/^http/, "ws") + "/api/events.mux";
   const ws = new WebSocket(url);
@@ -166,7 +166,7 @@ function buildSummary(output, finalText) {
   if (full.length > SUMMARY_HEAD + SUMMARY_TAIL) {
     const hidden = full.length - SUMMARY_HEAD - SUMMARY_TAIL;
     return {
-      text: `${full.slice(0, SUMMARY_HEAD)}\n\n…[中间过程 ${hidden} 字符已折叠，完整输出见 op 快照 / dsh web UI]…\n\n${full.slice(-SUMMARY_TAIL)}`,
+      text: `${full.slice(0, SUMMARY_HEAD)}\n\n…[中间过程 ${hidden} 字符已折叠，完整输出见 op 快照 / DSH web UI]…\n\n${full.slice(-SUMMARY_TAIL)}`,
       summaryOf: "head-tail",
       fullLength: full.length,
     };

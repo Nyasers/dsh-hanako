@@ -248,7 +248,7 @@ function submitTask(
       }
       if (!sp || !sm) {
         throw new Error(
-          "dsh_run 需要 provider/model：请显式传 provider/model，或先在 dsh models 页设置默认模型（settings.yaml agent-default-model）",
+          "dsh_run 需要 provider/model：请显式传 provider/model，或先在 DSH models 页设置默认模型（settings.yaml agent-default-model）",
         );
       }
       const selectModelPayload = {
@@ -391,7 +391,7 @@ function submitTask(
               else if (kind === "error")
                 outcome = {
                   stopReason: "error",
-                  failure: { message: "dsh 任务失败（无错误详情）" },
+                  failure: { message: "DSH 任务失败（无错误详情）" },
                 };
               else outcome = { stopReason: kind || "end_turn" };
               return; // 一次 prompt = 一个 turn，turn/end 即终态
@@ -627,7 +627,7 @@ function submitTask(
 
       if (!outcome || outcome.stopReason === "error") {
         const failure = outcome?.failure;
-        const msg = failure?.message || "dsh 任务执行失败";
+        const msg = failure?.message || "DSH 任务执行失败";
         throw Object.assign(new Error(msg), { code: "DSH_ERROR" });
       }
       if (outcome.stopReason === "aborted") {
@@ -693,9 +693,9 @@ function submitTask(
 export const name = "dsh_run";
 
 export const description =
-  "把任务交给 DeepSeek Harness（dsh）的常驻 web host 执行（完整编码 agent：沙箱 shell 与文件系统、上下文压缩、subagent 级联）。" +
+  "把任务交给 DeepSeek Harness（DSH）的常驻 web host 执行（完整编码 agent：沙箱 shell 与文件系统、上下文压缩、subagent 级联）。" +
   "适合需要独立 agent 上下文深度执行的代码任务（实现/重构/调试/测试）或与当前对话隔离的长任务。" +
-  "默认异步：提交即渲染实时卡片、完成后宿主唤醒结果后台送达；wait=true 同步直接返回。任务会话在 dsh Web UI（webPort，默认 3080）可见可继续。" +
+  "默认异步：提交即渲染实时卡片、完成后宿主唤醒结果后台送达；wait=true 同步直接返回。任务会话在 DSH Web UI（webPort，默认 3080）可见可继续。" +
   "完整调用手册（agentPreset/reasoningEffort/provider/model/sessionId resume/审批/回调模式）见 SKILL: skills/dsh-run/SKILL.md";
 
 export const parameters = {
@@ -704,12 +704,12 @@ export const parameters = {
     task: {
       type: "string",
       description:
-        "要 dsh 执行的任务描述（会作为用户消息发给编码 agent，应包含完整上下文与明确交付物）",
+        "要 DSH 执行的任务描述（会作为用户消息发给编码 agent，应包含完整上下文与明确交付物）",
     },
     cwd: {
       type: "string",
       description:
-        "dsh agent 的沙箱工作目录（bash 与文件系统工具的活动范围，绝对路径）。缺省用插件配置 defaultCwd。resume（传 sessionId）时以会话已有 cwd 为准，该值被忽略。",
+        "DSH agent 的沙箱工作目录（bash 与文件系统工具的活动范围，绝对路径）。缺省用插件配置 defaultCwd。resume（传 sessionId）时以会话已有 cwd 为准，该值被忽略。",
     },
     timeout: {
       type: "number",
@@ -725,28 +725,28 @@ export const parameters = {
       type: "string",
       enum: ["standard", "code", "cordis", "minimal"],
       description:
-        "agent 预设模式：standard=完整编码 agent（默认）/ code=工具呈现批量调用（适合大型编码任务）/ cordis=可读写运行时的 agent / minimal=固定提示词精简 agent。缺省不传，用 dsh 默认（dsh Web UI 可调）。",
+        "agent 预设模式：standard=完整编码 agent（默认）/ code=工具呈现批量调用（适合大型编码任务）/ cordis=可读写运行时的 agent / minimal=固定提示词精简 agent。缺省不传，用 DSH 默认（DSH Web UI 可调）。",
     },
     reasoningEffort: {
       type: "string",
       enum: ["off", "high", "max"],
       description:
-        "推理强度（DeepSeek adapter）：off=关闭思考 / high=高 / max=最高。工具显式传时才指定（v0.9.5 起无全局配置）；不传时由 dsh 默认处理（通常 high）。",
+        "推理强度（DeepSeek adapter）：off=关闭思考 / high=高 / max=最高。工具显式传时才指定（v0.9.5 起无全局配置）；不传时由 DSH 默认处理（通常 high）。",
     },
     provider: {
       type: "string",
       description:
-        "显式指定任务 provider（如 deepseek/sensenova/agnes）。与 model 一起传时 selectModel 覆盖 dsh 默认模型；只传一个时另一侧从 settings.yaml 默认模型补齐。都不传时不 selectModel，任务用 dsh 默认。",
+        "显式指定任务 provider（如 deepseek/sensenova/agnes）。与 model 一起传时 selectModel 覆盖 DSH 默认模型；只传一个时另一侧从 settings.yaml 默认模型补齐。都不传时不 selectModel，任务用 DSH 默认。",
     },
     model: {
       type: "string",
       description:
-        "显式指定任务模型 id（如 deepseek-v4-flash）。与 provider 一起传时 selectModel 覆盖 dsh 默认模型；都不传时不 selectModel，任务用 dsh 默认。",
+        "显式指定任务模型 id（如 deepseek-v4-flash）。与 provider 一起传时 selectModel 覆盖 DSH 默认模型；都不传时不 selectModel，任务用 DSH 默认。",
     },
     sessionId: {
       type: "string",
       description:
-        "复用已有 dsh 会话（resume）：传上次任务的 sessionId（dsh_run 回调/卡片里带，或 dsh web UI 会话列表）则在该会话上继续，agent 保留上文（省上下文重建）。resume 时以会话已有 cwd 为准（自动查询沿用，无需传 cwd）；目标会话应已空闲（上次任务已结束）。",
+        "复用已有 DSH 会话（resume）：传上次任务的 sessionId（dsh_run 回调/卡片里带，或 DSH web UI 会话列表）则在该会话上继续，agent 保留上文（省上下文重建）。resume 时以会话已有 cwd 为准（自动查询沿用，无需传 cwd）；目标会话应已空闲（上次任务已结束）。",
     },
   },
   required: ["task"],
@@ -757,7 +757,7 @@ export const sessionPermission = {
   describeSideEffect: () => ({
     kind: "external_llm_api",
     summary:
-      "把任务交给 DeepSeek Harness（dsh web host）执行：经 Hana 宿主 provider（sensenova/agnes/deepseek）消耗模型额度，dsh agent 可能在指定 cwd 内读写文件、运行沙箱命令",
+      "把任务交给 DeepSeek Harness（DSH web host）执行：经 Hana 宿主 provider（sensenova/agnes/deepseek）消耗模型额度，DSH agent 可能在指定 cwd 内读写文件、运行沙箱命令",
     ruleId: "dsh-hanako-external-llm",
   }),
 };
@@ -823,7 +823,7 @@ async function doExecute(input, ctx) {
       : "");
   const cardBase = {
     route: `/card/op?opId=${encodeURIComponent(opId)}${locQuery}`,
-    title: `dsh ${wait ? "任务" : "运行中"}`,
+    title: `DSH ${wait ? "任务" : "运行中"}`,
     description: String(input.task ?? "").slice(0, 80),
     aspectRatio: "16:1",
   };
@@ -883,7 +883,7 @@ async function doExecute(input, ctx) {
       content: [
         {
           type: "text",
-          text: `任务已提交给 dsh（opId: ${opId}），在后台执行中。进度与输出见上方卡片；完成后后台消息带回结果摘要（callbackMode=${cfg.callbackMode === "full" ? "full" : "summary"}，完整输出在卡片与 dsh web UI 可查）。`,
+          text: `任务已提交给 DSH（opId: ${opId}），在后台执行中。进度与输出见上方卡片；完成后后台消息带回结果摘要（callbackMode=${cfg.callbackMode === "full" ? "full" : "summary"}，完整输出在卡片与 DSH web UI 可查）。`,
         },
       ],
       details: {
@@ -897,7 +897,7 @@ async function doExecute(input, ctx) {
   const res = await promise;
   const note =
     res.stopReason === "end_turn" ? "" : `\n\n[stopReason: ${res.stopReason}]`;
-  const text = `${res.output || "（dsh 未返回文本）"}${note}`;
+  const text = `${res.output || "（DSH 未返回文本）"}${note}`;
   return {
     content: [{ type: "text", text }],
     details: {
@@ -911,7 +911,7 @@ async function doExecute(input, ctx) {
       },
       card: {
         ...cardBase,
-        title: `dsh ${res.stopReason === "end_turn" ? "完成" : "结束"}`,
+        title: `DSH ${res.stopReason === "end_turn" ? "完成" : "结束"}`,
       },
       ...(res.stderr ? { dshStderr: res.stderr.slice(-2000) } : {}),
     },

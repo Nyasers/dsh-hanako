@@ -142,7 +142,7 @@ window.__ModuleLoader__.load({
       // ---- DSH 版本卡片 ----
       versionTitle: "DSH 版本",
       versionSub:
-        "@deepseek-ai/dsh 版本检查与更新（检查 dsh 侧直查远端 registry，结果与 dsh_update 工具 / DSHana 标签页一致）",
+        "@deepseek-ai/dsh 版本检查与更新（检查 DSH 侧直查远端 registry，结果与 dsh_update 工具 / DSHana 标签页一致）",
       versionLocal: "本地版本",
       versionLatest: "最新版本",
       versionNone: "未安装",
@@ -152,7 +152,7 @@ window.__ModuleLoader__.load({
       upToDate: "已是最新版本",
       updateAvailableMsg: "可更新至 v",
       checkFailed: "版本检查失败：",
-      localMissing: "本地未安装 dsh（依赖缺失，请先在 DSHana 标签页安装）",
+      localMissing: "本地未安装 DSH（依赖缺失，请先在 DSHana 标签页安装）",
       update: "更新到最新",
       updateConfirm: "更新将重启 DSHana，正在执行的任务会中断，确定继续？",
       updateConfirmShort: "再次点击确认更新",
@@ -183,7 +183,7 @@ window.__ModuleLoader__.load({
       // ---- DSH version card ----
       versionTitle: "DSH Version",
       versionSub:
-        "@deepseek-ai/dsh version check & update (check queries the registry directly from dsh, same result as dsh_update tool / DSHana tab)",
+        "@deepseek-ai/dsh version check & update (check queries the registry directly from DSH, same result as dsh_update tool / DSHana tab)",
       versionLocal: "Local version",
       versionLatest: "Latest version",
       versionNone: "not installed",
@@ -194,7 +194,7 @@ window.__ModuleLoader__.load({
       updateAvailableMsg: "Update available: v",
       checkFailed: "Version check failed: ",
       localMissing:
-        "dsh is not installed locally (install it from the DSHana tab first)",
+        "DSH is not installed locally (install it from the DSHana tab first)",
       update: "Update to latest",
       updateConfirm:
         "Updating will restart DSHana and interrupt running tasks. Continue?",

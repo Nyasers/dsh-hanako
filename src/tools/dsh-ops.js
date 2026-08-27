@@ -25,7 +25,7 @@ while (!existsSync(join(PLUGIN_ROOT, "manifest.json"))) {
 export const name = "dsh_ops";
 
 export const description =
-  "查询 dsh 会话清单与摘要（解析 dsh 会话缓存 session_projcache，dsh 侧持久化、重启后仍可查）：" +
+  "查询 DSH 会话清单与摘要（解析 DSH 会话缓存 session_projcache，DSH 侧持久化、重启后仍可查）：" +
   "最新在前，limit 默认 10（1~100）。返回 sessionId/标题/cwd/时间/usage/会话统计，供对账与回溯。" +
   "按内容搜索历史会话用 dsh_search。完整调用手册见 SKILL: skills/dsh-ops/SKILL.md";
 
@@ -46,7 +46,7 @@ export const sessionPermission = {
   describeSideEffect: () => ({
     kind: "local_read",
     summary:
-      "读取 dsh 会话持久化缓存 session_projcache.json（dsh 官方 proj cache，本地只读）",
+      "读取 DSH 会话持久化缓存 session_projcache.json（DSH 官方 proj cache，本地只读）",
     ruleId: "dsh-hanako-ops",
   }),
 };
@@ -115,7 +115,7 @@ async function doExecute(input, ctx) {
 
   if (top.length === 0) {
     return {
-      content: [{ type: "text", text: "暂无 dsh 会话记录" }],
+      content: [{ type: "text", text: "暂无 DSH 会话记录" }],
       details: { dsh: { count: 0, limit } },
     };
   }
@@ -128,7 +128,7 @@ async function doExecute(input, ctx) {
     content: [
       {
         type: "text",
-        text: `dsh 会话清单（共 ${items.length} 条，最新 ${top.length} 条）：\n${lines.join("\n")}`,
+        text: `DSH 会话清单（共 ${items.length} 条，最新 ${top.length} 条）：\n${lines.join("\n")}`,
       },
     ],
     details: { dsh: { count: items.length, limit, sessions: top } },

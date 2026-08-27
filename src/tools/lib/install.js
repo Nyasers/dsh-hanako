@@ -289,7 +289,7 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir) {
     );
     if (!existsSync(cliBin)) {
       throw new Error(
-        "pnpm add 完成但未找到 dsh 包：" +
+        "pnpm add 完成但未找到 DSH 包：" +
           cliBin +
           " 不存在（部署目录 " +
           pkgDir +

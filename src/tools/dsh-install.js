@@ -53,9 +53,9 @@ function buildInstallText(r) {
 export const name = "dsh_install";
 
 export const description =
-  "安装或验证 DeepSeek Harness（dsh）依赖：action=install（默认）pnpm add @deepseek-ai/dsh 到数据目录 dsh-pkg（registry 兜底 + 自动运行级重验 + autoStart 拉起 web host，渲染安装卡片）；" +
+  "安装或验证 DeepSeek Harness（DSH）依赖：action=install（默认）pnpm add @deepseek-ai/dsh 到数据目录 dsh-pkg（registry 兜底 + 自动运行级重验 + autoStart 拉起 web host，渲染安装卡片）；" +
   "action=verify 只检测依赖完整性（运行级冒烟，只读）。" +
-  "适用场景：dsh_run 报「dsh 包未就绪」、DSHana 标签页依赖缺失。" +
+  "适用场景：dsh_run 报「DSH 包未就绪」、DSHana 标签页依赖缺失。" +
   "默认异步：后台执行 + 完成回调，wait=true 同步；安装中重复调用返回状态不重复执行。" +
   "完整调用手册见 SKILL: skills/dsh-install/SKILL.md";
 
@@ -87,7 +87,7 @@ export const sessionPermission = {
   describeSideEffect: () => ({
     kind: "external_api",
     summary:
-      "安装或验证 DeepSeek Harness（dsh）依赖：pnpm add @deepseek-ai/dsh（消耗网络，写入插件数据目录 dsh-pkg），可选自动启动 dsh web host",
+      "安装或验证 DeepSeek Harness（DSH）依赖：pnpm add @deepseek-ai/dsh（消耗网络，写入插件数据目录 dsh-pkg），可选自动启动 DSH web host",
     ruleId: "dsh-hanako-dsh-install",
   }),
 };
@@ -132,7 +132,7 @@ async function doExecute(input, ctx) {
     typeof g.installDeps !== "function" ||
     typeof g.verifyDeps !== "function"
   ) {
-    throw new Error("插件工具模块未加载（dsh 能力层不可用），稍后重试");
+    throw new Error("插件工具模块未加载（DSH 能力层不可用），稍后重试");
   }
   const cfg = {
     dataDir: ctx.dataDir || g.dataDir,

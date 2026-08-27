@@ -384,7 +384,7 @@ export default function registerCardRoutes(app, ctx) {
         // b) 转发 DSH 实时事件：events.mux WebSocket（与 tools/dsh-run.js openMux 同款连接）
         try {
           if (typeof WebSocket !== "function")
-            throw new Error("宿主环境无全局 WebSocket，无法订阅 dsh 事件流");
+            throw new Error("宿主环境无全局 WebSocket，无法订阅 DSH 事件流");
           ws = new WebSocket(`ws://127.0.0.1:${port}/api/events.mux`);
           ws.onmessage = (ev) => {
             let frame = {};

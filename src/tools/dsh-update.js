@@ -35,7 +35,7 @@ function buildCheckText(r) {
     return `DSH 版本检查：本地 ${local}，远端版本查询失败（${r.error}）。可稍后重试或检查网络/registry。`;
   }
   if (r?.localVersion === null) {
-    return `DSH 版本检查：本地未安装 dsh，最新版本 v${r?.latestVersion || "?"}。请先安装依赖（DSHana 标签页「安装依赖」或 pnpm add @deepseek-ai/dsh）。`;
+    return `DSH 版本检查：本地未安装 DSH，最新版本 v${r?.latestVersion || "?"}。请先安装依赖（DSHana 标签页「安装依赖」或 pnpm add @deepseek-ai/dsh）。`;
   }
   if (r?.updateAvailable) {
     return `DSH 版本检查：本地 v${local}，最新 v${r.latestVersion}，可更新。`;
@@ -56,7 +56,7 @@ function buildUpdateText(r) {
 export const name = "dsh_update";
 
 export const description =
-  "检查或更新 DeepSeek Harness（dsh）版本（宿主能力层单一事实源）：action=check（默认）查本地/远端版本与可更新状态，只读；" +
+  "检查或更新 DeepSeek Harness（DSH）版本（宿主能力层单一事实源）：action=check（默认）查本地/远端版本与可更新状态，只读；" +
   "action=update 执行完整更新（停 web host → pnpm add @deepseek-ai/dsh latest → 起 web host，正在执行的任务会中断）。" +
   "默认异步：后台执行 + 完成回调，wait=true 同步；更新中重复调用返回状态不重复执行。" +
   "完整调用手册见 SKILL: skills/dsh-update/SKILL.md";
@@ -68,7 +68,7 @@ export const parameters = {
       type: "string",
       enum: ["check", "update"],
       description:
-        "check=只查版本（默认，本地 + 远端 + 可更新判断，不修改任何东西）；update=执行完整更新（停 web host → pnpm add @deepseek-ai/dsh latest → 起 web host，正在执行的 dsh 任务会中断）",
+        "check=只查版本（默认，本地 + 远端 + 可更新判断，不修改任何东西）；update=执行完整更新（停 web host → pnpm add @deepseek-ai/dsh latest → 起 web host，正在执行的 DSH 任务会中断）",
     },
     wait: {
       type: "boolean",
@@ -84,7 +84,7 @@ export const sessionPermission = {
   describeSideEffect: () => ({
     kind: "external_api",
     summary:
-      "检查或更新 DeepSeek Harness（dsh）版本：更新会停止并重启 dsh web host（pnpm add @deepseek-ai/dsh，消耗网络），正在执行的 dsh 任务会中断",
+      "检查或更新 DeepSeek Harness（DSH）版本：更新会停止并重启 DSH web host（pnpm add @deepseek-ai/dsh，消耗网络），正在执行的 DSH 任务会中断",
     ruleId: "dsh-hanako-dsh-update",
   }),
 };
@@ -100,7 +100,7 @@ async function doExecute(input, ctx) {
     typeof g.checkDshUpdate !== "function" ||
     typeof g.updateDsh !== "function"
   ) {
-    throw new Error("插件工具模块未加载（dsh 能力层不可用），稍后重试");
+    throw new Error("插件工具模块未加载（DSH 能力层不可用），稍后重试");
   }
   const cfg = {
     dataDir: ctx.dataDir || g.dataDir,
@@ -196,7 +196,7 @@ async function doExecute(input, ctx) {
     content: [
       {
         type: "text",
-        text: "DSH 更新已在后台执行（将重启 web host，正在执行的任务会中断），完成后后台消息带回结果（新版本号）；进度与实时日志见上方升级卡片，也可在 DSHana 标签页或 dsh 设置页「DSH 版本」块查看",
+        text: "DSH 更新已在后台执行（将重启 web host，正在执行的任务会中断），完成后后台消息带回结果（新版本号）；进度与实时日志见上方升级卡片，也可在 DSHana 标签页或 DSH 设置页「DSH 版本」块查看",
       },
     ],
     details: {
