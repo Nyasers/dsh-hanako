@@ -309,11 +309,11 @@
           + '<span class="diag-mark">' + mark + '</span>'
           + '<div class="diag-body">'
           + '<div class="diag-name">' + escHtml(d.name) + '</div>'
-          + (d.key === "deps" && d.version ? '<div class="diag-detail">' + escHtml(versionLine(d)) + '</div>' : "") // deps 版本行（当前/最新/可更新）最新/可更新）
+          + (d.key === "deps" && d.version ? '<div class="diag-detail">' + escHtml(versionLine(d)) + '</div>' : "") // deps 版本行（当前已装版本；最新版本/可更新状态见设置页「检查与更新 DSH」卡片）
           + (d.key === "deps" && d.pnpmChecked ? '<div class="diag-detail">' + escHtml(pnpmLine(d)) + '</div>' : "") // deps 卡片 pnpm 引导状态行（独立子项，不进依赖就绪判定）
           + (d.detail ? '<div class="diag-detail">' + escHtml(d.detail) + '</div>' : "")
           + (d.key === "deps" && d.installing ? progressHtml(d) : "") // 安装实时进度
-          + (d.key === "deps" && d.updating ? updateProgressHtml(d) : "") // 更新 DSH 进度/结果
+          + (d.key === "deps" && d.updating ? updateProgressHtml(d) : "") // 更新进度/结果（更新由设置页触发，web host 停机期间被动展示）
           + (d.key === "process" && d.logPath ? '<div class="diag-logpath">本次会话日志：' + escHtml(d.logPath) + '</div>' : "") // 时间戳会话日志路径件路径
           + (d.fix ? '<div class="diag-fix">修复：' + escHtml(d.fix) + '</div>' : "")
           + actionButtonHtml(d)
@@ -363,16 +363,8 @@
             html += '<button type="button" class="diag-btn" data-action="verify-deps" data-check="deps"'
               + (d.verifyRunning ? " disabled" : "") + '>' + (d.verifyRunning ? "检测中…" : "检测依赖") + '</button>';
           }
-          // 「检查更新」常驻（检查中/更新中/安装中禁用）；「更新 DSH」仅可更新时出现
-          // （更新中禁用显示「更新中…」）。两者共用 deps 卡片的 diag-btn-msg 提示区。
-          if (!d.installing) {
-            html += '<button type="button" class="diag-btn" data-action="check-update" data-check="deps"'
-              + (d.checking || d.updating ? " disabled" : "") + '>' + (d.checking ? "检查中…" : "检查更新") + '</button>';
-          }
-          if (d.check && d.check.updateAvailable && !d.installing) {
-            html += '<button type="button" class="diag-btn" data-action="update-dsh" data-check="deps"'
-              + (d.updating ? " disabled" : "") + '>' + (d.updating ? "更新中…" : "更新 DSH") + '</button>';
-          }
+          // 版本管理（检查更新/更新 DSH）归设置页「检查与更新 DSH」卡片（@dsh-hanako/settings
+          // 版本卡片 + dsh_update 工具）；deps 卡片只保留依赖管理（安装/检测），不再渲染版本按钮。
         }
         return html ? html + '<span class="diag-btn-msg"></span>' : "";
       }
@@ -407,16 +399,10 @@
       if (d.installAt) html += '<div class="diag-progress-time">更新于 ' + escHtml(fmtTime(d.installAt)) + '</div>';
       return html;
     }
-    // deps 版本行（当前版本 / 最新版本 / 可更新状态，数据源 = 诊断 version/check 字段）
+    // deps 版本行（只显示当前已装版本——deps 卡片不再做版本检查，checkResult 无稳定数据源；
+    // 最新版本/可更新状态归设置页「检查与更新 DSH」卡片）
     function versionLine(d) {
-      var s = "当前版本 " + (d.version ? "v" + d.version : "未安装");
-      var c = d.check;
-      if (c && c.latest) {
-        s += " · 最新 v" + c.latest;
-        s += c.updateAvailable ? "（可更新）" : "（已最新）";
-      }
-      if (c && c.error) s += " · 检查失败：" + c.error;
-      return s;
+      return "当前版本 " + (d.version ? "v" + d.version : "未安装");
     }
     // deps 卡片 pnpm 引导状态行（独立子项：就绪/未就绪 + 原因；不并入「dsh 依赖就绪」
     // 判定——web host 启动不依赖 pnpm，patch 已去注入。数据源 = 诊断 pnpmReady/
@@ -428,7 +414,9 @@
       }
       return "pnpm 引导：未就绪" + (d.pnpmError ? "（原因：" + d.pnpmError + "）" : "");
     }
-    // 更新 DSH 进度/结果块（update-result.json 内容，随 3s 轮询刷新）
+    // 更新进度/结果块（update-result.json 内容，随 3s 轮询刷新）——版本管理归设置页
+    // （@dsh-hanako/settings「检查与更新 DSH」卡片 + dsh_update 工具），deps 卡片已无更新
+    // 按钮，仅在设置页触发更新（web host 停机期间）时被动展示进度。
     function updateProgressHtml(d) {
       var r = d.updateResult || null;
       var text = "正在更新 DSH…（将重启 DSHana，正在执行的任务会中断）";
@@ -510,20 +498,8 @@
           verifyBtn.textContent = "检测依赖";
         }
       }
-      // 「检查更新」/「更新 DSH」按钮状态同步（以诊断 checking/updating 为准；
-      // 按钮处理器自身已做乐观禁用，这里兜底页面刷新/轮询后状态一致）
-      var checkBtn = listBtn("deps", "check-update");
-      if (checkBtn && deps) {
-        checkBtn.disabled = deps.checking || deps.updating || deps.installing;
-        checkBtn.textContent = deps.checking ? "检查中…" : "检查更新";
-      }
-      var updBtn = listBtn("deps", "update-dsh");
-      if (updBtn && deps) {
-        updBtn.disabled = deps.updating;
-        updBtn.textContent = deps.updating
-          ? "更新中…"
-          : (updateArmed ? "再次点击确认更新" : "更新 DSH");
-      }
+      // 「检查更新」/「更新 DSH」按钮已移除（版本管理归设置页「检查与更新 DSH」卡片 +
+      // dsh_update 工具），无对应按钮状态同步
     }
     function startWebHost() {
       var btn = listBtn("process");
@@ -627,84 +603,10 @@
     function verifyDeps() {
       runVerifyDeps(listBtn("deps", "verify-deps"));
     }
-    // 版本检查（GET /webui/check-update，只读）——「检查更新」按钮。服务端
-    // await 检查（npm view ≤~15s，官方源失败自动重试 npmmirror），结果缓存进 g.checkResult
-    // 并写 check-result.json；拿到 ok 响应后触发一次 health 读取诊断刷新 deps 卡片
-    // （版本行显示最新版本/可更新状态，update-dsh 按钮按需出现）。
-    function checkUpdate() {
-      var btn = listBtn("deps", "check-update");
-      if (!btn || btn.disabled) return; // 幂等：已在检查中
-      btn.disabled = true;
-      btn.textContent = "检查中…";
-      setBtnMsg("deps", "");
-      fetch(api + "/webui/check-update", {
-        headers: surfaceHeaders(),
-        signal: AbortSignal.timeout(20000),
-      })
-        .then(function (r) { return r.json(); })
-        .then(function (d) {
-          if (d && d.ok) {
-            // 结果已写入服务端 g.checkResult：刷新一次诊断（版本行/按钮状态进 deps 卡片）
-            refreshDiag();
-            return;
-          }
-          var b = listBtn("deps", "check-update");
-          if (b) { b.disabled = false; b.textContent = "检查更新"; }
-          setBtnMsg("deps", d && d.error ? d.error : "检查请求失败，请稍后重试");
-        })
-        .catch(function () {
-          var b = listBtn("deps", "check-update");
-          if (b) { b.disabled = false; b.textContent = "检查更新"; }
-          setBtnMsg("deps", "检查请求超时或网络错误，请重试");
-        });
-    }
-    // 更新 DSH（POST /webui/update-dsh）——「更新 DSH」按钮。两段式确认
-    // （更新会重启 web host，正在执行的任务中断）：宿主沙箱 iframe 无 allow-modals，
-    // window.confirm 被浏览器忽略（Ignored call to 'confirm()'），改二次点击确认
-    // （5s 无操作自动复位）；触发后服务端异步执行（停 web host → pnpm add latest →
-    // 起 web host），页面靠 3s 轮询诊断刷新 updateProgressHtml（updating/done/error）
-    // 与按钮状态。
-    var updateArmed = false, updateArmTimer = null;
-    function updateDsh() {
-      var btn = listBtn("deps", "update-dsh");
-      if (!btn || btn.disabled) return; // 幂等：已在更新中
-      if (!updateArmed) {
-        updateArmed = true;
-        btn.textContent = "再次点击确认更新";
-        updateArmTimer = setTimeout(function () {
-          updateArmed = false;
-          var b = listBtn("deps", "update-dsh");
-          if (b && !b.disabled) b.textContent = "更新 DSH";
-        }, 5000);
-        return;
-      }
-      clearTimeout(updateArmTimer);
-      updateArmed = false;
-      btn.disabled = true;
-      btn.textContent = "更新中…";
-      setBtnMsg("deps", "");
-      // 立即退回诊断页：更新期间 web host 会停机，这里主动切 pending，下一轮
-      // 3s 轮询 health 未就绪即经 deps 卡片 updateProgressHtml 渲染更新进度
-      document.body.setAttribute("data-pending", "1");
-      renderDiagList(null); // 清空旧诊断占位（下轮 poll 渲染更新进度）
-      fetch(api + "/webui/update-dsh", {
-        method: "POST",
-        headers: surfaceHeaders(),
-        signal: AbortSignal.timeout(5000),
-      })
-        .then(function (r) { return r.json(); })
-        .then(function (d) {
-          if (d && d.ok) { return; } // updating：保持禁用，靠 3s 轮询渲染更新进度
-          var b = listBtn("deps", "update-dsh");
-          if (b) { b.disabled = false; b.textContent = "更新 DSH"; }
-          setBtnMsg("deps", d && d.error ? d.error : "更新请求失败，请稍后重试");
-        })
-        .catch(function () {
-          var b = listBtn("deps", "update-dsh");
-          if (b) { b.disabled = false; b.textContent = "更新 DSH"; }
-          setBtnMsg("deps", "更新请求超时或网络错误，请重试");
-        });
-    }
+    // 版本管理（检查更新/更新 DSH）归设置页「检查与更新 DSH」卡片（@dsh-hanako/settings
+    // 版本卡片 + dsh_update 工具），deps 卡片不再做版本检查/更新，前端 checkUpdate/
+    // updateDsh 按钮与脚本已移除；/webui/check-update、/webui/update-dsh 路由保留
+    // （dsh_update 工具等仍经后端能力层调用）。
     // 进标签页自动检测一次（仅依赖已装时；不随轮询重复——只在这里调一次）
     function autoVerifyDeps() {
       var deps = checkByKey(initDiag, "deps");
@@ -720,8 +622,6 @@
       if (action === "start") startWebHost();
       else if (action === "install-deps") installDeps();
       else if (action === "verify-deps") verifyDeps();
-      else if (action === "check-update") checkUpdate();
-      else if (action === "update-dsh") updateDsh();
     }
     var pollTimer = null;
     function poll() {

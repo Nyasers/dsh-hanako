@@ -8,9 +8,11 @@
 //   POST /webui/start        手动启动 web host（process 卡片「手动启动」按钮；ready/starting/触发启动三态）
 //   POST /webui/install-deps 自动安装 dsh 依赖（deps 卡片「安装依赖」按钮；installing/触发安装）
 //   GET  /webui/verify-deps  运行级依赖检测（node cliBin --version；进标签页自动一次 + 手动「检测依赖」按钮）
-//   GET  /webui/check-update 版本检查（deps 卡片「检查更新」按钮；经宿主能力层 g.checkDshUpdate）
-//   POST /webui/update-dsh   更新 DSH（deps 卡片「更新 DSH」按钮；经宿主能力层 g.updateDsh，
-//                            异步触发，更新会重启 web host、正在执行的任务中断）
+//   GET  /webui/check-update 版本检查（经宿主能力层 g.checkDshUpdate；deps 卡片「检查更新」
+//                            按钮已移除——版本管理归设置页「检查与更新 DSH」卡片 + dsh_update 工具，路由保留）
+//   POST /webui/update-dsh   更新 DSH（经宿主能力层 g.updateDsh，异步触发，更新会重启
+//                            web host、正在执行的任务中断；deps 卡片「更新 DSH」按钮已移除，
+//                            入口归设置页 dsh_update 工具，路由保留）
 //
 // 机制：与 routes/card.js 同构——宿主把 app 挂在 /api/plugins/<pluginId> 命名空间下，
 // 这里注册相对路径。渲染前服务端用 Node fetch 探测 dsh web host 的 /api/host.describe
