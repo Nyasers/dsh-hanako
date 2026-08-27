@@ -6,9 +6,9 @@
 // POST /api/session.cancel（client-request 信封，rpcId 回显校验）中断运行中的任务会话。
 // cancel 后 dsh 会发 turn/end（reason.kind=aborted），事件循环判 outcome.stopReason === "aborted"
 // → throw DSH_ABORTED → promise.catch 以 aborted 终态收尾（deferred fail 带「dsh_run 已取消」唤醒 Agent）。
-// 任务状态零存储（jsonl 唯一事实源），取消优先按 sessionId 直接定位会话——
-// sessionId 从 dsh_run 回调/卡片 URL 取；未传 sessionId 时兼容按 opId 从运行期协调状态（g.ops 残留，
-// 仅存审批/取消状态 + sessionId）反查，miss 则报错提示传 sessionId。工具侧先标记
+// 任务状态零存储（jsonl 唯一事实源），取消必传 sessionId（dsh_run 回调/卡片 URL 取）直接定位会话；
+// g.ops 运行期条目以任务 rpcId 键控，cancel 只有 sessionId 时遍历条目找 sessionId 匹配项
+// （条目极少——仅运行中任务，遍历可忽略；极早 cancel 条目未建则跳过标记）。工具侧先标记
 // cancelledRequested = true，防 cancel 导致 mux 断流时事件循环把取消误判为完成
 // （dsh-run.js consume 末尾的取消兜底）。best-effort 止损：任务刚好自然完成时 cancel 的 accepted
 // 无副作用（事件循环已终态，cancel 幂等）。
@@ -24,8 +24,8 @@ export const name = "dsh_cancel";
 
 export const description =
   "取消一个已派发的 DSH 任务（主动止损）：误派/卡死/不再需要结果时用。" +
-  "优先传 sessionId（dsh_run 回调/卡片 URL 里带）直接取消，兼容传 opId（仅运行期残留可反查，推荐 sessionId）。" +
-  "任务以 aborted 终态收尾并唤醒 Agent。完整调用手册见 SKILL: skills/dsh-cancel/SKILL.md";
+  "传 sessionId（dsh_run 回调/卡片 URL 里带）直接取消；任务以 aborted 终态收尾并唤醒 Agent。" +
+  "完整调用手册见 SKILL: skills/dsh-cancel/SKILL.md";
 
 export const parameters = {
   type: "object",
@@ -33,15 +33,10 @@ export const parameters = {
     sessionId: {
       type: "string",
       description:
-        "要取消的 DSH 会话 sessionId（dsh_run 异步回调/卡片 URL 里带；推荐传此参数，重启后仍有效）",
-    },
-    opId: {
-      type: "string",
-      description:
-        "要取消的 DSH 任务的 opId（dsh_run 提交时返回；仅本插件进程运行期残留可反查会话，任务结束即失效，优先用 sessionId）",
+        "要取消的 DSH 会话 sessionId（dsh_run 异步回调/卡片 URL 里带；必填，取消一律显式传 sessionId，重启后仍有效）",
     },
   },
-  required: [],
+  required: ["sessionId"],
 };
 
 export const sessionPermission = {
@@ -56,25 +51,22 @@ export const sessionPermission = {
 
 async function doExecute(input, ctx) {
   const sessionId = String(input.sessionId ?? "").trim();
-  const opId = String(input.opId ?? "").trim();
-  if (!sessionId && !opId)
+  if (!sessionId)
     throw new Error(
-      "需要 sessionId 或 opId 至少一个（推荐传 sessionId：dsh_run 回调/卡片 URL 里带）",
+      "需要 sessionId（dsh_run 回调/卡片 URL 里带；取消一律显式传 sessionId）",
     );
 
   const g = globalThis.__dshHanako;
-  // 运行期协调状态条目（op Map 退役后仅存审批/取消状态 + sessionId，不含任务快照）
+  // 运行期协调条目以任务 rpcId 键控，cancel 只有 sessionId：遍历 g.ops 找该会话条目
+  // （条目极少——仅运行中任务，遍历可忽略）；极早 cancel（条目未建）时 entry 为 null，跳过标记
   let entry = null;
-  if (opId && g?.ops) entry = g.ops.get(opId) || null;
-  let targetSessionId = sessionId;
-  if (!targetSessionId) {
-    if (!entry || !entry.sessionId) {
-      throw new Error(
-        `op 不存在或已过期（${opId}）：任务状态已不保存在插件内存（jsonl 唯一事实源），请显式传 sessionId（dsh_run 回调/卡片 URL 里带）`,
-      );
+  for (const e of g?.ops?.values() ?? []) {
+    if (e.sessionId === sessionId) {
+      entry = e;
+      break;
     }
-    targetSessionId = String(entry.sessionId);
   }
+  const targetSessionId = sessionId;
 
   const base = hostBase();
   const rpcId = `r_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -112,7 +104,6 @@ async function doExecute(input, ctx) {
     ],
     details: {
       dsh: {
-        opId: opId || null,
         sessionId: sid,
         accepted: true,
         status: "cancelling",

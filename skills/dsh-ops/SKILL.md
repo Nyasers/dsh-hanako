@@ -36,7 +36,7 @@ description: "dsh_ops 工具手册（源码 tools/dsh-ops.js 核对）。触发�
 - `usage`：token 用量（`rows.tokenUsage.val.totals`：uncachedInputTokens / outputTokens / cacheReadTokens / cacheWriteTokens）
 - `turns` / `steps` / `llmMs`：会话统计（`rows.sessionStats.val` 对应字段）
 
-无 `status` / `opId` / `stopReason` / `durationMs` / `endedAt` / `resumeSessionId`——新数据源无这些语义。
+无 `status` / `stopReason` / `durationMs` / `endedAt` / `resumeSessionId`——新数据源无这些语义。
 
 ## 排序与行格式
 

@@ -42,7 +42,7 @@ dsh_run(task=…, sessionId=<命中的 sessionId>)
 
 ## 使用场景
 
-- 想继续上次某个未完成/想接续的任务，但忘了 opId → 按关键词搜到 sessionId 再 resume。
+- 想继续上次某个未完成/想接续的任务 → 按关键词搜到 sessionId 再 resume。
 - 跨任务复用知识：之前某个任务里研究过的东西，搜到会话上下文继续用。
 - 排查：确认某类任务以前怎么做的（snippet 提供上下文预览）。
 

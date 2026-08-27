@@ -63,8 +63,8 @@ $node = <本机 node.exe 绝对路径，如 C:\Program Files\nodejs\node.exe>
 | `dsh_run(task, cwd?, timeout?, wait?, agentPreset?, reasoningEffort?, provider?, model?, sessionId?)` | 提交任务 | 默认异步（后台送达）；wait=true 同步；provider/model 显式覆盖模型（显式时 selectModel，写回 dsh 全局默认）；sessionId resume | [dsh-run 技能](dsh-run) |
 | `dsh_install(action?, wait?, autoStart?)` | 安装/验证 dsh 依赖 | action=install 安装（默认，registry 兜底 + 自动运行级重验 + autoStart 自动拉起 web host，渲染安装卡片）；action=verify 只检测完整性；异步默认 + 完成回调，wait=true 同步；安装中重复调用返回状态 | [dsh-install 技能](dsh-install) |
 | `dsh_update(action?, wait?)` | 检查/更新 DSH | action=check 查版本（默认）；action=update 完整更新（停 web host → pnpm add latest → 起 web host，**正在执行的任务会中断**，渲染升级卡片）；update 默认异步后台执行 + 完成回调，wait=true 同步；更新中重复调用返回状态不重复执行 | [dsh-update 技能](dsh-update) |
-| `dsh_approve(opId, approvalId, outcome?)` | 应答审批 | allowed-once 放行 / rejected 拒绝；通知带 args 命令原文 | [dsh-approve 技能](dsh-approve) |
-| `dsh_cancel(opId)` | 取消任务 | 误派/卡死止损；幂等 | [dsh-cancel 技能](dsh-cancel) |
+| `dsh_approve(rpcId, approvalId, outcome?)` | 应答审批 | allowed-once 放行 / rejected 拒绝；通知带 args 命令原文 | [dsh-approve 技能](dsh-approve) |
+| `dsh_cancel(sessionId)` | 取消任务 | 误派/卡死止损；幂等 | [dsh-cancel 技能](dsh-cancel) |
 | `dsh_ops(limit?)` | 查会话清单与摘要 | 解析 dsh 会话缓存 session_projcache 可查；limit 默认 10；最新在前 | [dsh-ops 技能](dsh-ops) |
 | `dsh_search(query)` | 跨会话搜索 | 命中后可 resume；snippet ≤240 字符 | [dsh-search 技能](dsh-search) |
 
@@ -97,7 +97,7 @@ $node = <本机 node.exe 绝对路径，如 C:\Program Files\nodejs\node.exe>
 
 ## 审批流程（Agent 应答）
 
-dsh 请求越界权限时任务挂起，插件经 deferred 发 dsh-approval 通知（opId/approvalId/reason/**args 命令路径原文**）。应答：读 args 判断 → 合理 `dsh_approve(opId, approvalId, "allowed-once")`，危险 `"rejected"`；无人应答超时（approvalTimeoutMs，默认 30s）自动拒绝；也可 dsh Web UI 人工处理。**决策看 args（执行了什么），不听 reason（model 自述）**。
+dsh 请求越界权限时任务挂起，插件经 deferred 发 dsh-approval 通知（rpcId/approvalId/reason/**args 命令路径原文**）。应答：读 args 判断 → 合理 `dsh_approve(rpcId, approvalId, "allowed-once")`，危险 `"rejected"`；无人应答超时（approvalTimeoutMs，默认 30s）自动拒绝；也可 dsh Web UI 人工处理。**决策看 args（执行了什么），不听 reason（model 自述）**。
 
 ## 排错表
 

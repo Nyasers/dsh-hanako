@@ -39,11 +39,11 @@ ensureWebHost（resolveDshPkgDir 定位依赖 → spawn dsh web，DSH_HOME=数�
 
 ## 返回与回调
 
-**异步模式（默认）**：立即返回 `{ content: "任务已提交给 dsh（opId: xxx）…", details: { dsh: { opId, status: "running", cwd, wait: false }, card: { route: "/card/op?opId=…", … } } }`。deferred 注册 taskId=opId（type=dsh-run，trigger_parent_turn，失败也唤醒），完成后宿主投递 `<hana-background-result>`。
+**异步模式（默认）**：立即返回 `{ content: "任务已提交给 dsh（rpcId: xxx）…", details: { dsh: { rpcId, status: "running", cwd, wait: false }, card: { route: "/card/op?sessionId=…&rpcId=…&timeoutMs=…", … } } }`。deferred 注册 taskId=任务 rpcId（type=dsh-run，trigger_parent_turn，失败也唤醒），完成后宿主投递 `<hana-background-result>`。
 
 **后台回调 payload**：
 ```
-{ opId, tool: "dsh_run", status: "ok", cwd, sessionId,
+{ rpcId, tool: "dsh_run", status: "ok", cwd, sessionId,
   output,                    // callbackMode 决定体量
   outputMeta: { mode, fullLength, summaryLength, summaryOf },
   stopReason, usage, stderr }
@@ -51,7 +51,7 @@ ensureWebHost（resolveDshPkgDir 定位依赖 → spawn dsh web，DSH_HOME=数�
 
 **callbackMode 摘要压缩**（buildSummary）：默认 summary 只回传摘要。锚点 = 最后一条 assistant/message 文本（`summaryOf: "final-message"`）；无 finalText 时超长（>1500+600）head-tail 折叠（`summaryOf: "head-tail"`）；短输出原样（`summaryOf: "full"`）。full 模式回传全量。**完整输出永远在卡片（会话 jsonl 恢复）+ dsh Web UI（sessionId 定位）可查**。
 
-**同步模式（wait=true）**：content = `res.output` +（非 end_turn 附 `[stopReason: …]`）；details.dsh = `{ stopReason, usage, cwd, opId, sessionId, wait: true }`，stderr 附 `dshStderr`（截 2000）。阻塞当前回合、无卡片进度；长任务建议异步。
+**同步模式（wait=true）**：content = `res.output` +（非 end_turn 附 `[stopReason: …]`）；details.dsh = `{ stopReason, usage, cwd, rpcId, sessionId, wait: true }`，stderr 附 `dshStderr`（截 2000）。阻塞当前回合、无卡片进度；长任务建议异步。
 
 ## 超时语义
 
@@ -70,7 +70,7 @@ ensureWebHost（resolveDshPkgDir 定位依赖 → spawn dsh web，DSH_HOME=数�
 
 ## 审批（挂起 → dsh_approve 应答）
 
-dsh agent 请求越界权限时任务挂起，插件经 deferred 通知（taskId = `` `${opId}::approval::${approvalId}` ``），payload 带 `toolName/callId/reason/args(命令路径原文)/taskPreview`。用 `dsh_approve(opId, approvalId, "allowed-once"/"rejected")` 应答（默认 allowed-once）；超时 `approvalTimeoutMs`（默认 30000，0=禁用）无人应答自动 rejected；也可靠 Web UI 人工处理。**决策看 args（执行了什么），不听 reason（model 自述）**。详见 dsh-approve 技能。
+dsh agent 请求越界权限时任务挂起，插件经 deferred 通知（taskId = `` `${rpcId}::approval::${approvalId}` ``，rpcId 为任务级 rpcId），payload 带 `toolName/callId/reason/args(命令路径原文)/taskPreview`。用 `dsh_approve(rpcId, approvalId, "allowed-once"/"rejected")` 应答（默认 allowed-once）；超时 `approvalTimeoutMs`（默认 30000，0=禁用）无人应答自动 rejected；也可靠 Web UI 人工处理。**决策看 args（执行了什么），不听 reason（model 自述）**。详见 dsh-approve 技能。
 
 ## 配置单一事实源（resolve* 函数）
 

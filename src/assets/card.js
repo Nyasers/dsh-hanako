@@ -37,7 +37,6 @@
     initDepCard();
     return;
   }
-  var opId = (root && root.dataset.op) || pageParams.get("opId") || "";
   // 重启恢复定位：卡片 URL 带 sessionId+rpcId（session.create + prompt 后生成），
   // 插件零任务状态（op Map 退役），/ops/stream 按它们从会话 jsonl 重建基线快照
   var sessionId =
@@ -45,7 +44,7 @@
   var rpcId = (root && root.dataset.rpc) || pageParams.get("rpcId") || "";
   var timeoutMs =
     (root && root.dataset.timeout) || pageParams.get("timeoutMs") || "";
-  if (!opId && !sessionId) {
+  if (!sessionId || !rpcId) {
     renderFail("缺少任务 ID");
     return;
   }
@@ -455,16 +454,18 @@
   }
 
   function opQuery() {
-    var q = "opId=" + encodeURIComponent(opId);
-    if (sessionId) q += "&sessionId=" + encodeURIComponent(sessionId);
-    if (rpcId) q += "&rpcId=" + encodeURIComponent(rpcId);
-    if (timeoutMs) q += "&timeoutMs=" + encodeURIComponent(timeoutMs);
+    var q = "";
+    if (sessionId)
+      q += (q ? "&" : "") + "sessionId=" + encodeURIComponent(sessionId);
+    if (rpcId) q += (q ? "&" : "") + "rpcId=" + encodeURIComponent(rpcId);
+    if (timeoutMs)
+      q += (q ? "&" : "") + "timeoutMs=" + encodeURIComponent(timeoutMs);
     return q;
   }
 
   // ── 事件处理 ──
   function onBaseline(snap) {
-    if (!snap || !snap.opId) {
+    if (!snap) {
       renderFail("任务记录不存在");
       closeStream();
       return;
@@ -654,7 +655,6 @@
     S.lastSummaryText = summaryText;
     return {
       op: {
-        opId: b.opId || "",
         task: b.task || "",
         cwd: b.cwd || "",
         agentPreset: b.agentPreset || "",

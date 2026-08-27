@@ -70,10 +70,12 @@ async function failDeferredWake({ bus, taskId, error }) {
 // ---- 审批挂起通知（宿主 deferred 通道，独立 taskId 不占用任务完成通道）----
 // dsh 会话触发 approval/requested 时任务挂起等应答；插件把审批上下文投递给宿主，
 // Agent 收到后调用 dsh_approve 工具应答（allowed-once / rejected）。
+// rpcId = 任务 rpcId（prompt 提交产生的 RPC id，与 jsonl data.source.rpcId 同值；
+// 区别于审批帧的 respondRpcId——那是 server-request 信封自己的 RPC id，respond 路由用）。
 // 容错纪律同任务回调：通知失败不影响任务，审批仍可在 dsh Web UI 人工处理。
-async function notifyApprovalWake({ bus, sessionPath, opId, approval, task }) {
+async function notifyApprovalWake({ bus, sessionPath, rpcId, approval, task }) {
   if (!bus?.request || !sessionPath) return;
-  const taskId = `${opId}::approval::${approval.approvalId}`;
+  const taskId = `${rpcId}::approval::${approval.approvalId}`;
   try {
     await bus.request("deferred:register", {
       taskId,
@@ -87,7 +89,7 @@ async function notifyApprovalWake({ bus, sessionPath, opId, approval, task }) {
       taskId,
       result: {
         kind: "dsh-approval",
-        opId,
+        rpcId,
         sessionId: approval.sessionId,
         approvalId: approval.approvalId,
         toolName: approval.toolName,
