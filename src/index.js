@@ -238,11 +238,11 @@ export default class DshHanakoPlugin {
       .then((mounted) => {
         if (!mounted) {
           log.warn(
-            "[dsh-hanako] 1s 内未等到工具模块加载，dsh web host 将随首次工具调用启动",
+            "[dsh-hanako] 1s 内未等到工具模块加载，DSH web host 将随首次工具调用启动",
           );
           g.appendLog?.(
             "hana",
-            "1s 内未等到工具模块加载，dsh web host 将随首次工具调用启动",
+            "1s 内未等到工具模块加载，DSH web host 将随首次工具调用启动",
           );
           return;
         }
@@ -251,11 +251,11 @@ export default class DshHanakoPlugin {
         Promise.resolve(g.startWebHost(config, dataDir)).then(
           (ok) => {
             log.info(
-              `[dsh-hanako] dsh web host ${ok ? "已随插件异步启动" : "启动未就绪（工具调用时将重试）"}`,
+              `[dsh-hanako] DSH web host ${ok ? "已随插件异步启动" : "启动未就绪（工具调用时将重试）"}`,
             );
             g.appendLog?.(
               "hana",
-              `dsh web host 启动${ok ? "成功（已随插件异步启动）" : "未就绪（工具调用时将重试）"}`,
+              `DSH web host 启动${ok ? "成功（已随插件异步启动）" : "未就绪（工具调用时将重试）"}`,
             );
           },
           (e) => {

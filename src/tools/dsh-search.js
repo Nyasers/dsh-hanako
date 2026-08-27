@@ -11,14 +11,14 @@ function hostBase() {
   const g = globalThis.__dshHanako;
   const web = g?.web;
   if (!web?.ready || !web.port)
-    throw new Error("dsh web host 未就绪（请先通过 dsh_run 提交任务拉起）");
+    throw new Error("DSH web host 未就绪（请先通过 dsh_run 提交任务拉起）");
   return `http://127.0.0.1:${web.port}`;
 }
 
 export const name = "dsh_search";
 
 export const description =
-  "跨会话搜索 dsh 历史会话内容（只读）：给 query 关键词，返回命中的 sessionId + 摘要 snippet，命中后可用 dsh_run 的 sessionId resume 继续。" +
+  "跨会话搜索 DSH 历史会话内容（只读）：给 query 关键词，返回命中的 sessionId + 摘要 snippet，命中后可用 dsh_run 的 sessionId resume 继续。" +
   "完整调用手册见 SKILL: skills/dsh-search/SKILL.md";
 
 export const parameters = {
@@ -37,7 +37,7 @@ export const sessionPermission = {
   describeSideEffect: () => ({
     kind: "external_api",
     summary:
-      "向 dsh web host 发起只读的跨会话内容搜索（session.search），查询 dsh 历史会话，不改变任何会话",
+      "向 DSH web host 发起只读的跨会话内容搜索（session.search），查询 DSH 历史会话，不改变任何会话",
     ruleId: "dsh-hanako-search",
   }),
 };

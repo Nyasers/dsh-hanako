@@ -16,14 +16,14 @@
 function hostBase() {
   const g = globalThis.__dshHanako;
   const web = g?.web;
-  if (!web?.ready || !web.port) throw new Error("dsh web host 未就绪");
+  if (!web?.ready || !web.port) throw new Error("DSH web host 未就绪");
   return `http://127.0.0.1:${web.port}`;
 }
 
 export const name = "dsh_cancel";
 
 export const description =
-  "取消一个已派发的 dsh 任务（主动止损）：误派/卡死/不再需要结果时用。" +
+  "取消一个已派发的 DSH 任务（主动止损）：误派/卡死/不再需要结果时用。" +
   "优先传 sessionId（dsh_run 回调/卡片 URL 里带）直接取消，兼容传 opId（仅运行期残留可反查，推荐 sessionId）。" +
   "任务以 aborted 终态收尾并唤醒 Agent。完整调用手册见 SKILL: skills/dsh-cancel/SKILL.md";
 
@@ -33,12 +33,12 @@ export const parameters = {
     sessionId: {
       type: "string",
       description:
-        "要取消的 dsh 会话 sessionId（dsh_run 异步回调/卡片 URL 里带；推荐传此参数，重启后仍有效）",
+        "要取消的 DSH 会话 sessionId（dsh_run 异步回调/卡片 URL 里带；推荐传此参数，重启后仍有效）",
     },
     opId: {
       type: "string",
       description:
-        "要取消的 dsh 任务的 opId（dsh_run 提交时返回；仅本插件进程运行期残留可反查会话，任务结束即失效，优先用 sessionId）",
+        "要取消的 DSH 任务的 opId（dsh_run 提交时返回；仅本插件进程运行期残留可反查会话，任务结束即失效，优先用 sessionId）",
     },
   },
   required: [],
@@ -49,7 +49,7 @@ export const sessionPermission = {
   describeSideEffect: () => ({
     kind: "external_api",
     summary:
-      "向 dsh web host 请求取消一个运行中的 dsh 任务会话（session.cancel），中断 dsh agent",
+      "向 DSH web host 请求取消一个运行中的 DSH 任务会话（session.cancel），中断 DSH agent",
     ruleId: "dsh-hanako-cancel",
   }),
 };
@@ -107,7 +107,7 @@ async function doExecute(input, ctx) {
     content: [
       {
         type: "text",
-        text: `已请求取消任务（会话 ${sid.slice(0, 12)}…）：dsh agent 会收到中断，任务将尽快以 aborted 终态收尾`,
+        text: `已请求取消任务（会话 ${sid.slice(0, 12)}…）：DSH agent 会收到中断，任务将尽快以 aborted 终态收尾`,
       },
     ],
     details: {

@@ -566,7 +566,7 @@
       S.stopReason = kind || "end_turn";
       var f = (reason && (reason.failure || reason.error)) || {};
       S.error = String(
-        f.message || (reason && reason.message) || "dsh 任务失败（无错误详情）",
+        f.message || (reason && reason.message) || "DSH 任务失败（无错误详情）",
       );
     }
     if (!S.finalText) S.finalText = S.lastMsgText;
@@ -788,7 +788,7 @@
       html +=
         '<div class="dsh-summary-meta">' + esc(summaryMeta(op)) + "</div>";
     } else if (!running) {
-      html += '<div class="dsh-empty">（dsh 未返回文本）</div>';
+      html += '<div class="dsh-empty">（DSH 未返回文本）</div>';
     }
     html += "</div>";
 

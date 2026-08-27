@@ -21,10 +21,11 @@
 //      下拉）三级联动；当前默认回显（POST /api/hana-settings.read）；保存
 //      （POST /api/hana-settings.save）→ agentDefaultModel 服务写 settings.yaml。
 //   ② DSH 版本卡片：@deepseek-ai/dsh 版本检查与更新（v0.18.1 起检查改 **dsh 侧直查**——
-//      后端 spawn 宿主 electron node + pnpm.cjs 执行 `pnpm view @deepseek-ai/dsh version`，
-//      官方源失败重试 npmmirror，不再经宿主桥接；更新仍写 update-request.json 由宿主
+//      后端 HTTP 直查 npm registry（fetch https://registry.npmjs.org/@deepseek-ai/dsh/latest
+//      的 JSON version 字段，pnpm view 语义等价；官方源失败重试 npmmirror，15s 超时，
+//      v0.18.2 起不再 spawn pnpm），不再经宿主桥接；更新仍写 update-request.json 由宿主
 //      5s 轮询执行）——挂载时自动调一次 POST /api/hana-settings.check-version
-//      （本地版本后端直读 dsh-pkg package.json 零延迟；远端版本后端 spawn 直查，慢时
+//      （本地版本后端直读 dsh-pkg package.json 零延迟；远端版本后端 HTTP 直查，慢时
 //      返回 pending 由前端轮询兜底），显示本地/最新版本与状态；「检查更新」手动刷新；
 //      「更新到最新」（仅 updateAvailable 时可用，两段式确认）→ POST
 //      /api/hana-settings.request-update 写更新请求文件，宿主侧 5s 轮询到后自动
@@ -141,7 +142,7 @@ window.__ModuleLoader__.load({
       // ---- DSH 版本卡片 ----
       versionTitle: "DSH 版本",
       versionSub:
-        "@deepseek-ai/dsh 版本检查与更新（检查 dsh 侧直查远端 registry，结果与 dsh_update 工具 / DSHana 标签页一致）",
+        "@deepseek-ai/dsh 版本检查与更新（检查 DSH 侧直查远端 registry，结果与 dsh_update 工具 / DSHana 标签页一致）",
       versionLocal: "本地版本",
       versionLatest: "最新版本",
       versionNone: "未安装",
@@ -151,7 +152,7 @@ window.__ModuleLoader__.load({
       upToDate: "已是最新版本",
       updateAvailableMsg: "可更新至 v",
       checkFailed: "版本检查失败：",
-      localMissing: "本地未安装 dsh（依赖缺失，请先在 DSHana 标签页安装）",
+      localMissing: "本地未安装 DSH（依赖缺失，请先在 DSHana 标签页安装）",
       update: "更新到最新",
       updateConfirm: "更新将重启 DSHana，正在执行的任务会中断，确定继续？",
       updateConfirmShort: "再次点击确认更新",
@@ -182,7 +183,7 @@ window.__ModuleLoader__.load({
       // ---- DSH version card ----
       versionTitle: "DSH Version",
       versionSub:
-        "@deepseek-ai/dsh version check & update (check queries the registry directly from dsh, same result as dsh_update tool / DSHana tab)",
+        "@deepseek-ai/dsh version check & update (check queries the registry directly from DSH, same result as dsh_update tool / DSHana tab)",
       versionLocal: "Local version",
       versionLatest: "Latest version",
       versionNone: "not installed",
@@ -193,7 +194,7 @@ window.__ModuleLoader__.load({
       updateAvailableMsg: "Update available: v",
       checkFailed: "Version check failed: ",
       localMissing:
-        "dsh is not installed locally (install it from the DSHana tab first)",
+        "DSH is not installed locally (install it from the DSHana tab first)",
       update: "Update to latest",
       updateConfirm:
         "Updating will restart DSHana and interrupt running tasks. Continue?",
@@ -505,16 +506,17 @@ window.__ModuleLoader__.load({
 
     // ---- DSH 版本卡片：@deepseek-ai/dsh 版本检查与更新（设置中心分组卡片二）----
     // v0.18.1 起检查改 **dsh 侧直查**：本分页 POST /api/hana-settings.check-version，
-    // 后端 spawn 宿主 electronNode + pnpm.cjs 执行 `pnpm view @deepseek-ai/dsh version`
-    // （官方源失败重试 npmmirror，15s 超时）→ 返回 { localVersion, latestVersion,
+    // 后端 HTTP 直查 npm registry（fetch https://registry.npmjs.org/@deepseek-ai/dsh/latest
+    // 的 JSON version 字段，pnpm view 语义等价；官方源失败重试 npmmirror，15s 超时，
+    // v0.18.2 起不再 spawn pnpm）→ 返回 { localVersion, latestVersion,
     // updateAvailable, error? }；本地版本后端直读 dsh-pkg package.json（零延迟，
     // 挂载即显示）。不再写 update-request.json / 读 check-result.json（v0.18.1 起
     // 废弃宿主桥接——resources.watch 链路不可靠曾致检查永不完成）。
     // 返回 value 形状：{ localVersion, latestVersion?, updateAvailable?, error? } 或
-    // { state:'pending', localVersion }（后端 spawn 慢时前端轮询兜底——保留 pending
+    // { state:'pending', localVersion }（后端 HTTP 查询慢时前端轮询兜底——保留 pending
     // 分支，applyCheck 语义不变）。
     // 挂载时自动检查一次：先拿到本地版本即时显示，pending 则每 1.5s 轮询
-    // check-version 直至结果（CHECK_POLL_MAX 次上限，防 spawn 慢/异常时无限轮询）。
+    // check-version 直至结果（CHECK_POLL_MAX 次上限，防查询慢/异常时无限轮询）。
     // 「更新到最新」→ request-update（宿主 5s 轮询到后 npm i latest + 重启 web host）→
     // 每 2s 轮询 update-status 直到 done/error；web host 重启窗口连接失败（fetch reject /
     // 非 ok 响应）视为仍在更新，连续失败超过 UPDATE_POLL_MAX_FAILURES 次才放弃。

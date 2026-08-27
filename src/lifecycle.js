@@ -441,7 +441,7 @@ export async function ensureWebHost(cfg) {
   );
   if (!existsSync(cliBin)) {
     throw new Error(
-      `dsh 包未就绪：${cliBin} 不存在。请在插件数据目录 dsh-pkg 执行 pnpm add @deepseek-ai/dsh`,
+      `DSH 包未就绪：${cliBin} 不存在。请在插件数据目录 dsh-pkg 执行 pnpm add @deepseek-ai/dsh`,
     );
   }
 
@@ -457,7 +457,8 @@ export async function ensureWebHost(cfg) {
   // dsh-plugin/dsh-hanako.patch.yml.tpl 单一模板：段1 session-query 静态配置块 + 段2 theme
   // insert + 段3 provider insert（恒渲染：hostProvider 恒开跟随宿主，无关闭选项）
   // + 段4 settings insert（恒挂载；改名 @dsh-hanako/settings 并注入
-  // 「检查与更新 DSH」链路 config：dshPkgDir/npmCliPath/electronNode/dataDir）。
+  // 「检查与更新 DSH」链路 config：dshPkgDir/dataDir——远端版本 HTTP 直查 npm registry，
+  // 不再注入 pnpm 入口）。
   // cordis 插件加载：theme/provider/settings/logger 四段均以包名注册（dsh client 模块发现
   // 按 loader entry 的 name 做 require.resolve('<name>/package.json')，file:// 无法解析），
   // 故启动前须在 $DSH_HOME/profiles/node_modules 统一建 junction（包名 → 插件安装目录
@@ -562,21 +563,17 @@ export async function ensureWebHost(cfg) {
   // provider 数据，parse 逻辑上移宿主，route 目录改经 HTTP push 下发）——provider config
   // 只剩 dshPkgDir（子进程解析 pi-ai 依赖用）。DSH_PKG_DIR = dsh 包安装目录
   // （provider/settings 段）；LOG_PATH = 本次会话日志文件路径（logger 段，四个内嵌
-  // 插件经统一日志服务写入同一文件）；NPM_CLI_PATH / ELECTRON_NODE / DATA_DIR =
-  // settings 段「检查与更新 DSH」链路（npm view 查远端版本 + 更新请求/结果文件写入数据目录）。
+  // 插件经统一日志服务写入同一文件）；DATA_DIR = settings 段「检查与更新 DSH」链路
+  // （更新请求/结果文件写入数据目录）。v0.18.2 起远端版本查询改 HTTP 直查 npm registry
+  // （settings 侧与 lib/check.js 同款，pnpm view 语义等价），NPM_CLI_PATH / ELECTRON_NODE
+  // 占位符已从模板删除（settings 不再 spawn pnpm，渲染为同步函数，无异步依赖）。
   const renderPatchTpl = () => {
     const gen = join(cfg.dataDir, "dsh-hanako.patch.generated.yml");
-    let content = readFileSync(patchTpl, "utf8")
+    const content = readFileSync(patchTpl, "utf8")
       .split("{{DSH_PKG_DIR}}")
       .join(cfg.dshPkgDir || resolveDshPkgDir(cfg))
       .split("{{LOG_PATH}}")
       .join(logPath)
-      // @dsh-hanako/settings「检查与更新 DSH」链路占位符（pnpm.cjs 路径 /
-      // 宿主 electron node / 插件数据目录）
-      .split("{{NPM_CLI_PATH}}")
-      .join(join(PLUGIN_ROOT, "node_modules", "pnpm", "bin", "pnpm.cjs"))
-      .split("{{ELECTRON_NODE}}")
-      .join(ELECTRON_NODE)
       .split("{{DATA_DIR}}")
       .join(cfg.dataDir);
     writeFileSync(gen, content, "utf8");
@@ -589,13 +586,13 @@ export async function ensureWebHost(cfg) {
       // 渲染失败（读模板/写数据目录异常）：不挂任何 patch 记 warn（dsh 启动不受影响，
       // 会话全文搜索保持上游默认禁用）
       console.warn(
-        `[dsh-run] patch 模板渲染失败（${e?.message || e}）：不挂任何 patch（dsh 启动不受影响，会话全文搜索保持上游默认禁用）`,
+        `[dsh-run] patch 模板渲染失败（${e?.message || e}）：不挂任何 patch（DSH 启动不受影响，会话全文搜索保持上游默认禁用）`,
       );
     }
   } else {
     // 模板缺失：不挂任何 patch 记 warn（dsh 启动不受影响，会话全文搜索保持上游默认禁用）
     console.warn(
-      "[dsh-run] dsh-plugin/dsh-hanako.patch.yml.tpl 缺失：不挂任何 patch（dsh 启动不受影响，会话全文搜索保持上游默认禁用）",
+      "[dsh-run] dsh-plugin/dsh-hanako.patch.yml.tpl 缺失：不挂任何 patch（DSH 启动不受影响，会话全文搜索保持上游默认禁用）",
     );
   }
   const patchArgs = patchFiles.flatMap((p) => ["--patch", p]);
@@ -676,7 +673,7 @@ export async function ensureWebHost(cfg) {
     while (Date.now() < deadline) {
       if (child.exitCode !== null) {
         throw new Error(
-          `dsh web 进程提前退出 (code=${child.exitCode})：${web.stderr.slice(-1200) || "无 stderr"}（完整日志：${logPath}）`,
+          `DSH web 进程提前退出 (code=${child.exitCode})：${web.stderr.slice(-1200) || "无 stderr"}（完整日志：${logPath}）`,
         );
       }
       try {
@@ -709,7 +706,7 @@ export async function ensureWebHost(cfg) {
       await new Promise((r) => setTimeout(r, 500));
     }
     throw new Error(
-      `dsh web 启动超时（${Math.round(PORT_READY_TIMEOUT_MS / 1000)}s 内端口 ${port} 未就绪）：${web.stderr.slice(-1200) || "无 stderr"}（完整日志：${logPath}）`,
+      `DSH web 启动超时（${Math.round(PORT_READY_TIMEOUT_MS / 1000)}s 内端口 ${port} 未就绪）：${web.stderr.slice(-1200) || "无 stderr"}（完整日志：${logPath}）`,
     );
   })();
   web.readyPromise = readyPromise;
@@ -743,13 +740,13 @@ function ensureProviderPushWatch(cfg) {
   // resources/bus 缺失（旧宿主无此服务 / onload 未注入）：降级不阻断
   if (!resources || typeof resources.watch !== "function") {
     console.warn(
-      "[dsh-run] 宿主 resources 不可用，provider 热跟随 watch 未建立（dsh 侧启动时仍会 refresh 一次）",
+      "[dsh-run] 宿主 resources 不可用，provider 热跟随 watch 未建立（DSH 侧启动时仍会 refresh 一次）",
     );
     return;
   }
   if (!bus || typeof bus.subscribe !== "function") {
     console.warn(
-      "[dsh-run] 宿主 bus 不可用，provider 热跟随订阅未建立（dsh 侧启动时仍会 refresh 一次）",
+      "[dsh-run] 宿主 bus 不可用，provider 热跟随订阅未建立（DSH 侧启动时仍会 refresh 一次）",
     );
     return;
   }
@@ -794,7 +791,7 @@ function ensureProviderPushWatch(cfg) {
   }
   if (handles.length === 0) {
     console.warn(
-      "[dsh-run] provider 热跟随 watch 全部建立失败（dsh 侧启动时仍会 refresh 一次）",
+      "[dsh-run] provider 热跟随 watch 全部建立失败（DSH 侧启动时仍会 refresh 一次）",
     );
     return;
   }
@@ -804,7 +801,7 @@ function ensureProviderPushWatch(cfg) {
     if (event.type !== "resource.changed") return;
     const key = event.resourceKey;
     if (typeof key === "string" && resourceKeys.has(key)) {
-      console.log(`[dsh-run] 宿主配置变化（${key}），防抖后 push dsh 刷新`);
+      console.log(`[dsh-run] 宿主配置变化（${key}），防抖后 push DSH 刷新`);
       triggerPush();
     }
   });
@@ -836,7 +833,7 @@ function ensureProviderPushWatch(cfg) {
     g.providerPushCleanup = null;
   };
   console.log(
-    `[dsh-run] provider 热跟随 watch 已建立（${paths.length} 文件），宿主配置变化将 push dsh 刷新`,
+    `[dsh-run] provider 热跟随 watch 已建立（${paths.length} 文件），宿主配置变化将 push DSH 刷新`,
   );
 }
 // ---- DSH 检查能力（checkDshUpdate / npmViewLatest / semver 比较 / 本地版本
@@ -944,7 +941,7 @@ export async function updateDsh(cfg) {
 }
 // ---- 宿主侧 DSH 更新桥接轮询（dsh 设置页「DSH 版本」块 → 宿主能力层）----
 // 语义：@dsh-hanako/settings 插件写 <dataDir>/update-request.json（state: 'requested'
-// 请求更新；版本检查 v0.18.1 起改 dsh 侧直查 pnpm view，不再走桥接），宿主侧 5s
+// 请求更新；版本检查 v0.18.1 起改 dsh 侧直查（v0.18.2 起 HTTP 直查 npm registry），不再走桥接），宿主侧 5s
 // 轮询读文件（替代早期 ctx.resources.watch——watch 依赖宿主 resources 注入 + bus
 // 事件订阅，链路不可靠：曾出现设置页检查/更新请求写入后宿主无感知的故障，
 // check-result.json 永不更新、前端永久 pending）→ 按 state 分发：requested →
@@ -1009,7 +1006,7 @@ function ensureUpdateWatch(cfg) {
 }
 
 // update-request.json 分发（requested → 更新）。v0.18.1 起仅剩更新桥接（版本检查
-// 改 dsh 侧直查 pnpm view，不走此通道）；防抖沿用能力层运行期标志（g.updating）。
+// 改 dsh 侧直查 HTTP 直查 npm registry，不走此通道）；防抖沿用能力层运行期标志（g.updating）。
 // 失败只记日志不抛出。
 function onBridgeRequestChanged(dataDir, path, cfg) {
   const g = getSingleton();
@@ -1232,6 +1229,16 @@ function buildDepsDiagCheck(g, cfg) {
       : null;
   const verifyVersion = smoke?.version ?? null;
   const verifyAt = smoke?.at ?? null;
+  // pnpm 引导状态（独立子项，不进 ok 判定）：透出 verifyDepsSmoke 的 pnpm 检查结果
+  // （pnpmReady/pnpmVersion/pnpmError；smoke 未生成过 → checked=false，前端不渲染该行）。
+  // 仅 DSHana 标签页 deps 卡片展示（settings「检查与更新 DSH」卡片不展示 pnpm 状态——
+  // 用户决策：远端版本查询已改 HTTP 直查，settings 侧不关心 pnpm 引导）。
+  const pnpmChecked = Boolean(smoke);
+  const pnpmReady = Boolean(smoke?.pnpmReady);
+  const pnpmVersion = smoke?.pnpmVersion || null;
+  const pnpmError = smoke?.pnpmError
+    ? String(smoke.pnpmError).slice(0, 300)
+    : null;
   // 当前版本（运行级验证缓存优先，无则直读 dsh-pkg package.json）+ 版本检查
   // 状态（g.checkResult 缓存：最近一次 checkDshUpdate 结果）+ 更新状态（g.updating /
   // g.updateError + update-result.json 文件内容）。只回非敏感布尔/版本号/截断文本。
@@ -1254,7 +1261,7 @@ function buildDepsDiagCheck(g, cfg) {
   const ok = installed && (!smoke || smoke.ok || smoke.running);
   const check = {
     key: "deps",
-    name: "dsh 依赖安装",
+    name: "DSH 依赖安装",
     ok,
     installed,
     installing,
@@ -1280,6 +1287,11 @@ function buildDepsDiagCheck(g, cfg) {
     updating,
     updateError: updateError || null,
     updateResult,
+    // pnpm 引导状态（独立子项，不进 ok 判定；见上方 pnpmChecked 注释）
+    pnpmChecked,
+    pnpmReady,
+    pnpmVersion,
+    pnpmError,
     detail: "",
     fix: "",
   };
@@ -1291,7 +1303,7 @@ function buildDepsDiagCheck(g, cfg) {
   } else if (!installed) {
     // 未安装：保持现有文案
     check.detail =
-      "未找到 dsh 包：" +
+      "未找到 DSH 包：" +
       cliBin +
       " 不存在" +
       (checked.length > 1 ? "（已检查 " + checked.join("、") + "）" : "");
@@ -1300,21 +1312,21 @@ function buildDepsDiagCheck(g, cfg) {
       "依赖缺失：点击本卡片「安装依赖」按钮自动在插件数据目录 dsh-pkg 执行 pnpm add @deepseek-ai/dsh（完成后自动验证）；或确认插件目录 node_modules 解压完整";
   } else if (!smoke) {
     // 未检测过（进标签页自动检测一次 / 手动「检测依赖」；ok 暂算 installed）
-    check.detail = "dsh 包已就绪，点击「检测依赖」验证依赖完整性";
+    check.detail = "DSH 包已就绪，点击「检测依赖」验证依赖完整性";
   } else if (verifyRunning) {
     // 检测进行中：ok 暂 true，结果由检测接口返回后刷新
     check.detail = "正在检测依赖完整性…";
   } else if (!smoke.ok) {
     // 存在但验证失败：依赖图不完整（ERR_MODULE_NOT_FOUND 等真实错误）
     check.detail =
-      "dsh 包存在但依赖不完整：" +
+      "DSH 包存在但依赖不完整：" +
       (verifyError ? "\n" + verifyError : "运行级验证失败");
     check.fix =
       "点击本卡片「重新安装依赖」按钮重新执行 pnpm add @deepseek-ai/dsh（自动部署到 dsh-pkg，完成后自动验证）";
   } else {
     // 存在 + 验证通过：能跑 = 依赖图完整
     check.detail =
-      "dsh 包已就绪（运行级验证通过，版本 v" +
+      "DSH 包已就绪（运行级验证通过，版本 v" +
       (currentVersion || smoke?.version || "?") +
       "）：" +
       cliBin;
@@ -1415,8 +1427,8 @@ function buildProcessDiagCheck(g, out) {
  * webLastError 可能未携带 stderr 尾部，见「进程已退出」分支）。 */
 function pickProcessFix(lastError, stderr, port) {
   const text = (lastError || "") + "\n" + (stderr || "");
-  if (/dsh 包未就绪|cliBin|npm i/i.test(text)) {
-    return "按上方「dsh 依赖安装」项修复（数据目录 dsh-pkg 执行 pnpm add @deepseek-ai/dsh，完成后自动验证）";
+  if (/dsh 包未就绪|DSH 包未就绪|cliBin|npm i/i.test(text)) {
+    return "按上方「DSH 依赖安装」项修复（数据目录 dsh-pkg 执行 pnpm add @deepseek-ai/dsh，完成后自动验证）";
   }
   if (/EADDRINUSE|address already in use|占用|bind/i.test(text)) {
     return "检查端口 " + port + " 是否被占用（释放后重启 Hana）";

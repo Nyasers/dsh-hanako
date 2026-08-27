@@ -23,6 +23,4 @@
       name: '@dsh-hanako/settings'
       config:
         dshPkgDir: '{{DSH_PKG_DIR}}'
-        npmCliPath: '{{NPM_CLI_PATH}}'
-        electronNode: '{{ELECTRON_NODE}}'
         dataDir: '{{DATA_DIR}}'

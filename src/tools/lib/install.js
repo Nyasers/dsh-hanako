@@ -31,6 +31,7 @@ import {
   ELECTRON_NODE_ENV,
   IS_WIN,
 } from "./state.js";
+import { ensurePnpm, runPnpm, PNPM_VERSION } from "./pnpm.js";
 
 // ---- 依赖安装日志通道（统一）----
 // installDepsFromPlugin 内部 emitLog(s, src)：同一份文本同时进
@@ -191,7 +192,7 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir) {
     );
     copyFileSync(srcWs, join(pkgDir, "pnpm-workspace.yaml"));
     milestone("写最小 package.json + pnpm-workspace.yaml 到 " + pkgDir);
-    // 3. 创建 node 代理，定位 pnpm.cjs
+    // 3. 创建 node 代理；pnpm 入口 = 运行时引导（lib/pnpm.js ensurePnpm）
     if (IS_WIN) {
       const script = join(pkgDir, "node.cmd");
       const content = `@"${ELECTRON_NODE}" %*\n`;
@@ -202,16 +203,17 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir) {
       writeFileSync(script, content, { mode: 0o755 });
     }
     milestone("Created proxy node at " + pkgDir);
-    const pnpmCli = join(
-      PLUGIN_ROOT,
-      "node_modules",
-      "pnpm",
-      "bin",
-      "pnpm.cjs",
-    );
-    if (!existsSync(pnpmCli)) {
-      throw new Error("pnpm.cjs 不存在：" + pnpmCli);
+    // pnpm 不再内置（zip 摘除 node_modules/pnpm）：运行时下载 pnpm-{version} 单文件
+    // pnpm.mjs 到数据目录 pnpm-dist/（缓存独立于 dsh-pkg）。引导失败（网络/校验）与
+    // 旧「pnpm.cjs 不存在」语义区分：抛可读错误（含两个 CDN 提示），由外层 catch 记入
+    // g.depsInstallError——不再有「pnpm 缺失」分支（pnpm 已无内置形态）。
+    let pnpmCli;
+    try {
+      pnpmCli = await ensurePnpm({ dataDir });
+    } catch (e) {
+      throw new Error("pnpm 引导失败：" + (e?.message || e));
     }
+    milestone("pnpm 引导就绪：" + pnpmCli);
     // ---- npm → pnpm 升级兼容清理 ----
     // 旧版本 dsh-install 用 npm i 部署 dsh-pkg，会留下 package-lock.json 和扁平的
     // node_modules；新版本改用 pnpm add 部署，若不先清掉旧 npm 结构，会与 pnpm 自己的
@@ -238,42 +240,33 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir) {
     // 5. pnpm add @deepseek-ai/dsh：最小 package.json 无 devDeps 无需 omit；allowBuilds 放行
     //    build scripts；PATH 首部指向 pkgDir（代理脚本 node.cmd/node 让 install script 找到宿主 electron node）
     const run = async (registryArgs) => {
-      const child = spawn(
-        ELECTRON_NODE,
-        [
-          pnpmCli,
-          "add",
-          "@deepseek-ai/dsh",
-          "--loglevel=http",
-          ...registryArgs,
-        ],
-        {
-          cwd: pkgDir,
-          stdio: ["ignore", "pipe", "pipe"],
-          env: {
-            ...ELECTRON_NODE_ENV,
-            PATH: pkgDir + delimiter + (process.env.PATH || ""),
-          },
-          windowsHide: true,
-        },
-      );
-      let out = ""; // 仅用于错误信息提取（失败时拼进错误文本）
+      let out = ""; // 仅用于错误信息提取（失败时拼进错误文本）；cap 尾环 ≤64KB
       // pnpm 输出逐 chunk 实时进统一日志通道（emitLog：内存尾环 ≤DEPS_LOG_CAP
       // + 会话日志 src=pnpm 实时写，行规范化 \r\n/\r → \n——取代旧「命令完成后一次性
       // g.appendLog("pnpm", out)」）；每次 data 刷新 depsInstallAt——前端 3s 轮询 health
       // 随诊断刷新 installLog 尾部，呈现实时进度
       const cap = (d) => {
         const text = String(d).replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-        out += text;
+        out = (out + text).slice(-65536);
         emitLog(text, "pnpm");
       };
-      child.stdout.on("data", cap);
-      child.stderr.on("data", cap);
-      const code = await new Promise((res) => child.once("close", res));
-      if (code !== 0)
+      const r = await runPnpm(
+        ["add", "@deepseek-ai/dsh", "--loglevel=http", ...registryArgs],
+        {
+          pnpmCli,
+          cwd: pkgDir,
+          env: {
+            ...ELECTRON_NODE_ENV,
+            PATH: pkgDir + delimiter + (process.env.PATH || ""),
+          },
+          onStdout: cap,
+          onStderr: cap,
+        },
+      );
+      if (r.code !== 0)
         throw new Error(
           "pnpm add 失败 @deepseek-ai/dsh（exit " +
-            code +
+            r.code +
             "）：" +
             (out.slice(-300) || "无输出"),
         );
@@ -296,7 +289,7 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir) {
     );
     if (!existsSync(cliBin)) {
       throw new Error(
-        "pnpm add 完成但未找到 dsh 包：" +
+        "pnpm add 完成但未找到 DSH 包：" +
           cliBin +
           " 不存在（部署目录 " +
           pkgDir +
@@ -329,6 +322,10 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir) {
 // running=true 时直接返回当前缓存不重复 spawn（spawn 一次 --version 数百 ms，3s 轮询 ×
 // 每次 spawn 不可接受，必须缓存 + running 标志）。触发时机：进标签页自动一次 +
 // 手动「检测依赖」按钮（经 GET /webui/verify-deps 驱动）/ installDeps 部署成功后强制重验。
+// v0.18.2: 叠加 pnpm 引导检查（独立子项）——与 dsh 冒烟并行调 ensurePnpm（幂等：缓存
+// 完整直接返回，缺失/损坏自动重新下载自愈），结果记 pnpmReady / pnpmVersion / pnpmError。
+// 不进 smoke.ok 的 dsh 依赖就绪判定（web host 启动不依赖 pnpm，patch 已降级）；仅作
+// deps 卡片「pnpm 引导：就绪/未就绪」独立展示行。
 export async function verifyDepsSmoke(cfg) {
   const g = getSingleton();
   // 防并发：验证进行中直接返回当前缓存（不重复 spawn）
@@ -363,8 +360,33 @@ export async function verifyDepsSmoke(cfg) {
     stderr: "",
     at: "",
     running: true,
+    // pnpm 引导状态（独立子项，不进 smoke.ok 判定）：pnpmReady=false 时 pnpmError 为原因
+    pnpmReady: false,
+    pnpmVersion: null,
+    pnpmError: "",
   };
   g.depsSmoke = smoke;
+  // pnpm 引导检查（与 dsh 运行级验证并行，互不拖累）：verifyDepsSmoke 虽是运行级
+  // 只读检测，但 pnpm 检查允许自愈——ensurePnpm 幂等：缓存完整（sha256 一致）直接
+  // 返回（快速路径），缺失/损坏自动重新下载（网络操作无副作用）。dataDir 显式传入
+  // （与 installDepsFromPlugin 同约定，见 pnpm.js resolveDataDir；patch 渲染已不再
+  // 依赖 pnpm——v0.18.2 起版本检查改 HTTP 直查 npm registry）。
+  // 结果独立展示，不进 dsh 依赖就绪的布尔判定。任务内已 catch 全部错误，永不 reject。
+  const pnpmTask = (async () => {
+    slog("pnpm 引导检查…");
+    try {
+      await ensurePnpm({ dataDir });
+      smoke.pnpmReady = true;
+      smoke.pnpmVersion = PNPM_VERSION;
+      smoke.pnpmError = "";
+      slog("pnpm 引导就绪（pnpm-dist/pnpm-" + PNPM_VERSION + "）");
+    } catch (e) {
+      smoke.pnpmReady = false;
+      smoke.pnpmVersion = null;
+      smoke.pnpmError = String(e?.message || e).slice(0, 400);
+      slog("pnpm 引导失败：" + String(smoke.pnpmError).slice(0, 200));
+    }
+  })();
   try {
     if (!existsSync(cliBin)) throw new Error("cliBin 不存在：" + cliBin);
     slog("开始（cliBin=" + cliBin + "）");
@@ -416,6 +438,10 @@ export async function verifyDepsSmoke(cfg) {
     smoke.error = String(e?.message || e).slice(0, 400);
     slog("异常：" + String(smoke.error).slice(0, 200));
   } finally {
+    // 等 pnpm 检查收尾（自愈下载可能比 dsh 冒烟慢；pnpmTask 内部已 catch，不抛）。
+    // 若只 await dsh 冒烟，冷启动首次 verify 会带着 pnpmReady=false 返回，前端展示
+    // 「未就绪」误导——自愈路径（删缓存后 verify）须等下载完成再定格结果。
+    await pnpmTask;
     smoke.at = new Date().toISOString();
     smoke.running = false;
   }

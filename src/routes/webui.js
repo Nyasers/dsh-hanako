@@ -8,9 +8,11 @@
 //   POST /webui/start        手动启动 web host（process 卡片「手动启动」按钮；ready/starting/触发启动三态）
 //   POST /webui/install-deps 自动安装 dsh 依赖（deps 卡片「安装依赖」按钮；installing/触发安装）
 //   GET  /webui/verify-deps  运行级依赖检测（node cliBin --version；进标签页自动一次 + 手动「检测依赖」按钮）
-//   GET  /webui/check-update 版本检查（deps 卡片「检查更新」按钮；经宿主能力层 g.checkDshUpdate）
-//   POST /webui/update-dsh   更新 DSH（deps 卡片「更新 DSH」按钮；经宿主能力层 g.updateDsh，
-//                            异步触发，更新会重启 web host、正在执行的任务中断）
+//   GET  /webui/check-update 版本检查（经宿主能力层 g.checkDshUpdate；deps 卡片「检查更新」
+//                            按钮已移除——版本管理归设置页「检查与更新 DSH」卡片 + dsh_update 工具，路由保留）
+//   POST /webui/update-dsh   更新 DSH（经宿主能力层 g.updateDsh，异步触发，更新会重启
+//                            web host、正在执行的任务中断；deps 卡片「更新 DSH」按钮已移除，
+//                            入口归设置页 dsh_update 工具，路由保留）
 //
 // 机制：与 routes/card.js 同构——宿主把 app 挂在 /api/plugins/<pluginId> 命名空间下，
 // 这里注册相对路径。渲染前服务端用 Node fetch 探测 dsh web host 的 /api/host.describe
@@ -219,8 +221,11 @@ export default function registerWebuiRoutes(app, ctx) {
 
   // 运行级依赖检测（deps 卡片「检测依赖」按钮 + 进标签页自动一次；GET 只读）：
   // 检测中（g.depsSmoke.running）→ {ok:true,running:true}；否则 await verifyDepsSmoke(cfg)
-  // （≤10s 返回）→ {ok:true, verified, version, error, running:false}。结果写入 g.depsSmoke，
-  // 前端随后经 health 读取诊断刷新 deps 卡片。单例缺失/无函数/异常一律容错回 {ok:false}。
+  // （dsh 冒烟 ≤10s + pnpm 引导检查并行；自愈下载可能更久）→
+  // {ok:true, verified, version, error, running:false, pnpmReady, pnpmVersion, pnpmError}。
+  // pnpm 引导状态为独立子项（不进 verified 判定）：未就绪时 pnpmError 为原因，自愈
+  // 路径（缺缓存自动重下）恢复就绪。结果写入 g.depsSmoke，前端随后经 health 读取
+  // 诊断刷新 deps 卡片。单例缺失/无函数/异常一律容错回 {ok:false}。
   app.get("/webui/verify-deps", async (c) => {
     const g = globalThis.__dshHanako;
     try {
@@ -238,6 +243,9 @@ export default function registerWebuiRoutes(app, ctx) {
         verified: smoke.ok,
         version: smoke.version,
         error: smoke.error || null,
+        pnpmReady: smoke.pnpmReady === true,
+        pnpmVersion: smoke.pnpmVersion || null,
+        pnpmError: smoke.pnpmError || null,
       });
     } catch (e) {
       ctx.log?.warn?.(
@@ -250,7 +258,7 @@ export default function registerWebuiRoutes(app, ctx) {
 
   // 版本检查（deps 卡片「检查更新」按钮 + Agent 工具 dsh_update 共用能力层；
   // GET 只读）：检查中（g.checking）→ {ok:true,running:true}；否则 await
-  // g.checkDshUpdate(cfg)（npm view ≤~15s，官方源失败重试 npmmirror）→
+  // g.checkDshUpdate(cfg)（HTTP 直查 npm registry ≤~15s，官方源失败重试 npmmirror）→
   // {ok:true, localVersion, latestVersion, updateAvailable, error?}。结果缓存进
   // g.checkResult（内存，不再写 check-result.json——v0.18.1 起设置页检查改 dsh 侧
   // 直查），前端随后经 health 读取诊断刷新 deps 卡片。

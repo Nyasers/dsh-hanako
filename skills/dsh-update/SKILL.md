@@ -35,7 +35,7 @@ description: "dsh_update 工具手册（源码 tools/dsh-update.js + tools/dsh-r
 
 - **版本检查**：Agent 需要确认当前 dsh 版本 / 是否有新版（`dsh_update(action="check")`）
 - **更新 DSH**：有新版本且当前无运行中任务时（`dsh_update(action="update")`）——**先确认没有正在执行的 dsh 任务**（dsh_ops 查会话/看卡片），更新会重启 web host 中断任务
-- 与 dsh 设置页「DSHana 设置 → DSH 版本卡片」（v0.18.1 起检查 dsh 侧直查，同款 pnpm view；更新仍走宿主能力层）、DSHana 标签页 deps 卡片结果一致
+- 与 dsh 设置页「DSHana 设置 → DSH 版本卡片」（v0.18.1 起检查 dsh 侧直查，v0.18.2 起 HTTP 直查 npm registry；更新仍走宿主能力层）、DSHana 标签页 deps 卡片结果一致
 
 ## 示例
 

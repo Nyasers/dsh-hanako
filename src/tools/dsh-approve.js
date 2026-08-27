@@ -11,23 +11,23 @@ function hostBase() {
   const g = globalThis.__dshHanako;
   const web = g?.web;
   if (!web?.ready || !web.port)
-    throw new Error("dsh web host 未就绪（有审批挂起说明任务正在运行）");
+    throw new Error("DSH web host 未就绪（有审批挂起说明任务正在运行）");
   return `http://127.0.0.1:${web.port}`;
 }
 
 export const name = "dsh_approve";
 
 export const description =
-  "应答 dsh 任务挂起的权限审批（approval/requested）：allowed-once=放行该次请求 / rejected=拒绝。" +
+  "应答 DSH 任务挂起的权限审批（approval/requested）：allowed-once=放行该次请求 / rejected=拒绝。" +
   "opId 与 approvalId 来自审批通知；应答前评估通知里的 toolName 与 reason（命令原文）决定放行或拒绝。" +
-  "无人应答也可在 dsh Web UI 人工处理。完整调用手册见 SKILL: skills/dsh-approve/SKILL.md";
+  "无人应答也可在 DSH Web UI 人工处理。完整调用手册见 SKILL: skills/dsh-approve/SKILL.md";
 
 export const parameters = {
   type: "object",
   properties: {
     opId: {
       type: "string",
-      description: "审批所属 dsh 任务的 opId（审批通知里带）",
+      description: "审批所属 DSH 任务的 opId（审批通知里带）",
     },
     approvalId: {
       type: "string",
@@ -49,7 +49,7 @@ export const sessionPermission = {
   describeSideEffect: () => ({
     kind: "external_api",
     summary:
-      "向 dsh web host 提交审批应答（allowed-once/rejected），放行或拒绝 dsh agent 的越界权限请求",
+      "向 DSH web host 提交审批应答（allowed-once/rejected），放行或拒绝 DSH agent 的越界权限请求",
     ruleId: "dsh-hanako-approve",
   }),
 };
@@ -64,7 +64,7 @@ async function doExecute(input, ctx) {
   const op = g?.ops?.get(opId);
   if (!op)
     throw new Error(
-      `op 不存在或已过期（${opId}）：只可应答本会话近期提交的 dsh 任务审批`,
+      `op 不存在或已过期（${opId}）：只可应答本会话近期提交的 DSH 任务审批`,
     );
   const approvals = Array.isArray(op.pendingApprovals)
     ? op.pendingApprovals

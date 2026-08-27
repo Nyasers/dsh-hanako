@@ -80,7 +80,7 @@ async function notifyApprovalWake({ bus, sessionPath, opId, approval, task }) {
       sessionPath,
       meta: {
         type: "dsh-approval",
-        label: `dsh 审批: ${approval.toolName || "tool"}`,
+        label: `DSH 审批: ${approval.toolName || "tool"}`,
       },
     });
     await bus.request("deferred:resolve", {

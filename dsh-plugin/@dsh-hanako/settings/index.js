@@ -17,9 +17,10 @@
 //   ② DSH 版本卡片：@deepseek-ai/dsh 版本检查与更新。本地版本 dsh 侧直读 dsh-pkg
 //      package.json（零延迟，挂载即显示）；远端版本 **dsh 侧直查**（v0.18.1 起不再走
 //      宿主桥接——宿主 resources.watch 链路不可靠，曾致检查请求写入后无人消费、前端
-//      永久 pending）：本插件 spawn 宿主 electronNode + pnpm.cjs 执行
-//      `pnpm view @deepseek-ai/dsh version`（官方源失败自动重试 npmmirror，15s 超时
-//      kill），结果即最新版本。「更新到最新」仍写 { state:'requested' } 到
+//      永久 pending）：HTTP 直查 npm registry
+//      `https://registry.npmjs.org/@deepseek-ai/dsh/latest`（JSON 的 version 字段，
+//      pnpm view 语义等价；官方源失败重试一次 npmmirror，15s 超时），结果即最新版本，
+//      不再依赖 pnpm。「更新到最新」仍写 { state:'requested' } 到
 //      <dataDir>/update-request.json，宿主 5s 轮询感知后执行完整更新（停 web host →
 //      pnpm add @deepseek-ai/dsh latest → 起 web host），结果写
 //      <dataDir>/update-result.json，本插件 update-status 路由读它供前端轮询。
@@ -33,19 +34,17 @@
 // agentDefaultModel 服务调用；前端表单逻辑见同目录 client.js。
 //   POST /api/hana-settings.read            → agentDefaultModel.currentSelection()
 //   POST /api/hana-settings.save            → agentDefaultModel.saveSelection(...)
-//   POST /api/hana-settings.check-version   → 本地版本直读 + 远端版本 dsh 侧直查（pnpm view）
+//   POST /api/hana-settings.check-version   → 本地版本直读 + 远端版本 dsh 侧 HTTP 直查（npm registry）
 //   POST /api/hana-settings.request-update  → 写 <dataDir>/update-request.json（宿主轮询触发更新）
 //   POST /api/hana-settings.update-status   → 读 <dataDir>/update-result.json（更新进度/结果）
 // 路由经 webServer.register（kind: exact）注册——webserver 匹配 exact 优先于 apiproxy
 // 的 /api 前缀，冲突只会发生在同 (kind, path) 重复注册（插件重载未清理场景），此时
 // 降级记日志不阻断。错误统一返回 { ok:false, error } 结构。
 //
-// config 注入：dshPkgDir（dsh 包安装目录）、npmCliPath（宿主插件安装目录
-// node_modules/pnpm/bin/pnpm.cjs，即 {{NPM_CLI_PATH}} 渲染路径）、electronNode（宿主
-// electron 进程的 node 可执行文件）、dataDir（宿主插件数据目录）——由宿主 patch 模板
-// 渲染（{{DSH_PKG_DIR}}/{{NPM_CLI_PATH}}/{{ELECTRON_NODE}}/{{DATA_DIR}}，见
-// dsh-hanako.patch.yml.tpl / src/lifecycle.js）。v0.18.1 起 npmCliPath / electronNode
-// 供版本检查 dsh 侧 spawn 使用（v0.13.0 桥接时代仅作保留注入）。
+// config 注入：dshPkgDir（dsh 包安装目录）、dataDir（宿主插件数据目录）——由宿主 patch
+// 模板渲染（{{DSH_PKG_DIR}}/{{DATA_DIR}}，见 dsh-hanako.patch.yml.tpl / src/lifecycle.js）。
+// v0.18.1 曾注入 npmCliPath / electronNode 供版本检查 dsh 侧 spawn pnpm view；v0.18.2 起
+// 版本检查改 HTTP 直查 npm registry（全局 fetch），不再需要（patch 模板已删除对应占位符）。
 //
 // 服务依赖：export const inject = ['webServer', 'agentDefaultModel', 'hanaLogger'] 声明依赖
 // （cordis 服务注入经 inject 声明生效，无声明则 apply 内 ctx.webServer /
@@ -58,7 +57,6 @@
 export const name = "@dsh-hanako/settings";
 export const inject = ["webServer", "agentDefaultModel", "hanaLogger"];
 
-import { spawn } from "node:child_process";
 import { existsSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -130,76 +128,44 @@ function compareVersions(a, b) {
   return 0;
 }
 
-// ---- 远端版本直查（v0.18.1 起替代宿主桥接；语义与宿主 lib/check.js npmViewLatest 一致）----
-// spawn 宿主 electron node + 宿主 pnpm.cjs（config 注入字段 electronNode / npmCliPath，
-// 即 patch 模板 {{ELECTRON_NODE}} / {{NPM_CLI_PATH}} 渲染路径）执行
-// `pnpm view @deepseek-ai/dsh version`（单字段输出 = 纯版本号，trim 即可）；15s 超时
-// kill；官方源失败自动重试 --registry=https://registry.npmmirror.com。仍失败返回
-// { version:null, error }（调用方按需降级，不抛）。
-function npmViewLatest(cfg) {
-  const electronNode = cfg.electronNode;
-  const npmCliPath = cfg.npmCliPath;
-  const run = (registryArgs) => {
-    return new Promise((resolve) => {
-      if (!electronNode || !npmCliPath) {
-        resolve({
-          ok: false,
-          error: "缺少 electronNode / npmCliPath 配置（patch config 未渲染？）",
-        });
-        return;
-      }
-      let child = null;
-      try {
-        child = spawn(
-          electronNode,
-          [npmCliPath, "view", "@deepseek-ai/dsh", "version", ...registryArgs],
-          { stdio: ["ignore", "pipe", "pipe"], windowsHide: true },
-        );
-      } catch (e) {
-        resolve({ ok: false, error: e?.message || String(e) });
-        return;
-      }
-      let out = "";
-      let err = "";
-      child.stdout.on("data", (d) => {
-        out = (out + String(d)).slice(-800);
-      });
-      child.stderr.on("data", (d) => {
-        err = (err + String(d)).slice(-800);
-      });
-      const timer = setTimeout(() => {
-        try {
-          child.kill();
-        } catch {
-          /* 已退出 */
-        }
-      }, 15000);
-      child.once("close", (code) => {
-        clearTimeout(timer);
-        const version = out.trim();
-        if (code === 0 && version) resolve({ ok: true, version });
-        else
-          resolve({
-            ok: false,
-            error: (err || out || `退出码 ${code}`).trim().slice(0, 300),
-          });
-      });
-    });
-  };
-  return (async () => {
+// ---- 远端版本直查（HTTP 直查 npm registry；语义与宿主 lib/check.js npmViewLatest 一致）----
+// pnpm view @deepseek-ai/dsh version 的本质就是查 npm registry 的 latest dist-tag——
+// 直接 fetch https://registry.npmjs.org/@deepseek-ai/dsh/latest 的 JSON version 字段
+// （官方源失败重试一次 https://registry.npmmirror.com/@deepseek-ai/dsh/latest），15s
+// 超时（AbortSignal.timeout）。仍失败返回 { version:null, error }（调用方按需降级，不抛）。
+// HTTP 能力：dsh web host 运行在宿主 node v24（全局 fetch 可用），零运行时依赖；
+// 不再 spawn 宿主 electron node + pnpm 入口（config 注入字段 electronNode / npmCliPath
+// 已随 patch 模板占位符删除）。
+async function npmViewLatest(cfg) {
+  const fetchJson = async (url) => {
     try {
-      const first = await run([]);
-      if (first.ok) return { version: first.version, error: null };
-      const second = await run(["--registry=https://registry.npmmirror.com"]);
-      if (second.ok) return { version: second.version, error: null };
-      return {
-        version: null,
-        error: second.error || first.error || "查询失败",
-      };
+      const res = await fetch(url, {
+        signal: AbortSignal.timeout(15000),
+        headers: { "user-agent": "dsh-hanako-plugin" },
+      });
+      if (!res.ok) return { ok: false, error: "HTTP " + res.status + "：" + url };
+      const data = await res.json();
+      const version =
+        data && typeof data.version === "string" ? data.version.trim() : "";
+      if (!version) return { ok: false, error: "响应缺少 version 字段：" + url };
+      return { ok: true, version };
     } catch (e) {
-      return { version: null, error: e?.message || String(e) };
+      return { ok: false, error: e?.message || String(e) };
     }
-  })();
+  };
+  try {
+    const first = await fetchJson(
+      "https://registry.npmjs.org/@deepseek-ai/dsh/latest",
+    );
+    if (first.ok) return { version: first.version, error: null };
+    const second = await fetchJson(
+      "https://registry.npmmirror.com/@deepseek-ai/dsh/latest",
+    );
+    if (second.ok) return { version: second.version, error: null };
+    return { version: null, error: second.error || first.error || "查询失败" };
+  } catch (e) {
+    return { version: null, error: e?.message || String(e) };
+  }
 }
 
 // ---- 插件 apply：路由注册（全程容错，降级不阻断 dsh 启动；前端分页见 client.js）----
@@ -302,8 +268,8 @@ export function apply(ctx, config) {
         });
 
         // POST /api/hana-settings.check-version：本地版本直读（零延迟）+ 远端版本
-        // dsh 侧直查——spawn 宿主 electronNode + pnpm.cjs 执行 `pnpm view
-        // @deepseek-ai/dsh version`（官方源失败重试 npmmirror，15s 超时 kill），
+        // dsh 侧 HTTP 直查——fetch https://registry.npmjs.org/@deepseek-ai/dsh/latest
+        // 的 JSON version 字段（pnpm view 语义等价；官方源失败重试 npmmirror，15s 超时），
         // 响应 { ok:true, value:{ localVersion, latestVersion, updateAvailable, error? } }。
         // 不再写 update-request.json / 读 check-result.json（v0.18.1 起废弃宿主桥接：
         // resources.watch 链路不可靠导致检查永不完成）。
