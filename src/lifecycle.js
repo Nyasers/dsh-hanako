@@ -601,9 +601,16 @@ export async function ensureWebHost(cfg) {
   // launcher flag（--profile/--patch）必须位于应用参数（--port）之前；且 --patch 是
   // 顶层 dsh 选项，必须位于 --profile 之前（dsh 0.1.x：--profile 之后的参数视为
   // web app 参数，--patch 会被 web app 拒为 unknown option）
+  // --expose-internals 是 node 运行时 flag，必须置于 cliBin 之前（node --expose-internals <cliBin> …）。
+  // HMR 服务需要 Node 内部 ESM loader：上游 drop 该 flag 后改走原生 addon 兜底
+  // （require('node-addon-require-builtin')），但该 addon 在 macOS arm64 上加载失败
+  // （node-addon-require-builtin: Unsupported/no-getter (arm64 …)），导致 `dsh web` boot 崩溃。
+  // 显式注入 flag 切到 require('internal/modules/esm/loader') 直连路径，绕开崩溃 addon；
+  // Windows x64 等其余平台走直连同样成立、行为不变（Hana 内置 node 24.15，v2 loader）。
   const child = spawn(
     ELECTRON_NODE,
     [
+      "--expose-internals",
       cliBin,
       ...patchArgs,
       "--profile",
