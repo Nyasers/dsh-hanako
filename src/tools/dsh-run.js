@@ -4,10 +4,17 @@
 // tools/dsh-run.js — dsh_run 工具（有状态任务提交核心 + 工具契约）
 // 把任务交给 DeepSeek Harness（dsh）的 web host（--profile web）执行：
 // 经 /api 网关提交任务（session.create → events.mux 订阅 → session.prompt），
-// 实时事件流驱动卡片输出。本文件收敛为「有状态提交核心」——与审批状态机
-// （g.ops / approvalTimers / toolCallCache）紧耦合的代码保留在此；纯协议/解析/唤醒
-// 已剥离到 lib/*.js，web host 生命周期在 app/lifecycle.js。
+// 实时事件流驱动卡片输出。运行期协调键统一为任务 rpcId（session.prompt 提交产生的
+// RPC id，与 jsonl user/message 的 data.source.rpcId 同值）——g.ops 条目键 /
+// toolCallCache / approvalTimers 全部以任务 rpcId 键控，运行期协调键与数据定位键合一。
+// 本文件收敛为「有状态提交核心」——与审批状态机（g.ops / approvalTimers /
+// toolCallCache）紧耦合的代码保留在此；纯协议/解析/唤醒已剥离到 lib/*.js，
+// web host 生命周期在 app/lifecycle.js。
 // 完整模块结构与分发纪律见 DESIGN.md「架构」。
+// dataDir 解析：ctx.dataDir（宿主 onload 注入）→ g.dataDir（单例，onload 已正确初始化）
+// → PLUGIN_ROOT/data（冷启动兜底）。工具调用 ctx 通常没有 dataDir，回退链经单例兜底；
+// 回退值绝不写回单例（防污染 g.dataDir → 卡片 readOp / dsh_ops 定位错目录），
+// 详见 doExecute 内注释。
 //
 // 权限：external_side_effect（调用 dsh 编码 agent 执行任务，消耗 Hana 宿主 provider 额度，Auto 模式送审）。
 import { join } from "node:path";
@@ -44,7 +51,7 @@ import { ensureWebHost, ensureConfigJson } from "../lifecycle.js";
 async function respondApprovalLocal(base, approval, outcome) {
   const body = {
     type: "client-response",
-    rpcId: approval.rpcId,
+    rpcId: approval.respondRpcId,
     result: {
       ok: true,
       value: {
@@ -69,51 +76,45 @@ async function respondApprovalLocal(base, approval, outcome) {
   return true;
 }
 
-// 审批超时拒绝计时器表：key = `${opId}::${approvalId}`（不挂 op 快照上——ap 会落盘序列化，
-// timer 是运行时对象；终态清理见 submitTask 的 finally）。所有审批都会挂表（0=禁用除外）。
+// 审批超时拒绝计时器表：key = `${taskRpcId}::${approvalId}`（timer 是运行时对象，
+// 不挂 g.ops 条目上；终态清理见 submitTask 的 finally）。所有审批都会挂表（0=禁用除外）。
 const approvalTimers = new Map();
 
 // tool/call 参数缓存（审批决策信息源）：
-// key = `${opId}::${callId}`，value = { name, args }（args 为命令原文/目标路径的 JSON 字符串
-// 或对象，通知时转字符串）。运行期缓存不落盘（审批都是运行期的，落盘无意义）；终态清理同
-// approvalTimers（见 submitTask 的 finally）。审批到达时按 approval.callId 反查，把「具体
+// key = `${taskRpcId}::${callId}`，value = { name, args }（args 为命令原文/目标路径的 JSON
+// 字符串或对象，通知时转字符串）。运行期缓存不落盘（审批都是运行期的，落盘无意义）；终态清理
+// 同 approvalTimers（见 submitTask 的 finally）。审批到达时按 approval.callId 反查，把「具体
 // 执行了什么」（命令/路径原文）附在审批通知里给 Agent——Agent 看命令原文决策，而不是只看
 // 工具名或 model 自述（bash/pwsh 都能执行任意命令，工具名说明不了安全）。
 const toolCallCache = new Map();
 
-// ---- 运行期协调状态（任务状态零存储，op Map 仅存审批/取消协调字段）----
+// ---- 运行期协调状态（任务状态零存储，g.ops 仅存审批/取消协调字段）----
 // 任务状态（status/output/summary/usage/耗时）不再保存在插件内存：jsonl（dsh 会话日志）是
 // 唯一事实源，卡片经 /ops/stream 从 jsonl 重建基线 + 转发 DSH 实时事件，插件零任务状态。
-// g.ops 仅保留「审批/取消」运行期协调状态：opId → { task, sessionId, approvalPending,
-// pendingApprovals, cancelledRequested }。任务终态时在 submitTask 的 finally 删除条目。
-// 用途：① approval/requested 存审批上下文（rpcId 路由 respond），dsh_approve 工具应答；
-// ② dsh_cancel 未传 sessionId 时按 opId 反查 sessionId / 标记 cancelledRequested
+// g.ops 仅保留「审批/取消」运行期协调状态：任务 rpcId → { rpcId, task, sessionId,
+// approvalPending, pendingApprovals, cancelledRequested }。任务终态时在 submitTask 的 finally
+// 删除条目。用途：① approval/requested 存审批上下文（respondRpcId 路由 respond），
+// dsh_approve 工具应答；② dsh_cancel 按 sessionId 遍历 g.ops 找条目并标记 cancelledRequested
 //   （防 mux 断流时事件循环把取消误判为完成）。
 
-function nextOpId() {
-  const ts = Date.now().toString(36);
-  const rand = Math.random().toString(36).slice(2, 5);
-  return `op_${ts}_${rand}`;
-}
-
-function createOpEntry(opId, { task }) {
+function createOpEntry(taskRpcId, { task, sessionId }) {
   const g = getSingleton();
-  g.ops.set(opId, {
-    opId,
+  g.ops.set(taskRpcId, {
+    rpcId: taskRpcId,
     task: String(task ?? "").slice(0, 500),
-    sessionId: null, // session.create 后回填（dsh_cancel 按 opId 反查取消目标）
+    sessionId: sessionId ?? null, // prompt 提交成功后建条目时已建会话，直接回填（dsh_cancel 按 sessionId 遍历反查）
     approvalPending: false,
     pendingApprovals: [],
     cancelledRequested: false,
   });
-  return opId;
+  return taskRpcId;
 }
 
 // 缓存 tool/call 帧的参数原文（审批决策信息源）。
 // payload 兼容两种帧形：session/event 包裹的 tool/call 事件（ev.data={name,arguments,callId}）
 // 或直发帧（frame.data={name,arguments,callId}，宿主 backscanArgs 同款字段结构）。
 // arguments 是 JSON 字符串时原样存（子串匹配足够），对象则序列化；无 callId 的帧不缓存。
-function cacheToolCall(opId, payload) {
+function cacheToolCall(taskRpcId, payload) {
   if (!payload || typeof payload !== "object") return;
   const callId = payload.callId;
   if (typeof callId !== "string" || !callId) return;
@@ -125,13 +126,14 @@ function cacheToolCall(opId, payload) {
       args = String(args ?? "");
     }
   }
-  toolCallCache.set(`${opId}::${callId}`, {
+  toolCallCache.set(`${taskRpcId}::${callId}`, {
     name: typeof payload.name === "string" ? payload.name : "",
     args,
   });
 }
 // ---- 任务提交：注册运行期协调状态 + 后台执行（不 await）----
-// 返回 { opId, promise, ready }：opId 立即可用（构造卡片 route / deferred taskId），
+// 返回 { promise, ready }：任务 rpcId 由 prompt 提交产生（submitTask 作用域提升变量，事件循环
+// 与终态回调共用；运行期协调键与数据定位键合一）；卡片 route 由 ready 的 sessionId+rpcId 定位；
 // promise 在后台跑：session.create → events.mux 订阅 → session.prompt → 事件循环 → 终态。
 // 任务状态零存储——collected/blocksSeq/usageTotal 仅用于回调返回，
 // 卡片状态由 /ops/stream 从 jsonl 重建 + 实时事件转发呈现。
@@ -176,9 +178,9 @@ function submitTask(
     opProvider = opProvider || (dm && dm.provider) || "";
     opModel = opModel || (dm && dm.model) || "";
   }
-  const opId = createOpEntry(nextOpId(), { task: taskText });
   // ready：session.create + prompt 提交完成时 resolve { sessionId, rpcId }（卡片 URL 推迟到此后生成，
-  // 重启后按 sessionId+rpcId 从会话 jsonl 精确恢复 op，零映射文件）；失败 resolve null（降级 opId-only URL）
+  // 重启后按 sessionId+rpcId 从会话 jsonl 精确恢复 op，零映射文件）；失败 resolve null（loc 为 null 时
+  // route 不带任何定位参数——该路径任务提交必失败，deferred fail 会报错，卡片只做失败展示）
   let resolveReady = null;
   const ready = new Promise((r) => {
     resolveReady = r;
@@ -187,6 +189,11 @@ function submitTask(
   // 覆盖式只保留最后一轮、多轮任务严重偏小；按 disjoint 口径累计 = 未缓存输入/输出/缓存读取/推理之和，
   // 与 dsh 会话投影 tokenUsage.totals 对齐）。ok 终态与 promise.catch 的错误终态都能读到。
   let usageTotal = null;
+  // taskRpcId 同样提升到 submitTask 作用域：prompt 提交成功后才产生（callUnary 的 client-request
+  // 信封 rpcId，与 jsonl user/message 的 data.source.rpcId 同值）；事件循环（审批/取消/缓存键）与
+  // 终态回调都读它。注意不要用 frame.rpcId（server-request 信封自己的 RPC id，仅 /api/respond 的
+  // client-response 路由用，见 approval.respondRpcId）。
+  let taskRpcId = null;
 
   const promise = (async () => {
     const web = await ensureWebHost(cfg);
@@ -226,9 +233,6 @@ function submitTask(
     }
     const session = await callUnary(base, "session.create", createPayload);
     const sessionId = session.sessionId;
-    // 运行期协调状态回填 sessionId（dsh_cancel 未传 sessionId 时按 opId 反查取消目标）
-    const entryNow = getSingleton().ops.get(opId);
-    if (entryNow) entryNow.sessionId = sessionId;
 
     // 1.5 模型选择：仅当工具显式传 provider/model/effort 时才 selectModel（显式覆盖
     // dsh 默认模型）；都不传时不 selectModel，任务直接用 dsh 默认模型
@@ -361,13 +365,13 @@ function submitTask(
             } else if (ev.type === "tool/call") {
               // 缓存工具调用参数原文（session/event 包裹的 tool/call 事件，
               // d = { name, arguments, callId }），审批到达时按 callId 反查做内容级匹配。
-              cacheToolCall(opId, d);
+              cacheToolCall(taskRpcId, d);
             } else if (ev.type === "tool/code-dispatch-start") {
               // code preset 子调用分发事件（d = { rootCallId, parentCallId,
               // subCallId, name, arguments }）：run_code 内联的工具调用（如 write）以子调用
               // 形式派发，参数不产生独立 tool/call 帧；按 subCallId 缓存（形如 `root:code:N`），
               // 审批帧 callId 即该 subCallId，可精确反查到命令/路径原文。
-              cacheToolCall(opId, {
+              cacheToolCall(taskRpcId, {
                 callId: d.subCallId,
                 name: d.name,
                 arguments: d.arguments,
@@ -398,7 +402,7 @@ function submitTask(
             }
           } else if (frame.type === "approval/requested") {
             // 审批挂起（approval/policy=ask）：任务会等待应答。把审批上下文（含 respond
-            // 路由所需的 rpcId）存进运行期协调状态（g.ops 条目，非任务快照），并触发
+            // 路由所需的 respondRpcId）存进运行期协调状态（g.ops 条目，键 = 任务 rpcId），并触发
             // 宿主 deferred 通知（独立 taskId，不占用任务完成通道），Agent 收到后
             // 调用 dsh_approve 工具应答；无人应答仍可在 dsh Web UI 人工处理。
             // 审批固定形态——挂起 → deferred 通知 Agent（附 tool/call 参数原文，
@@ -406,12 +410,12 @@ function submitTask(
             // （approvalTimeoutMs，默认 30s 应答方失联检测，0=禁用）。不再有白名单自动放行
             // 或 manual/auto 模式切换：全部审批都交 Agent 处理。
             const g = getSingleton();
-            const op = g.ops.get(opId);
+            const op = g.ops.get(taskRpcId);
             if (op) {
               op.approvalPending = true;
               const approval = {
                 approvalId: frame.approvalId,
-                rpcId: frame.rpcId,
+                respondRpcId: frame.rpcId,
                 sessionId,
                 toolName: frame.toolName,
                 callId: frame.callId,
@@ -425,11 +429,11 @@ function submitTask(
               // tool/code-dispatch-start 事件里，已按 subCallId 精确缓存；若仍 miss（子调用
               // 事件未到/直发帧形态），剥 `:code:N` 后缀回退到 run_code 根调用（args 为整段
               // 代码原文，兜底呈现）。
-              let cachedCall = toolCallCache.get(`${opId}::${frame.callId}`);
+              let cachedCall = toolCallCache.get(`${taskRpcId}::${frame.callId}`);
               if (!cachedCall && typeof frame.callId === "string") {
                 const stripped = frame.callId.replace(/:\w+:\d+$/, "");
                 if (stripped !== frame.callId) {
-                  const root = toolCallCache.get(`${opId}::${stripped}`);
+                  const root = toolCallCache.get(`${taskRpcId}::${stripped}`);
                   if (root && root.name === "run_code") {
                     cachedCall = {
                       name: "run_code(code-dispatch)",
@@ -452,14 +456,14 @@ function submitTask(
                 notifyApprovalWake({
                   bus: bus ?? getSingleton().bus,
                   sessionPath,
-                  opId,
+                  rpcId: taskRpcId,
                   approval,
                   task: op.task,
                 });
                 pauseTimeout(); // 审批挂起：暂停执行超时计时（外部决策等待不计入执行时间）
                 const timeoutMs = resolveApprovalTimeoutMs(cfg);
                 if (timeoutMs > 0) {
-                  const timerKey = `${opId}::${approval.approvalId}`;
+                  const timerKey = `${taskRpcId}::${approval.approvalId}`;
                   const t = setTimeout(() => {
                     approvalTimers.delete(timerKey); // 计时器已触发：从表移除
                     const ap2 = op.pendingApprovals?.find(
@@ -499,7 +503,7 @@ function submitTask(
             // "answered" 时不再覆写，但同样不参与 pending 计数。item 变为非
             // pending（resolved/answered）即清掉该审批的超时拒绝计时器（防触发重复应答）。
             const g = getSingleton();
-            const op = g.ops.get(opId);
+            const op = g.ops.get(taskRpcId);
             if (op?.pendingApprovals) {
               const item = op.pendingApprovals.find(
                 (a) => a.approvalId === frame.approvalId,
@@ -509,7 +513,7 @@ function submitTask(
                 item.outcome = frame.outcome ?? "resolved";
                 item.resolvedAt = new Date().toISOString();
               }
-              const timerKey = `${opId}::${frame.approvalId}`;
+              const timerKey = `${taskRpcId}::${frame.approvalId}`;
               const t = approvalTimers.get(timerKey);
               if (t) {
                 clearTimeout(t);
@@ -523,7 +527,7 @@ function submitTask(
           } else if (frame.type === "tool/call") {
             // 直发 tool/call 帧（frame.data = { name, arguments, callId }，
             // 宿主 backscanArgs 同款字段结构）：同样缓存参数原文（frame.data 缺失时回退帧字段）。
-            cacheToolCall(opId, frame.data ?? frame);
+            cacheToolCall(taskRpcId, frame.data ?? frame);
           } else if (frame.type === "stream/error") {
             outcome = {
               stopReason: "error",
@@ -534,7 +538,7 @@ function submitTask(
         }
         // 取消兜底：dsh_cancel 已标记 cancelledRequested 时，若 cancel 导致 mux 断流且
         // 未收到 turn/end，把无终态收尾判为 aborted 而非 end_turn（防误报完成）
-        const opNow = getSingleton().ops.get(opId);
+        const opNow = getSingleton().ops.get(taskRpcId);
         if (opNow?.cancelledRequested && !outcome)
           outcome = { stopReason: "aborted" };
         // 流正常结束但无终态：视为完成（end_turn 可能已发但流先关）
@@ -603,7 +607,8 @@ function submitTask(
     try {
       // 3. 提交 prompt（queue 模式：立即 accepted，agent 异步执行）
       // promptMeta.rpcId = 会话 jsonl 的 user/message 事件 data.source.rpcId（同一 RPC id），
-      // 经 ready 返回给卡片 URL：插件重启后按 sessionId+rpcId 从 jsonl 精确恢复（无需 opId 映射）
+      // 经 ready 返回给卡片 URL：插件重启后按 sessionId+rpcId 从 jsonl 精确恢复（运行期协调键
+      // 即任务 rpcId，数据定位键合一）
       const promptMeta = {};
       await callUnary(
         base,
@@ -616,7 +621,12 @@ function submitTask(
         ac.signal,
         promptMeta,
       );
-      resolveReady({ sessionId, rpcId: promptMeta.rpcId || "" });
+      // 任务 rpcId 此刻产生（prompt 提交成功）：赋值提升变量 + 建运行期协调条目。
+      // 顺序最稳：赋值 taskRpcId → createOpEntry → resolveReady——resolveReady 后事件循环
+      // 才开始流转，审批帧到达时条目必已存在（g.ops.get(taskRpcId) 必命中）。
+      taskRpcId = promptMeta.rpcId || "";
+      createOpEntry(taskRpcId, { task: taskText, sessionId });
+      resolveReady({ sessionId, rpcId: taskRpcId });
 
       // 4. 竞速：事件循环终态 / 超时 / 取消
       // 初始启动：无审批时与旧行为完全一致（一次 setTimeout(timeoutMs)）
@@ -640,7 +650,7 @@ function submitTask(
       // 回调/返回值保持 chunk 流文本；结构化 blocks（reasoning 可折叠）由卡片端从 jsonl/实时事件重建
       const summary = buildSummary(fullOutput, finalMessageText);
       return {
-        opId,
+        rpcId: taskRpcId,
         sessionId,
         output: fullOutput,
         summary,
@@ -665,18 +675,18 @@ function submitTask(
       // 任务终态清理本 op 的审批超时拒绝计时器（防泄漏）。任务已结束（正常
       // 终态/取消/超时），挂起的审批由 web host 侧会话收尾自然失效，无需再自动拒绝。
       for (const [key, t] of approvalTimers) {
-        if (key.startsWith(`${opId}::`)) {
+        if (key.startsWith(`${taskRpcId}::`)) {
           clearTimeout(t);
           approvalTimers.delete(key);
         }
       }
       // 同样清理本 op 的 tool/call 参数缓存（运行期缓存只活到任务终态，防泄漏）
       for (const key of toolCallCache.keys()) {
-        if (key.startsWith(`${opId}::`)) toolCallCache.delete(key);
+        if (key.startsWith(`${taskRpcId}::`)) toolCallCache.delete(key);
       }
       // 删除运行期协调状态条目（任务状态零存储，条目仅活到终态）
       try {
-        getSingleton().ops.delete(opId);
+        getSingleton().ops.delete(taskRpcId);
       } catch {
         /* 忽略 */
       }
@@ -684,10 +694,10 @@ function submitTask(
   })();
 
   promise.catch((err) => {
-    resolveReady?.(null); // 提交失败：卡片降级 opId-only（错误态由 deferred fail 呈现）
+    resolveReady?.(null); // 提交失败：loc 为 null，卡片 route 不带定位参数（错误态由 deferred fail 呈现）
   });
 
-  return { opId, promise, ready };
+  return { promise, ready };
 }
 // ---- 工具契约 ----
 export const name = "dsh_run";
@@ -767,13 +777,21 @@ async function doExecute(input, ctx) {
   for (const [k, v] of Object.entries(ctx.config || {})) {
     if (v !== undefined && v !== null && v !== "") cfg[k] = v;
   }
-  // 插件数据目录（宿主注入）：DSH_HOME 数据根落在这里（账本随插件生命周期）
-  const dataDir = ctx.dataDir || join(PLUGIN_ROOT, "data");
+  // 插件数据目录（宿主注入）：DSH_HOME 数据根落在这里（账本随插件生命周期）。
+  // 回退链对齐 dsh-update/dsh-install 的 ctx.dataDir || g.dataDir：宿主只对 onload
+  // 生命周期 ctx 注入 dataDir，工具调用 ctx 通常没有（缺 g.dataDir 兜底会回退到
+  // PLUGIN_ROOT/data 并把错误值写进单例，污染 g.dataDir → 卡片 readOp / dsh_ops
+  // 全落到不存在的 dsh-home → 404「任务记录不存在」）。
+  const g = getSingleton();
+  const dataDir = ctx.dataDir || g.dataDir || join(PLUGIN_ROOT, "data");
   cfg.dataDir = dataDir;
   // 首次工具调用即自动生成 config.json（不存在时按 manifest 默认值；幂等，失败静默）
   ensureConfigJson(cfg);
-  // 单例记数据目录（dsh_ops 经 g.dataDir 定位 dsh 会话缓存等数据文件）
-  getSingleton().dataDir = dataDir;
+  // 单例记数据目录（dsh_ops 经 g.dataDir 定位 dsh 会话缓存等数据文件）——
+  // 只在显式注入（ctx.dataDir 非空）或单例为空（冷启动兜底）时写入；ctx.dataDir
+  // 为空且单例已有值时保留单例原值，绝不把 PLUGIN_ROOT/data 回退值覆盖进去。
+  if (ctx.dataDir && ctx.dataDir !== g.dataDir) g.dataDir = ctx.dataDir;
+  else if (!g.dataDir) g.dataDir = dataDir;
   // dsh 依赖位置——数据目录 dsh-pkg/（Agent npm i @deepseek-ai/dsh 部署）优先，插件根兑底
   if (!cfg.dshPkgDir) cfg.dshPkgDir = resolveDshPkgDir(cfg);
 
@@ -809,20 +827,28 @@ async function doExecute(input, ctx) {
   };
 
   const wait = input.wait === true;
-  const { opId, promise, ready } = submitTask(taskCfg, taskParams);
+  const { promise, ready } = submitTask(taskCfg, taskParams);
   // 卡片 URL 推迟到 session.create + prompt 提交后生成：携带 sessionId+rpcId，
-  // 插件重启后旧卡片按这两个键从会话 jsonl 精确恢复（op Map 清空不丢数据）
+  // 插件重启后旧卡片按这两个键从会话 jsonl 精确恢复（运行期协调键 = 任务 rpcId，不丢数据）
   const loc = await ready;
+  // 任务 rpcId：ready 的 loc.rpcId（prompt 提交产生的 RPC id，与 jsonl data.source.rpcId 同值）；
+  // loc 为 null（提交失败）时为空串。deferred taskId 与工具契约字段都用它。
+  const taskRpcId = (loc && loc.rpcId) || "";
+  // deferred taskId = 任务 rpcId（运行期协调键与数据定位键合一）；taskRpcId 为空时兜底唯一键
+  // （该路径提交必失败，deferred fail 报错即可）
+  const deferredTaskId = taskRpcId || ("dsh-run::" + Date.now().toString(36));
+  // 卡片 route 定位参数只带 locQuery（sessionId+rpcId+timeoutMs）；loc 为 null（提交失败）时
+  // route 不带任何定位参数——降级路径已随 op Map 退役移除（/ops/stream 需 sessionId+rpcId 才能恢复）
   const locQuery =
     (loc && loc.sessionId
-      ? `&sessionId=${encodeURIComponent(loc.sessionId)}`
+      ? `?sessionId=${encodeURIComponent(loc.sessionId)}`
       : "") +
     (loc && loc.rpcId ? `&rpcId=${encodeURIComponent(loc.rpcId)}` : "") +
-    (taskCfg.timeoutMs != null
+    (loc && taskCfg.timeoutMs != null
       ? `&timeoutMs=${encodeURIComponent(taskCfg.timeoutMs)}`
       : "");
   const cardBase = {
-    route: `/card/op?opId=${encodeURIComponent(opId)}${locQuery}`,
+    route: `/card/op${locQuery}`,
     title: `DSH ${wait ? "任务" : "运行中"}`,
     description: String(input.task ?? "").slice(0, 80),
     aspectRatio: "16:1",
@@ -835,14 +861,14 @@ async function doExecute(input, ctx) {
     await registerDeferredWake({
       bus,
       sessionPath,
-      taskId: opId,
+      taskId: deferredTaskId,
       label: String(input.task ?? "").slice(0, 120),
     });
 
     promise.then(
       (res) => {
         // PTC 式回调压缩：默认只带最终结论摘要（callbackMode=summary），
-        // 完整输出在 op 快照（卡片）与 dsh web UI（sessionId）可查，不进 Agent 上下文。
+        // 完整输出在卡片（jsonl 恢复）与 dsh web UI（sessionId）可查，不进 Agent 上下文。
         const outputMode = cfg.callbackMode === "full" ? "full" : "summary";
         const payloadOutput =
           outputMode === "full"
@@ -850,9 +876,9 @@ async function doExecute(input, ctx) {
             : (res.summary?.text ?? res.output);
         resolveDeferredWake({
           bus,
-          taskId: opId,
+          taskId: deferredTaskId,
           result: {
-            opId,
+            rpcId: taskRpcId,
             tool: "dsh_run",
             status: "ok",
             cwd,
@@ -873,7 +899,7 @@ async function doExecute(input, ctx) {
       (err) => {
         failDeferredWake({
           bus,
-          taskId: opId,
+          taskId: deferredTaskId,
           error: { message: String(err?.message || err).slice(0, 300) },
         });
       },
@@ -883,11 +909,11 @@ async function doExecute(input, ctx) {
       content: [
         {
           type: "text",
-          text: `任务已提交给 DSH（opId: ${opId}），在后台执行中。进度与输出见上方卡片；完成后后台消息带回结果摘要（callbackMode=${cfg.callbackMode === "full" ? "full" : "summary"}，完整输出在卡片与 DSH web UI 可查）。`,
+          text: `任务已提交给 DSH（rpcId: ${taskRpcId}），在后台执行中。进度与输出见上方卡片；完成后后台消息带回结果摘要（callbackMode=${cfg.callbackMode === "full" ? "full" : "summary"}，完整输出在卡片与 DSH web UI 可查）。`,
         },
       ],
       details: {
-        dsh: { opId, status: "running", cwd, wait: false },
+        dsh: { rpcId: taskRpcId, status: "running", cwd, wait: false },
         card: cardBase,
       },
     };
@@ -905,7 +931,7 @@ async function doExecute(input, ctx) {
         stopReason: res.stopReason,
         usage: res.usage,
         cwd,
-        opId: res.opId,
+        rpcId: res.rpcId,
         sessionId: res.sessionId,
         wait: true,
       },

@@ -11,6 +11,9 @@
 // 终态后完整输出用本地 blocksSeq（dsh-blocks-v1::JSON）走 renderBody（reasoning 折叠保留）。
 // 超时本地判定：URL data-timeout + 基线 startedAt 本地倒计时（插件侧 AbortController 照常终止）。
 // 轮询已移除；EventSource 建立失败（如插件重启后 DSH 未就绪）回退请求一次 /ops/status。
+// 「暂未就绪」重试：初始连接 404（jsonl 异步落盘秒级窗口）EventSource 关闭后不自动重连
+// （readyState=CLOSED），卡片侧有限重试（每 2s 重建 EventSource，最多 30 次 ≈ 60s），
+// 窗口耗尽仍失败才判「任务记录不存在」（与恢复卡片的真不存在语义一致）。
 // 输出是 Markdown（dsh 报告型输出），用内联轻量渲染器实时转 HTML。
 // 卡片类型分支——data-kind="dep"（/card/dep）= 安装/升级卡片（DSH 安装/DSH 升级，
 // 数据源 = 宿主单例 g.depTasks + g.depsInstallLog，SSE /ops/dep-stream，非 dsh 会话无 jsonl），
@@ -37,7 +40,6 @@
     initDepCard();
     return;
   }
-  var opId = (root && root.dataset.op) || pageParams.get("opId") || "";
   // 重启恢复定位：卡片 URL 带 sessionId+rpcId（session.create + prompt 后生成），
   // 插件零任务状态（op Map 退役），/ops/stream 按它们从会话 jsonl 重建基线快照
   var sessionId =
@@ -45,7 +47,7 @@
   var rpcId = (root && root.dataset.rpc) || pageParams.get("rpcId") || "";
   var timeoutMs =
     (root && root.dataset.timeout) || pageParams.get("timeoutMs") || "";
-  if (!opId && !sessionId) {
+  if (!sessionId || !rpcId) {
     renderFail("缺少任务 ID");
     return;
   }
@@ -324,6 +326,10 @@
 
   var es = null; // EventSource
   var fallbackDone = false; // /ops/status 兜底只做一次
+  var retryTimer = null; // 「暂未就绪」重试定时器（jsonl 异步落盘秒级窗口）
+  var retryCount = 0; // 已重试次数（上限 RETRY_MAX；窗口耗尽 = 记录真不存在）
+  var RETRY_DELAY = 2000; // 重试间隔（ms）
+  var RETRY_MAX = 30; // 最多 30 次 ≈ 60s 恢复窗口
   var summaryTimer = null; // chunk 渲染节流（约 100ms）
   var tickTimer = null; // 运行中 1s tick（头部耗时走动 + 本地超时判定）
   var timeoutDeadline = null;
@@ -395,7 +401,13 @@
     try {
       es = new EventSource(apiUrl("/ops/stream?" + streamQuery()));
     } catch (e) {
-      fallbackStatus(); // 建立失败：兜底一次 /ops/status
+      // 建立失败：兜底一次 /ops/status；已兜底过则进入有限重试
+      if (!fallbackDone) {
+        fallbackDone = true;
+        fallbackStatus();
+      } else {
+        scheduleRetry();
+      }
       return;
     }
     es.addEventListener("baseline", function (e) {
@@ -417,10 +429,15 @@
       if (frame) onEvent(frame);
     });
     es.onerror = function () {
-      // 建立失败/流中断：EventSource 自动重连；从未收到基线时兜底一次 /ops/status
-      if (!S.base && !fallbackDone) {
+      // 建立失败/流中断：初始连接非 200（404 = jsonl 尚未落盘）EventSource 关闭后不自动
+      // 重连（readyState=CLOSED）；已建立后断开则由 EventSource 自动重连接管。
+      // 从未收到基线时兜底一次 /ops/status；仍失败进入有限重试（「暂未就绪」≠「真不存在」）。
+      if (S.base) return; // 基线已到：后续中断由 EventSource 自动重连
+      if (!fallbackDone) {
         fallbackDone = true;
         fallbackStatus();
+      } else {
+        scheduleRetry();
       }
     };
   }
@@ -436,7 +453,8 @@
     }
   }
 
-  // 兜底：EventSource 建立失败时请求一次 /ops/status（快照渲染，无实时增量）
+  // 兜底：EventSource 建立失败时请求一次 /ops/status（快照渲染，无实时增量）；
+  // 失败（404/网络）不立即判失败——进入有限重试（jsonl 落盘后重试即命中）。
   function fallbackStatus() {
     apiFetch("/ops/status?" + opQuery(), { cache: "no-store" })
       .then(function (r) {
@@ -444,31 +462,62 @@
       })
       .then(function (data) {
         if (!data || !data.ok) {
-          renderFail((data && data.error) || "任务记录不存在");
+          scheduleRetry(); // 暂未就绪：进入重试，不渲染错误
           return;
         }
         onBaseline(data.op); // 复用基线处理（种子 + 终态判定；无 SSE 实时事件）
       })
       .catch(function () {
-        renderFail("任务记录不存在");
+        scheduleRetry(); // 网络/解析失败同样按「暂未就绪」重试
       });
   }
 
+  // 「暂未就绪」有限重试：fallbackStatus 失败（或 ES 建立失败）后不立即 renderFail，
+  // 每 RETRY_DELAY 重建 EventSource 重试全链路（基线 + 实时事件），最多 RETRY_MAX 次
+  // （≈60s 窗口）。重试期间保持占位「正在连接任务状态…」，成功（S.base 就绪）即停止；
+  // 窗口耗尽仍失败 → renderFail（语义不变：记录真不存在）。重试前 closeStream 清理旧
+  // 连接（含自动重连中的 CONNECTING），防止叠加多个 EventSource。
+  function scheduleRetry() {
+    if (retryTimer) return; // 已有待触发重试，不叠加
+    retryTimer = setTimeout(function () {
+      retryTimer = null;
+      if (S.base) return; // 等待期间基线已就绪（如 ES 自动重连成功），无需再试
+      if (retryCount >= RETRY_MAX) {
+        closeStream();
+        renderFail("任务记录不存在");
+        return;
+      }
+      retryCount++;
+      closeStream(); // 清掉旧 ES（含自动重连中的 CONNECTING 连接），防叠加
+      startStream(); // 重建 EventSource：jsonl 落盘后基线即命中，全链路恢复
+    }, RETRY_DELAY);
+  }
+
+  function stopRetry() {
+    if (retryTimer) {
+      clearTimeout(retryTimer);
+      retryTimer = null;
+    }
+  }
+
   function opQuery() {
-    var q = "opId=" + encodeURIComponent(opId);
-    if (sessionId) q += "&sessionId=" + encodeURIComponent(sessionId);
-    if (rpcId) q += "&rpcId=" + encodeURIComponent(rpcId);
-    if (timeoutMs) q += "&timeoutMs=" + encodeURIComponent(timeoutMs);
+    var q = "";
+    if (sessionId)
+      q += (q ? "&" : "") + "sessionId=" + encodeURIComponent(sessionId);
+    if (rpcId) q += (q ? "&" : "") + "rpcId=" + encodeURIComponent(rpcId);
+    if (timeoutMs)
+      q += (q ? "&" : "") + "timeoutMs=" + encodeURIComponent(timeoutMs);
     return q;
   }
 
   // ── 事件处理 ──
   function onBaseline(snap) {
-    if (!snap || !snap.opId) {
+    if (!snap) {
       renderFail("任务记录不存在");
       closeStream();
       return;
     }
+    stopRetry(); // 基线已就绪：取消可能挂起的重试定时器
     S.base = snap;
     S.usage = snap.usage || null;
     S.outputLength = snap.outputLength || 0;
@@ -654,7 +703,6 @@
     S.lastSummaryText = summaryText;
     return {
       op: {
-        opId: b.opId || "",
         task: b.task || "",
         cwd: b.cwd || "",
         agentPreset: b.agentPreset || "",

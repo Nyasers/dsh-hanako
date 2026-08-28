@@ -134,7 +134,7 @@ dsh 的 `/api/events.mux` **要求 WebSocket 升级**：GET 返回 `426 Upgrade 
   - `lib/wake.js` — deferred 唤醒协议 + 审批挂起通知：registerDeferredWake / resolveDeferredWake / failDeferredWake / notifyApprovalWake（dsh-run / dsh-install / dsh-update 三入口共享，消除三重复；meta.type 由调用方传入保留各自标识）
   - `lib/protocol.js` — dsh web /api 网关协议层（纯协议零状态）：nextRpcId / callUnary / openMux / textFromChunk / textFromMessageBlocks / SUMMARY_HEAD/TAIL / buildSummary
   - `app/lifecycle.js` — web host 生命周期（启动/自检/更新/三条 watch）：原在本文件，分离后独立，经静态 import 供 dsh-run 使用 ensureWebHost / ensureConfigJson，顶层 mountLifecycle 挂单例字段
-  - **保留在 dsh-run**：nextOpId / createOpEntry / respondApprovalLocal / approvalTimers / toolCallCache / cacheToolCall / submitTask / doExecute / execute / 工具契约——与审批状态机（g.ops 协调状态 / approvalTimers / toolCallCache）紧耦合，拆出要跨模块传递大量运行状态，保留在此
+  - **保留在 dsh-run**：createOpEntry（运行期协调条目，键 = 任务 rpcId）/ respondApprovalLocal / approvalTimers / toolCallCache / cacheToolCall / submitTask / doExecute / execute / 工具契约——与审批状态机（g.ops 协调状态（键 = 任务 rpcId）/ approvalTimers / toolCallCache）紧耦合，拆出要跨模块传递大量运行状态，保留在此
 - **分发纪律（历史约束）**：Hana 以带 ?t= 时间戳的 URL 加载 tools/*.js（热更新缓存破坏），但 tools 内部静态 import 的相对模块是无 query 的固定 URL，Node ESM 按 URL 缓存、永不刷新。分发形态宿主加载 dist/tools/*.js（rspack bundle，build.mjs 入口内联 import），?t= 重载即刷新；因此 rspack 入口（dsh-run 等）可静态 import lib 与本插件 app/lifecycle.js（内联进 bundle）。非 bundle 侧（routes/webui.js、index.js）保持经 globalThis 单例调用
 
 ## 已知限制

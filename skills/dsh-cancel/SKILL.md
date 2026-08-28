@@ -1,6 +1,6 @@
 ---
 name: dsh-cancel
-description: "dsh_cancel 工具手册（源码 tools/dsh-cancel.js 核对）。触发场景：取消已派发的 dsh 任务（误派/卡死/不再需要结果止损）、dsh_cancel 怎么用（sessionId 从 dsh_run 回调/卡片 URL 取，opId 从 dsh_run 返回取）、op Map 退役后 opId 仅运行期残留可反查（推荐 sessionId）、幂等语义（任务已结束返回无需取消）、取消后任务以 aborted 终态收尾并唤醒 Agent、cancelling 状态、session.cancel 调用细节。需要取消 dsh 任务前先读本技能。"
+description: "dsh_cancel 工具手册（源码 tools/dsh-cancel.js 核对）。触发场景：取消已派发的 dsh 任务（误派/卡死/不再需要结果止损）、dsh_cancel 怎么用（sessionId 从 dsh_run 回调/卡片 URL 取，必填）、op Map 退役后 g.ops 仅存运行期协调条目（任务 rpcId 键控，取消只认 sessionId）、幂等语义（任务已结束返回无需取消）、取消后任务以 aborted 终态收尾并唤醒 Agent、cancelling 状态、session.cancel 调用细节。需要取消 dsh 任务前先读本技能。"
 ---
 
 # dsh_cancel 工具手册
@@ -9,24 +9,23 @@ description: "dsh_cancel 工具手册（源码 tools/dsh-cancel.js 核对）。�
 
 ## 参数契约
 
-v0.10.46（op Map 退役，任务状态零存储、jsonl 唯一事实源）：`required: []`，`sessionId` 与 `opId` 至少传一个：
+`required: ["sessionId"]`（op Map 退役后 g.ops 仅存运行期协调条目、任务 rpcId 键控；**取消一律显式传 sessionId**）：
 
 | 参数 | 类型 | 语义 |
 |---|---|---|
-| `sessionId` | string（推荐） | 要取消的 dsh 会话 sessionId（dsh_run 异步回调/卡片 URL 里带）。直接按会话取消，重启后仍有效 |
-| `opId` | string | 要取消的任务 opId（dsh_run 提交时返回）。仅能反查本插件进程运行期残留的会话（任务结束即失效），优先用 sessionId |
+| `sessionId` | string（必填） | 要取消的 dsh 会话 sessionId（dsh_run 异步回调/卡片 URL 里带）。直接按会话取消，重启后仍有效 |
 
 ## 行为（源码核实）
 
-1. **参数校验**：`sessionId` 与 `opId` 都为空 → 抛 `需要 sessionId 或 opId 至少一个（推荐传 sessionId…）`。
-2. **定位**：传 `sessionId` 直接用；只传 `opId` 时从 `g.ops` 运行期协调状态条目反查 `sessionId`（条目仅存审批/取消状态 + sessionId，不含任务快照；终态时已被删除）——miss 抛 `op 不存在或已过期…请显式传 sessionId`。
+1. **参数校验**：`sessionId` 为空 → 抛 `需要 sessionId（dsh_run 回调/卡片 URL 里带；取消一律显式传 sessionId）`。
+2. **定位**：`sessionId` 直接定位会话；g.ops 运行期条目以任务 rpcId 键控，cancel 遍历条目找 `entry.sessionId === sessionId` 的项（条目极少——仅运行中任务，遍历可忽略；极早 cancel 条目未建则为 null，跳过标记）。
 3. **请求**：调 web host `POST /api/session.cancel`（client-request 信封，rpcId 回显校验；`full.result.ok` 为假抛取消请求未接受）。
-4. **防误判**：先标记 `entry.cancelledRequested = true`（有 opId 残留条目时）——cancel 导致 mux 断流时，dsh-run.js 事件循环读取该标记把无终态收尾判为 aborted 而非 end_turn（防误报完成）。
+4. **防误判**：先标记 `entry.cancelledRequested = true`（找到该会话的运行期条目时）——cancel 导致 mux 断流时，dsh-run.js 事件循环读取该标记把无终态收尾判为 aborted 而非 end_turn（防误报完成）。
 5. **收尾**：dsh agent 收到中断，任务以 aborted 终态收尾，宿主 deferred fail 以「dsh_run 已取消」唤醒 Agent。best-effort：任务刚好自然完成时 cancel 的 accepted 无副作用（cancel 幂等）。
 
 ## 返回
 
-`已请求取消任务（会话 <sessionId 前 12 字符>…）：dsh agent 会收到中断，任务将尽快以 aborted 终态收尾`，details `{ dsh: { opId, sessionId, accepted: true, status: "cancelling" } }`。
+`已请求取消任务（会话 <sessionId 前 12 字符>…）：dsh agent 会收到中断，任务将尽快以 aborted 终态收尾`，details `{ dsh: { sessionId, accepted: true, status: "cancelling" } }`。
 
 ## 使用场景
 
@@ -36,12 +35,12 @@ v0.10.46（op Map 退役，任务状态零存储、jsonl 唯一事实源）：`r
 
 ## 示例：从哪拿 sessionId
 
-sessionId 优先来源（op Map 已退役，**取消一律推荐显式传 sessionId**）：
+sessionId 来源（**取消一律显式传 sessionId**）：
 
 1. **dsh_run 异步回调**：任务完成/失败时后台消息带 `sessionId`（形如 `session-xxxx`）——直接抄用
-2. **运行卡片 URL**：卡片 iframe 地址带 `sessionId=<session-xxxx>&rpcId=<r_xxx>&opId=<op_xxx>`——从 URL 取
+2. **运行卡片 URL**：卡片 iframe 地址带 `sessionId=<session-xxxx>&rpcId=<r_xxx>`——从 URL 取
 3. **dsh_ops**：查会话清单（`dsh_ops`）按 `sessionId` 定位，再取消
-4. 只有 dsh_run 提交返回值（opId）且任务仍在运行期 → 只传 opId 可反查（进程残留，重启后失效）
+4. 任务 rpcId 不再用于取消定位（g.ops 条目按任务 rpcId 键控，但 cancel 参数只收 sessionId）——**取消一律传 sessionId**
 
 ```
 dsh_cancel(sessionId="session-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx")

@@ -2,10 +2,10 @@
 // Copyright (c) 2026 Nyasers
 //
 // routes/card.js — dsh-hanako 任务反馈卡片路由
-//   GET /card/op?opId=&sessionId=&rpcId=&timeoutMs=  卡片页面（iframe 内容）
+//   GET /card/op?sessionId=&rpcId=&timeoutMs=       卡片页面（iframe 内容）
 //   GET /ops/stream?sessionId=&rpcId=&timeoutMs=     SSE 推送源（卡片主链路：基线快照 + DSH 实时事件转发）
-//   GET /ops/status?opId=&sessionId=&rpcId=          兜底状态 JSON（EventSource 建立失败时卡片回退一次；仅 jsonl 恢复路径）
-//   GET /ops/output?opId=&sessionId=&rpcId=          兜底全量输出 JSON（兼容旧卡片懒加载；仅 jsonl 恢复路径）
+//   GET /ops/status?sessionId=&rpcId=&timeoutMs=     兜底状态 JSON（EventSource 建立失败时卡片回退一次；仅 jsonl 恢复路径）
+//   GET /ops/output?sessionId=&rpcId=&timeoutMs=     兜底全量输出 JSON（兼容旧卡片懒加载；仅 jsonl 恢复路径）
 //   GET /card/dep?taskId=                            安装/升级卡片页面（dsh_install/dsh_update 异步流程，data-kind="dep"）
 //   GET /ops/dep-stream?taskId=                      安装/升级卡片 SSE 推送源（进程内 g.depTasks + g.depsInstallLog）
 //   GET /ops/dep-status?taskId=                      安装/升级卡片兜底状态 JSON
@@ -183,7 +183,6 @@ function rebuildOpFromLog(dataDir, sessionId, rpcId) {
   // 卡片据此保持运行态展示（SSE 实时事件随后接管；本地超时倒计时兜底）。
   if (!turnEnd) {
     return {
-      opId: "recovered-" + rpcId,
       rpcId,
       task: taskText || "（任务描述不可用）",
       cwd: header?.cwd || "",
@@ -210,7 +209,6 @@ function rebuildOpFromLog(dataDir, sessionId, rpcId) {
   const isError =
     stopReason === "error" || stopReason === "aborted" || !!lastErr;
   return {
-    opId: "recovered-" + rpcId,
     rpcId,
     task: taskText || "（任务描述不可用）",
     cwd: header?.cwd || "",
@@ -281,7 +279,6 @@ function readOp({ sessionId, rpcId, timeoutMs }, includeFull) {
     }
   }
   const snap = {
-    opId: op.opId,
     task: op.task || "",
     cwd: op.cwd || "",
     agentPreset: op.agentPreset || "",
@@ -308,10 +305,9 @@ function readOp({ sessionId, rpcId, timeoutMs }, includeFull) {
 export default function registerCardRoutes(app, ctx) {
   const base = "/api/plugins/" + ctx.pluginId;
 
-  // 卡片页（iframe 内容）：opId 参数（兼容旧卡片）+ sessionId/rpcId（重启恢复定位）
+  // 卡片页（iframe 内容）：sessionId+rpcId（重启恢复定位；op Map 退役后仅此可定位）
     app.get("/card/op", (c) => {
     const assets = CARD_ASSETS;
-    const opId = String(c.req.query("opId") || "");
     const sessionId = String(c.req.query("sessionId") || "");
     const rpcId = String(c.req.query("rpcId") || "");
     const timeoutMs = String(c.req.query("timeoutMs") || "");
@@ -325,7 +321,6 @@ export default function registerCardRoutes(app, ctx) {
         assets,
         esc,
         th,
-        opId,
         sessionId,
         rpcId,
         timeoutMs,
@@ -437,32 +432,29 @@ export default function registerCardRoutes(app, ctx) {
   });
 
   // 状态兜底源（降级：仅 jsonl 恢复路径，不再读 op Map）。
-  // 定位：sessionId+rpcId（新卡片）；opId-only 的旧卡片在 op Map 退役后无法恢复，返回 404。
+  // 定位：sessionId+rpcId（op Map 退役后唯一定位键）。
   app.get("/ops/status", (c) => {
-    const opId = String(c.req.query("opId") || "");
     const sessionId = String(c.req.query("sessionId") || "");
     const rpcId = String(c.req.query("rpcId") || "");
     const timeoutMs = String(c.req.query("timeoutMs") || "");
-    if (!opId && !rpcId)
-      return c.json({ ok: false, error: "缺少 opId 或 rpcId" }, 400);
-    const op = readOp({ opId, sessionId, rpcId, timeoutMs });
+    if (!sessionId || !rpcId)
+      return c.json({ ok: false, error: "缺少 sessionId 或 rpcId" }, 400);
+    const op = readOp({ sessionId, rpcId, timeoutMs });
     if (!op) return c.json({ ok: false, error: "任务记录不存在" }, 404);
     return c.json({ ok: true, op });
   });
 
   // 全量输出兜底拉取（兼容旧卡片懒加载；jsonl 恢复路径）
   app.get("/ops/output", (c) => {
-    const opId = String(c.req.query("opId") || "");
     const sessionId = String(c.req.query("sessionId") || "");
     const rpcId = String(c.req.query("rpcId") || "");
     const timeoutMs = String(c.req.query("timeoutMs") || "");
-    if (!opId && !rpcId)
-      return c.json({ ok: false, error: "缺少 opId 或 rpcId" }, 400);
-    const op = readOp({ opId, sessionId, rpcId, timeoutMs }, true);
+    if (!sessionId || !rpcId)
+      return c.json({ ok: false, error: "缺少 sessionId 或 rpcId" }, 400);
+    const op = readOp({ sessionId, rpcId, timeoutMs }, true);
     if (!op) return c.json({ ok: false, error: "任务记录不存在" }, 404);
     return c.json({
       ok: true,
-      opId: op.opId,
       output: op.output,
       outputLength: op.outputLength,
     });
