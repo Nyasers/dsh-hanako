@@ -26,6 +26,7 @@ import {
   resolveReasoningEffort,
   resolveApprovalTimeoutMs,
   resolveDefaultCwd,
+  resolveCallbackMode,
 } from "./lib/config.js";
 import {
   registerDeferredWake,
@@ -842,11 +843,10 @@ async function doExecute(input, ctx) {
       : Number(cfg.defaultTimeoutMs || 600000);
 
   // callbackMode 三档：full=回传全量输出 / summary=只带最终结论摘要（默认）/
-  // minimal=回调只带 { id, status, rpcId, sessionId } 定位键（不生成摘要、不占上下文）
-  const callbackMode =
-    cfg.callbackMode === "full" || cfg.callbackMode === "minimal"
-      ? cfg.callbackMode
-      : "summary";
+  // minimal=回调只带 { id, status, rpcId, sessionId } 定位键（不生成摘要、不占上下文）。
+  // 直读 dataDir/config.json 的 global.callbackMode（单一事实源，设置界面改动/Agent 直改
+  // 文件均即时生效），无则回退配置快照；与 defaultCwd/approvalTimeoutMs 同款直读兜底。
+  const callbackMode = resolveCallbackMode(cfg);
   // 异步提交回执按 callbackMode 展示三档语义
   const modePhrase =
     callbackMode === "full"
