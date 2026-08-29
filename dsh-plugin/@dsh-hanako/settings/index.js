@@ -21,7 +21,7 @@
 //      `https://registry.npmjs.org/@deepseek-ai/dsh/latest`（JSON 的 version 字段，
 //      pnpm view 语义等价；官方源失败重试一次 npmmirror，15s 超时），结果即最新版本，
 //      不再依赖 pnpm。「更新到最新」仍写 { state:'requested' } 到
-//      <dataDir>/update-request.json，宿主 5s 轮询感知后执行完整更新（停 web host →
+//      <dataDir> 经宿主反向信道直投（/child/post，loopbackToken 凭据）触发完整更新（停 web host →
 //      pnpm add @deepseek-ai/dsh latest → 起 web host），结果写
 //      <dataDir>/update-result.json，本插件 update-status 路由读它供前端轮询。
 //
@@ -35,7 +35,7 @@
 //   POST /api/hana-settings.read            → agentDefaultModel.currentSelection()
 //   POST /api/hana-settings.save            → agentDefaultModel.saveSelection(...)
 //   POST /api/hana-settings.check-version   → 本地版本直读 + 远端版本 dsh 侧 HTTP 直查（npm registry）
-//   POST /api/hana-settings.request-update  → 写 <dataDir>/update-request.json（宿主轮询触发更新）
+//   POST /api/hana-settings.request-update  → 直投宿主反向信道（/child/post，触发更新）
 //   POST /api/hana-settings.update-status   → 读 <dataDir>/update-result.json（更新进度/结果）
 // 路由经 webServer.register（kind: exact）注册——webserver 匹配 exact 优先于 apiproxy
 // 的 /api 前缀，冲突只会发生在同 (kind, path) 重复注册（插件重载未清理场景），此时
@@ -57,7 +57,7 @@
 export const name = "@dsh-hanako/settings";
 export const inject = ["webServer", "agentDefaultModel", "hanaLogger"];
 
-import { existsSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 // ---- 读请求 body（JSON）----
@@ -295,28 +295,45 @@ export function apply(ctx, config) {
           }
         });
 
-        // POST /api/hana-settings.request-update：写更新请求文件（宿主 5s 轮询到后自动
-        // npm i latest + 重启 web host，结果写 update-result.json）
+        // POST /api/hana-settings.request-update：经子插件反向信道直投宿主
+        // （v0.21.2 起替代 update-request.json 文件桥——宿主侧无轮询、无文件）。
+        // 宿主 POST /child/post 受理后执行 npm i latest + 重启 web host，结果写
+        // update-result.json（本插件 update-status 路由读）。hostApi 由宿主 patch
+        // 注入（server-info.json 的 loopbackToken + 端口，过宿主鉴权墙）。
         registerRoute("/api/hana-settings.request-update", async (req, res) => {
           try {
             await readJsonBody(req);
-            const dataDir = cfg.dataDir;
-            if (!dataDir)
-              throw new Error("缺少 dataDir 配置（patch config 未渲染？）");
-            mkdirSync(dataDir, { recursive: true });
-            writeFileSync(
-              join(dataDir, "update-request.json"),
-              JSON.stringify({
-                state: "requested",
-                at: new Date().toISOString(),
-                fromVersion: readLocalVersion(),
+            const hostApi = cfg.hostApi;
+            if (
+              !hostApi ||
+              typeof hostApi.url !== "string" ||
+              typeof hostApi.token !== "string"
+            ) {
+              throw new Error("宿主反向信道未配置（hostApi 缺失）");
+            }
+            const url =
+              hostApi.url +
+              (hostApi.url.includes("?") ? "&" : "?") +
+              "token=" +
+              encodeURIComponent(hostApi.token);
+            const r = await fetch(url, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                channel: "dsh.update-request",
+                payload: {
+                  at: new Date().toISOString(),
+                  fromVersion: readLocalVersion(),
+                },
               }),
-              "utf8",
-            );
-            settingsLog(
-              "更新请求已写入 update-request.json（宿主轮询将自动执行更新）",
-            );
-            json(res, { ok: true });
+              signal: AbortSignal.timeout(5000),
+            });
+            const data = await r.json().catch(() => ({}));
+            if (!r.ok || data?.ok === false) {
+              throw new Error(data?.error || `宿主投递失败（HTTP ${r.status}）`);
+            }
+            settingsLog("更新请求已直投宿主（/child/post），将自动执行更新");
+            json(res, { ok: true, ...data });
           } catch (e) {
             try {
               settingsLog(`更新请求失败：${e?.message || e}`);

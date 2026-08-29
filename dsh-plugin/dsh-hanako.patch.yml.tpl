@@ -24,3 +24,4 @@
       config:
         dshPkgDir: '{{DSH_PKG_DIR}}'
         dataDir: '{{DATA_DIR}}'
+        hostApi: {{DSH_HOST_API}}
