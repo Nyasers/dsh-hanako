@@ -285,12 +285,13 @@
       return params.get("token") || "";
     }
     function setupChannel() {
-      // 分流：本地直连 127.0.0.1:<port>（不经 /web、不经 SW——scope=/web/ 收窄，
-      // WS 实时事件正常）；远程走 /web（宿主代理直接提供 dsh 页面——index 不经 SW，
-      // SW 激活与否不影响入口，杜绝 about:blank/404）。
+      // 地址分流（插件唯一职责）：iframe 直连 dsh web host 本身——本地 127.0.0.1:<port>
+      // （同源，POST/WS 全通）；远程用配置的 dsh 远程地址（cloudflared 转发 3080，
+      // dsh trustedHosts 已放行远程 Host）。前端零感知，无 SW/代理/隧道。
       var base = "http://127.0.0.1:{{= it.port }}/";
-      if (isRemote) {
-        frame.src = api + "/web" + "?dshReload=" + Date.now();
+      var remoteUrl = {{= JSON.stringify(it.remoteUrl || "") }};
+      if (isRemote && remoteUrl) {
+        frame.src = remoteUrl + (remoteUrl.indexOf("?") !== -1 ? "&" : "?") + "dshReload=" + Date.now();
       } else {
         frame.src = base + "?dshReload=" + Date.now();
       }

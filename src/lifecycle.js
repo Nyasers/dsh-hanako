@@ -583,13 +583,26 @@ export async function ensureWebHost(cfg) {
   // 占位符已从模板删除（settings 不再 spawn pnpm，渲染为同步函数，无异步依赖）。
   const renderPatchTpl = () => {
     const gen = join(cfg.dataDir, "dsh-hanako.patch.generated.yml");
+    // 远程可信 Host：dshRemoteUrl 配置的 host（cloudflared 转发 3080 的远程域，
+    // dsh isTrustedApiRequest 对非 loopback Host 需 trustedHosts 放行）；未配置为空
+    //（trustedHosts 空数组，等价默认）。
+    let trustedHost = "";
+    if (typeof cfg.dshRemoteUrl === "string" && cfg.dshRemoteUrl) {
+      try {
+        trustedHost = new URL(cfg.dshRemoteUrl).host;
+      } catch {
+        trustedHost = "";
+      }
+    }
     const content = readFileSync(patchTpl, "utf8")
       .split("{{DSH_PKG_DIR}}")
       .join(cfg.dshPkgDir || resolveDshPkgDir(cfg))
       .split("{{LOG_PATH}}")
       .join(logPath)
       .split("{{DATA_DIR}}")
-      .join(cfg.dataDir);
+      .join(cfg.dataDir)
+      .split("{{DSH_TRUSTED_HOST}}")
+      .join(trustedHost);
     writeFileSync(gen, content, "utf8");
     return gen;
   };

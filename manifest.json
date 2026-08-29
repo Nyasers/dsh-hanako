@@ -35,7 +35,12 @@
     "configuration": {
       "title": "DSHana 设置",
       "properties": {
-        "webPort": {
+        "dshRemoteUrl": {
+        "type": "string",
+        "default": "",
+        "title": "远程 dsh 地址",
+        "description": "远程访问（非本机）时 iframe 指向的 dsh Web UI 完整地址（如 https://dsh.example.com，需 cloudflared 等转发 dsh web host 端口并在 dsh trustedHosts 放行该域）。留空时远程回退本地直连。"
+      },"webPort": {
           "type": "number",
           "default": 3080,
           "title": "dsh Web UI 端口",

@@ -27,3 +27,11 @@
 - insert:
     - id: '@dsh-hanako/bridge'
       name: '@dsh-hanako/bridge'
+
+- id: web-app
+  config:
+    openBrowser: false
+    printUrl: true
+    surfaceContext: true
+    trustedHosts:
+      - '{{DSH_TRUSTED_HOST}}'

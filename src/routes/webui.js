@@ -184,6 +184,7 @@ export default function registerWebuiRoutes(app, ctx) {
         channelOk,
         channelUrl,
         tunnelPath,
+        remoteUrl: typeof cfg.dshRemoteUrl === "string" ? cfg.dshRemoteUrl : "",
       }),
     );
   });
