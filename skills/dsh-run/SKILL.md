@@ -88,4 +88,4 @@ defaultCwd / approvalTimeoutMs 优先直读 `<dataDir>/config.json` 的 `global.
 - 需要完整编码 agent 深度执行（实现/重构/调试/测试、沙箱实验、与当前对话隔离的长任务）→ dsh_run 默认异步提交。
 - 日常小代码任务 → subagent 协作（平台原生、隔离上下文），不注入 dsh。
 - **provider/model 显式指定 = 写回 dsh 全局新默认**（settings.yaml），要长期固定某模型请在 dsh models 页设默认。
-- resume 复用：dsh_session action=list 找到历史会话（仅 agent 创建的会话）或复用上次回调 sessionId → `dsh_run(sessionId=…)`，省上下文重建。
+- resume 复用：dsh_session action=list 找到历史会话或复用上次回调 sessionId → `dsh_run(sessionId=…)`，省上下文重建。

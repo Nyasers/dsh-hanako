@@ -26,8 +26,6 @@ import {
   resolveReasoningEffort,
   resolveApprovalTimeoutMs,
   resolveDefaultCwd,
-  registerSession,
-  readSessionRegistry,
 } from "./lib/config.js";
 import {
   registerDeferredWake,
@@ -209,16 +207,6 @@ function submitTask(
     // agentPreset 无值不传（缺省走 web host 默认，Web UI 可调）
     let createPayload;
     if (resumeSessionId) {
-      // 权限收敛：仅允许 resume agent 自己创建的会话（config.json sessions 注册表内）。
-      // 注册表机制启用前创建的会话不在注册表内（历史会话），resume 直接拒绝并提示——
-      // 不可经 resume 把非 agent 创建的会话（如 UI 手建）纳入管理范围。
-      const registry = readSessionRegistry(cfg.dataDir);
-      if (!registry[resumeSessionId]) {
-        throw new Error(
-          `无权 resume 会话 ${resumeSessionId}：不在 agent 会话注册表（config.json sessions，仅含 dsh_run 创建的会话）；` +
-            `注册表机制启用前的历史会话不在其中，请在 DSH Web UI 查看或续接`,
-        );
-      }
       const list = await callUnary(base, "session.list", {
         projections: ["id", "cwd"],
       });
@@ -244,22 +232,6 @@ function submitTask(
     }
     const session = await callUnary(base, "session.create", createPayload);
     const sessionId = session.sessionId;
-
-    // 1.4 会话注册表登记（权限收敛：agent 只管理自己创建的会话）：
-    // dsh 会话无 owner 概念，插件自建 config.json sessions 注册表记录「agent 创建的会话」——
-    // dsh_session list/get 按注册表过滤（UI 手建会话/他人会话不可见不可读）。幂等写入
-    // （已登记直接覆盖同键）、读-改-写前重读最新内容绝不覆盖 global/agents、tmp+rename
-    // 原子替换；失败静默不阻断任务提交流程（权限收敛为尽力而为，见 lib/config.js）。
-    // 仅本次新建的会话登记：resume 复用既有会话不登记（注册表外的 resume 已在上方拒绝，
-    // 注册表内的保持原条目不变——不覆盖既有登记信息）。
-    if (!resumeSessionId) {
-      registerSession({
-        dataDir: cfg.dataDir,
-        sessionId,
-        cwd: String(cwd ?? ""),
-        taskText,
-      });
-    }
 
     // 1.5 模型选择：仅当工具显式传 provider/model/effort 时才 selectModel（显式覆盖
     // dsh 默认模型）；都不传时不 selectModel，任务直接用 dsh 默认模型

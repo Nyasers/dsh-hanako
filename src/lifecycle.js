@@ -451,9 +451,9 @@ export async function ensureWebHost(cfg) {
   // 当前会话日志 = 时间戳会话文件（index.js onload 已初始化单例 g.logPath）。
   // 单例优先；index.js 未初始化（冷启动边缘）时兜底自建。写进 web/logLastExit/错误消息供诊断。
   const logPath = g.logPath || newWebLogPath(cfg.dataDir);
-  // session-query-sqlite 注入已移除（v0.21.x 权限收敛）：dsh 默认 openAt: never 禁用
-  // 全文搜索，插件不再 --patch 覆盖启用——agent 只能读自己创建的会话（config.json
-  // sessions 注册表作用域，见 tools/dsh-session.js），不注入全历史会话全文搜索。
+  // session-query-sqlite 注入已移除（权限收敛）：dsh 默认 openAt: never 禁用
+  // 全文搜索，插件不再 --patch 覆盖启用——不再有全局全文搜索入口；会话管理以
+  // dsh-home 为唯一事实源（sessionId 即访问凭证，见 tools/dsh-session.js）。
   // 主题注入 overlay + 宿主 provider 跟随 overlay——多份 patch 合并为
   // dsh-plugin/dsh-hanako.patch.yml.tpl 单一模板：段1 theme
   // insert + 段2 provider insert（恒渲染：hostProvider 恒开跟随宿主，无关闭选项）

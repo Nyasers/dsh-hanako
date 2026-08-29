@@ -4,25 +4,24 @@
 // tools/dsh-session.js — dsh 会话统一查询工具（list / get 两模式，只读）
 // 继承 dsh_ops（清单）能力并新增 get（凭 sessionId 直取会话内容）：主上下文收到
 // minimal 回调定位键后，凭 sessionId 直接取会话内容/续接，不再需要关键词搜索先决条件。
-// search 模式已移除（v0.21.x 权限收敛）：dsh 默认 openAt: never 禁用全文搜索，
-// 插件也不再注入 session-query-sqlite patch 覆盖启用——agent 只能读自己创建的会话。
+// search 模式已移除（权限收敛）：dsh 默认 openAt: never 禁用全文搜索，插件也不再注入
+// session-query-sqlite patch 覆盖启用——不再有全局全文搜索入口。
+// 权限模型：sessionId 即访问凭证——拿得到 id（dsh_run 回调 / list 清单）即可 get/resume，
+// 拿不到天然无所有权；会话存在性与内容的唯一事实源在 dsh-home，无需额外注册表。
 //   - list：解析 dsh 官方会话持久化缓存 <dataDir>/dsh-home/storages/session_projcache.json
 //     （session-persistence 单元的 proj cache，含全部历史会话摘要：标题/cwd/创建时间/
 //     最近提示时间/token usage/会话统计）。纯本地文件读，不调 dsh web host。
-//     按 config.json sessions 注册表过滤——只返回 agent 自己创建的会话。
 //   - get：凭 sessionId 直取会话内容——projcache 元数据（同 list 字段）+ summary
 //     （会话最终结论 = jsonl 最后一条 assistant/message 的 text，截断 ≤4000 字符）。
 //     jsonl 文件 <dataDir>/dsh-home/sessions/<cwd-key>/<sessionId>/session.jsonl.zstd
 //     是 dsh 逐批 append 的多帧 zstd 容器（每批一帧，帧 magic 0xFD2FB528），
 //     node:zlib zstdDecompressSync 一次只解一帧，需按 magic 逐帧拆解再拼接。
-//     权限收敛：sessionId 不在注册表（config.json sessions）内直接拒绝，不读 jsonl。
 // 只读查询，不改变任何会话。数据定位键统一为 sessionId（与 dsh_run 回调同键）。
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { zstdDecompressSync } from "node:zlib";
 import { textFromMessageBlocks } from "./lib/protocol.js";
-import { readSessionRegistry } from "./lib/config.js";
 
 const __here = dirname(fileURLToPath(import.meta.url));
 // PLUGIN_ROOT 向上查找含 manifest.json 的目录——源码形态（tools/ 下）与
@@ -38,9 +37,9 @@ while (!existsSync(join(PLUGIN_ROOT, "manifest.json"))) {
 export const name = "dsh_session";
 
 export const description =
-  "查询 DSH 会话（list/get 两模式，只读，仅限 agent 自己创建的会话——config.json sessions 注册表作用域）：list=会话清单与摘要（解析 DSH 会话缓存 session_projcache 并按注册表过滤，limit 默认 10）；" +
-  "get=凭 sessionId 直取会话元数据 + 最终结论 summary（读会话 jsonl，zstd 多帧容器本地解压；注册表外会话无权读取）。" +
-  "数据定位键统一为 sessionId（与 dsh_run 回调同键）。完整调用手册见 SKILL: skills/dsh-session/SKILL.md";
+  "查询 DSH 会话（list/get 两模式，只读）：list=会话清单与摘要（解析 DSH 会话缓存 session_projcache，dsh-home 唯一事实源，limit 默认 10）；" +
+  "get=凭 sessionId 直取会话元数据 + 最终结论 summary（读会话 jsonl，zstd 多帧容器本地解压）。" +
+  "权限模型：sessionId 即访问凭证——拿得到 id 即可读取/续接。完整调用手册见 SKILL: skills/dsh-session/SKILL.md";
 
 export const parameters = {
   type: "object",
@@ -48,7 +47,7 @@ export const parameters = {
     action: {
       type: "string",
       enum: ["list", "get"],
-      description: "两模式：list=会话清单（仅 agent 创建的会话）；get=凭 sessionId 直取会话内容（仅 agent 创建的会话）",
+      description: "两模式：list=会话清单；get=凭 sessionId 直取会话内容（dsh-home 存在即读）",
     },
     limit: {
       type: "integer",
@@ -56,7 +55,7 @@ export const parameters = {
     },
     sessionId: {
       type: "string",
-      description: "仅 get 模式（必传）：目标会话 id（形如 session-<uuid>，取自 dsh_run 回调 / 卡片 URL / list 结果；须在 config.json sessions 注册表内）",
+      description: "仅 get 模式（必传）：目标会话 id（形如 session-<uuid>，取自 dsh_run 回调 / 卡片 URL / list 结果；dsh-home 存在即读）",
     },
   },
   required: ["action"],
@@ -67,7 +66,7 @@ export const sessionPermission = {
   describeSideEffect: () => ({
     kind: "local_read",
     summary:
-      "读取 DSH 会话持久化缓存 session_projcache.json 与会话 jsonl（zstd 容器本地解压，只读），仅限 agent 自己创建的会话（config.json sessions 注册表作用域），不改变任何会话",
+      "读取 DSH 会话持久化缓存 session_projcache.json 与会话 jsonl（zstd 容器本地解压，只读；dsh-home 唯一事实源，sessionId 即访问凭证），不改变任何会话",
     ruleId: "dsh-hanako-session",
   }),
 };
@@ -237,7 +236,7 @@ async function doGet(input, ctx, g, dataDir, projSessions) {
       content: [
         {
           type: "text",
-          text: "找不到会话 " + sessionId + " 的日志文件，无法取会话内容。可用 dsh_session action=list 查会话清单（仅 agent 创建的会话）。",
+          text: "找不到会话 " + sessionId + " 的日志文件，无法取会话内容。可用 dsh_session action=list 查会话清单。",
         },
       ],
       details: { dsh: { action: "get", sessionId, ok: false } },
@@ -315,41 +314,13 @@ async function doExecute(input, ctx) {
   const dataDir = g?.dataDir || join(PLUGIN_ROOT, "data");
   const action = String(input.action ?? "").trim();
 
-  // 注册表（config.json sessions）= agent 会话所有权登记表：list/get 只在该作用域内
-  // 返回/读取（UI 手建会话/非 agent 创建的会话不可见不可读）。任何异常按空表处理。
-  const registry = readSessionRegistry(dataDir);
-  const regKeys = Object.keys(registry);
-
   if (action === "list") {
     const limit = clampLimit(input.limit);
-    // 注册表为空：无 agent 创建的会话，直接返回空（不读 projcache）
-    if (regKeys.length === 0) {
-      return {
-        content: [{ type: "text", text: "暂无 agent 创建的会话记录" }],
-        details: { dsh: { action: "list", count: 0, limit, scoped: "registry" } },
-      };
-    }
-    // projcache 可用：按注册表过滤（sessionId ∈ registry）再映射
-    const projSessions = readSessionProjcache(dataDir);
-    let items;
-    if (projSessions) {
-      items = mapSessionItems(projSessions).filter((s) =>
-        regKeys.includes(s.sessionId),
-      );
-    } else {
-      // projcache 缺失但注册表非空：按注册表 sessionId 列表返回（字段尽力而为，缺失不带）
-      items = regKeys.map((sessionId) => {
-        const reg = registry[sessionId] || {};
-        const item = { sessionId };
-        if (reg.createdAt != null) item.createdAt = reg.createdAt;
-        if (reg.cwd != null) item.cwd = reg.cwd;
-        if (reg.title != null) item.title = String(reg.title);
-        return item;
-      });
-    }
-    // 排序：lastPromptAt 降序（最新在前；缺失时兜底 createdAt，仍缺失排最后）。
-    // 注意：projcache 缺失兜底分支（按注册表返回）构造的 item 无 lastPromptAt，
-    // 必须用 createdAt 兜底，否则比较值全为 -Infinity、排序退化为注册表插入顺序。
+    // 会话清单以 dsh-home 为唯一事实源（session_projcache.json）；sessionId 即访问
+    // 凭证——list 暴露的 id 即可 get/resume，拿不到 id 天然无所有权，无需额外注册表。
+    const sessions = readSessionProjcache(dataDir);
+    const items = mapSessionItems(sessions);
+    // 排序：lastPromptAt 降序（最新在前；缺失时兜底 createdAt，仍缺失排最后）
     items.sort(
       (a, b) =>
         (b.lastPromptAt ?? b.createdAt ?? -Infinity) -
@@ -358,8 +329,8 @@ async function doExecute(input, ctx) {
     const top = items.slice(0, limit);
     if (top.length === 0) {
       return {
-        content: [{ type: "text", text: "暂无 agent 创建的会话记录" }],
-        details: { dsh: { action: "list", count: 0, limit, scoped: "registry" } },
+        content: [{ type: "text", text: "暂无 DSH 会话记录" }],
+        details: { dsh: { action: "list", count: 0, limit } },
       };
     }
     const lines = top.map(
@@ -370,11 +341,11 @@ async function doExecute(input, ctx) {
       content: [
         {
           type: "text",
-          text: `agent 创建的 DSH 会话清单（共 ${items.length} 条，最新 ${top.length} 条）：\n${lines.join("\n")}`,
+          text: `DSH 会话清单（共 ${items.length} 条，最新 ${top.length} 条）：\n${lines.join("\n")}`,
         },
       ],
       details: {
-        dsh: { action: "list", count: items.length, limit, scoped: "registry", sessions: top },
+        dsh: { action: "list", count: items.length, limit, sessions: top },
       },
     };
   }
@@ -382,21 +353,8 @@ async function doExecute(input, ctx) {
   if (action === "get") {
     const sessionId = String(input.sessionId ?? "").trim();
     if (!sessionId) throw new Error("get 模式必须传 sessionId");
-    // 权限收敛：sessionId 不在注册表（agent 创建的会话）内直接拒绝，不读 jsonl
-    if (!registry[sessionId]) {
-      return {
-        ok: false,
-        error: "会话 " + sessionId + " 不是 agent 创建的会话，无权读取",
-        content: [
-          {
-            type: "text",
-            text: "会话 " + sessionId + " 不是 agent 创建的会话，无权读取（仅限 dsh_run 创建的会话，见 config.json sessions 注册表）。",
-          },
-        ],
-        details: { dsh: { action: "get", sessionId, ok: false, scoped: "registry" } },
-      };
-    }
-    // projcache 只在需要时读一次（get 定位 cwd-key + 元数据共用）
+    // projcache 只在需要时读一次（get 定位 cwd-key + 元数据共用）；
+    // 权限模型：sessionId 即凭证——凭 id 在 dsh-home 存在即读，不存在报错（见 doGet）。
     const projSessions = readSessionProjcache(dataDir);
     return doGet(input, ctx, g, dataDir, projSessions);
   }
