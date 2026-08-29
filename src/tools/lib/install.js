@@ -220,12 +220,17 @@ function pnpmNdjsonLineToText(line, sizes) {
   }
 }
 
-// 失败错误提取：out 尾部最近若干行逐行转可读文本（JSON 错误行提取 message/err，不把原始
-// JSON 整行抛给用户），最终 ≤300 字符（旧实现 out.slice(-300) 语义保持）。
-function pnpmErrorTail(out) {
-  if (!out) return "无输出";
-  const lines = out.split("\n").filter((s) => s.length > 0).slice(-10);
-  const parts = lines.map((ln) => pnpmNdjsonLineToText(ln)).filter((s) => s.length > 0);
+// 失败错误提取：stdout/stderr 各自的 capped tail 独立逐行转可读文本（JSON 错误行提取
+// message/err，不把原始 JSON 整行抛给用户；两流独立解析，避免跨流拼接部分 NDJSON
+// 记录），最终 ≤300 字符（旧实现 out.slice(-300) 语义保持）。
+function pnpmErrorTail(stdoutTail, stderrTail) {
+  const parse = (tail) => {
+    if (!tail) return "";
+    const lines = tail.split("\n").filter((s) => s.length > 0).slice(-10);
+    return lines.map((ln) => pnpmNdjsonLineToText(ln)).filter((s) => s.length > 0).join("\n");
+  };
+  // stderr 在前（错误/警告通常走 stderr），stdout 在后（ndjson 进度/结构化错误也可能在 stdout）
+  const parts = [parse(stderrTail), parse(stdoutTail)].filter((s) => s.length > 0);
   return parts.join("\n").slice(-300) || "无输出";
 }
 
@@ -430,11 +435,15 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir) {
     //    devDeps 无需 omit；allowBuilds 放行 build scripts；PATH 首部指向 pkgDir（代理脚本
     //    node.cmd/node 让 install script 找到宿主 electron node）
     const run = async (registry) => {
-      let out = ""; // 仅用于错误信息提取（失败时拼进错误文本）；cap 尾环 ≤64KB
-      // stdout/stderr 各持独立跨 chunk 行缓冲（JSON 行可能被拆到两个 data chunk）：两条
+      // stdout/stderr 各持独立跨 chunk 行缓冲（pending 行重组 + tail 错误提取）：两条
       // 管道的 chunk 边界互不相关，共用一个缓冲会把不同流的片段拼成一行，破坏 ndjson
-      // 行重组（JSON.parse 失败 → 降级为脏文本透传）。makePipe 工厂按流各自创建回调。
-      const buffers = { out: { pending: "" }, err: { pending: "" } };
+      // 行重组（JSON.parse 失败 → 降级为脏文本透传）；错误提取也按流独立解析
+      // （pnpmErrorTail(stdoutTail, stderrTail)），避免跨流拼接部分 NDJSON 记录。
+      // makePipe 工厂按流各自创建回调。
+      const buffers = {
+        out: { pending: "", tail: "" },
+        err: { pending: "", tail: "" },
+      };
       const pkgSizes = new Map(); // fetching-progress 包大小记录（started 事件记 size）
       // pnpm ndjson 输出逐 chunk 实时进统一日志通道（emitLog：内存尾环 ≤DEPS_LOG_CAP
       // + 会话日志 src=pnpm 实时写，行规范化 \r\n/\r → \n）；每行先做 ndjson 解析转
@@ -443,7 +452,7 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir) {
       // health 随诊断刷新 installLog 尾部，呈现实时进度
       const makePipe = (buf) => (d) => {
         const text = String(d).replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-        out = (out + text).slice(-65536);
+        buf.tail = (buf.tail + text).slice(-65536); // 各流独立 capped tail（错误提取用）
         const lines = (buf.pending + text).split("\n");
         buf.pending = lines.pop() ?? ""; // 末段可能是不完整行，留到下个 chunk
         for (const line of lines) {
@@ -472,9 +481,9 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir) {
       }
       if (r.code !== 0)
         throw new Error(
-          "pnpm add 失败 " + DSH_PACKAGE + "（exit " + r.code + "）：" + pnpmErrorTail(out),
+          "pnpm add 失败 " + DSH_PACKAGE + "（exit " + r.code + "）：" + pnpmErrorTail(buffers.out.tail, buffers.err.tail),
         );
-      return out;
+      return buffers.out.tail; // 无消费者（run 返回值未使用）；保持 string 返回语义
     };
     try {
       await run(null); // 官方源（buildPnpmAddArgs 不加 registry 参数）
