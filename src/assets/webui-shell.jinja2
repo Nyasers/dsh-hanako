@@ -284,60 +284,19 @@
       return params.get("token") || "";
     }
     function setupChannel() {
-      // 注册 SW（scope = 通道前缀；脚本在插件命名空间 /sw.js，scope 在其下合法）。
-      // 始终返回 promise：成功 resolve(true)（已设通道 src）；无 SW 支持 / 注册失败
-      // resolve(false)（已设直连 src）——调用方无需再按 channelMode 补设 src。
-      var base = "http://127.0.0.1:{{= it.port }}/";
-      // SW 脚本在插件根（宿主白名单原生 serve /api/plugins/<id>/sw.js）：根路径的
-      // max scope = /api/plugins/<id>/，web/ 通道 scope 合法（assets/ 下会 scope 非法）；
-      // 自定义 /sw.js 路由 serve 内联版作兼容兜底。
-      var swUrl = api + "/sw.js" + (pageToken() ? "?token=" + encodeURIComponent(pageToken()) : "");
-      if (!("serviceWorker" in navigator)) {
-        // 无 SW 支持：回退直连（极端旧浏览器）
-        channelMode = false;
-        frame.src = base + "?dshReload=" + Date.now();
-        return Promise.resolve(false);
-      }
-      var setupChain = navigator.serviceWorker.register(swUrl, { scope: channelUrl })
-        .then(function () { return navigator.serviceWorker.ready; })
-        .then(function (reg) {
-          // HTTP 隧道配置：tunnelUrl 在壳页面拼一次（origin + tunnelPath，SW 零拼接），
-          // surfaceSession 取 location.search 的 pluginSurfaceSession（与壳页面
-          // surfaceHeaders() 同款宿主鉴权 header）。
-          var tunnelUrl = window.location.origin + tunnelPath;
-          var surfaceSession = surfaceSessionToken();
-          if (reg && reg.active) {
-            reg.active.postMessage({
-              type: "bridge-config",
-              mode: "http-tunnel",
-              tunnelUrl: tunnelUrl,
-              surfaceSession: surfaceSession,
-            });
-          }
-          frame.src = channelUrl + "?dshReload=" + Date.now();
-          return true;
-        });
-      // 超时兜底：SW 首次注册需下载+编译+激活，Electron 环境下可能超过 10s（此前
-      // 10s 误伤慢激活，register 本身正常）。放宽到 20s：仅真正挂起（网络层无响应）
-      // 才回退直连；激活慢的等它完成。
-      var setupTimer = null;
-      var setupTimeout = new Promise(function (resolve) {
-        setupTimer = setTimeout(function () {
-          console.warn("[dsh-hanako] SW 通道挂起（20s），回退直连");
-          channelMode = false;
-          frame.src = base + "?dshReload=" + Date.now();
-          resolve(false);
-        }, 20000);
-      });
-      return Promise.race([setupChain, setupTimeout])
-        .catch(function (err) {
-          // SW 注册/激活失败：回退直连（先清超时定时器，避免已 settle 后误报挂起）
-          if (setupTimer) { clearTimeout(setupTimer); setupTimer = null; }
-          console.warn("[dsh-hanako] SW 注册失败，回退直连:", err);
-          channelMode = false;
-          frame.src = base + "?dshReload=" + Date.now();
-          return false;
-        });
+      // v8：SW 注册由独立 /web 引导页负责（routes/bridge.js 端点）。iframe 首载指向
+      // 注册页（带 token/surfaceSession query，壳页面拼一次）：注册页注册 SW（scope=
+      // /web/）→ postMessage bridge-config → 跳 /web/ 由 SW 接管导航（隧道转发 dsh）；
+      // 注册失败/超时由注册页内部直连 127.0.0.1:<port>（本地体验不退化）。壳页面不再
+      // 直接注册 SW，注册复杂度全部收敛到引导页。
+      var q = [];
+      var pageParams = new URLSearchParams(location.search);
+      var token = pageParams.get("token");
+      var sess = pageParams.get("pluginSurfaceSession");
+      if (token) q.push("token=" + encodeURIComponent(token));
+      if (sess) q.push("pluginSurfaceSession=" + encodeURIComponent(sess));
+      frame.src = api + "/web" + (q.length ? "?" + q.join("&") : "") + "&dshReload=" + Date.now();
+      return Promise.resolve(true);
     }
     function attach() {
       // 就绪：停当前轮询定时器，按需挂载/刷新 iframe，切回主视图

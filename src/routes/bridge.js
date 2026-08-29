@@ -29,6 +29,8 @@ import { bridgeStatus, bridgeRequestHttp, registerSwConnection } from "../lib/br
 import { WsConnection } from "../lib/ws-lib.js";
 // SW 脚本（构建期 asset/source 内联为字符串；经 /sw.js 路由 serve，content-type 正确）
 import swSource from "../assets/sw.js";
+// /web 通道引导页模板（doT 编译，render({ api, port })）
+import { render as webuiBridgeHtml } from "../assets/webui-bridge.jinja2";
 
 const WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
@@ -40,6 +42,8 @@ function acceptKey(key) {
 }
 
 export default function registerBridgeRoutes(app, ctx) {
+  // 插件 API 前缀（宿主挂载 /api/plugins/<pluginId>；壳页面用它拼注册页 URL）
+  const apiBase = "/api/plugins/dsh-hanako";
   // WS #1 端点：SW 连入。浏览器/Node WebSocket 客户端发 GET + Upgrade: websocket，
   // 宿主 upgrade 分发把它作为普通 GET 请求路由到本 handler（raw socket 视宿主版本
   // 决定是否可达）。
@@ -154,10 +158,22 @@ export default function registerBridgeRoutes(app, ctx) {
 
   // service worker 脚本：壳页面 navigator.serviceWorker.register 从这里加载
   // （/api/plugins/dsh-hanako/sw.js，content-type application/javascript；scope 取
-  // /api/plugins/dsh-hanako/web/ 在脚本目录之下，无需 Service-Worker-Allowed 头）
+  // /api/plugins/dsh-hanako/web/ 在脚本目录之下，无需 Service-Worker-Allowed 头；
+  // 宿主白名单亦原生 serve 插件根 sw.js，本路由为兼容/覆盖）
   app.get("/sw.js", (c) => {
     c.header("Content-Type", "application/javascript; charset=utf-8");
     c.header("Cache-Control", "no-cache");
     return c.body(swSource);
+  });
+
+  // /web 通道引导页（v8）：注册 SW（scope = /web/）接管 /web/ 下全部请求经隧道转发
+  // dsh。SW 注册逻辑从 webui 壳页面独立到此端点：iframe 通道模式首载指向本页，
+  // 注册成功跳 /web/（SW 接管导航），失败/超时直连 127.0.0.1:<port>（本地不退化）。
+  // 页面内联注册脚本（template-loader 构建期 doT 编译），token/surfaceSession 经
+  // query 传入（壳页面拼一次）。
+  app.get("/web", (c) => {
+    c.header("Content-Type", "text/html; charset=utf-8");
+    c.header("Cache-Control", "no-store");
+    return c.body(webuiBridgeHtml({ api: apiBase, port }));
   });
 }
