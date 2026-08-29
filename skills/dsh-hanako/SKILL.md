@@ -65,7 +65,7 @@ $node = <本机 node.exe 绝对路径，如 C:\Program Files\nodejs\node.exe>
 | `dsh_update(action?, wait?)` | 检查/更新 DSH | action=check 查版本（默认）；action=update 完整更新（停 web host → pnpm add latest → 起 web host，**正在执行的任务会中断**，渲染升级卡片）；update 默认异步后台执行 + 完成回调，wait=true 同步；更新中重复调用返回状态不重复执行 | [dsh-update 技能](dsh-update) |
 | `dsh_approve(rpcId, approvalId, outcome?)` | 应答审批 | allowed-once 放行 / rejected 拒绝；通知带 args 命令原文 | [dsh-approve 技能](dsh-approve) |
 | `dsh_cancel(sessionId)` | 取消任务 | 误派/卡死止损；幂等 | [dsh-cancel 技能](dsh-cancel) |
-| `dsh_session(action, limit?, sessionId?, query?)` | 统一会话查询 | list=清单与摘要（projcache，limit 默认 10）；get=凭 sessionId 直取内容（summary）；search=按关键词搜（命中可 resume） | [dsh-session 技能](dsh-session) |
+| `dsh_session(action, limit?, sessionId?)` | 统一会话查询 | list=清单与摘要（dsh-home 唯一事实源 projcache，limit 默认 10）；get=凭 sessionId 直取内容（summary，sessionId 即访问凭证）；search 模式已移除 | [dsh-session 技能](dsh-session) |
 
 **工具调用的完整参数语义、返回结构、错误码、审批通道、副作用分别见上述六个独立工具技能（均从源码 tools/*.js 核对）**——本表只是速查。
 

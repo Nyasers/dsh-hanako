@@ -49,4 +49,4 @@ dsh_cancel(sessionId="session-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx")
 ## 关联
 
 - 取消后的终态、错误码 DSH_ABORTED、usage 对账见 dsh-run 技能「错误码速查」。
-- 取消后查终态看运行卡片（SSE 卡片从 jsonl 恢复，重启后仍可看）；跨会话清单/摘要（含取消后遗留的会话）用 dsh_session action=list（详见 dsh-session 技能）。
+- 取消后查终态看运行卡片（SSE 卡片从 jsonl 恢复，重启后仍可看）；会话清单/摘要（含取消后遗留的会话，仅 agent 自己创建的会话）用 dsh_session action=list（详见 dsh-session 技能）。

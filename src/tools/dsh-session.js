@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// tools/dsh-session.js — dsh 会话统一查询工具（list / get / search 三模式，只读）
-// 合并旧 dsh_ops（清单）+ dsh_search（内容搜索）能力，并新增 get（凭 sessionId 直取
-// 会话内容）：主上下文收到 minimal 回调定位键后，凭 sessionId 直接取会话内容/续接，
-// 不再需要「不知道内容就搜不到」的关键词搜索先决条件。
+// tools/dsh-session.js — dsh 会话统一查询工具（list / get 两模式，只读）
+// 继承 dsh_ops（清单）能力并新增 get（凭 sessionId 直取会话内容）：主上下文收到
+// minimal 回调定位键后，凭 sessionId 直接取会话内容/续接，不再需要关键词搜索先决条件。
+// search 模式已移除（权限收敛）：dsh 默认 openAt: never 禁用全文搜索，插件也不再注入
+// session-query-sqlite patch 覆盖启用——不再有全局全文搜索入口。
+// 权限模型：sessionId 即访问凭证——拿得到 id（dsh_run 回调 / list 清单）即可 get/resume，
+// 拿不到天然无所有权；会话存在性与内容的唯一事实源在 dsh-home，无需额外注册表。
 //   - list：解析 dsh 官方会话持久化缓存 <dataDir>/dsh-home/storages/session_projcache.json
 //     （session-persistence 单元的 proj cache，含全部历史会话摘要：标题/cwd/创建时间/
 //     最近提示时间/token usage/会话统计）。纯本地文件读，不调 dsh web host。
@@ -13,9 +16,7 @@
 //     jsonl 文件 <dataDir>/dsh-home/sessions/<cwd-key>/<sessionId>/session.jsonl.zstd
 //     是 dsh 逐批 append 的多帧 zstd 容器（每批一帧，帧 magic 0xFD2FB528），
 //     node:zlib zstdDecompressSync 一次只解一帧，需按 magic 逐帧拆解再拼接。
-//   - search：调 dsh web host POST /api/session.search（client-request 信封，rpcId
-//     回显校验），跨全部历史会话内容匹配，返回 items[{sessionId,snippet}] + hasMore。
-// 只读查询，不改变任何会话。数据定位键统一为 sessionId（与 dsh_run 回调 id 同键）。
+// 只读查询，不改变任何会话。数据定位键统一为 sessionId（与 dsh_run 回调同键）。
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -36,17 +37,17 @@ while (!existsSync(join(PLUGIN_ROOT, "manifest.json"))) {
 export const name = "dsh_session";
 
 export const description =
-  "查询 DSH 会话（list/get/search 三模式，只读）：list=会话清单与摘要（解析 DSH 会话缓存 session_projcache，limit 默认 10）；" +
-  "get=凭 sessionId 直取会话元数据 + 最终结论 summary（读会话 jsonl，zstd 多帧容器本地解压）；search=按关键词跨会话搜内容（sessionId+snippet）。" +
-  "数据定位键统一为 sessionId（与 dsh_run 回调 id 同键）。完整调用手册见 SKILL: skills/dsh-session/SKILL.md";
+  "查询 DSH 会话（list/get 两模式，只读）：list=会话清单与摘要（解析 DSH 会话缓存 session_projcache，dsh-home 唯一事实源，limit 默认 10）；" +
+  "get=凭 sessionId 直取会话元数据 + 最终结论 summary（读会话 jsonl，zstd 多帧容器本地解压）。" +
+  "权限模型：sessionId 即访问凭证——拿得到 id 即可读取/续接。完整调用手册见 SKILL: skills/dsh-session/SKILL.md";
 
 export const parameters = {
   type: "object",
   properties: {
     action: {
       type: "string",
-      enum: ["list", "get", "search"],
-      description: "三模式：list=会话清单；get=凭 sessionId 直取会话内容；search=按关键词搜历史会话",
+      enum: ["list", "get"],
+      description: "两模式：list=会话清单；get=凭 sessionId 直取会话内容（dsh-home 存在即读）",
     },
     limit: {
       type: "integer",
@@ -54,11 +55,7 @@ export const parameters = {
     },
     sessionId: {
       type: "string",
-      description: "仅 get 模式（必传）：目标会话 id（形如 session-<uuid>，取自 dsh_run 回调 id / 卡片 URL / list / search 结果）",
-    },
-    query: {
-      type: "string",
-      description: "仅 search 模式（必传）：搜索关键词（1~500 字符），会 trim；跨全部历史会话内容匹配",
+      description: "仅 get 模式（必传）：目标会话 id（形如 session-<uuid>，取自 dsh_run 回调 / 卡片 URL / list 结果；dsh-home 存在即读）",
     },
   },
   required: ["action"],
@@ -69,7 +66,7 @@ export const sessionPermission = {
   describeSideEffect: () => ({
     kind: "local_read",
     summary:
-      "读取 DSH 会话持久化缓存 session_projcache.json 与会话 jsonl（zstd 容器本地解压，只读），必要时向 DSH web host 发起只读的跨会话内容搜索（session.search），不改变任何会话",
+      "读取 DSH 会话持久化缓存 session_projcache.json 与会话 jsonl（zstd 容器本地解压，只读；dsh-home 唯一事实源，sessionId 即访问凭证），不改变任何会话",
     ruleId: "dsh-hanako-session",
   }),
 };
@@ -229,6 +226,15 @@ function truncateSummary(text) {
 async function doGet(input, ctx, g, dataDir, projSessions) {
   const sessionId = String(input.sessionId ?? "").trim();
   if (!sessionId) throw new Error("get 模式必须传 sessionId");
+  // 校验 sessionId 格式（session-<UUID>，与 dsh session 创建方生成格式一致）：sessionId
+  // 会拼入 locateSessionDir 的文件路径，非法值（路径分隔符 / 穿越段 / 畸形 id）可导致
+  // 读取 sessions/ 之外的外部 session.jsonl.zstd——精确匹配 UUID 结构（8-4-4-4-12 hex），
+  // 同时拒绝 session-abc / session--- 等畸形值；正则即锁死格式与长度，无需额外长度检查。
+  if (!/^session-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId)) {
+    throw new Error(
+      `sessionId 格式非法（应为 session-<UUID>）：${sessionId}`,
+    );
+  }
 
   // 定位会话目录（projcache 猜编码优先，失败遍历 sessions/ 全部子目录）
   const sessionDir = locateSessionDir(dataDir, sessionId, projSessions);
@@ -239,7 +245,7 @@ async function doGet(input, ctx, g, dataDir, projSessions) {
       content: [
         {
           type: "text",
-          text: "找不到会话 " + sessionId + " 的日志文件，无法取会话内容。可用 dsh_session action=list 查会话清单，或 action=search 按关键词搜。",
+          text: "找不到会话 " + sessionId + " 的日志文件，无法取会话内容。可用 dsh_session action=list 查会话清单。",
         },
       ],
       details: { dsh: { action: "get", sessionId, ok: false } },
@@ -312,74 +318,6 @@ async function doGet(input, ctx, g, dataDir, projSessions) {
   };
 }
 
-// ---- search：跨会话内容搜索（继承 dsh_search 全部能力）----
-function hostBase(g) {
-  const web = g?.web;
-  if (!web?.ready || !web.port)
-    throw new Error("DSH web host 未就绪（请先通过 dsh_run 提交任务拉起）");
-  return `http://127.0.0.1:${web.port}`;
-}
-
-async function doSearch(input, g) {
-  const query = String(input.query ?? "").trim();
-  if (!query) throw new Error("query 必填（1~500 字符）");
-  if (query.length > 500) throw new Error(`query 过长（${query.length} 字符，最多 500）`);
-  if (query.includes("\0")) throw new Error("query 不得包含 NUL 字符");
-
-  const base = hostBase(g);
-  const rpcId = `r_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-  const res = await fetch(`${base}/api/session.search`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      type: "client-request",
-      rpcId,
-      method: "session.search",
-      payload: { query },
-    }),
-  });
-  if (!res.ok) throw new Error(`/api/session.search HTTP ${res.status}`);
-  const full = await res.json();
-  if (!full || full.rpcId !== rpcId) throw new Error("/api/session.search rpcId 不匹配");
-  if (!full.result?.ok) {
-    const e = full.result?.error || {};
-    throw new Error(`dsh session.search 失败：${e.code || "unknown"} ${e.message || ""}`);
-  }
-
-  const value = full.result.value || {};
-  const items = Array.isArray(value.items) ? value.items : [];
-  const hasMore = !!value.hasMore;
-  const count = items.length;
-
-  if (count === 0) {
-    return { content: [{ type: "text", text: `未找到匹配 "${query}" 的会话` }],
-      details: { dsh: { action: "search", query, count: 0, hasMore: false } } };
-  }
-
-  const maxSnippet = 240; // 与 host schema 对齐：snippet ≤240 Unicode code points（防御性再截断）
-  const lines = items.map((item) => {
-    const sessionId = String(item.sessionId ?? "").trim();
-    let snippet = String(item.snippet ?? "");
-    const chars = [...snippet];
-    if (chars.length > maxSnippet)
-      snippet = chars.slice(0, maxSnippet).join("") + "…";
-    return `- ${sessionId}\n  ${snippet}`;
-  });
-
-  return {
-    content: [
-      {
-        type: "text",
-        text:
-          `匹配 "${query}" 的历史会话（共 ${count} 条${hasMore ? "，还有更多" : ""}）：\n` +
-          lines.join("\n") +
-          "\n可用 dsh_run 的 sessionId 参数 resume 命中会话继续，或 dsh_session get 取会话内容",
-      },
-    ],
-    details: { dsh: { action: "search", query, count, hasMore } },
-  };
-}
-
 async function doExecute(input, ctx) {
   const g = globalThis.__dshHanako;
   const dataDir = g?.dataDir || join(PLUGIN_ROOT, "data");
@@ -387,11 +325,15 @@ async function doExecute(input, ctx) {
 
   if (action === "list") {
     const limit = clampLimit(input.limit);
+    // 会话清单以 dsh-home 为唯一事实源（session_projcache.json）；sessionId 即访问
+    // 凭证——list 暴露的 id 即可 get/resume，拿不到 id 天然无所有权，无需额外注册表。
     const sessions = readSessionProjcache(dataDir);
     const items = mapSessionItems(sessions);
     // 排序：lastPromptAt 降序（最新在前；缺失时兜底 createdAt，仍缺失排最后）
     items.sort(
-      (a, b) => (b.lastPromptAt ?? -Infinity) - (a.lastPromptAt ?? -Infinity),
+      (a, b) =>
+        (b.lastPromptAt ?? b.createdAt ?? -Infinity) -
+        (a.lastPromptAt ?? a.createdAt ?? -Infinity),
     );
     const top = items.slice(0, limit);
     if (top.length === 0) {
@@ -411,21 +353,22 @@ async function doExecute(input, ctx) {
           text: `DSH 会话清单（共 ${items.length} 条，最新 ${top.length} 条）：\n${lines.join("\n")}`,
         },
       ],
-      details: { dsh: { action: "list", count: items.length, limit, sessions: top } },
+      details: {
+        dsh: { action: "list", count: items.length, limit, sessions: top },
+      },
     };
   }
 
   if (action === "get") {
-    // projcache 只在需要时读一次（get 定位 cwd-key + 元数据共用）
+    const sessionId = String(input.sessionId ?? "").trim();
+    if (!sessionId) throw new Error("get 模式必须传 sessionId");
+    // projcache 只在需要时读一次（get 定位 cwd-key + 元数据共用）；
+    // 权限模型：sessionId 即凭证——凭 id 在 dsh-home 存在即读，不存在报错（见 doGet）。
     const projSessions = readSessionProjcache(dataDir);
     return doGet(input, ctx, g, dataDir, projSessions);
   }
 
-  if (action === "search") {
-    return doSearch(input, g);
-  }
-
-  throw new Error(`action 必须是 list / get / search（收到 "${action}"）`);
+  throw new Error(`action 必须是 list / get（收到 "${action}"）`);
 }
 
 export async function execute(input, ctx) {

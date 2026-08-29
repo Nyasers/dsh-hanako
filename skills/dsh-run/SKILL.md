@@ -43,11 +43,11 @@ ensureWebHost（resolveDshPkgDir 定位依赖 → spawn dsh web，DSH_HOME=数�
 
 **后台回调 payload（固定 minimal，v0.21.3 后续演进收口）**：
 ```
-{ id, status, rpcId, sessionId }
+{ status, rpcId, sessionId }
 ```
-只带定位键，不含 output/outputMeta/summary/usage/stderr 等大字段、不生成摘要、不占 Agent 上下文。`id` = sessionId（与 dsh_session / dsh_run resume 的定位键一致）：主上下文收到回调后**凭 id 直接取会话内容**——`dsh_session(action="get", sessionId=<id>)` 直取最终结论 summary（读会话 jsonl），或 dsh_run resume 续接。失败回调（failDeferredWake）error 尽力带定位键：有 sessionId（提交成功后的执行失败）时 `error.sessionId`；提交失败无 sessionId 时 `error.rpcId`（可为空串）。**完整输出永远在卡片（会话 jsonl 恢复）+ dsh Web UI（sessionId 定位）可查**。
+只带定位键，不含 output/outputMeta/summary/usage/stderr 等大字段、不生成摘要、不占 Agent 上下文。**sessionId 唯一定位键**（v0.21.x 起不再冗余 id 字段——id 与 sessionId 同值重复，收敛到只留 sessionId；与 dsh_session / dsh_run resume 的定位键一致）：主上下文收到回调后**凭 sessionId 直接取会话内容**——`dsh_session(action="get", sessionId=<id>)` 直取最终结论 summary（读会话 jsonl），或 dsh_run resume 续接。失败回调（failDeferredWake）error 尽力带定位键：有 sessionId（提交成功后的执行失败）时 `error.sessionId`；提交失败无 sessionId 时 `error.rpcId`（可为空串）。**完整输出永远在卡片（会话 jsonl 恢复）+ dsh Web UI（sessionId 定位）可查**。
 
-**同步模式（wait=true）**：content = `res.output` +（非 end_turn 附 `[stopReason: …]`）；details.dsh = `{ id, stopReason, usage, cwd, rpcId, sessionId, wait: true }`（`id` = sessionId，同异步回调定位键），stderr 附 `dshStderr`（截 2000）。阻塞当前回合、无卡片进度；长任务建议异步。
+**同步模式（wait=true）**：content = `res.output` +（非 end_turn 附 `[stopReason: …]`）；details.dsh = `{ sessionId, stopReason, usage, cwd, rpcId, wait: true }`（`sessionId` 唯一定位键，同异步回调；不再冗余 id 字段），stderr 附 `dshStderr`（截 2000）。阻塞当前回合、无卡片进度；长任务建议异步。
 
 ## 超时语义
 
@@ -88,4 +88,4 @@ defaultCwd / approvalTimeoutMs 优先直读 `<dataDir>/config.json` 的 `global.
 - 需要完整编码 agent 深度执行（实现/重构/调试/测试、沙箱实验、与当前对话隔离的长任务）→ dsh_run 默认异步提交。
 - 日常小代码任务 → subagent 协作（平台原生、隔离上下文），不注入 dsh。
 - **provider/model 显式指定 = 写回 dsh 全局新默认**（settings.yaml），要长期固定某模型请在 dsh models 页设默认。
-- resume 复用：dsh_session action=search 命中历史会话或复用上次回调 sessionId → `dsh_run(sessionId=…)`，省上下文重建。
+- resume 复用：dsh_session action=list 找到历史会话或复用上次回调 sessionId → `dsh_run(sessionId=…)`，省上下文重建。

@@ -451,11 +451,13 @@ export async function ensureWebHost(cfg) {
   // 当前会话日志 = 时间戳会话文件（index.js onload 已初始化单例 g.logPath）。
   // 单例优先；index.js 未初始化（冷启动边缘）时兜底自建。写进 web/logLastExit/错误消息供诊断。
   const logPath = g.logPath || newWebLogPath(cfg.dataDir);
-  // 会话全文搜索 overlay（dsh 默认 openAt: never 禁用搜索，需 --patch 覆盖为 first-search）
+  // session-query-sqlite 注入已移除（权限收敛）：dsh 默认 openAt: never 禁用
+  // 全文搜索，插件不再 --patch 覆盖启用——不再有全局全文搜索入口；会话管理以
+  // dsh-home 为唯一事实源（sessionId 即访问凭证，见 tools/dsh-session.js）。
   // 主题注入 overlay + 宿主 provider 跟随 overlay——多份 patch 合并为
-  // dsh-plugin/dsh-hanako.patch.yml.tpl 单一模板：段1 session-query 静态配置块 + 段2 theme
-  // insert + 段3 provider insert（恒渲染：hostProvider 恒开跟随宿主，无关闭选项）
-  // + 段4 settings insert（恒挂载；改名 @dsh-hanako/settings 并注入
+  // dsh-plugin/dsh-hanako.patch.yml.tpl 单一模板：段1 theme
+  // insert + 段2 provider insert（恒渲染：hostProvider 恒开跟随宿主，无关闭选项）
+  // + 段3 settings insert（恒挂载；改名 @dsh-hanako/settings 并注入
   // 「检查与更新 DSH」链路 config：dshPkgDir/dataDir——远端版本 HTTP 直查 npm registry，
   // 不再注入 pnpm 入口）。
   // cordis 插件加载：theme/provider/settings/logger 四段均以包名注册（dsh client 模块发现
@@ -465,7 +467,7 @@ export async function ensureWebHost(cfg) {
   // 每次启动无条件重建）。
   // 启动前渲染模板（占位符→实际路径）到数据目录 dsh-hanako.patch.generated.yml；launcher
   // flag（--profile/--patch）必须位于应用参数（--port）之前。模板缺失/渲染失败时不挂
-  // 任何 patch 记 warn（会话全文搜索保持上游默认禁用），不阻断 dsh 启动。
+  // 任何 patch 记 warn（内嵌插件降级不可用，dsh 启动不受影响），不阻断 dsh 启动。
   // 正规化升级：@dsh-hanako/settings 前身 dsh-hana-default-model 先行改包名注册；
   // 本版 theme/provider 一并正规化——dsh client 模块发现按
   // require.resolve('<name>/package.json') 找 package.json 的 dsh.client 声明，file://
@@ -618,15 +620,15 @@ export async function ensureWebHost(cfg) {
       patchFiles.push(renderPatchTpl());
     } catch (e) {
       // 渲染失败（读模板/写数据目录异常）：不挂任何 patch 记 warn（dsh 启动不受影响，
-      // 会话全文搜索保持上游默认禁用）
+      // 内嵌插件降级不可用）
       console.warn(
-        `[dsh-run] patch 模板渲染失败（${e?.message || e}）：不挂任何 patch（DSH 启动不受影响，会话全文搜索保持上游默认禁用）`,
+        `[dsh-run] patch 模板渲染失败（${e?.message || e}）：不挂任何 patch（DSH 启动不受影响，内嵌插件降级不可用）`,
       );
     }
   } else {
-    // 模板缺失：不挂任何 patch 记 warn（dsh 启动不受影响，会话全文搜索保持上游默认禁用）
+    // 模板缺失：不挂任何 patch 记 warn（dsh 启动不受影响，内嵌插件降级不可用）
     console.warn(
-      "[dsh-run] dsh-plugin/dsh-hanako.patch.yml.tpl 缺失：不挂任何 patch（DSH 启动不受影响，会话全文搜索保持上游默认禁用）",
+      "[dsh-run] dsh-plugin/dsh-hanako.patch.yml.tpl 缺失：不挂任何 patch（DSH 启动不受影响，内嵌插件降级不可用）",
     );
   }
   const patchArgs = patchFiles.flatMap((p) => ["--patch", p]);

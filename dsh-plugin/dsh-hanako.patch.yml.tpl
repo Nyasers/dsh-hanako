@@ -1,7 +1,3 @@
-- id: session-query-sqlite
-  config:
-    path: ':memory:'
-    openAt: first-search
 - insert:
     - id: '@dsh-hanako/logger'
       name: '@dsh-hanako/logger'
