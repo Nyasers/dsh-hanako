@@ -119,6 +119,13 @@ for (const [relPath, name] of Object.entries({
 fs.copySync(join(ROOT, "manifest.json"), join(ROOT, "dist", "manifest.json"));
 console.log("manifest.json -> dist/");
 
+// 3.5) 静态资产复制到 dist/assets/（宿主官方 assets 通道 serve：/api/plugins/<id>/assets/...，
+//      带 token 的 GET）。SW 脚本（src/assets/sw.js）作为独立文件提供——壳页面经官方
+//      assets 路径注册 SW，不走自定义路由（宿主规范：静态资源归 assets/，勿建自定义
+//      静态路由；src/assets 其余模板/脚本仍 asset/source 内联进 bundle）。
+fs.copySync(join(ROOT, "src", "assets", "sw.js"), join(ROOT, "dist", "assets", "sw.js"));
+console.log("assets/sw.js -> dist/");
+
 // 4) dist 整体额外 terser 压缩：rspack（swc）已压过一轮，这里再走 terser 做第二轮
 // （bundle 字符串资产 - 内联 HTML/CSS/JS 一并在内；引号统一/去多余空格/再 mangle）。
 // 顺序说明：必须在本步之前完成 import.meta.url 替换（walk）——若先 terser 再替换，

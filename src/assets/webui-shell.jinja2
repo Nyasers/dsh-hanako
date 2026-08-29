@@ -288,7 +288,9 @@
       // 始终返回 promise：成功 resolve(true)（已设通道 src）；无 SW 支持 / 注册失败
       // resolve(false)（已设直连 src）——调用方无需再按 channelMode 补设 src。
       var base = "http://127.0.0.1:{{= it.port }}/";
-      var swUrl = api + "/sw.js" + (pageToken() ? "?token=" + encodeURIComponent(pageToken()) : "");
+      // SW 脚本经宿主官方 assets 通道提供（/api/plugins/<id>/assets/sw.js，带 token
+      // 过墙）；自定义 /sw.js 路由仅作兼容兜底（宿主规范：静态资源归 assets/）。
+      var swUrl = api + "/assets/sw.js" + (pageToken() ? "?token=" + encodeURIComponent(pageToken()) : "");
       if (!("serviceWorker" in navigator)) {
         // 无 SW 支持：回退直连（极端旧浏览器）
         channelMode = false;
