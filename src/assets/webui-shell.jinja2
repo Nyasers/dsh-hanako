@@ -199,11 +199,16 @@
 
 <body data-hana-theme="{{= it.esc(it.theme) }}" data-pending="{{= it.ready ? " 0" : "1" }}">
   <div id="dsh-pending">
-    <div class="diag-box">
+    <div class="diag-box" id="loading-box">
+      <div class="diag-title">正在启动 DSH web host…</div>
+      <div class="diag-sub">等待 DSH 就绪（就绪后自动进入 DSH Web UI）</div>
+      <div class="diag-retry">正在连接…</div>
+    </div>
+    <div class="diag-box" id="diag-box" style="display:none">
       <div class="diag-title">DSH web host 未就绪</div>
-      <div class="diag-sub">连接失败自检（每 3 秒自动刷新，就绪后自动进入）</div>
+      <div class="diag-sub">连接失败自检（就绪后自动进入；可「查看诊断」或刷新页面重试）</div>
       <ul class="diag-list" id="diag-list"></ul>
-      <div class="diag-retry">正在重试…</div>
+      <div class="diag-retry" id="diag-retry"></div>
     </div>
   </div>
   {{= it.iframe }}
@@ -263,21 +268,18 @@
         .catch(function () { ack(false); });
     });
     function attach() {
-      // 就绪：停当前轮询定时器，按需挂载/刷新 iframe，切回主视图
-      if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+      // 就绪（宿主 push ready 事件 / postMessage ready）：挂载/刷新 iframe，切回主视图
+      clearReadyTimers();
       var wasPending = document.body.getAttribute("data-pending") === "1";
       document.body.setAttribute("data-pending", "0");
       var base = "http://127.0.0.1:{{= it.port }}/";
-      // 首次挂载（src 空）或从诊断页切回（更新/停机后）：强制加载当前 web host
+      // 首次挂载（src 空）或从加载/诊断态切回（更新/停机后）：强制加载当前 web host
       // （带时间戳 bust，避免相同 src 不触发重新加载，保证更新后拿到新版本 UI）；
-      // 已挂载且非 pending（检查/验证后的 refreshDiag）不重复 reload，不打断 dsh UI
+      // 已挂载且非 pending（重复 ready）不重复 reload，不打断 dsh UI
       if (wasPending || !frame.getAttribute("src")) {
         frame.src = base + "?dshReload=" + Date.now();
       }
       startThemePush();
-      // 低频兜底探测：iframe 挂载后不再高频轮询，但 web host 掉线（更新停机/进程
-      // 退出）时能自动退回诊断页；document.hidden 时 poll 内部已自动拉长间隔
-      pollTimer = setTimeout(poll, 5000);
     }
     function surfaceHeaders() {
       var params = new URLSearchParams(location.search);
@@ -515,7 +517,7 @@
       })
         .then(function (r) { return r.json(); })
         .then(function (d) {
-          if (d && d.ok && d.state === "ready") { attach(); return; } // 已就绪：直接切 iframe
+          if (d && d.ok && d.state === "ready") { mountReady(); return; } // 已就绪：mountReady（置 readyReceived + attach），与其他 ready 路径一致
           if (d && d.ok) { return; } // starting：保持禁用，轮询检测就绪
           // 失败：恢复按钮并提示错误
           startRequested = false;
@@ -563,10 +565,11 @@
     // 触发一次 health 读取诊断刷新 deps 卡片（检测中显示「正在检测依赖完整性…」，结果
     // 回来显示通过/失败）。不随 3s 轮询重复触发。
     function refreshDiag() {
+      // 诊断数据源（一次性 health 查询；不轮询、不自动挂载——挂载只由 ready 事件驱动）
       fetch(api + "/webui/health", { headers: surfaceHeaders(), signal: AbortSignal.timeout(3000) })
         .then(function (r) { return r.json(); })
         .then(function (d) {
-          if (d && d.ok) { attach(); return; }
+          if (d && d.ok && !readyReceived) { mountReady(); return; }
           if (d && d.diagnostics) renderDiagList(d.diagnostics);
         })
         .catch(function () { });
@@ -623,41 +626,143 @@
       else if (action === "install-deps") installDeps();
       else if (action === "verify-deps") verifyDeps();
     }
-    var pollTimer = null;
-    function poll() {
-      if (document.hidden) { pollTimer = setTimeout(poll, 5000); return; }
-      // 3s 超时兜底：web host 假死（TCP 挂起）时走 catch 继续重试，避免轮询永久卡住
+    // ---- 就绪事件化（v0.22.1+）：不再 3s 轮询 health 挂载 iframe——改事件驱动：
+    // ① 宿主 push ready（/webui/events 就绪事件流 或 父窗口 postMessage ready）→ 挂载；
+    // ② 未 ready 显示加载态；30s 超时兜底 → 引导刷新/看诊断；
+    // ③ 宿主推诊断事件（web host 启动失败）→ 直接显示自检诊断。----
+    var readyTimer = null;
+    var streamAbort = null;
+    var readyReceived = false;
+    function clearReadyTimers() {
+      if (readyTimer) { clearTimeout(readyTimer); readyTimer = null; }
+      if (streamAbort) { try { streamAbort.abort(); } catch (e) { /* 已关闭 */ } streamAbort = null; }
+    }
+    function mountReady() {
+      if (readyReceived) return;
+      readyReceived = true;
+      attach();
+    }
+    // 显示加载态（web host 启动中/停机窗口；默认进入）
+    function showLoading() {
+      var lb = document.getElementById("loading-box");
+      var db = document.getElementById("diag-box");
+      if (lb) lb.style.display = "";
+      if (db) db.style.display = "none";
+      document.body.setAttribute("data-pending", "1");
+    }
+    var diagShown = false;
+    // 显示诊断态（30s 超时 / 宿主推诊断事件 / 手动「查看诊断」）
+    function showDiagnostics(diag) {
+      var lb = document.getElementById("loading-box");
+      var db = document.getElementById("diag-box");
+      if (lb) lb.style.display = "none";
+      if (db) db.style.display = "";
+      document.body.setAttribute("data-pending", "1");
+      renderDiagList(diag || null);
+      var rt = document.getElementById("diag-retry");
+      if (rt) {
+        rt.textContent = "web host 长时间未就绪：可刷新页面重试，或按上方自检修复后重试";
+      }
+      if (!diagShown) {
+        diagShown = true;
+        autoVerifyDeps(); // 进诊断态自动运行级检测一次（结果经 refreshDiag 进 deps 卡片）
+      }
+    }
+    // 订阅宿主就绪事件流（/webui/events；SSE 式 chunked，非轮询）。
+    // 流在 ready 前断开（网络/服务端关闭）时按 10s 退避重开（有界 10 次）——
+    // 覆盖「web host 启动失败后用户修复重新拉起」的 ready 到达窗口
+    var streamRetries = 0;
+    function openReadyStream() {
+      if (readyReceived || streamRetries >= 10) return;
+      var ac = new AbortController();
+      streamAbort = ac;
+      var retryTimer = null;
+      fetch(api + "/webui/events", {
+        headers: surfaceHeaders(),
+        signal: ac.signal,
+      })
+        .then(function (r) {
+          if (!r || !r.ok || !r.body) {
+            scheduleReopen();
+            return null;
+          }
+          var reader = r.body.getReader();
+          var decoder = new TextDecoder();
+          var buf = "";
+          var pump = function () {
+            reader.read().then(function process({ done, value }) {
+              if (done || readyReceived) {
+                if (done && !readyReceived) scheduleReopen();
+                return;
+              }
+              buf += decoder.decode(value, { stream: true });
+              var idx;
+              while ((idx = buf.indexOf("\n\n")) !== -1) {
+                var chunk = buf.slice(0, idx);
+                buf = buf.slice(idx + 2);
+                var dataLine = null;
+                var ls = chunk.split("\n");
+                for (var i = 0; i < ls.length; i++) {
+                  if (ls[i].indexOf("data: ") === 0) { dataLine = ls[i].slice(6); break; }
+                }
+                if (!dataLine) continue;
+                var ev;
+                try { ev = JSON.parse(dataLine); } catch (e2) { continue; }
+                if (!ev || typeof ev.type !== "string") continue;
+                if (ev.type === "ready") { mountReady(); return; }
+                else if (ev.type === "pending") { if (!readyReceived) showLoading(); }
+                else if (ev.type === "diagnostics") { if (!readyReceived) showDiagnostics(ev.diagnostics); }
+              }
+              // 递归 read 同样附加 rejection 处理：仅 readyReceived false 时重开流
+              // （ready 已收到后流错误不再重试，与 done/初始 read 的 catch 分支一致）
+              reader.read().then(process).catch(function () {
+                if (!readyReceived) scheduleReopen();
+              });
+            }).catch(function () {
+              if (!readyReceived) scheduleReopen();
+            });
+          };
+          pump();
+          return null;
+        })
+        .catch(function () {
+          if (!readyReceived) scheduleReopen();
+        });
+      function scheduleReopen() {
+        if (readyReceived || streamRetries >= 10) return;
+        streamRetries += 1;
+        if (retryTimer) clearTimeout(retryTimer);
+        retryTimer = setTimeout(function () {
+          retryTimer = null;
+          if (!readyReceived) openReadyStream();
+        }, 10000);
+      }
+    }
+    // 父窗口 postMessage ready（页面桥：宿主 UI / 测试直接推「ready」）
+    window.addEventListener("message", function (e) {
+      if (readyReceived) return;
+      var m = e.data;
+      if (m && typeof m === "object") {
+        // ① 纯 { type:"ready" }（壳页自身握手同款命名）
+        if (m.type === "ready" && !m.protocol) { mountReady(); return; }
+        // ② hana.plugin.ui 事件（type: dsh.ready）
+        if (m.protocol === "hana.plugin.ui" && m.kind === "event" && m.type === "dsh.ready") { mountReady(); return; }
+      }
+    });
+    function loadDiagnosticsNow() {
+      // 一次性 health 查询（诊断数据源；不轮询）——30s 超时兜底/手动「查看诊断」用。
+      // 就绪（web host 已起但 ready 信号丢失）时直接挂载；未就绪渲染自检
       fetch(api + "/webui/health", { headers: surfaceHeaders(), signal: AbortSignal.timeout(3000) })
         .then(function (r) { return r.json(); })
         .then(function (d) {
-          if (d && d.ok) {
-            // health 就绪但更新/安装进行中（web host 尚未停机）：保持诊断页显示
-            // 进度，避免刚触发更新/安装时切回 iframe 又立刻退回的跳变
-            var diag = d && d.diagnostics ? d.diagnostics : null;
-            var busy = diag && diag.checks && diag.checks.some(function (c) {
-              return c.key === "deps" && (c.updating || c.installing);
-            });
-            if (busy) {
-              document.body.setAttribute("data-pending", "1");
-              renderDiagList(diag);
-              pollTimer = setTimeout(poll, 3000);
-              return;
-            }
-            attach();
-          }
-          else {
-            // 未就绪：退回诊断页（web host 停机/更新中/启动失败），刷新自检列表；
-            // health 未就绪时附带 diagnostics 字段（为 null 时保留占位）——更新中
-            // deps 卡片经 updateProgressHtml 显示实时进度
-            document.body.setAttribute("data-pending", "1");
-            if (d && d.diagnostics) renderDiagList(d.diagnostics);
-            pollTimer = setTimeout(poll, 3000);
-          }
+          if (d && d.ok) { mountReady(); return; }
+          if (d && d.diagnostics) showDiagnostics(d.diagnostics);
+          else showDiagnostics(null);
         })
-        .catch(function () { pollTimer = setTimeout(poll, 3000); });
+        .catch(function () { showDiagnostics(null); });
     }
     window.addEventListener("beforeunload", function () {
-      if (pollTimer) clearTimeout(pollTimer);
+      clearReadyTimers();
     });
     // 主题桥——dsh 页面（跨源 iframe）postMessage 索取 Hana 主题，
     // 这里回传主题 id（location.search hana-theme）+ 实时变量值（hana-css 已
@@ -767,17 +872,21 @@
         else { clearInterval(activePushTimer); activePushTimer = null; }
       }, 1500);
     }
-    // 无论首帧就绪与否都启动轮询：未就绪态高频（3s 刷新自检与进度），就绪态低频
-    // 兜底（5s，web host 掉线/更新停机时自动退回诊断页）；诊断页按钮事件委托无条件
-    // 绑定（diag-list 元素恒在，从 iframe 态退回诊断页后按钮依旧可点）
+    // 就绪事件化引导：未就绪（服务端渲染即总线未连接）→ 加载态 + 订阅宿主就绪事件流
+    // + 30s 超时兜底（引导刷新/看诊断）；就绪态（服务端渲染即已连接）→ 直接进入。
+    // 诊断页按钮事件委托无条件绑定（diag-list 元素恒在，从 iframe 态退回诊断页后按钮依旧可点）
     var diagList = document.getElementById("diag-list");
     if (diagList) diagList.addEventListener("click", onDiagClick);
     if (document.body.getAttribute("data-pending") === "1") {
-      renderDiagList(initDiag); // 首屏即渲染服务端带回的初始自检（null 时显示占位）+ 同步卡片内按钮
-      autoVerifyDeps(); // 进标签页依赖运行级检测一次（结果经 refreshDiag 进 deps 卡片）
-      poll();
+      showLoading(); // 未就绪：加载态（「正在启动 DSH web host…」）
+      openReadyStream(); // 订阅宿主就绪事件流（ready/pending/diagnostics 事件）
+      readyTimer = setTimeout(function () {
+        if (!readyReceived) loadDiagnosticsNow(); // 30s 未就绪：引导看诊断（可刷新/修复）
+      }, 30000);
     } else {
-      pollTimer = setTimeout(poll, 5000); // 就绪态：低频兜底探测
+      // 就绪态（服务端渲染即已连接）：iframe 首帧已带 src，直接启动主题推送
+      readyReceived = true;
+      startThemePush();
     }
 }) ();
   </script>

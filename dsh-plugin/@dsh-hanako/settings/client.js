@@ -23,15 +23,18 @@
 //   ② DSH 版本卡片：@deepseek-ai/dsh 版本检查与更新（v0.18.1 起检查改 **dsh 侧直查**——
 //      后端 HTTP 直查 npm registry（fetch https://registry.npmjs.org/@deepseek-ai/dsh/latest
 //      的 JSON version 字段，pnpm view 语义等价；官方源失败重试 npmmirror，15s 超时，
-//      v0.18.2 起不再 spawn pnpm），不再经宿主桥接；更新经反向信道直投宿主
-//      5s 轮询执行）——挂载时自动调一次 POST /api/hana-settings.check-version
+//      v0.18.2 起不再 spawn pnpm），不再经宿主桥接；更新经 **dshana.bus 消息总线**
+//      （@dsh-hanako/bridge 提供 dshanaBus 服务）发 update.request 直投宿主执行——
+//      挂载时自动调一次 POST /api/hana-settings.check-version
 //      （本地版本后端直读 dsh-pkg package.json 零延迟；远端版本后端 HTTP 直查，慢时
 //      返回 pending 由前端轮询兜底），显示本地/最新版本与状态；「检查更新」手动刷新；
 //      「更新到最新」（仅 updateAvailable 时可用，两段式确认）→ POST
-//      /api/hana-settings.request-update 写更新请求文件，宿主侧 5s 轮询到后自动
-//      npm i latest + 重启 web host（web host 重启窗口连接失败视为仍在更新，
-//      继续轮询）；更新期间每 2s 轮询 POST /api/hana-settings.update-status
-//      （读 update-result.json）直到 done/error，轮询计时器卸载时清理。
+//      /api/hana-settings.request-update 经总线直投宿主（v0.22.1 起替代写更新请求文件
+//      与 /child/post 反向信道，均已退役；bus 未就绪返回「消息总线未连接」），宿主
+//      npm i latest + 重启 web host（web host 重启窗口流断开视为仍在更新）；更新期间
+//      订阅 GET /api/hana-settings.update-stream 事件流（v0.22.1+ 事件驱动，替代旧 2s
+//      轮询 update-status）直到 done/error；事件缺失时手动刷新（update-status 一次性
+//      查询兜底：事件缓存优先 + update-result.json 读回），计时器/流卸载时清理。
 // 样式用 dsw CSS 变量（--dsw-alias-*），对齐设置面板原生观感（hs-* 类，设置中心：
 // 页头品牌区 + 圆角分组卡片 + 卡片头分隔线 + 版本信息面板；hs 前缀 = hana-settings，
 // 替代改名前的 hdm（hana-default-model）标识）。
@@ -517,16 +520,12 @@ window.__ModuleLoader__.load({
     // 分支，applyCheck 语义不变）。
     // 挂载时自动检查一次：先拿到本地版本即时显示，pending 则每 1.5s 轮询
     // check-version 直至结果（CHECK_POLL_MAX 次上限，防查询慢/异常时无限轮询）。
-    // 「更新到最新」→ request-update（宿主 5s 轮询到后 npm i latest + 重启 web host）→
-    // 每 2s 轮询 update-status 直到 done/error；web host 重启窗口连接失败（fetch reject /
-    // 非 ok 响应）视为仍在更新，连续失败超过 UPDATE_POLL_MAX_FAILURES 次才放弃。
+    // 「更新到最新」→ request-update（宿主经总线受理后 npm i latest + 重启 web host）→
+    // 订阅 /api/hana-settings.update-stream 事件流（v0.22.1+ 事件驱动，替代旧 2s 轮询
+    // update-status）直到 done/error；流不可用/事件缺失时手动刷新（update-status 一次性
+    // 查询兜底）。web host 重启窗口流断开：保持「更新中…」，回来后事件/刷新拿到终态。
     const CHECK_POLL_INTERVAL_MS = 1500;
     const CHECK_POLL_MAX = 12;
-    const UPDATE_POLL_INTERVAL_MS = 2000;
-    // web host 更新期间全程停机（closeProcess → npm i → 重启），轮询会持续连接失败；
-    // 上限 300 次（10 分钟）——覆盖慢速网络下 npm i 数分钟 + 重启窗口，仅当 web host
-    // 长时间不回来（更新彻底失败且未重启）才放弃
-    const UPDATE_POLL_MAX_FAILURES = 300;
     function DshVersionBlock(props) {
       const { t } = props;
       const [checking, setChecking] = react.useState(false);
@@ -547,7 +546,12 @@ window.__ModuleLoader__.load({
 
       const stopPoll = () => {
         if (pollTimerRef.current) {
-          clearInterval(pollTimerRef.current);
+          // 兼容两种形态：旧轮询定时器（clearInterval）与事件流清理句柄（{ close }）
+          if (typeof pollTimerRef.current === 'object' && typeof pollTimerRef.current.close === 'function') {
+            pollTimerRef.current.close();
+          } else {
+            clearInterval(pollTimerRef.current);
+          }
           pollTimerRef.current = null;
         }
       };
@@ -680,10 +684,100 @@ window.__ModuleLoader__.load({
               );
               return;
             }
-            // 每 2s 轮询 update-status 直到 done/error；web host 重启窗口连接失败视为仍在更新
-            let failures = 0;
-            stopPoll();
-            pollTimerRef.current = setInterval(() => {
+            // ---- 事件驱动（v0.22.1+）：订阅 /api/hana-settings.update-stream（SSE 式流）
+            // 直到 done/error——替代旧 2s 轮询 update-status。后端收到总线 update.progress/
+            // result 事件即推；终态后流关闭。事件缺失（流未建立/中途断开）时依赖手动刷新
+            // 按钮（update-status 一次性查询兜底）。web host 重启窗口流会断开：显示
+            // 「更新中…」并保持——web host 回来且更新完成时新订阅/手动刷新拿到终态。
+            const streamUrl = "/api/hana-settings.update-stream";
+            let reader = null;
+            let streamClosed = false;
+            const closeStream = () => {
+              streamClosed = true;
+              if (reader) {
+                try { reader.cancel(); } catch (e) { /* 已关闭 */ }
+                reader = null;
+              }
+            };
+            // 流式读取（fetch + ReadableStream；SSE 行解析 data: ...）
+            const readStream = (res) => {
+              if (!res || !res.body) {
+                // 流不可用（旧后端/代理缓冲）：退化为一次性查询（用户可手动刷新）
+                queryStatusOnce();
+                return;
+              }
+              reader = res.body.getReader();
+              const decoder = new TextDecoder();
+              let buf = "";
+              const pump = () => {
+                reader.read().then(function process({ done, value }) {
+                  if (done || streamClosed) {
+                    reader = null;
+                    // 流关闭但未收到终态：web host 重启窗口断开——保持「更新中…」，
+                    // 用户可点「检查更新」或稍后重进分页查看
+                    return;
+                  }
+                  buf += decoder.decode(value, { stream: true });
+                  var idx;
+                  while ((idx = buf.indexOf("\n\n")) !== -1) {
+                    var chunk = buf.slice(0, idx);
+                    buf = buf.slice(idx + 2);
+                    var dataLine = null;
+                    var lines = chunk.split("\n");
+                    for (var i = 0; i < lines.length; i++) {
+                      if (lines[i].indexOf("data: ") === 0) {
+                        dataLine = lines[i].slice(6);
+                        break;
+                      }
+                    }
+                    if (!dataLine) continue;
+                    var d2;
+                    try { d2 = JSON.parse(dataLine); } catch (e2) { continue; }
+                    if (!d2 || !d2.ok || !d2.value) continue;
+                    applyUpdateEvent(d2.value);
+                    if (streamClosed) return;
+                  }
+                  // 递归 read 同样附加 rejection 处理：流错误时置 reader 为 null，
+                  // 与 done/streamClosed/初始 read 的 catch 分支一致（不留悬空 reader）
+                  reader.read().then(process).catch(function () {
+                    reader = null;
+                  });
+                }).catch(function () {
+                  reader = null;
+                });
+              };
+              pump();
+            };
+            // 应用一个更新事件（progress/result）
+            const applyUpdateEvent = (v) => {
+              if (!v) return;
+              if (v.state === "done") {
+                closeStream();
+                setUpdating(false);
+                setStatusBoth(
+                  t("updateDone") + (v.version || "?") + t("restartNote"),
+                  "ok",
+                );
+                // 更新完成：刷新版本信息（新 web host 已起，读到新本地版本）
+                doCheck().then((c) => {
+                  if (c && c.ok && c.value) {
+                    setLocalVersion(c.value.localVersion);
+                    setLatestVersion(c.value.latestVersion);
+                    setUpdateAvailable(c.value.updateAvailable === true);
+                  }
+                });
+              } else if (v.state === "error") {
+                closeStream();
+                setUpdating(false);
+                setStatusBoth(
+                  t("updateFailed") + (v.error || t("unknown")),
+                  "err",
+                );
+              }
+              // state updating/idle：继续等事件
+            };
+            // 一次性查询兜底（手动刷新/流不可用时）：读 update-status（事件缓存或文件）
+            const queryStatusOnce = () => {
               fetch("/api/hana-settings.update-status", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -691,57 +785,27 @@ window.__ModuleLoader__.load({
               })
                 .then((r) => r.json())
                 .then((d2) => {
-                  if (!d2 || !d2.ok) {
-                    failures += 1;
-                    if (failures > UPDATE_POLL_MAX_FAILURES) {
-                      stopPoll();
-                      setUpdating(false);
-                      setStatusBoth(
-                        t("updateFailed") + t("updateTimeout"),
-                        "err",
-                      );
-                    }
-                    return;
-                  }
-                  const v = d2.value || {};
-                  if (v.state === "done") {
-                    stopPoll();
-                    setUpdating(false);
-                    setStatusBoth(
-                      t("updateDone") + (v.version || "?") + t("restartNote"),
-                      "ok",
-                    );
-                    // 更新完成：刷新版本信息（新 web host 已起，读到新本地版本）
-                    doCheck().then((c) => {
-                      if (c && c.ok && c.value) {
-                        setLocalVersion(c.value.localVersion);
-                        setLatestVersion(c.value.latestVersion);
-                        setUpdateAvailable(c.value.updateAvailable === true);
-                      }
-                    });
-                  } else if (v.state === "error") {
-                    stopPoll();
-                    setUpdating(false);
-                    setStatusBoth(
-                      t("updateFailed") + (v.error || t("unknown")),
-                      "err",
-                    );
-                  }
-                  // state 'updating'/'idle'：继续轮询
+                  if (d2 && d2.ok && d2.value) applyUpdateEvent(d2.value);
                 })
-                .catch(() => {
-                  // web host 重启窗口连接失败：继续轮询（连续失败超上限才放弃）
-                  failures += 1;
-                  if (failures > UPDATE_POLL_MAX_FAILURES) {
-                    stopPoll();
-                    setUpdating(false);
-                    setStatusBoth(
-                      t("updateFailed") + t("updateTimeout"),
-                      "err",
-                    );
-                  }
-                });
-            }, UPDATE_POLL_INTERVAL_MS);
+                .catch(() => { /* 手动刷新失败：保持当前状态 */ });
+            };
+            // 卸载清理：关闭流。先 stopPoll() 清掉 pending 的 check 轮询定时器再接管
+            // pollTimerRef——否则旧定时器仍会继续 applyCheck 覆盖状态，且其结束时的
+            // stopPoll() 会误关新流句柄（{ close } 被当 interval clearInterval 清掉）
+            stopPoll();
+            pollTimerRef.current = { close: closeStream }; // 复用 stopPoll 清理槽
+            fetch(streamUrl, { headers: { "Accept": "text/event-stream" } })
+              .then(function (r) {
+                if (!r.ok) { queryStatusOnce(); return null; }
+                return r;
+              })
+              .then(function (res) {
+                if (res && !streamClosed) readStream(res);
+              })
+              .catch(function () {
+                // 流建立失败：退化为一次性查询（后端事件缓存/文件兜底）
+                queryStatusOnce();
+              });
           })
           .catch((e) => {
             setUpdating(false);

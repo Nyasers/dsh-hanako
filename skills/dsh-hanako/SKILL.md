@@ -73,8 +73,9 @@ $node = <本机 node.exe 绝对路径，如 C:\Program Files\nodejs\node.exe>
 
 | 路由 | 用途 |
 |---|---|
-| `GET /webui` | 页面壳（就绪探测 + 主题 + 首帧自检） |
-| `GET /webui/health` | 就绪探测；未就绪附带 diagnostics（自检数据源，3s 轮询） |
+| `GET /webui` | 页面壳（就绪事件化 + 主题 + 首帧自检；按总线连接状态判定就绪） |
+| `GET /webui/events` | 就绪事件流（SSE 式 chunked：ready/pending/diagnostics 事件；壳页就绪事件化挂载通道，替代 3s 轮询） |
+| `GET /webui/health` | 纯诊断端点（readDiagnostics 自检 + web host 状态；30s 超时兜底/手动刷新数据源） |
 | `POST /webui/start` | 手动启动 web host（t3 按钮） |
 | `POST /webui/install-deps` | 安装依赖（pnpm add @deepseek-ai/dsh 到 dsh-pkg，停 host + 清旧残留 + 创建 node 代理脚本，npmmirror 兜底；t1 按钮） |
 | `GET /webui/verify-deps` | 运行级依赖检测（node cliBin --version；进页自动一次 + 手动） |
@@ -87,12 +88,23 @@ $node = <本机 node.exe 绝对路径，如 C:\Program Files\nodejs\node.exe>
 
 1. **Agent 工具 `dsh_update`**：`action=check`（默认）查 `{ localVersion, latestVersion, updateAvailable, error? }`，只读不改；`action=update` 执行完整更新（停 web host → pnpm add @deepseek-ai/dsh latest → 起 web host），默认异步（后台执行 + **升级卡片**实时日志，完成后宿主唤醒带回结果），`wait=true` 同步等待；更新会重启 web host、正在执行的任务会中断，`update` 前确认无运行中任务；更新执行中重复调用返回状态不重复执行
 2. **DSHana 标签页 deps 卡片**（web host 未就绪时可见）：版本行显示「当前版本 / 最新版本 / 可更新状态」+「检查更新」「更新 DSH」按钮（更新前两段式确认）；更新中显示进度（update-result.json 状态），完成显示「更新完成 vX，请重启 DSHana 使完全生效」；更新/安装期间页面自动退到诊断页显示进度，完成后自动切回并刷新
-3. **dsh 设置页「DSHana 设置」分页 → 「DSH 版本」卡片**：本地版本直读 dsh-pkg package.json（挂载即显示），远端版本 **dsh 侧直查**（v0.18.2 起 HTTP 直查 npm registry——fetch `https://registry.npmjs.org/@deepseek-ai/dsh/latest` 的 JSON `version` 字段（pnpm view 语义等价），官方源失败重试 npmmirror，15s 超时，不再 spawn pnpm；v0.18.1 起不再经宿主桥接——修复了宿主 resources.watch 桥接不可靠导致检查永不完成的问题）；「更新到最新」→ 两段式确认 → 写 update-request.json（宿主 5s 轮询感知）→ 宿主执行更新 → 每 2s 轮询 update-status 直到 done/error
+3. **dsh 设置页「DSHana 设置」分页 → 「DSH 版本」卡片**：本地版本直读 dsh-pkg package.json（挂载即显示），远端版本 **dsh 侧直查**（v0.18.2 起 HTTP 直查 npm registry——fetch `https://registry.npmjs.org/@deepseek-ai/dsh/latest` 的 JSON `version` 字段（pnpm view 语义等价），官方源失败重试 npmmirror，15s 超时，不再 spawn pnpm；v0.18.1 起不再经宿主桥接——修复了宿主 resources.watch 桥接不可靠导致检查永不完成的问题）；「更新到最新」→ 两段式确认 → 经 **dshana.bus 消息总线**（@dsh-hanako/bridge 提供的 dshanaBus 服务）发 update.request 直投宿主（v0.22.1 起替代 update-request.json 文件桥与 POST /child/post 反向信道，均已退役；bus 未就绪时 request-update 返回「消息总线未连接」）→ 宿主执行更新 → **v0.22.1+ 事件化**：订阅 update-stream 事件流（update.progress/result 驱动）直到 done/error；事件缺失手动刷新（update-status 一次性查询兜底）
 4. **Agent 工具 `dsh_install`**（依赖缺失/安装场景）：`action=install`（默认）pnpm add @deepseek-ai/dsh 到 dsh-pkg（registry 兜底 + 自动运行级重验 + autoStart 自动拉起 web host），默认异步 + **安装卡片**实时日志 + 完成回调，`wait=true` 同步；`action=verify` 只检测依赖完整性（运行级冒烟）；安装中（`g.depsInstalling`）重复调用返回状态不重复执行
 
-**并发与一致性**：检查 `g.checking` / 更新 `g.updating` / 安装 `g.depsInstalling` 进行中重复请求跳过（更新轮询触发层 + 能力层双重防护）；检查结果缓存 `g.checkResult`（内存，5s 时间窗防远端查询重复跑；不再写 check-result.json 桥接文件）；更新结果写 `<dataDir>/update-result.json { state: done|error, version?, error?, at }`（设置页/标签页轮询读）。
+**并发与一致性**：检查 `g.checking` / 更新 `g.updating` / 安装 `g.depsInstalling` 进行中重复请求跳过（请求触发层 + 能力层双重防护）；检查结果缓存 `g.checkResult`（内存，5s 时间窗防远端查询重复跑；不再写 check-result.json 桥接文件）；更新结果写 `<dataDir>/update-result.json { state: done|error, version?, error?, at }`（设置页事件缓存优先 + update-status 一次性查询读，标签页诊断路径读）。
 
 **安装/升级卡片（v0.13.0）**：dsh_install / dsh_update 异步流程渲染 iframe 卡片（`/card/dep`，与任务卡片同构）——登记宿主单例 `g.depTasks`（taskId → kind/state/log/at/result），SSE `/ops/dep-stream`（首帧快照 + 每 1s npm 日志实时滚动，终态关闭）+ 兜底 `/ops/dep-status`；显示标题（DSH 安装 / DSH 升级）+ 状态徽标 + 日志实时滚动 + 完成结果（「已安装 vX，web host 已自动启动」/「更新完成 vX，请重启 DSHana 使完全生效」/ 错误信息）。
+
+## 进程间消息总线（dshana.bus，v0.22.1+ 收敛）
+
+宿主插件与 dsh 进程之间的**双向消息总线**（`@dsh-hanako/bridge` 在 dsh webserver 注册 `/api/dshana.bus` upgrade 路由，宿主 `src/lib/bus.js` 连 `ws://127.0.0.1:<webPort>/api/dshana.bus`），JSON 文本帧 `{ channel, payload }`——**进程间唯一通道**（`/child/post` 反向信道、`/api/hana-provider.refresh` HTTP push、update-request.json 文件桥、patch config/logPath 注入均已退役）：
+
+- **免鉴权（本机信任）**：首帧 `hello` 只作身份宣告，不再比对 token（总线与 mux、`/api/session.*` 同级）；patch 静态化后 bridge config 恒空
+- **config 通道**：宿主 bus ready 后发 `{ channel:"config", payload:{ dshPkgDir, dataDir } }`，bridge 缓存，`dshanaBus.getConfig()` 返回——settings/provider 子插件取 dshPkgDir/dataDir 的路径来源（替代 patch config 注入）；config 未下发时相关路由报「总线配置未就绪」
+- **log 通道**：dsh 内部日志经 `{ channel:"log", payload:{ src, line } }` 转发宿主写会话文件（`[ts] [src]` 行格式统一；`@dsh-hanako/logger` 提供 hanaLogger 服务，bus 未连接时有界环形缓冲 ≤500 行、连接后按序补发）
+- **update 通道**：`update.request`（设置页发起）→ 宿主 `updateDsh` → `update.progress`（开始）/ `update.result`（完成，`{ state, version?, error? }`）回投——设置页事件缓存 + update-stream 推送，替代 2s 轮询 update-status
+- **provider.refresh 通道**：宿主经总线推 `{ routes }`（替代 `/api/hana-provider.refresh` HTTP push；bus 未连接记待补推，bus.ready 后自动补推最新 routes）
+- **壳页就绪事件化**：宿主总线状态经 `GET /webui/events` 就绪事件流（SSE 式 chunked）推给 DSHana 标签页壳页——bus ready 推 `ready` 事件 → 壳页挂载 iframe（替代 3s health 轮询挂载）；web host 启动失败推 `diagnostics` 事件；30s 超时兜底引导刷新/看诊断
 
 ## 审批流程（Agent 应答）
 

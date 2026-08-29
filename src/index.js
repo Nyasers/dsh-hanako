@@ -44,7 +44,6 @@ import * as dshSession from "./tools/dsh-session.js";
 // 路由工厂（默认导出）
 import registerWebuiRoutes from "./routes/webui.js";
 import registerCardRoutes from "./routes/card.js";
-import registerChildRoutes from "./routes/child.js";
 
 // 工具清单（registerTool 消费普通契约；宿主自动加 pluginId_ 前缀）
 const HANAKO_TOOLS = [dshRun, dshUpdate, dshInstall, dshApprove, dshCancel, dshSession];
@@ -138,7 +137,6 @@ function compressArchivedLogs(logsDir) {
 // routes 具名导出：dist/routes/*.js 壳 import { webuiRoute } from "../index.js" 转发
 export const webuiRoute = registerWebuiRoutes;
 export const cardRoute = registerCardRoutes;
-export const childRoute = registerChildRoutes;
 
 export default class DshHanakoPlugin {
   async onload() {
