@@ -23,12 +23,14 @@
 //   ② DSH 版本卡片：@deepseek-ai/dsh 版本检查与更新（v0.18.1 起检查改 **dsh 侧直查**——
 //      后端 HTTP 直查 npm registry（fetch https://registry.npmjs.org/@deepseek-ai/dsh/latest
 //      的 JSON version 字段，pnpm view 语义等价；官方源失败重试 npmmirror，15s 超时，
-//      v0.18.2 起不再 spawn pnpm），不再经宿主桥接；更新经反向信道直投宿主
-//      5s 轮询执行）——挂载时自动调一次 POST /api/hana-settings.check-version
+//      v0.18.2 起不再 spawn pnpm），不再经宿主桥接；更新经 **dshana.bus 消息总线**
+//      （@dsh-hanako/bridge 提供 dshanaBus 服务）发 update.request 直投宿主执行——
+//      挂载时自动调一次 POST /api/hana-settings.check-version
 //      （本地版本后端直读 dsh-pkg package.json 零延迟；远端版本后端 HTTP 直查，慢时
 //      返回 pending 由前端轮询兜底），显示本地/最新版本与状态；「检查更新」手动刷新；
 //      「更新到最新」（仅 updateAvailable 时可用，两段式确认）→ POST
-//      /api/hana-settings.request-update 写更新请求文件，宿主侧 5s 轮询到后自动
+//      /api/hana-settings.request-update 经总线直投宿主（v0.22.1 起替代写更新请求文件
+//      与 /child/post 反向信道，均已退役；bus 未就绪返回「消息总线未连接」），宿主
 //      npm i latest + 重启 web host（web host 重启窗口连接失败视为仍在更新，
 //      继续轮询）；更新期间每 2s 轮询 POST /api/hana-settings.update-status
 //      （读 update-result.json）直到 done/error，轮询计时器卸载时清理。

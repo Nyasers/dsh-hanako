@@ -20,8 +20,9 @@
 //      永久 pending）：HTTP 直查 npm registry
 //      `https://registry.npmjs.org/@deepseek-ai/dsh/latest`（JSON 的 version 字段，
 //      pnpm view 语义等价；官方源失败重试一次 npmmirror，15s 超时），结果即最新版本，
-//      不再依赖 pnpm。「更新到最新」仍写 { state:'requested' } 到
-//      <dataDir> 经宿主反向信道直投（/child/post，loopbackToken 凭据）触发完整更新（停 web host →
+//      不再依赖 pnpm。「更新到最新」经 **dshana.bus 消息总线**（@dsh-hanako/bridge 提供
+//      dshanaBus 服务）发 update.request 直投宿主（进程内 WebSocket 双向总线，替代旧的
+//      POST /child/post 单向 HTTP 反向信道）触发完整更新（停 web host →
 //      pnpm add @deepseek-ai/dsh latest → 起 web host），结果写
 //      <dataDir>/update-result.json，本插件 update-status 路由读它供前端轮询。
 //
@@ -35,7 +36,7 @@
 //   POST /api/hana-settings.read            → agentDefaultModel.currentSelection()
 //   POST /api/hana-settings.save            → agentDefaultModel.saveSelection(...)
 //   POST /api/hana-settings.check-version   → 本地版本直读 + 远端版本 dsh 侧 HTTP 直查（npm registry）
-//   POST /api/hana-settings.request-update  → 直投宿主反向信道（/child/post，触发更新）
+//   POST /api/hana-settings.request-update  → 经 dshana.bus 消息总线发 update.request（触发更新）
 //   POST /api/hana-settings.update-status   → 读 <dataDir>/update-result.json（更新进度/结果）
 // 路由经 webServer.register（kind: exact）注册——webserver 匹配 exact 优先于 apiproxy
 // 的 /api 前缀，冲突只会发生在同 (kind, path) 重复注册（插件重载未清理场景），此时
@@ -44,7 +45,8 @@
 // config 注入：dshPkgDir（dsh 包安装目录）、dataDir（宿主插件数据目录）——由宿主 patch
 // 模板渲染（{{DSH_PKG_DIR}}/{{DATA_DIR}}，见 dsh-hanako.patch.yml.tpl / src/lifecycle.js）。
 // v0.18.1 曾注入 npmCliPath / electronNode 供版本检查 dsh 侧 spawn pnpm view；v0.18.2 起
-// 版本检查改 HTTP 直查 npm registry（全局 fetch），不再需要（patch 模板已删除对应占位符）。
+// 版本检查改 HTTP 直查 npm registry（全局 fetch），不再需要（patch 模板已删除对应占位符）；
+// v0.22.1 起删除 hostApi 注入（/child/post 反向信道退役），更新请求改经 dshanaBus 总线。
 //
 // 服务依赖：export const inject = ['webServer', 'agentDefaultModel', 'hanaLogger'] 声明依赖
 // （cordis 服务注入经 inject 声明生效，无声明则 apply 内 ctx.webServer /
@@ -55,7 +57,7 @@
 // 空操作，不阻断 dsh 启动（边界要求）。注释风格同 @dsh-hanako/provider（中文/单引号/无分号）。
 
 export const name = "@dsh-hanako/settings";
-export const inject = ["webServer", "agentDefaultModel", "hanaLogger"];
+export const inject = ["webServer", "agentDefaultModel", "hanaLogger", "dshanaBus"];
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -172,226 +174,199 @@ async function npmViewLatest(cfg) {
 export function apply(ctx, config) {
   const cfg = config && typeof config === "object" ? config : {};
   try {
-    ctx.inject(["webServer", "agentDefaultModel", "hanaLogger"], (httpCtx) => {
-      httpCtx.effect(() => {
-        const disposers = [];
-        const settingsLog = (msg) => {
-          try {
-            httpCtx.hanaLogger.log("settings", msg);
-          } catch {
-            /* 日志失败不阻断 */
-          }
-        };
-        const registerRoute = (path, handler) => {
-          try {
-            disposers.push(
-              httpCtx.webServer.register({ kind: "exact", path, handler }),
-            );
-          } catch (e) {
-            // 重复注册（插件重载未清理）：降级记日志，不阻断
-            settingsLog(`路由 ${path} 注册失败：${e?.message || e}`);
+    ctx.inject(
+      ["webServer", "agentDefaultModel", "hanaLogger", "dshanaBus"],
+      (httpCtx) => {
+        httpCtx.effect(() => {
+          const disposers = [];
+          const settingsLog = (msg) => {
             try {
-              ctx.logger?.warn?.(
-                `[@dsh-hanako/settings] 路由 ${path} 注册失败：${e?.message || e}`,
-              );
+              httpCtx.hanaLogger.log("settings", msg);
             } catch {
               /* 日志失败不阻断 */
             }
-          }
-        };
-
-        // 本地版本：dsh-pkg 下 @deepseek-ai/dsh 的 package.json（文件不存在 → null；
-        // 零延迟直读，不经桥接）
-        const readLocalVersion = () => {
-          try {
-            const pkgPath = join(
-              cfg.dshPkgDir || "",
-              "node_modules",
-              "@deepseek-ai",
-              "dsh",
-              "package.json",
-            );
-            if (!existsSync(pkgPath)) return null;
-            const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
-            return pkg && typeof pkg.version === "string" && pkg.version
-              ? pkg.version
-              : null;
-          } catch (e) {
-            settingsLog(`本地版本读取失败：${e?.message || e}`);
-            return null;
-          }
-        };
-
-        // POST /api/hana-settings.read：返回当前默认（{ provider, model, reasoningEffort? }）
-        registerRoute("/api/hana-settings.read", async (req, res) => {
-          try {
-            await readJsonBody(req);
-            const value = httpCtx.agentDefaultModel.currentSelection();
-            json(res, { ok: true, value });
-          } catch (e) {
-            json(res, { ok: false, error: e?.message || String(e) });
-          }
-        });
-
-        // POST /api/hana-settings.save：保存默认（reasoningEffort 空/缺省 = 不传）
-        registerRoute("/api/hana-settings.save", async (req, res) => {
-          try {
-            const body = await readJsonBody(req);
-            const provider =
-              typeof body?.provider === "string" ? body.provider : "";
-            const model = typeof body?.model === "string" ? body.model : "";
-            const reasoningEffort =
-              typeof body?.reasoningEffort === "string" && body.reasoningEffort
-                ? body.reasoningEffort
-                : "";
-            if (!provider || !model) {
-              json(res, { ok: false, error: "provider 与 model 不能为空" });
-              return;
-            }
-            await httpCtx.agentDefaultModel.saveSelection({
-              provider,
-              model,
-              ...(reasoningEffort ? { reasoningEffort } : {}),
-            });
-            settingsLog(
-              `默认模型已保存：${provider} / ${model}${reasoningEffort ? " / " + reasoningEffort : ""}`,
-            );
-            json(res, { ok: true });
-          } catch (e) {
+          };
+          const registerRoute = (path, handler) => {
             try {
-              settingsLog(`默认模型保存失败：${e?.message || e}`);
-            } catch {
-              /* 日志失败不阻断（防二次抛错挂起响应） */
-            }
-            json(res, { ok: false, error: e?.message || String(e) });
-          }
-        });
-
-        // POST /api/hana-settings.check-version：本地版本直读（零延迟）+ 远端版本
-        // dsh 侧 HTTP 直查——fetch https://registry.npmjs.org/@deepseek-ai/dsh/latest
-        // 的 JSON version 字段（pnpm view 语义等价；官方源失败重试 npmmirror，15s 超时），
-        // 响应 { ok:true, value:{ localVersion, latestVersion, updateAvailable, error? } }。
-        // 不再写 update-request.json / 读 check-result.json（v0.18.1 起废弃宿主桥接：
-        // resources.watch 链路不可靠导致检查永不完成）。
-        registerRoute("/api/hana-settings.check-version", async (req, res) => {
-          try {
-            await readJsonBody(req);
-            const localVersion = readLocalVersion();
-            const remote = await npmViewLatest(cfg);
-            const latestVersion = remote.version;
-            const updateAvailable = !!(
-              localVersion &&
-              latestVersion &&
-              compareVersions(localVersion, latestVersion) < 0
-            );
-            const value = { localVersion, latestVersion, updateAvailable };
-            if (remote.error) value.error = remote.error;
-            settingsLog(
-              `版本检查完成（本地=${localVersion || "未安装"}，远端=${latestVersion || "查询失败"}${remote.error ? "，" + remote.error : ""}${updateAvailable ? "，可更新" : ""}）`,
-            );
-            json(res, { ok: true, value });
-          } catch (e) {
-            json(res, { ok: false, error: e?.message || String(e) });
-          }
-        });
-
-        // POST /api/hana-settings.request-update：经子插件反向信道直投宿主
-        // （v0.21.2 起替代 update-request.json 文件桥——宿主侧无轮询、无文件）。
-        // 宿主 POST /child/post 受理后执行 npm i latest + 重启 web host，结果写
-        // update-result.json（本插件 update-status 路由读）。hostApi 由宿主 patch
-        // 注入（server-info.json 的 loopbackToken + 端口，过宿主鉴权墙）。
-        registerRoute("/api/hana-settings.request-update", async (req, res) => {
-          try {
-            await readJsonBody(req);
-            const hostApi = cfg.hostApi;
-            if (
-              !hostApi ||
-              typeof hostApi.url !== "string" ||
-              typeof hostApi.token !== "string"
-            ) {
-              throw new Error("宿主反向信道未配置（hostApi 缺失）");
-            }
-            const url =
-              hostApi.url +
-              (hostApi.url.includes("?") ? "&" : "?") +
-              "token=" +
-              encodeURIComponent(hostApi.token);
-            const r = await fetch(url, {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({
-                channel: "dsh.update-request",
-                payload: {
-                  at: new Date().toISOString(),
-                  fromVersion: readLocalVersion(),
-                },
-              }),
-              signal: AbortSignal.timeout(5000),
-            });
-            let data = null;
-            try {
-              data = await r.json();
-            } catch {
-              throw new Error(`宿主响应非 JSON（HTTP ${r.status}）`);
-            }
-            if (!r.ok) {
-              throw new Error(
-                (data && typeof data === "object" && data.error) ||
-                  `宿主投递失败（HTTP ${r.status}）`,
+              disposers.push(
+                httpCtx.webServer.register({ kind: "exact", path, handler }),
               );
-            }
-            if (!data || typeof data !== "object" || data.ok !== true) {
-              throw new Error(
-                (data && typeof data === "object" && data.error) ||
-                  `宿主响应缺少 ok:true（HTTP ${r.status}）`,
-              );
-            }
-            settingsLog("更新请求已直投宿主（/child/post），将自动执行更新");
-            json(res, { ok: true, ...data });
-          } catch (e) {
-            try {
-              settingsLog(`更新请求失败：${e?.message || e}`);
-            } catch {
-              /* 日志失败不阻断 */
-            }
-            json(res, { ok: false, error: e?.message || String(e) });
-          }
-        });
-
-        // POST /api/hana-settings.update-status：读更新结果文件（不存在 → idle；解析失败 → idle）
-        registerRoute("/api/hana-settings.update-status", async (req, res) => {
-          try {
-            await readJsonBody(req);
-            const f = join(cfg.dataDir || "", "update-result.json");
-            if (!existsSync(f)) {
-              json(res, { ok: true, value: { state: "idle" } });
-              return;
-            }
-            let value = null;
-            try {
-              value = JSON.parse(readFileSync(f, "utf8"));
             } catch (e) {
-              // 解析失败（写入中/损坏）：视为 idle，不阻断
-              settingsLog(`update-result.json 解析失败：${e?.message || e}`);
-              json(res, { ok: true, value: { state: "idle" } });
-              return;
+              // 重复注册（插件重载未清理）：降级记日志，不阻断
+              settingsLog(`路由 ${path} 注册失败：${e?.message || e}`);
+              try {
+                ctx.logger?.warn?.(
+                  `[@dsh-hanako/settings] 路由 ${path} 注册失败：${e?.message || e}`,
+                );
+              } catch {
+                /* 日志失败不阻断 */
+              }
             }
-            json(res, { ok: true, value });
-          } catch (e) {
-            json(res, { ok: false, error: e?.message || String(e) });
-          }
-        });
+          };
 
-        return () => {
-          for (const dispose of disposers) {
+          // 本地版本：dsh-pkg 下 @deepseek-ai/dsh 的 package.json（文件不存在 → null；
+          // 零延迟直读，不经桥接）
+          const readLocalVersion = () => {
             try {
-              dispose();
-            } catch {
-              /* 清理失败不阻断 */
+              const pkgPath = join(
+                cfg.dshPkgDir || "",
+                "node_modules",
+                "@deepseek-ai",
+                "dsh",
+                "package.json",
+              );
+              if (!existsSync(pkgPath)) return null;
+              const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
+              return pkg && typeof pkg.version === "string" && pkg.version
+                ? pkg.version
+                : null;
+            } catch (e) {
+              settingsLog(`本地版本读取失败：${e?.message || e}`);
+              return null;
             }
-          }
-        };
-      });
+          };
+
+          // POST /api/hana-settings.read：返回当前默认（{ provider, model, reasoningEffort? }）
+          registerRoute("/api/hana-settings.read", async (req, res) => {
+            try {
+              await readJsonBody(req);
+              const value = httpCtx.agentDefaultModel.currentSelection();
+              json(res, { ok: true, value });
+            } catch (e) {
+              json(res, { ok: false, error: e?.message || String(e) });
+            }
+          });
+
+          // POST /api/hana-settings.save：保存默认（reasoningEffort 空/缺省 = 不传）
+          registerRoute("/api/hana-settings.save", async (req, res) => {
+            try {
+              const body = await readJsonBody(req);
+              const provider =
+                typeof body?.provider === "string" ? body.provider : "";
+              const model = typeof body?.model === "string" ? body.model : "";
+              const reasoningEffort =
+                typeof body?.reasoningEffort === "string" && body.reasoningEffort
+                  ? body.reasoningEffort
+                  : "";
+              if (!provider || !model) {
+                json(res, { ok: false, error: "provider 与 model 不能为空" });
+                return;
+              }
+              await httpCtx.agentDefaultModel.saveSelection({
+                provider,
+                model,
+                ...(reasoningEffort ? { reasoningEffort } : {}),
+              });
+              settingsLog(
+                `默认模型已保存：${provider} / ${model}${reasoningEffort ? " / " + reasoningEffort : ""}`,
+              );
+              json(res, { ok: true });
+            } catch (e) {
+              try {
+                settingsLog(`默认模型保存失败：${e?.message || e}`);
+              } catch {
+                /* 日志失败不阻断（防二次抛错挂起响应） */
+              }
+              json(res, { ok: false, error: e?.message || String(e) });
+            }
+          });
+
+          // POST /api/hana-settings.check-version：本地版本直读（零延迟）+ 远端版本
+          // dsh 侧 HTTP 直查——fetch https://registry.npmjs.org/@deepseek-ai/dsh/latest
+          // 的 JSON version 字段（pnpm view 语义等价；官方源失败重试 npmmirror，15s 超时），
+          // 响应 { ok:true, value:{ localVersion, latestVersion, updateAvailable, error? } }。
+          // 不再写 update-request.json / 读 check-result.json（v0.18.1 起废弃宿主桥接：
+          // resources.watch 链路不可靠导致检查永不完成）。
+          registerRoute("/api/hana-settings.check-version", async (req, res) => {
+            try {
+              await readJsonBody(req);
+              const localVersion = readLocalVersion();
+              const remote = await npmViewLatest(cfg);
+              const latestVersion = remote.version;
+              const updateAvailable = !!(
+                localVersion &&
+                latestVersion &&
+                compareVersions(localVersion, latestVersion) < 0
+              );
+              const value = { localVersion, latestVersion, updateAvailable };
+              if (remote.error) value.error = remote.error;
+              settingsLog(
+                `版本检查完成（本地=${localVersion || "未安装"}，远端=${latestVersion || "查询失败"}${remote.error ? "，" + remote.error : ""}${updateAvailable ? "，可更新" : ""}）`,
+              );
+              json(res, { ok: true, value });
+            } catch (e) {
+              json(res, { ok: false, error: e?.message || String(e) });
+            }
+          });
+
+          // POST /api/hana-settings.request-update：经 dshana.bus 消息总线发
+          // update.request 直投宿主（v0.22.1 起替代 POST /child/post 单向 HTTP 反向
+          // 信道——/child/post 已退役）。@dsh-hanako/bridge 提供 dshanaBus 服务：
+          // 握手成功（hello 通过）后 emit 即送达宿主，宿主受理后执行 npm i latest +
+          // 重启 web host，结果写 update-result.json（本插件 update-status 路由读）。
+          // bus 未就绪（无已连接客户端）时返回 { ok:false, error:"消息总线未连接" }。
+          registerRoute("/api/hana-settings.request-update", async (req, res) => {
+            try {
+              await readJsonBody(req);
+              const bus = httpCtx.dshanaBus;
+              if (!bus || typeof bus.emit !== "function") {
+                throw new Error("消息总线未连接（dshanaBus 不可用）");
+              }
+              const st = typeof bus.status === "function" ? bus.status() : null;
+              if (!st || st.connected !== true) {
+                throw new Error("消息总线未连接");
+              }
+              const sent = bus.emit("update.request", {
+                at: new Date().toISOString(),
+                fromVersion: readLocalVersion(),
+              });
+              if (!sent) throw new Error("消息总线未连接");
+              settingsLog("更新请求已经消息总线直投宿主，将自动执行更新");
+              json(res, { ok: true, state: "updating" });
+            } catch (e) {
+              try {
+                settingsLog(`更新请求失败：${e?.message || e}`);
+              } catch {
+                /* 日志失败不阻断 */
+              }
+              json(res, { ok: false, error: e?.message || String(e) });
+            }
+          });
+
+          // POST /api/hana-settings.update-status：读更新结果文件（不存在 → idle；解析失败 → idle）
+          registerRoute("/api/hana-settings.update-status", async (req, res) => {
+            try {
+              await readJsonBody(req);
+              const f = join(cfg.dataDir || "", "update-result.json");
+              if (!existsSync(f)) {
+                json(res, { ok: true, value: { state: "idle" } });
+                return;
+              }
+              let value = null;
+              try {
+                value = JSON.parse(readFileSync(f, "utf8"));
+              } catch (e) {
+                // 解析失败（写入中/损坏）：视为 idle，不阻断
+                settingsLog(`update-result.json 解析失败：${e?.message || e}`);
+                json(res, { ok: true, value: { state: "idle" } });
+                return;
+              }
+              json(res, { ok: true, value });
+            } catch (e) {
+              json(res, { ok: false, error: e?.message || String(e) });
+            }
+          });
+
+          return () => {
+            for (const dispose of disposers) {
+              try {
+                dispose();
+              } catch {
+                /* 清理失败不阻断 */
+              }
+            }
+          };
+        });
     });
   } catch (e) {
     try {

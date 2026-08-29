@@ -20,4 +20,8 @@
       config:
         dshPkgDir: '{{DSH_PKG_DIR}}'
         dataDir: '{{DATA_DIR}}'
-        hostApi: {{DSH_HOST_API}}
+- insert:
+    - id: '@dsh-hanako/bridge'
+      name: '@dsh-hanako/bridge'
+      config:
+        busToken: '{{BUS_TOKEN}}'

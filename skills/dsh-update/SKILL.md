@@ -18,9 +18,9 @@ description: "dsh_update 工具手册（源码 tools/dsh-update.js + tools/dsh-r
 
 ## 行为（源码核实）
 
-**check**：本地版本（运行级验证 verifyDepsSmoke 缓存优先，无则直读 dsh-pkg package.json）+ 远端版本（`spawn npm view @deepseek-ai/dsh version`，官方源失败自动重试 `--registry=https://registry.npmmirror.com`，15s 超时 kill）→ zero-dep semver 比较（major.minor.patch 三段数字逐个比，预发布 `-rc.x` 视为低于同版本正式版）→ `{ localVersion, latestVersion, updateAvailable, error? }`。结果缓存 `g.checkResult`（内存；v0.18.1 起不再写 `<dataDir>/check-result.json` 桥接文件——dsh 设置页「DSH 版本」卡片检查已改 dsh 侧直查，Agent 工具与 DSHana 标签页直接读返回值）。
+**check**：本地版本（运行级验证 verifyDepsSmoke 缓存优先，无则直读 dsh-pkg package.json）+ 远端版本（HTTP 直查 npm registry——fetch `https://registry.npmjs.org/@deepseek-ai/dsh/latest` 的 JSON `version` 字段（pnpm view 语义等价），官方源失败自动重试 npmmirror，15s 超时）→ zero-dep semver 比较（major.minor.patch 三段数字逐个比，预发布 `-rc.x` 视为低于同版本正式版）→ `{ localVersion, latestVersion, updateAvailable, error? }`。结果缓存 `g.checkResult`（内存；不再写 `<dataDir>/check-result.json` 桥接文件——dsh 设置页「DSH 版本」卡片检查已改 dsh 侧直查，Agent 工具与 DSHana 标签页直接读返回值）。
 
-**update**：① 写 `<dataDir>/update-result.json { state:'updating', at }` → ② 停 web host（closeProcess，Windows 文件锁前提：pnpm add 要替换被 web host 占用的 dsh 包文件）→ ③ `installDepsFromPlugin`（pnpm add @deepseek-ai/dsh latest，官方源失败重试 npmmirror）→ ④ 起 web host（ensureWebHost，失败不阻断结果上报，记 error 字段）→ ⑤ 读新版本 → 写 `{ state:'done', version, at }`；任一步失败写 `{ state:'error', error, at }`（截断 ≤1500）→ ⑥ 清 update-request.json（写回 idle 防重复触发）。**并发防护**：更新执行中（`g.updating`）重复调用返回 `{ ok:false, state:'updating' }` 不重复执行；检查（`g.checking`）同理。
+**update**：① 写 `<dataDir>/update-result.json { state:'updating', at }` → ② 停 web host（closeProcess，Windows 文件锁前提：pnpm add 要替换被 web host 占用的 dsh 包文件）→ ③ `installDepsFromPlugin`（pnpm add @deepseek-ai/dsh latest，官方源失败重试 npmmirror）→ ④ 起 web host（ensureWebHost，失败不阻断结果上报，记 error 字段）→ ⑤ 读新版本 → 写 `{ state:'done', version, at }`；任一步失败写 `{ state:'error', error, at }`（截断 ≤1500）。**触发信道**：设置页经 **dshana.bus 消息总线**发 `update.request` 直投（`src/lib/bus.js` 订阅 → 调 `updateDsh` → 完成后总线回投 `update.result { state, version?, error? }`；v0.22.1 起替代 update-request.json 文件桥与 POST /child/post 反向信道，均已退役，无请求文件可清理）。**并发防护**：更新执行中（`g.updating`）重复调用返回 `{ ok:false, state:'updating' }` 不重复执行；检查（`g.checking`）同理。
 
 **异步模式**：`update` 默认异步——立即返回「已后台执行」，经宿主 deferred 通道注册唤醒（taskId `dup_*`），完成后后台消息带回 `{ tool:'dsh_update', action:'update', status:'done', version }`（失败带 error）。
 
