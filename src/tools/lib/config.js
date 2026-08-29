@@ -11,7 +11,13 @@
 // state.js 会让单例状态与只读解析混在一个文件，职责分歧。消费方只有 dsh-run.js
 // （submitTask 提交前补齐 preset/effort/model 与 doExecute 的 cwd/timeout 解析）。
 
-import { existsSync, readFileSync } from "node:fs";
+import {
+  existsSync,
+  readFileSync,
+  writeFileSync,
+  renameSync,
+  mkdirSync,
+} from "node:fs";
 import { join } from "node:path";
 
 // 读 dsh-home/settings.yaml 的 agent-default-model（行级解析，零依赖）——
@@ -115,3 +121,55 @@ export function resolveDefaultCwd(cfg) {
   }
   return String(cfg.defaultCwd || "");
 }
+
+// ---- 会话注册表（agent 会话所有权登记：config.json sessions 字段）----
+// dsh 会话无 owner 概念（任何会话在 dsh 侧一律可读/可续），权限收敛到「agent 只管理
+// 自己创建的会话」需要插件自建注册表：dsh_run session.create 成功后幂等登记
+// config.json 的 sessions[sessionId] = { createdAt, cwd, title }。
+// config.json 可能被宿主设置页管理——本函数读-改-写前重读最新内容，绝不覆盖
+// schemaVersion/global/agents 字段；写入用临时文件 + rename 原子替换（对齐 lifecycle.js
+// ensureConfigJson 的 .tmp + rename 惯例）。任一步失败静默返回 false，不阻断任务提交流程。
+// 返回 true=登记成功（含已存在幂等），false=失败静默（读/写/解析异常）。
+export function registerSession({ dataDir, sessionId, cwd, taskText }) {
+  try {
+    const sid = String(sessionId ?? "").trim();
+    if (!sid || !dataDir) return false;
+    const cf = join(dataDir, "config.json");
+    if (!existsSync(cf)) return false; // 无配置文件（异常态）：不建新文件，交给 ensureConfigJson
+    // 读-改-写前重读最新内容（宿主设置页/其他写入方可能刚改过，绝不覆盖 global/agents）
+    const j = JSON.parse(readFileSync(cf, "utf8"));
+    if (!j || typeof j !== "object") return false;
+    const sessions = j.sessions && typeof j.sessions === "object" && !Array.isArray(j.sessions)
+      ? j.sessions
+      : (j.sessions = {});
+    sessions[sid] = {
+      createdAt: Date.now(),
+      cwd: String(cwd ?? ""),
+      title: String(taskText ?? "").slice(0, 80),
+    };
+    // 临时文件 + rename 原子替换（中断不留半成品）
+    const tmp = join(dataDir, ".config.json.tmp");
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(tmp, JSON.stringify(j, null, 2), "utf8");
+    renameSync(tmp, cf);
+    return true;
+  } catch {
+    return false; // 登记失败静默：不阻断任务提交流程（权限收敛为尽力而为）
+  }
+}
+
+// 读 config.json sessions 注册表（agent 创建的会话所有权登记表）。返回对象 map
+// { sessionId: { createdAt, cwd, title } }；文件缺失/JSON 损坏/结构不符返回 {}（按空表处理）。
+export function readSessionRegistry(dataDir) {
+  try {
+    const cf = join(dataDir, "config.json");
+    if (!existsSync(cf)) return {};
+    const j = JSON.parse(readFileSync(cf, "utf8"));
+    const s = j?.sessions;
+    if (s && typeof s === "object" && !Array.isArray(s)) return s;
+    return {};
+  } catch {
+    return {};
+  }
+}
+

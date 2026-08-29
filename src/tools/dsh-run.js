@@ -26,6 +26,7 @@ import {
   resolveReasoningEffort,
   resolveApprovalTimeoutMs,
   resolveDefaultCwd,
+  registerSession,
 } from "./lib/config.js";
 import {
   registerDeferredWake,
@@ -232,6 +233,18 @@ function submitTask(
     }
     const session = await callUnary(base, "session.create", createPayload);
     const sessionId = session.sessionId;
+
+    // 1.4 会话注册表登记（权限收敛：agent 只管理自己创建的会话）：
+    // dsh 会话无 owner 概念，插件自建 config.json sessions 注册表记录「agent 创建的会话」——
+    // dsh_session list/get 按注册表过滤（UI 手建会话/他人会话不可见不可读）。幂等写入
+    // （已登记直接覆盖同键）、读-改-写前重读最新内容绝不覆盖 global/agents、tmp+rename
+    // 原子替换；失败静默不阻断任务提交流程（权限收敛为尽力而为，见 lib/config.js）。
+    registerSession({
+      dataDir: cfg.dataDir,
+      sessionId,
+      cwd: String(cwd ?? ""),
+      taskText,
+    });
 
     // 1.5 模型选择：仅当工具显式传 provider/model/effort 时才 selectModel（显式覆盖
     // dsh 默认模型）；都不传时不 selectModel，任务直接用 dsh 默认模型
@@ -835,8 +848,8 @@ async function doExecute(input, ctx) {
       : Number(cfg.defaultTimeoutMs || 600000);
 
   // callbackMode 收口固定 minimal（v0.21.3 后续演进）：所有回调只带定位键
-  // { id, status, rpcId, sessionId }（id=sessionId），不生成摘要、不占上下文；
-  // 取会话内容统一走 dsh_session action=get（凭 sessionId 直取 summary）。
+  // { status, rpcId, sessionId }（sessionId 唯一定位键，不再冗余 id 字段），
+  // 不生成摘要、不占上下文；取会话内容统一走 dsh_session action=get（凭 sessionId 直取 summary）。
   const taskCfg = {
     dshPkgDir: cfg.dshPkgDir,
     dataDir: cfg.dataDir,
@@ -900,15 +913,15 @@ async function doExecute(input, ctx) {
 
     promise.then(
       (res) => {
-        // 回调固定 minimal：只带定位键 { id, status, rpcId, sessionId }（id=sessionId，
-        // 与 dsh_session / dsh_run resume 同键），不含 output/outputMeta/summary/usage/stderr
-        // 等大字段、不生成摘要、不占 Agent 上下文；取会话内容统一走 dsh_session
-        // action=get（凭 sessionId 直取 summary），完整输出在卡片与 dsh Web UI 可查。
+        // 回调固定 minimal：只带定位键 { status, rpcId, sessionId }（sessionId 唯一定位键，
+        // 与 dsh_session / dsh_run resume 同键；不再冗余 id 字段——id 与 sessionId 同值重复），
+        // 不含 output/outputMeta/summary/usage/stderr 等大字段、不生成摘要、不占 Agent 上下文；
+        // 取会话内容统一走 dsh_session action=get（凭 sessionId 直取 summary），完整输出在
+        // 卡片与 dsh Web UI 可查。
         resolveDeferredWake({
           bus,
           taskId: deferredTaskId,
           result: {
-            id: res.sessionId,
             status: "ok",
             rpcId: taskRpcId,
             sessionId: res.sessionId,
@@ -940,7 +953,7 @@ async function doExecute(input, ctx) {
       content: [
         {
           type: "text",
-          text: `任务已提交给 DSH（rpcId: ${taskRpcId}），在后台执行中。进度与输出见上方卡片；完成后后台消息仅带回任务状态与定位键（id/rpcId/sessionId），取内容用 dsh_session get。`,
+          text: `任务已提交给 DSH（rpcId: ${taskRpcId}），在后台执行中。进度与输出见上方卡片；完成后后台消息仅带回任务状态与定位键（rpcId/sessionId），取内容用 dsh_session get。`,
         },
       ],
       details: {
@@ -959,12 +972,12 @@ async function doExecute(input, ctx) {
     content: [{ type: "text", text }],
     details: {
       dsh: {
-        id: res.sessionId, // 定位键 = sessionId（与异步回调 result.id 同键，凭 id 直接取会话内容/续接）
+        // 定位键统一为 sessionId（不再冗余 id 字段——id 与 sessionId 同值重复，收敛唯一定位键）
+        sessionId: res.sessionId,
         stopReason: res.stopReason,
         usage: res.usage,
         cwd,
         rpcId: res.rpcId,
-        sessionId: res.sessionId,
         wait: true,
       },
       card: {
