@@ -140,6 +140,13 @@ async function dispatchInProcess(webServer, method, path, headers, bodyBuf) {
       for (const k of Object.keys(req.headers)) {
         if (k.toLowerCase() === 'origin') delete req.headers[k]
       }
+      // 补 Host：dsh 的 API 可信校验（dsh-client-connection isTrustedApiRequest）要求
+      // Host header 存在且为 loopback/trusted（缺失即 403 forbidden）——隧道转发的
+      // 请求无 Host（浏览器/SW 不携带），补 webServer 实际监听地址。
+      if (!Object.keys(req.headers).some((k) => k.toLowerCase() === 'host')) {
+        const hostPort = (webServer && webServer.port) || 3080
+        req.headers.host = '127.0.0.1:' + hostPort
+      }
       req.socket = sock
       // body 喂入（IncomingMessage 是 Readable）
       if (bodyBuf && bodyBuf.length > 0) req.push(bodyBuf)

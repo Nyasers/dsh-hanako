@@ -228,6 +228,22 @@ function rewriteHtmlUrls(html) {
   );
 }
 
+// ---- CSS 改写（url() 绝对路径 → scope 相对）----
+// dsh 的 CSS（/web/assets/*.css 经隧道返回）内容里可能引用绝对路径资源
+// （url(/assets/font.woff)）——浏览器解析到宿主根（脱离 scope）会 404。
+// 对 text/css 响应做 url() 改写，与 HTML 改写并列。相对 url（./ 无斜杠开头）
+// 基于 CSS 自身 URL（/web/assets/...）解析，天然落入 scope，无需改写。
+function rewriteCssUrls(css) {
+  if (typeof css !== "string") return css;
+  return css.replace(
+    /url\((["']?)\/(?!\/)([^"')]+)\1\)/g,
+    function (all, quote, path) {
+      if (path.indexOf("api/plugins/dsh-hanako/") === 0) return all;
+      return "url(" + quote + CHANNEL_PREFIX + "/" + path + quote + ")";
+    },
+  );
+}
+
 // ---- SW 生命周期 ----
 self.addEventListener("install", function (event) {
   // 立即激活（不等待旧 SW 释放页面控制）
@@ -285,22 +301,24 @@ self.addEventListener("fetch", function (event) {
       }
       var respHeaders = new Headers();
       var isHtml = false;
+      var isCss = false;
       if (resp.headers) {
         Object.keys(resp.headers).forEach(function (k) {
           var v = resp.headers[k];
           if (/^content-length$/i.test(k)) return; // 流式长度由 Response 自算
           if (/^content-type$/i.test(k) && String(v).indexOf("text/html") !== -1) isHtml = true;
+          if (/^content-type$/i.test(k) && String(v).indexOf("text/css") !== -1) isCss = true;
           respHeaders.set(k, v);
         });
       }
-      if (!respHeaders.has("content-type") && isHtml) {
-        respHeaders.set("content-type", "text/html; charset=utf-8");
+      if (!respHeaders.has("content-type") && (isHtml || isCss)) {
+        respHeaders.set("content-type", (isHtml ? "text/html" : "text/css") + "; charset=utf-8");
       }
       var body = resp.body;
-      // HTML 改写（小页面直接缓冲；非 HTML 直接流式）
-      if (isHtml && body && body.byteLength && body.byteLength < 2 * 1024 * 1024) {
+      // HTML/CSS 改写（小页面直接缓冲；非文本直接流式）
+      if ((isHtml || isCss) && body && body.byteLength && body.byteLength < 2 * 1024 * 1024) {
         var text = new TextDecoder().decode(body);
-        var rewritten = rewriteHtmlUrls(text);
+        var rewritten = isHtml ? rewriteHtmlUrls(text) : rewriteCssUrls(text);
         return new Response(rewritten, { status: resp.status, headers: respHeaders });
       }
       var stream = new ReadableStream({

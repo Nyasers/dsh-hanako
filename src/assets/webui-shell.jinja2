@@ -263,14 +263,15 @@
         .catch(function () { ack(false); });
     });
     // ---- 统一通道（bridge）模式：SW 拦截 + 通道路径 iframe ----
-    // channelMode 由服务端渲染的 channelOk（bridge WS #2 就绪）初始化，随 health
-    // 轮询结果刷新（d.channelOk）。通道模式下 iframe 走宿主通道路径
-    // （/api/plugins/dsh-hanako/web/）：壳页面先注册 SW（scope 同通道）+ await ready
-    // + postMessage bridge-config（v7 起 HTTP 隧道：mode/tunnelUrl/surfaceSession）再
-    // 设 iframe src——首载导航本身被 SW 拦截经 HTTP 隧道转发到 dsh。宿主 0.769.0
-    // WS #1 端点不可用（rft 丢 socket）已由 HTTP 隧道替代；WS #2 未就绪时 channelOk
-    // 恒 false，回退直连 127.0.0.1:<port>（旧行为）。
-    var channelMode = {{= it.channelOk === true ? "true" : "false" }};
+    // 通道模式判据：远程访问（location.origin 非本机）且隧道就绪（WS #2 连接，
+    // channelOk 随 health 轮询刷新）。本地访问保持直连 127.0.0.1:<port>——SW
+    // scope=/web/ 收窄，直连 iframe 不在 scope 内，不经 SW/代理（WS 实时事件正常）。
+    function isRemoteOrigin() {
+      var h = location.hostname;
+      return !(h === "127.0.0.1" || h === "localhost" || h === "::1" || h === "");
+    }
+    var isRemote = isRemoteOrigin();
+    var channelMode = isRemote && {{= it.channelOk === true ? "true" : "false" }};
     var channelUrl = {{= JSON.stringify(it.channelUrl) }};
     var tunnelPath = {{= JSON.stringify(it.tunnelPath) }};
     function surfaceSessionToken() {
@@ -284,59 +285,24 @@
       return params.get("token") || "";
     }
     function setupChannel() {
-      // 壳页面（/webui）为 /web/ 注册 SW：scope 约束只与脚本路径相关（插件根
-      // sw.js 的 max scope = /api/plugins/<id>/，web/ 子路径合法），注册页面 /webui
-      // 与脚本同源即可，与 scope 无关。scope=/web/ 收窄：壳页面 index.html（/webui）
-      // 不在 scope 内，不会被 SW 劫持（about:blank 防护）。注册成功 → postMessage
-      // bridge-config → iframe src=/web/（SW 接管导航 → 隧道转发 dsh）；失败/超时
-      // （20s）→ 直连 127.0.0.1:<port>（本地体验不退化）。
+      // 注册 SW（scope=/web/，fire-and-forget，不依赖 navigator.serviceWorker.ready——
+      // SW 拦截 scope 内导航不需要页面被控制/ready；bridge-config 由 SW 拦截时配置
+      // 缺失主动索取（双向握手），壳页面监听 bridge-config-request 重发）。
       var base = "http://127.0.0.1:{{= it.port }}/";
       var swUrl = api + "/sw.js" + (pageToken() ? "?token=" + encodeURIComponent(pageToken()) : "");
-      if (!("serviceWorker" in navigator)) {
-        // 无 SW 支持：回退直连（极端旧浏览器）
-        channelMode = false;
-        frame.src = base + "?dshReload=" + Date.now();
-        return Promise.resolve(false);
+      if ("serviceWorker" in navigator) {
+        navigator.serviceWorker.register(swUrl, { scope: channelUrl }).catch(function (err) {
+          console.warn("[dsh-hanako] SW 注册失败:", err);
+        });
       }
-      var setupChain = navigator.serviceWorker.register(swUrl, { scope: channelUrl })
-        .then(function () { return navigator.serviceWorker.ready; })
-        .then(function (reg) {
-          // HTTP 隧道配置：tunnelUrl 在壳页面拼一次（origin + tunnelPath，SW 零拼接），
-          // surfaceSession 取 location.search 的 pluginSurfaceSession（与壳页面
-          // surfaceHeaders() 同款宿主鉴权 header）。
-          var tunnelUrl = window.location.origin + tunnelPath;
-          var surfaceSession = surfaceSessionToken();
-          if (reg && reg.active) {
-            reg.active.postMessage({
-              type: "bridge-config",
-              mode: "http-tunnel",
-              tunnelUrl: tunnelUrl,
-              surfaceSession: surfaceSession,
-            });
-          }
-          frame.src = channelUrl + "?dshReload=" + Date.now();
-          return true;
-        });
-      // 超时兜底：SW 首次注册需下载+编译+激活，Electron 环境下可能超过 10s（此前
-      // 10s 误伤慢激活，register 本身正常）。放宽 20s：仅真正挂起才回退直连。
-      var setupTimer = null;
-      var setupTimeout = new Promise(function (resolve) {
-        setupTimer = setTimeout(function () {
-          console.warn("[dsh-hanako] SW 通道挂起（20s），回退直连");
-          channelMode = false;
-          frame.src = base + "?dshReload=" + Date.now();
-          resolve(false);
-        }, 20000);
-      });
-      return Promise.race([setupChain, setupTimeout])
-        .catch(function (err) {
-          // SW 注册/激活失败：回退直连（先清超时定时器，避免已 settle 后误报挂起）
-          if (setupTimer) { clearTimeout(setupTimer); setupTimer = null; }
-          console.warn("[dsh-hanako] SW 注册失败，回退直连:", err);
-          channelMode = false;
-          frame.src = base + "?dshReload=" + Date.now();
-          return false;
-        });
+      // 分流：本地直连 3080（不经 SW/代理，WS 正常）；远程走 /web/（SW 接管导航 →
+      // 隧道转发 dsh）。SW 未激活时远程导航落宿主 /web 兜底路由（引导/重试页）。
+      if (isRemote) {
+        frame.src = channelUrl + "?dshReload=" + Date.now();
+      } else {
+        frame.src = base + "?dshReload=" + Date.now();
+      }
+      return Promise.resolve(true);
     }
     function attach() {
       // 就绪：停当前轮询定时器，按需挂载/刷新 iframe，切回主视图
@@ -670,7 +636,7 @@
       fetch(api + "/webui/health", { headers: surfaceHeaders(), signal: AbortSignal.timeout(3000) })
         .then(function (r) { return r.json(); })
         .then(function (d) {
-          if (d && typeof d.channelOk === "boolean") channelMode = d.channelOk;
+          if (d && typeof d.channelOk === "boolean") channelMode = isRemote && d.channelOk;
           if (d && d.ok) { attach(); return; }
           if (d && d.diagnostics) renderDiagList(d.diagnostics);
         })
@@ -735,7 +701,7 @@
       fetch(api + "/webui/health", { headers: surfaceHeaders(), signal: AbortSignal.timeout(3000) })
         .then(function (r) { return r.json(); })
         .then(function (d) {
-          if (d && typeof d.channelOk === "boolean") channelMode = d.channelOk;
+          if (d && typeof d.channelOk === "boolean") channelMode = isRemote && d.channelOk;
           if (d && d.ok) {
             // health 就绪但更新/安装进行中（web host 尚未停机）：保持诊断页显示
             // 进度，避免刚触发更新/安装时切回 iframe 又立刻退回的跳变

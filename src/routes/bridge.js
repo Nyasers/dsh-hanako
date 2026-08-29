@@ -161,4 +161,23 @@ export default function registerBridgeRoutes(app, ctx) {
     c.header("Cache-Control", "no-cache");
     return c.body(swSource);
   });
+
+  // /web 通道兜底路由：远程访问时 iframe 指向 /web/（SW scope 内，正常由 SW 拦截
+  // 转发）；SW 未激活/未注册时导航落到宿主本路由，返回引导重试页（不裸 404）。
+  // 页面提示通道未就绪并自动重试（SW 激活后重试即被拦截）。
+  app.get("/web", (c) => {
+    c.header("Content-Type", "text/html; charset=utf-8");
+    c.header("Cache-Control", "no-store");
+    return c.body(
+      "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><title>DSHana 通道</title>" +
+        "<style>html,body{margin:0;height:100%;display:flex;align-items:center;justify-content:center;" +
+        "font:13px/1.6 system-ui,sans-serif;color:#888;background:transparent}.box{text-align:center}" +
+        ".box a{color:#4a6b4a}</style></head><body><div class=\"box\">" +
+        "<p>DSHana 远程通道未就绪（Service Worker 未接管）</p>" +
+        "<p><a href=\"/api/plugins/dsh-hanako/web/?dshRetry=" + Date.now() + "\">重试</a> · " +
+        "<a href=\"/api/plugins/dsh-hanako/webui\">返回标签页</a></p>" +
+        "<script>setTimeout(function(){location.reload()},3000)</script>" +
+        "</div></body></html>",
+    );
+  });
 }
