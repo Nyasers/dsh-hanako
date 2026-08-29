@@ -63,10 +63,10 @@ web host 未就绪时，DSHana 标签页不再只显示「正在重试…」—�
 
 | 检查项 | 判定 | 操作 |
 | --- | --- | --- |
-| **t1 dsh 依赖** | 存在性（cliBin 文件存在）+ **运行级验证**（`node <cliBin> --version` 沿 import 图加载 cordis 模块树，能跑 = 依赖完整，抓 `ERR_MODULE_NOT_FOUND` 类假就绪） | 卡片按钮：缺失「安装依赖」/ 验证失败「重新安装依赖」/ 常驻「检测依赖」/ 安装中「安装中…」禁用。安装过程显示 pnpm add **实时进度**（stdout/stderr 流式 → installLog 尾部 + 更新时间，3s 轮询刷新） |
+| **t1 dsh 依赖** | 存在性（cliBin 文件存在）+ **运行级验证**（`node <cliBin> --version` 沿 import 图加载 cordis 模块树，能跑 = 依赖完整，抓 `ERR_MODULE_NOT_FOUND` 类假就绪） | 卡片按钮：缺失「安装依赖」/ 验证失败「重新安装依赖」/ 常驻「检测依赖」/ 安装中「安装中…」禁用。安装过程显示 pnpm add **实时进度**（--reporter=ndjson 结构化进度事件流 → 解析为可读进度行 → installLog 尾部 + 更新时间，3s 轮询刷新） |
 | **t2 DSH 进程** | 单例 web 状态：未启动 / 启动中 / 已就绪但探测未中 / 已退出（webLastExit 持久记录：code/signal/时间/stderr）/ 启动失败（webLastError）；诊断区显示**「本次会话日志」路径**（`<dataDir>/logs/<YYYYMMDD-HHmmss-SSS>.log` 时间戳会话文件，v0.10.8+） | 卡片按钮「手动启动 web host」；**t1 未通过时按钮禁用**（msg「依赖未就绪，请先安装/重新安装依赖」） |
 
-**自愈闭环**：t1 缺失 → deps 卡片「安装依赖」自动完成（写最小 package.json + 复制 pnpm-workspace.yaml（allowBuilds 白名单）到数据目录 `dsh-pkg/` → 创建指向宿主 electron node 的代理脚本 `pkgDir/node.cmd` → 清旧 npm 残留（package-lock.json / pnpm-lock.yaml / 扁平 node_modules）→ pnpm add `@deepseek-ai/dsh --loglevel=http` → 校验 → 自动运行级重验，官方源失败自动重试 npmmirror）→ t1 转 ✓ → t2 按钮解锁 → 「手动启动 web host」拉起进程 → 轮询就绪切 iframe。运行级检测「进标签页自动一次 + 手动「检测依赖」按钮」，不再随 3s 轮询重复触发。
+**自愈闭环**：t1 缺失 → deps 卡片「安装依赖」自动完成（写最小 package.json + 复制 pnpm-workspace.yaml（allowBuilds 白名单）到数据目录 `dsh-pkg/` → 创建指向宿主 electron node 的代理脚本 `pkgDir/node.cmd` → 清旧 npm 残留（package-lock.json / pnpm-lock.yaml / 扁平 node_modules）→ pnpm add `@deepseek-ai/dsh --reporter=ndjson` → 校验 → 自动运行级重验，官方源失败自动重试 npmmirror）→ t1 转 ✓ → t2 按钮解锁 → 「手动启动 web host」拉起进程 → 轮询就绪切 iframe。运行级检测「进标签页自动一次 + 手动「检测依赖」按钮」，不再随 3s 轮询重复触发。
 
 **任务持续**：pnpm add 与 web host 都是宿主进程 spawn 的子进程——离开标签页任务继续，返回后重新渲染诊断仍可见进度（单例内存态；宿主重启则中断，需重装依赖）。
 
