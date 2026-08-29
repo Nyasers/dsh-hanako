@@ -24,9 +24,6 @@
 //      <dataDir>/update-request.json，宿主 5s 轮询感知后执行完整更新（停 web host →
 //      pnpm add @deepseek-ai/dsh latest → 起 web host），结果写
 //      <dataDir>/update-result.json，本插件 update-status 路由读它供前端轮询。
-//      （v0.21 起 update-request.json 文件桥接退役：request-update 改经 bridge.emit
-//      ("update.request") → WS #2 event 帧 → 宿主 updateDsh；update-result.json 保留
-//      写/读，宿主完成时另经 bridge 推 update.result 事件帧供前端可选收推送。）
 //
 // 机制（v0.9.5 正规化升级沿用）：分页为**原生渲染**——不再用 tapIndex DOM 注入，而是按
 // dsh client 插件规范声明前端 client 模块（package.json dsh.client 字段 + exports["./client"]
@@ -38,7 +35,7 @@
 //   POST /api/hana-settings.read            → agentDefaultModel.currentSelection()
 //   POST /api/hana-settings.save            → agentDefaultModel.saveSelection(...)
 //   POST /api/hana-settings.check-version   → 本地版本直读 + 远端版本 dsh 侧 HTTP 直查（npm registry）
-//   POST /api/hana-settings.request-update  → bridge.emit("update.request")（宿主经 WS #2 事件触发更新）
+//   POST /api/hana-settings.request-update  → 写 <dataDir>/update-request.json（宿主轮询触发更新）
 //   POST /api/hana-settings.update-status   → 读 <dataDir>/update-result.json（更新进度/结果）
 // 路由经 webServer.register（kind: exact）注册——webserver 匹配 exact 优先于 apiproxy
 // 的 /api 前缀，冲突只会发生在同 (kind, path) 重复注册（插件重载未清理场景），此时
@@ -60,7 +57,7 @@
 export const name = "@dsh-hanako/settings";
 export const inject = ["webServer", "agentDefaultModel", "hanaLogger"];
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 // ---- 读请求 body（JSON）----
@@ -298,35 +295,27 @@ export function apply(ctx, config) {
           }
         });
 
-        // POST /api/hana-settings.request-update：经 bridge 推更新请求事件
-        // （v0.21 起 update-request.json 文件桥接退役：bridge.emit("update.request",
-        // { fromVersion }) → WS #2 event 帧 → 宿主 bridge 事件分发 → updateDsh，
-        // 结果写 update-result.json 供 update-status 轮询 + 经 bridge 推 update.result）
+        // POST /api/hana-settings.request-update：写更新请求文件（宿主 5s 轮询到后自动
+        // npm i latest + 重启 web host，结果写 update-result.json）
         registerRoute("/api/hana-settings.request-update", async (req, res) => {
           try {
             await readJsonBody(req);
-            // bridge 服务惰性获取（不声明进 inject 依赖，settings 初始化不等 bridge
-            // 就绪；未注入时 get 抛错/返回空，由下方 guard 与 catch 兜底为 ok:false）
-            let bridge = null;
-            try {
-              bridge = httpCtx.get ? httpCtx.get("bridge") : httpCtx.bridge;
-            } catch {
-              /* 服务未注入 */
-            }
-            if (!bridge || typeof bridge.emit !== "function") {
-              throw new Error("bridge 服务不可用（@dsh-hanako/bridge 未加载？）");
-            }
-            const sent = bridge.emit("update.request", {
-              fromVersion: readLocalVersion(),
-              at: new Date().toISOString(),
-            });
-            if (!sent) {
-              // 投递失败：回 ok:false（前端按既有失败分支处理，不进入 update-status 轮询）
-              settingsLog("更新请求经 bridge 推送未送达（宿主未连接，更新将不执行）");
-              json(res, { ok: false, error: "更新请求发送失败（bridge 未连接）" });
-              return;
-            }
-            settingsLog("更新请求已经 bridge 推送（update.request，宿主将执行更新）");
+            const dataDir = cfg.dataDir;
+            if (!dataDir)
+              throw new Error("缺少 dataDir 配置（patch config 未渲染？）");
+            mkdirSync(dataDir, { recursive: true });
+            writeFileSync(
+              join(dataDir, "update-request.json"),
+              JSON.stringify({
+                state: "requested",
+                at: new Date().toISOString(),
+                fromVersion: readLocalVersion(),
+              }),
+              "utf8",
+            );
+            settingsLog(
+              "更新请求已写入 update-request.json（宿主轮询将自动执行更新）",
+            );
             json(res, { ok: true });
           } catch (e) {
             try {
