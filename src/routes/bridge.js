@@ -162,22 +162,80 @@ export default function registerBridgeRoutes(app, ctx) {
     return c.body(swSource);
   });
 
-  // /web 通道兜底路由：远程访问时 iframe 指向 /web/（SW scope 内，正常由 SW 拦截
-  // 转发）；SW 未激活/未注册时导航落到宿主本路由，返回引导重试页（不裸 404）。
-  // 页面提示通道未就绪并自动重试（SW 激活后重试即被拦截）。
-  app.get("/web", (c) => {
-    c.header("Content-Type", "text/html; charset=utf-8");
-    c.header("Cache-Control", "no-store");
-    return c.body(
-      "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><title>DSHana 通道</title>" +
-        "<style>html,body{margin:0;height:100%;display:flex;align-items:center;justify-content:center;" +
-        "font:13px/1.6 system-ui,sans-serif;color:#888;background:transparent}.box{text-align:center}" +
-        ".box a{color:#4a6b4a}</style></head><body><div class=\"box\">" +
-        "<p>DSHana 远程通道未就绪（Service Worker 未接管）</p>" +
-        "<p><a href=\"/api/plugins/dsh-hanako/web/?dshRetry=" + Date.now() + "\">重试</a> · " +
-        "<a href=\"/api/plugins/dsh-hanako/webui\">返回标签页</a></p>" +
-        "<script>setTimeout(function(){location.reload()},3000)</script>" +
-        "</div></body></html>",
+  // /web 通道代理端点：远程访问时 iframe 指向 /web（scope 外，无尾斜杠），由宿主
+  // 直接提供 dsh 页面——index 不经 SW（SW 激活与否不影响入口，杜绝 about:blank/404）。
+  // 逻辑：fetch dsh web host（127.0.0.1:<port>）对应路径 → HTML/CSS 绝对路径改写
+  // （/assets → /api/plugins/dsh-hanako/web/assets）→ 回传。
+  // 端口与 webui.js 同源（manifest 默认 + 用户配置合并的 ctx.config；非对象回退 3080）
+  const dshCfg = ctx && typeof ctx.config === "object" && ctx.config ? ctx.config : {};
+  const dshPort = () => Number(dshCfg.webPort) || 3080;
+  // HTML 改写（绝对路径 → scope 相对，与 sw.js rewriteHtmlUrls 同逻辑）
+  function rewriteHtmlUrls(html) {
+    return String(html).replace(
+      /([ \t\r\n](?:href|src)[ \t\r\n]*=[ \t\r\n]*)(["'])\/(?!\/)([^"']*)\2/g,
+      (all, prefix, quote, path) => {
+        if (path.indexOf("api/plugins/dsh-hanako/") === 0) return all;
+        return prefix + quote + "/api/plugins/dsh-hanako/web/" + path + quote;
+      },
     );
+  }
+  // CSS 改写（url() 绝对路径 → scope 相对）
+  function rewriteCssUrls(css) {
+    return String(css).replace(
+      /url\((["']?)\/(?!\/)([^"')]+)\1\)/g,
+      (all, quote, path) => {
+        if (path.indexOf("api/plugins/dsh-hanako/") === 0) return all;
+        return "url(" + quote + "/api/plugins/dsh-hanako/web/" + path + quote + ")";
+      },
+    );
+  }
+  // /web 与 /web/* 统一代理（GET/POST/HEAD；HTML/CSS 改写，其余透传）
+  app.all("/web*", async (c) => {
+    const url = new URL(c.req.url, "http://dsh.internal");
+    let path = url.pathname;
+    if (path === "/web" || path === "/web/") path = "/";
+    else if (path.startsWith("/web/")) path = path.slice(4);
+    else return c.text("not found", 404);
+    const method = c.req.method || "GET";
+    const port = dshPort();
+    try {
+      const headers = {};
+      // 转发关键头（Host 必须为 dsh loopback——isTrustedApiRequest 可信校验）；
+      // 剥离浏览器跨站标记（Origin/Referer/sec-fetch-*，进程内转发无跨站概念）
+      for (const [k, v] of Object.entries(c.req.headers || {})) {
+        const lk = k.toLowerCase();
+        if (/^(host|origin|referer|sec-fetch-|connection|upgrade|accept-encoding)$/i.test(lk)) continue;
+        if (typeof v === "string") headers[k] = v;
+      }
+      headers["host"] = "127.0.0.1:" + port;
+      const body = method !== "GET" && method !== "HEAD" ? await c.req.arrayBuffer() : undefined;
+      const upstream = await fetch("http://127.0.0.1:" + port + path + url.search, {
+        method,
+        headers,
+        body,
+        redirect: "manual",
+      });
+      const ct = String(upstream.headers.get("content-type") || "");
+      const buf = Buffer.from(await upstream.arrayBuffer());
+      let out = buf;
+      if (buf.length < 2 * 1024 * 1024) {
+        if (ct.indexOf("text/html") !== -1) {
+          out = Buffer.from(rewriteHtmlUrls(buf.toString("utf8")), "utf8");
+        } else if (ct.indexOf("text/css") !== -1) {
+          out = Buffer.from(rewriteCssUrls(buf.toString("utf8")), "utf8");
+        }
+      }
+      const outHeaders = {};
+      for (const [k, v] of upstream.headers.entries()) {
+        if (/^(content-length|content-encoding|transfer-encoding|connection|upgrade)$/i.test(k)) continue;
+        outHeaders[k] = v;
+      }
+      c.header("Content-Type", ct || "application/octet-stream");
+      c.header("Cache-Control", "no-store");
+      c.status(upstream.status);
+      return c.body(out);
+    } catch (e) {
+      return c.json({ ok: false, error: "代理 dsh 失败：" + String(e?.message || e) }, 502);
+    }
   });
 }

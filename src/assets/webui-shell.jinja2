@@ -285,20 +285,12 @@
       return params.get("token") || "";
     }
     function setupChannel() {
-      // 注册 SW（scope=/web/，fire-and-forget，不依赖 navigator.serviceWorker.ready——
-      // SW 拦截 scope 内导航不需要页面被控制/ready；bridge-config 由 SW 拦截时配置
-      // 缺失主动索取（双向握手），壳页面监听 bridge-config-request 重发）。
+      // 分流：本地直连 127.0.0.1:<port>（不经 /web、不经 SW——scope=/web/ 收窄，
+      // WS 实时事件正常）；远程走 /web（宿主代理直接提供 dsh 页面——index 不经 SW，
+      // SW 激活与否不影响入口，杜绝 about:blank/404）。
       var base = "http://127.0.0.1:{{= it.port }}/";
-      var swUrl = api + "/sw.js" + (pageToken() ? "?token=" + encodeURIComponent(pageToken()) : "");
-      if ("serviceWorker" in navigator) {
-        navigator.serviceWorker.register(swUrl, { scope: channelUrl }).catch(function (err) {
-          console.warn("[dsh-hanako] SW 注册失败:", err);
-        });
-      }
-      // 分流：本地直连 3080（不经 SW/代理，WS 正常）；远程走 /web/（SW 接管导航 →
-      // 隧道转发 dsh）。SW 未激活时远程导航落宿主 /web 兜底路由（引导/重试页）。
       if (isRemote) {
-        frame.src = channelUrl + "?dshReload=" + Date.now();
+        frame.src = api + "/web" + "?dshReload=" + Date.now();
       } else {
         frame.src = base + "?dshReload=" + Date.now();
       }
