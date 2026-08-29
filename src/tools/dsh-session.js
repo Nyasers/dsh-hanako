@@ -226,15 +226,13 @@ function truncateSummary(text) {
 async function doGet(input, ctx, g, dataDir, projSessions) {
   const sessionId = String(input.sessionId ?? "").trim();
   if (!sessionId) throw new Error("get 模式必须传 sessionId");
-  // 校验 sessionId 格式（session-<uuid>）：sessionId 会拼入 locateSessionDir 的文件路径，
-  // 非法值（路径分隔符 / 穿越段）可导致读取 sessions/ 之外的外部 session.jsonl.zstd——
-  // 只允许字母数字与连字符（uuid 字符集），拒绝空/路径类/超长值。
-  if (
-    !/^session-[0-9a-zA-Z-]+$/.test(sessionId) ||
-    sessionId.length > 64
-  ) {
+  // 校验 sessionId 格式（session-<UUID>，与 dsh session 创建方生成格式一致）：sessionId
+  // 会拼入 locateSessionDir 的文件路径，非法值（路径分隔符 / 穿越段 / 畸形 id）可导致
+  // 读取 sessions/ 之外的外部 session.jsonl.zstd——精确匹配 UUID 结构（8-4-4-4-12 hex），
+  // 同时拒绝 session-abc / session--- 等畸形值；正则即锁死格式与长度，无需额外长度检查。
+  if (!/^session-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId)) {
     throw new Error(
-      `sessionId 格式非法（应为 session-<uuid>）：${sessionId}`,
+      `sessionId 格式非法（应为 session-<UUID>）：${sessionId}`,
     );
   }
 
