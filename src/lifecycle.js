@@ -936,9 +936,10 @@ export async function updateDsh(cfg) {
     log(`更新失败：${err}`);
     return { ok: false, state: "error", error: err };
   } finally {
-    // ⑥ 清 update-request.json（写回 idle，防重复触发）
+    // ⑥ 清 update-request.json（删文件，无请求态 = 文件不存在，与轮询语义一致；
+    // 防重复触发由 g.updateWatchLastAt 内存去重承担）
     try {
-      writeFileSync(requestFile, JSON.stringify({ state: "idle" }), "utf8");
+      rmSync(requestFile, { force: true });
     } catch {
       /* 清理失败不阻断 */
     }
@@ -973,20 +974,10 @@ function ensureUpdateWatch(cfg) {
     return;
   }
   const path = join(dataDir, "update-request.json");
-  // 轮询前确保文件存在（占位 idle，避免「文件不存在」读失败）
-  try {
-    if (!existsSync(path)) {
-      mkdirSync(dataDir, { recursive: true });
-      writeFileSync(path, JSON.stringify({ state: "idle" }), "utf8");
-    }
-  } catch (e) {
-    console.warn(
-      `[dsh-run] update-request.json 占位写入失败（${e?.message || e}），DSH 更新桥接轮询未建立`,
-    );
-    return;
-  }
   // 5s 轮询：watch 事件不可靠（宿主 resources.watch 失效/未注入）时仍能感知
-  // 设置页更新请求。state === 'requested' 且 at 与上次处理的不同（单例
+  // 设置页更新请求。文件不存在即无请求（不占位写入——idle 文件会让数据目录
+  // 每次启动都残留 update-request.json；轮询本来就有 !existsSync 保护）。
+  // state === 'requested' 且 at 与上次处理的不同（单例
   // g.updateWatchLastAt，ISO 字符串比较）才触发——同请求只处理一次。
   const timer = setInterval(() => {
     let req = null;
