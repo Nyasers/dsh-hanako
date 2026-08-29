@@ -105,6 +105,7 @@ walk(join(ROOT, "dist"));
 for (const [relPath, name] of Object.entries({
   "routes/webui.js": "webuiRoute",
   "routes/card.js": "cardRoute",
+  "routes/child.js": "childRoute",
 })) {
   const p = join(ROOT, "dist", relPath);
   const shell =

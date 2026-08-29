@@ -23,7 +23,7 @@
 //   ② DSH 版本卡片：@deepseek-ai/dsh 版本检查与更新（v0.18.1 起检查改 **dsh 侧直查**——
 //      后端 HTTP 直查 npm registry（fetch https://registry.npmjs.org/@deepseek-ai/dsh/latest
 //      的 JSON version 字段，pnpm view 语义等价；官方源失败重试 npmmirror，15s 超时，
-//      v0.18.2 起不再 spawn pnpm），不再经宿主桥接；更新仍写 update-request.json 由宿主
+//      v0.18.2 起不再 spawn pnpm），不再经宿主桥接；更新经反向信道直投宿主
 //      5s 轮询执行）——挂载时自动调一次 POST /api/hana-settings.check-version
 //      （本地版本后端直读 dsh-pkg package.json 零延迟；远端版本后端 HTTP 直查，慢时
 //      返回 pending 由前端轮询兜底），显示本地/最新版本与状态；「检查更新」手动刷新；

@@ -12,9 +12,7 @@
 //   关闭回收         closeProcess（先清 provider/update watch，再 kill 子进程）
 //   连接失败自检     collectWebDiagnostics + buildDepsDiagCheck + buildProcessDiagCheck + pickProcessFix
 //   更新 DSH         updateDsh（停 host → 装依赖 → 起 host → 读版本，写 update-result.json）
-//   watch + 轮询     ensureProviderPushWatch（provider 热跟随 watch）/ ensureUpdateWatch
-//                    （DSH 更新请求 5s 轮询，v0.18.1 起替代 resources.watch 桥接）/
-//                    onBridgeRequestChanged
+//   watch           ensureProviderPushWatch（provider 热跟随 watch）
 //   provider 路由     detectHostProviderPaths / readJsonFile / mapModel / readHostConfig / buildProviderRoutes
 //                    → pushProviderRefresh（HTTP push 到 dsh web host）
 //   config 引导       ensureConfigJson（自动生成 config.json，幂等）
@@ -45,6 +43,7 @@ import {
   unlinkSync,
   renameSync,
   appendFileSync,
+  rmSync,
   readdirSync,
 } from "node:fs";
 import { join, dirname } from "node:path";
@@ -564,21 +563,56 @@ export async function ensureWebHost(cfg) {
   // 只剩 dshPkgDir（子进程解析 pi-ai 依赖用）。DSH_PKG_DIR = dsh 包安装目录
   // （provider/settings 段）；LOG_PATH = 本次会话日志文件路径（logger 段，四个内嵌
   // 插件经统一日志服务写入同一文件）；DATA_DIR = settings 段「检查与更新 DSH」链路
-  // （更新请求/结果文件写入数据目录）。v0.18.2 起远端版本查询改 HTTP 直查 npm registry
-  // （settings 侧与 lib/check.js 同款，pnpm view 语义等价），NPM_CLI_PATH / ELECTRON_NODE
-  // 占位符已从模板删除（settings 不再 spawn pnpm，渲染为同步函数，无异步依赖）。
+  // （更新结果文件写入数据目录）；DSH_HOST_API = settings 段子插件反向信道凭据
+  // （宿主 server-info.json 的 loopbackToken + 端口，经 /child/post 直投触发更新，
+  // 替代 update-request.json 文件桥——文件桥已退役）。v0.18.2 起远端版本查询改 HTTP
+  // 直查 npm registry（settings 侧与 lib/check.js 同款，pnpm view 语义等价），
+  // NPM_CLI_PATH / ELECTRON_NODE 占位符已从模板删除（settings 不再 spawn pnpm，
+  // 渲染为同步函数，无异步依赖）。
   const renderPatchTpl = () => {
     const gen = join(cfg.dataDir, "dsh-hanako.patch.generated.yml");
+    // 子插件反向信道凭据：宿主 server-info.json（<home>/.hanako/）的 loopbackToken +
+    // 端口——宿主启动时官方落盘，供本机进程过鉴权墙（Vit 认 query token 匹配
+    // loopbackToken 且 local transport，实测受保护端点 200）。注入 settings 的 hostApi，
+    // 投递 POST /child/post 直触发 updateDsh（替代 update-request.json 文件桥）。
+    // 文件缺失（宿主旧版本）→ {}（settings 投递报「宿主信道未配置」，不降级回文件）。
+    const hostApi = readChildHostApi(cfg.dataDir);
+    const hostApiJson = hostApi ? JSON.stringify(hostApi) : "{}";
     const content = readFileSync(patchTpl, "utf8")
       .split("{{DSH_PKG_DIR}}")
       .join(cfg.dshPkgDir || resolveDshPkgDir(cfg))
       .split("{{LOG_PATH}}")
       .join(logPath)
       .split("{{DATA_DIR}}")
-      .join(cfg.dataDir);
+      .join(cfg.dataDir)
+      .split("{{DSH_HOST_API}}")
+      .join(hostApiJson);
     writeFileSync(gen, content, "utf8");
     return gen;
   };
+  // readChildHostApi：读宿主 server-info.json（loopbackToken + 端口，宿主启动时官方
+  // 落盘，供本机进程过鉴权墙）。dataDir = <home>/.hanako/plugin-data/dsh-hanako →
+  // server-info.json = <home>/.hanako/server-info.json（join(dataDir, "../..")）。
+  // 返回 { url, token } 或 null（宿主旧版本/异常——信道不可用，不降级回文件）。
+  function readChildHostApi(dataDir) {
+    try {
+      const info = join(dataDir, "..", "..", "server-info.json");
+      if (!existsSync(info)) return null;
+      const s = JSON.parse(readFileSync(info, "utf8"));
+      if (typeof s?.token !== "string" || !s.token) return null;
+      const port = Number(s.port) || 0;
+      if (!port) return null;
+      return {
+        url: `http://127.0.0.1:${port}/api/plugins/dsh-hanako/child/post`,
+        token: s.token,
+      };
+    } catch (e) {
+      console.warn(
+        `[dsh-run] 读 server-info.json 失败（${e?.message || e}），子插件反向信道不可用`,
+      );
+      return null;
+    }
+  }
   if (existsSync(patchTpl)) {
     try {
       patchFiles.push(renderPatchTpl());
@@ -862,7 +896,6 @@ export async function updateDsh(cfg) {
   g.updateError = null;
   const dataDir = cfg.dataDir || g.dataDir;
   const resultFile = join(dataDir, "update-result.json");
-  const requestFile = join(dataDir, "update-request.json");
   const stamp = () => new Date().toISOString();
   const log = (s) => {
     try {
@@ -900,13 +933,13 @@ export async function updateDsh(cfg) {
       restartError = String(e?.message || e).slice(0, 1500);
       log(`web host 重启失败：${restartError}`);
     }
-    // ④b 重启后重建宿主侧 watch/轮询——closeProcess 已清理（provider 热跟随 +
-    // DSH 更新请求轮询），ensureWebHost 本身不建（只有 startWebHostFromPlugin 建），
-    // 不重建则更新后设置页更新请求不再触发宿主处理
+    // ④b 重启后重建宿主侧 provider 热跟随 watch——closeProcess 已清理，
+    // ensureWebHost 本身不建（只有 startWebHostFromPlugin 建），不重建则
+    // 更新后 provider 配置变更不再推送。DSH 更新请求不走 watch/轮询：
+    // v0.21.2 起子插件经反向信道（POST /child/post）直投宿主触发。
     ensureProviderPushWatch(cfg);
     // 重启用进程后首批 provider 的初始 push 已由 ensureWebHost（唯一就绪点）
     // 发出；此处只重建跟随 watch，不再重复 push。
-    ensureUpdateWatch(cfg);
     // ⑤ 读新版本 → done（installDepsFromPlugin 已刷新 g.depsSmoke，优先用；无则直读 package.json）
     const version =
       (g.depsSmoke && !g.depsSmoke.running && g.depsSmoke.ok
@@ -936,100 +969,8 @@ export async function updateDsh(cfg) {
     log(`更新失败：${err}`);
     return { ok: false, state: "error", error: err };
   } finally {
-    // ⑥ 清 update-request.json（写回 idle，防重复触发）
-    try {
-      writeFileSync(requestFile, JSON.stringify({ state: "idle" }), "utf8");
-    } catch {
-      /* 清理失败不阻断 */
-    }
-    // ⑦ 解锁
+    // ⑥ 解锁（更新请求信道已由 /child/post 受理，无请求文件可清理）
     g.updating = false;
-  }
-}
-// ---- 宿主侧 DSH 更新桥接轮询（dsh 设置页「DSH 版本」块 → 宿主能力层）----
-// 语义：@dsh-hanako/settings 插件写 <dataDir>/update-request.json（state: 'requested'
-// 请求更新；版本检查 v0.18.1 起改 dsh 侧直查（v0.18.2 起 HTTP 直查 npm registry），不再走桥接），宿主侧 5s
-// 轮询读文件（替代早期 ctx.resources.watch——watch 依赖宿主 resources 注入 + bus
-// 事件订阅，链路不可靠：曾出现设置页检查/更新请求写入后宿主无感知的故障，
-// check-result.json 永不更新、前端永久 pending）→ 按 state 分发：requested →
-// updateDsh（写 update-result.json，pnpm add latest + 重启 web host）。at 去重：
-// 同一请求（at 相同）只处理一次（单例 g.updateWatchLastAt，见轮询回调）。
-// 幂等：startWebHost 重复调用 / web host 重建时先清定时器再建；cleanup 挂单例
-// g.updateWatchCleanup，closeProcess 回收 web host 时调用（clearInterval）。
-function ensureUpdateWatch(cfg) {
-  const g = getSingleton();
-  // 幂等：先清旧定时器（startWebHost 重复调用 / web host 重建时）
-  if (typeof g.updateWatchCleanup === "function") {
-    try {
-      g.updateWatchCleanup();
-    } catch {
-      /* 清理失败不阻断 */
-    }
-    g.updateWatchCleanup = null;
-  }
-  const dataDir = cfg.dataDir || g.dataDir;
-  if (!dataDir) {
-    console.warn("[dsh-run] 缺少 dataDir，DSH 更新桥接轮询未建立");
-    return;
-  }
-  const path = join(dataDir, "update-request.json");
-  // 轮询前确保文件存在（占位 idle，避免「文件不存在」读失败）
-  try {
-    if (!existsSync(path)) {
-      mkdirSync(dataDir, { recursive: true });
-      writeFileSync(path, JSON.stringify({ state: "idle" }), "utf8");
-    }
-  } catch (e) {
-    console.warn(
-      `[dsh-run] update-request.json 占位写入失败（${e?.message || e}），DSH 更新桥接轮询未建立`,
-    );
-    return;
-  }
-  // 5s 轮询：watch 事件不可靠（宿主 resources.watch 失效/未注入）时仍能感知
-  // 设置页更新请求。state === 'requested' 且 at 与上次处理的不同（单例
-  // g.updateWatchLastAt，ISO 字符串比较）才触发——同请求只处理一次。
-  const timer = setInterval(() => {
-    let req = null;
-    try {
-      if (!existsSync(path)) return;
-      req = JSON.parse(readFileSync(path, "utf8"));
-    } catch {
-      return; // 不存在/解析失败：忽略，下轮重试
-    }
-    if (!req || typeof req !== "object") return;
-    if (req.state !== "requested") return;
-    const at = typeof req.at === "string" ? req.at : "";
-    if (!at || at === g.updateWatchLastAt) return; // 同请求只处理一次
-    g.updateWatchLastAt = at;
-    onBridgeRequestChanged(dataDir, path, cfg);
-  }, 5000);
-  g.updateWatchCleanup = () => {
-    clearInterval(timer);
-    g.updateWatchCleanup = null;
-  };
-  console.log(
-    `[dsh-run] DSH 更新桥接轮询已建立（${path}，5s），设置页更新请求将触发宿主处理`,
-  );
-}
-
-// update-request.json 分发（requested → 更新）。v0.18.1 起仅剩更新桥接（版本检查
-// 改 dsh 侧直查 HTTP 直查 npm registry，不走此通道）；防抖沿用能力层运行期标志（g.updating）。
-// 失败只记日志不抛出。
-function onBridgeRequestChanged(dataDir, path, cfg) {
-  const g = getSingleton();
-  let req = null;
-  try {
-    req = JSON.parse(readFileSync(path, "utf8"));
-  } catch {
-    return; // 解析失败/不存在：忽略
-  }
-  if (!req || typeof req !== "object") return;
-  if (req.state === "requested") {
-    if (g.updating) return; // 更新中：跳过（重复触发防护）
-    console.log("[dsh-run] 收到 DSH 更新请求（设置页），执行 updateDsh");
-    updateDsh(cfg).catch((e) => {
-      console.warn(`[dsh-run] DSH 更新异常：${e?.message || e}`);
-    });
   }
 }
 // push dsh web host 刷新（回环调用 127.0.0.1:{port}；结果写入统一会话日志 + console 简记，
@@ -1128,10 +1069,8 @@ getSingleton().startWebHost = async function startWebHostFromPlugin(
     ensureProviderPushWatch(cfg);
     // 首批 provider 的初始 push 已收敛进 ensureWebHost（唯一就绪点，含重试），
     // 此处不再重复推；后续每次 resource.changed 经防抖 watch 增量 push。
-    // DSH 更新请求轮询（幂等）：dsh 设置页「更新到最新」写 update-request.json →
-    // 宿主 updateDsh（单一事实源）；版本检查 v0.18.1 起由 dsh 侧设置页直查，
-    // 不再经桥接
-    ensureUpdateWatch(cfg);
+    // DSH 更新请求 v0.21.2 起由子插件反向信道（POST /child/post）直投，
+    // 无宿主侧轮询/文件。
     return true;
   } catch (e) {
     // 记录失败原因供诊断（onload 侧只能看到布尔）；后续工具调用重试
@@ -1449,13 +1388,6 @@ export async function closeProcess() {
   if (typeof g.providerPushCleanup === "function") {
     try {
       g.providerPushCleanup();
-    } catch {
-      /* 清理失败不阻断 */
-    }
-  }
-  if (typeof g.updateWatchCleanup === "function") {
-    try {
-      g.updateWatchCleanup();
     } catch {
       /* 清理失败不阻断 */
     }
