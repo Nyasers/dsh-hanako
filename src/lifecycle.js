@@ -7,16 +7,14 @@
 // 等）。本次把 a) 的全部函数原样搬入本模块，让 dsh-run.js 瘦身为纯任务提交流程模块 +
 // 经本模块转发生命周期能力。
 //
-// 本模块承载（逐字迁移自 dsh-run.js，逻辑零改动；v0.21 起并入统一通道 bridge）：
-//   web host 拉起    ensureWebHost（spawn dsh web + 端口就绪等待，幂等；启动前 ensureBridge
-//                    起 WS #2 server，端口/token 注入 spawn env）+ startWebHostFromPlugin（挂 g.startWebHost）
-//   关闭回收         closeProcess（先清 provider watch / bridge 更新事件订阅 / stopBridge，再 kill 子进程）
+// 本模块承载（逐字迁移自 dsh-run.js，逻辑零改动）：
+//   web host 拉起    ensureWebHost（spawn dsh web + 端口就绪等待，幂等）+ startWebHostFromPlugin（挂 g.startWebHost）
+//   关闭回收         closeProcess（先清 provider/update watch，再 kill 子进程）
 //   连接失败自检     collectWebDiagnostics + buildDepsDiagCheck + buildProcessDiagCheck + pickProcessFix
-//   更新 DSH         updateDsh（停 host → 装依赖 → 起 host → 读版本，写 update-result.json +
-//                    经 bridge 推 update.result 事件帧）
-//   bridge 装配       ensureBridge / stopBridge / subscribeBridgeEvents（WS #2 生命周期 +
-//                    update.request 事件订阅，替代 update-request.json 文件轮询桥接）
-//   watch + 轮询     ensureProviderPushWatch（provider 热跟随 watch）
+//   更新 DSH         updateDsh（停 host → 装依赖 → 起 host → 读版本，写 update-result.json）
+//   watch + 轮询     ensureProviderPushWatch（provider 热跟随 watch）/ ensureUpdateWatch
+//                    （DSH 更新请求 5s 轮询，v0.18.1 起替代 resources.watch 桥接）/
+//                    onBridgeRequestChanged
 //   provider 路由     detectHostProviderPaths / readJsonFile / mapModel / readHostConfig / buildProviderRoutes
 //                    → pushProviderRefresh（HTTP push 到 dsh web host）
 //   config 引导       ensureConfigJson（自动生成 config.json，幂等）
@@ -33,7 +31,7 @@
 // bundle 内联，无固定 URL 缓存问题。
 //
 // 语义不变：ensureWebHost 重复调用幂等；web host 进程随插件 onload/卸载生命周期拉起/回收
-// （index.js register 回收调用 g.closeProcess）；providerPushCleanup / updateEventCleanup 清理时机与
+// （index.js register 回收调用 g.closeProcess）；providerPushCleanup / updateWatchCleanup 清理时机与
 // 拆分前一致；updateDsh 流程（停 host→装依赖→起 host→读版本）保持完整；collectWebDiagnostics 输出的
 // checks 结构（t1 依赖 / t2 进程）令 routes/webui.js 渲染不变。
 import { spawn } from "node:child_process";
@@ -67,13 +65,6 @@ import {
   readDshInstalledVersion,
 } from "./tools/lib/install.js";
 import { checkDshUpdate } from "./tools/lib/check.js";
-// 统一通道（bridge，M1）：WS #2 server + 帧分发 + event 分发（lifecycle 装配）
-import {
-  ensureBridge,
-  stopBridge,
-  onBridgeEvent,
-  emitBridgeEvent,
-} from "./lib/bridge.js";
 
 const STDERR_CAP = 8192;
 const PORT_READY_TIMEOUT_MS = 60000; // web host 端口就绪等待上限
@@ -516,10 +507,6 @@ export async function ensureWebHost(cfg) {
         link: "@dsh-hanako/clipboard",
         target: join(PLUGIN_ROOT, "dsh-plugin", "@dsh-hanako", "clipboard"),
       },
-      {
-        link: "@dsh-hanako/bridge",
-        target: join(PLUGIN_ROOT, "dsh-plugin", "@dsh-hanako", "bridge"),
-      },
     ];
     const nmDir = join(dshHome, "profiles", "node_modules");
     // 清理旧名 junction：profiles/node_modules 下 dsh-hana-*（非 @dsh-hanako scope）
@@ -570,9 +557,8 @@ export async function ensureWebHost(cfg) {
 
   const patchFiles = [];
   const patchTpl = join(PLUGIN_ROOT, "dsh-plugin", "dsh-hanako.patch.yml.tpl");
-  // 渲染各插件的 config 依赖解析基座占位符——theme/provider/settings/logger/clipboard/
-  // bridge 六段均以包名注册，不再有 file:// URL 占位符；包名经 ensureCordisJunctions 的
-  // junction 解析。bridge 段无 config（URL/TOKEN 由 spawn env 注入）。
+  // 渲染各插件的 config 依赖解析基座占位符——theme/provider/settings/logger 四段均以
+  // 包名注册，不再有 file:// URL 占位符；包名经 ensureCordisJunctions 的 junction 解析。
   // B方案：provider 段不再注入 modelsPath/catalogPath（宿主不再经 patch 注入
   // provider 数据，parse 逻辑上移宿主，route 目录改经 HTTP push 下发）——provider config
   // 只剩 dshPkgDir（子进程解析 pi-ai 依赖用）。DSH_PKG_DIR = dsh 包安装目录
@@ -610,25 +596,8 @@ export async function ensureWebHost(cfg) {
     );
   }
   const patchArgs = patchFiles.flatMap((p) => ["--patch", p]);
-  // 六段 cordis 插件均以包名注册，spawn 前确保 junction 就绪（幂等）
+  // 四段 cordis 插件均以包名注册，spawn 前确保 junction 就绪（幂等）
   ensureCordisJunctions(dshHome);
-  // ---- 统一通道（bridge）WS #2：spawn 前启动服务端（幂等），端口/token 注入 spawn env ----
-  // dsh 侧 @dsh-hanako/bridge 插件经 DSH_BRIDGE_URL/DSH_BRIDGE_TOKEN 连接并首帧握手。
-  // ensureBridge 内部已做幂等（web host 重建时旧实例已由 closeProcess → stopBridge 清掉，
-  // 新启动生成新 token）。bridge 启动失败不阻断 dsh 启动（降级：页面/更新链路回退旧路径，
-  // 详见 lib/bridge.js 与 routes/bridge.js 注释）。
-  let bridgeEnv = {};
-  try {
-    const br = await ensureBridge();
-    bridgeEnv = {
-      DSH_BRIDGE_URL: "ws://127.0.0.1:" + br.port,
-      DSH_BRIDGE_TOKEN: br.token,
-    };
-  } catch (e) {
-    console.warn(
-      `[dsh-run] bridge WS #2 启动失败（${e?.message || e}），本次 web host 无 bridge 通道`,
-    );
-  }
   // launcher flag（--profile/--patch）必须位于应用参数（--port）之前；且 --patch 是
   // 顶层 dsh 选项，必须位于 --profile 之前（dsh 0.1.x：--profile 之后的参数视为
   // web app 参数，--patch 会被 web app 拒为 unknown option）
@@ -661,8 +630,6 @@ export async function ensureWebHost(cfg) {
         ...ELECTRON_NODE_ENV,
         DSH_HOME: dshHome,
         DSH_TELEMETRY_DISABLED: "1",
-        // bridge WS #2 连接参数（dsh 侧 @dsh-hanako/bridge 插件消费；见上方 ensureBridge）
-        ...bridgeEnv,
       },
       windowsHide: true,
     },
@@ -881,12 +848,11 @@ function ensureProviderPushWatch(cfg) {
 // Agent 工具 dsh_update / DSHana 标签页 webui 路由两面共用，单一事实源；
 // 设置页「DSH 版本」卡片 v0.18.1 起由 dsh 侧 @dsh-hanako/settings 直查远端，不经此通道）----
 
-// ---- 更新 DSH（能力层）：停 web host（closeProcess——回收子进程 + 停 bridge，Windows
-// 文件锁前提：npm i 要替换被 web host 占用的 dsh 包文件）→ installDepsFromPlugin（npm i
-// @deepseek-ai/dsh = 装 latest，成功即新版本）→ 起 web host（ensureWebHost 重建 bridge，
-// 新端口/token，失败不阻断结果上报，记 error 字段）→ 读新版本。全程写
-// <dataDir>/update-result.json { state: done|error, version?, error?, at }（dsh 设置页
-// update-status 路由读），完成/失败同时经 bridge 推 update.result 事件帧（前端可选收推送）。
+// ---- 更新 DSH（能力层）：停 web host（closeProcess——回收子进程，Windows 文件锁前提：
+// npm i 要替换被 web host 占用的 dsh 包文件）→ installDepsFromPlugin（npm i
+// @deepseek-ai/dsh = 装 latest，成功即新版本）→ 起 web host（ensureWebHost，失败不阻断
+// 结果上报，记 error 字段）→ 读新版本。全程写 <dataDir>/update-result.json
+// { state: done|error, version?, error?, at }（dsh 设置页 update-status 路由读）。
 // 并发防护：g.updating 进行中重复调用返回 { ok:false, state:"updating" } 不重复执行；
 // 与 installDepsFromPlugin 内部 g.depsInstalling 独立（本标志管整条更新流程）。----
 export async function updateDsh(cfg) {
@@ -896,6 +862,7 @@ export async function updateDsh(cfg) {
   g.updateError = null;
   const dataDir = cfg.dataDir || g.dataDir;
   const resultFile = join(dataDir, "update-result.json");
+  const requestFile = join(dataDir, "update-request.json");
   const stamp = () => new Date().toISOString();
   const log = (s) => {
     try {
@@ -933,14 +900,13 @@ export async function updateDsh(cfg) {
       restartError = String(e?.message || e).slice(0, 1500);
       log(`web host 重启失败：${restartError}`);
     }
-    // ④b 重启后重建宿主侧 watch/事件订阅——closeProcess 已清理（provider 热跟随 +
-    // bridge 更新事件订阅），ensureWebHost 本身不建（只有 startWebHostFromPlugin 建），
-    // 不重建则更新后设置页更新请求不再触发宿主处理。bridge 本身已由 ensureWebHost
-    // 重建（新端口/token），此处重建事件订阅。
+    // ④b 重启后重建宿主侧 watch/轮询——closeProcess 已清理（provider 热跟随 +
+    // DSH 更新请求轮询），ensureWebHost 本身不建（只有 startWebHostFromPlugin 建），
+    // 不重建则更新后设置页更新请求不再触发宿主处理
     ensureProviderPushWatch(cfg);
     // 重启用进程后首批 provider 的初始 push 已由 ensureWebHost（唯一就绪点）
     // 发出；此处只重建跟随 watch，不再重复 push。
-    subscribeBridgeEvents(cfg);
+    ensureUpdateWatch(cfg);
     // ⑤ 读新版本 → done（installDepsFromPlugin 已刷新 g.depsSmoke，优先用；无则直读 package.json）
     const version =
       (g.depsSmoke && !g.depsSmoke.running && g.depsSmoke.ok
@@ -949,14 +915,6 @@ export async function updateDsh(cfg) {
       readDshInstalledVersion({ ...cfg, dataDir }) ||
       null;
     writeResult({
-      state: "done",
-      version,
-      ...(restartError ? { error: restartError } : {}),
-      at: stamp(),
-    });
-    // 更新结果同时经 bridge 推送给 dsh 侧（update.result 事件帧；设置页 update-status
-    // 仍读文件轮询——改动最小，推送供前端可选收实时通知）
-    emitBridgeEvent("update.result", {
       state: "done",
       version,
       ...(restartError ? { error: restartError } : {}),
@@ -975,54 +933,104 @@ export async function updateDsh(cfg) {
     const err = String(e?.message || e).slice(0, 1500);
     g.updateError = err;
     writeResult({ state: "error", error: err, at: stamp() });
-    emitBridgeEvent("update.result", { state: "error", error: err, at: stamp() });
     log(`更新失败：${err}`);
     return { ok: false, state: "error", error: err };
   } finally {
-    // ⑥ 解锁（update-request.json 文件桥接已退役：不再写/清该文件）
-    g.updating = false;
-  }
-}
-// ---- 宿主侧 DSH 更新请求桥接（v0.21 起：update-request.json 文件轮询退役，改 bridge 事件流）----
-// 语义：dsh 设置页「更新到最新」经 @dsh-hanako/settings 的 bridge.emit("update.request",
-// { fromVersion }) → WS #2 event 帧 → 宿主 bridge 事件分发（lib/bridge.js events
-// EventEmitter）→ 本订阅触发 updateDsh（能力层单一事实源，写 update-result.json 供
-// 设置页 update-status 轮询 + 经 bridge 推 update.result 供前端可选收推送）。
-// 相比旧 ensureUpdateWatch 5s 轮询 update-request.json：事件驱动即时、无轮询空窗、
-// 无文件占位/读写。update-request.json 退役（不再写/读）。
-// 幂等：startWebHost 重复调用 / web host 重建时先退订再订；cleanup 挂单例
-// g.updateEventCleanup，closeProcess 回收 web host 时调用。
-function subscribeBridgeEvents(cfg) {
-  const g = getSingleton();
-  // 幂等：先退订旧订阅（startWebHost 重复调用 / web host 重建时）
-  if (typeof g.updateEventCleanup === "function") {
+    // ⑥ 清 update-request.json（写回 idle，防重复触发）
     try {
-      g.updateEventCleanup();
+      writeFileSync(requestFile, JSON.stringify({ state: "idle" }), "utf8");
     } catch {
       /* 清理失败不阻断 */
     }
-    g.updateEventCleanup = null;
+    // ⑦ 解锁
+    g.updating = false;
   }
-  // 更新请求（dsh 设置页 → 宿主）：触发 updateDsh（能力层；g.updating 防并发）
-  const onUpdateRequest = (payload) => {
+}
+// ---- 宿主侧 DSH 更新桥接轮询（dsh 设置页「DSH 版本」块 → 宿主能力层）----
+// 语义：@dsh-hanako/settings 插件写 <dataDir>/update-request.json（state: 'requested'
+// 请求更新；版本检查 v0.18.1 起改 dsh 侧直查（v0.18.2 起 HTTP 直查 npm registry），不再走桥接），宿主侧 5s
+// 轮询读文件（替代早期 ctx.resources.watch——watch 依赖宿主 resources 注入 + bus
+// 事件订阅，链路不可靠：曾出现设置页检查/更新请求写入后宿主无感知的故障，
+// check-result.json 永不更新、前端永久 pending）→ 按 state 分发：requested →
+// updateDsh（写 update-result.json，pnpm add latest + 重启 web host）。at 去重：
+// 同一请求（at 相同）只处理一次（单例 g.updateWatchLastAt，见轮询回调）。
+// 幂等：startWebHost 重复调用 / web host 重建时先清定时器再建；cleanup 挂单例
+// g.updateWatchCleanup，closeProcess 回收 web host 时调用（clearInterval）。
+function ensureUpdateWatch(cfg) {
+  const g = getSingleton();
+  // 幂等：先清旧定时器（startWebHost 重复调用 / web host 重建时）
+  if (typeof g.updateWatchCleanup === "function") {
+    try {
+      g.updateWatchCleanup();
+    } catch {
+      /* 清理失败不阻断 */
+    }
+    g.updateWatchCleanup = null;
+  }
+  const dataDir = cfg.dataDir || g.dataDir;
+  if (!dataDir) {
+    console.warn("[dsh-run] 缺少 dataDir，DSH 更新桥接轮询未建立");
+    return;
+  }
+  const path = join(dataDir, "update-request.json");
+  // 轮询前确保文件存在（占位 idle，避免「文件不存在」读失败）
+  try {
+    if (!existsSync(path)) {
+      mkdirSync(dataDir, { recursive: true });
+      writeFileSync(path, JSON.stringify({ state: "idle" }), "utf8");
+    }
+  } catch (e) {
+    console.warn(
+      `[dsh-run] update-request.json 占位写入失败（${e?.message || e}），DSH 更新桥接轮询未建立`,
+    );
+    return;
+  }
+  // 5s 轮询：watch 事件不可靠（宿主 resources.watch 失效/未注入）时仍能感知
+  // 设置页更新请求。state === 'requested' 且 at 与上次处理的不同（单例
+  // g.updateWatchLastAt，ISO 字符串比较）才触发——同请求只处理一次。
+  const timer = setInterval(() => {
+    let req = null;
+    try {
+      if (!existsSync(path)) return;
+      req = JSON.parse(readFileSync(path, "utf8"));
+    } catch {
+      return; // 不存在/解析失败：忽略，下轮重试
+    }
+    if (!req || typeof req !== "object") return;
+    if (req.state !== "requested") return;
+    const at = typeof req.at === "string" ? req.at : "";
+    if (!at || at === g.updateWatchLastAt) return; // 同请求只处理一次
+    g.updateWatchLastAt = at;
+    onBridgeRequestChanged(dataDir, path, cfg);
+  }, 5000);
+  g.updateWatchCleanup = () => {
+    clearInterval(timer);
+    g.updateWatchCleanup = null;
+  };
+  console.log(
+    `[dsh-run] DSH 更新桥接轮询已建立（${path}，5s），设置页更新请求将触发宿主处理`,
+  );
+}
+
+// update-request.json 分发（requested → 更新）。v0.18.1 起仅剩更新桥接（版本检查
+// 改 dsh 侧直查 HTTP 直查 npm registry，不走此通道）；防抖沿用能力层运行期标志（g.updating）。
+// 失败只记日志不抛出。
+function onBridgeRequestChanged(dataDir, path, cfg) {
+  const g = getSingleton();
+  let req = null;
+  try {
+    req = JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return; // 解析失败/不存在：忽略
+  }
+  if (!req || typeof req !== "object") return;
+  if (req.state === "requested") {
     if (g.updating) return; // 更新中：跳过（重复触发防护）
-    console.log("[dsh-run] 收到 DSH 更新请求（bridge update.request），执行 updateDsh");
+    console.log("[dsh-run] 收到 DSH 更新请求（设置页），执行 updateDsh");
     updateDsh(cfg).catch((e) => {
       console.warn(`[dsh-run] DSH 更新异常：${e?.message || e}`);
     });
-  };
-  // 更新结果推送（宿主 → dsh）：updateDsh 完成时经 bridge emit("update.result")
-  // 推送（设置页 update-status 仍读文件轮询——改动最小；推送供前端可选消费）
-  const unsubRequest = onBridgeEvent("update.request", onUpdateRequest);
-  g.updateEventCleanup = () => {
-    try {
-      unsubRequest();
-    } catch {
-      /* 退订失败忽略 */
-    }
-    g.updateEventCleanup = null;
-  };
-  console.log("[dsh-run] bridge 更新事件订阅已建立（update.request → updateDsh）");
+  }
 }
 // push dsh web host 刷新（回环调用 127.0.0.1:{port}；结果写入统一会话日志 + console 简记，
 // 失败不阻断。B方案：body 携带组装好的 route 目录（buildProviderRoutes() 的
@@ -1120,10 +1128,10 @@ getSingleton().startWebHost = async function startWebHostFromPlugin(
     ensureProviderPushWatch(cfg);
     // 首批 provider 的初始 push 已收敛进 ensureWebHost（唯一就绪点，含重试），
     // 此处不再重复推；后续每次 resource.changed 经防抖 watch 增量 push。
-    // bridge 更新事件订阅（幂等）：dsh 设置页「更新到最新」经 bridge.emit("update.request")
-    // → WS #2 event 帧 → 宿主 updateDsh（单一事实源，update-request.json 文件桥接退役）；
-    // 版本检查 v0.18.1 起由 dsh 侧设置页直查，不经桥接
-    subscribeBridgeEvents(cfg);
+    // DSH 更新请求轮询（幂等）：dsh 设置页「更新到最新」写 update-request.json →
+    // 宿主 updateDsh（单一事实源）；版本检查 v0.18.1 起由 dsh 侧设置页直查，
+    // 不再经桥接
+    ensureUpdateWatch(cfg);
     return true;
   } catch (e) {
     // 记录失败原因供诊断（onload 侧只能看到布尔）；后续工具调用重试
@@ -1445,19 +1453,12 @@ export async function closeProcess() {
       /* 清理失败不阻断 */
     }
   }
-  if (typeof g.updateEventCleanup === "function") {
+  if (typeof g.updateWatchCleanup === "function") {
     try {
-      g.updateEventCleanup();
+      g.updateWatchCleanup();
     } catch {
       /* 清理失败不阻断 */
     }
-  }
-  // 关闭 bridge（WS #2 server + 全部连接；web host 重启时下次 ensureWebHost 重建，
-  // 生成新端口/token）
-  try {
-    await stopBridge();
-  } catch (e) {
-    console.warn(`[dsh-run] bridge 停止异常：${e?.message || e}`);
   }
   const web = g.web;
   g.web = null;

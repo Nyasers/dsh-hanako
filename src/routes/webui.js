@@ -30,8 +30,6 @@
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-// 统一通道（bridge）：WS #2 状态供壳页面判断是否走 SW 通道 iframe
-import { bridgeStatus } from "../lib/bridge.js";
 // 插件页 HTML 壳（构建期 template-loader 经 doT 编译为自包含渲染函数，运行时零依赖）
 import { render as webuiShellHtml } from "../assets/webui-shell.jinja2";
 
@@ -91,14 +89,7 @@ function readDiagnostics(ctx, cfg, port) {
  * system 时通过 prefers-color-scheme 解析，Chromium 会让跨源 iframe 继承父页面
  * 的 color-scheme，因此 dsh 会跟随宿主主题；dsh 内显式选了 light/dark 则不受影响。
  * diagnostics：未就绪时服务端收集的首帧自检数据（JSON 对象或 null）；浏览器端
- * 渲染进提示区，并在每次 health 轮询未就绪时用新 diagnostics 刷新。
- * channel：统一通道（bridge）模式——bridge WS #2 就绪时 iframe 走宿主通道路径
- * （/api/plugins/dsh-hanako/web/）：壳页面先注册 SW + await navigator.serviceWorker.ready
- * + postMessage bridge-config（WS #1 url + token，token 取 location.search）再设 iframe
- * src（导航本身被 SW 拦截转发到 dsh）；否则回退直连 http://127.0.0.1:<port>/（旧行为）。
- * channelOk = bridge 可用（WS #2 运行且 dsh 侧已连接）；channelUrl = 通道路径；
- * tunnelPath = HTTP 隧道端点相对路径（base + /bridge/http；壳页面拼
- * location.origin + tunnelPath 后整体注入 SW，SW 零拼接）。 */
+ * 渲染进提示区，并在每次 health 轮询未就绪时用新 diagnostics 刷新。 */
 function buildShell({
   ready,
   hcLink,
@@ -107,20 +98,13 @@ function buildShell({
   port,
   colorScheme,
   diagnostics,
-  channelOk,
-  channelUrl,
-  tunnelPath,
 }) {
   // dsh-frame 保持裸嵌（曾尝试显式声明 sandbox/allow 绕过宿主沙箱，实测跨源继承链
   // 下内层声明无法生效，属无效方案已回滚，见 CHANGELOG）。
   // 剪贴板问题的正规解法是 @dsh-hanako/clipboard 插件（tapIndex 注入桥 → 宿主 capability）
   // + 下方壳页面桥（hostRequest + __dshCopy 监听）。
-  // 通道模式：iframe src 留空由壳脚本在 SW ready 后设置（通道导航被 SW 拦截转发）；
-  // 直连模式：ready 时直接内联 127.0.0.1:<port>
   const iframe = ready
-    ? channelOk
-      ? `<iframe id="dsh-frame"></iframe>`
-      : `<iframe id="dsh-frame" src="http://127.0.0.1:${port}/"></iframe>`
+    ? `<iframe id="dsh-frame" src="http://127.0.0.1:${port}/"></iframe>`
     : `<iframe id="dsh-frame"></iframe>`;
   // 嵌入首帧自检 JSON：把 </ 转义成 <\/，防诊断文本（路径/stderr）里的 </script> 提前闭合脚本
   const initDiag = diagnostics
@@ -138,9 +122,6 @@ function buildShell({
     api,
     initDiag,
     port,
-    channelOk: !!channelOk,
-    channelUrl: channelUrl || "",
-    tunnelPath: tunnelPath || "",
   });
 }
 
@@ -159,17 +140,6 @@ export default function registerWebuiRoutes(app, ctx) {
     const hcLink = hc ? `<link rel="stylesheet" href="${esc(hc)}">` : "";
     // 宿主深色主题（midnight/dark 等）→ iframe 内 prefers-color-scheme dark，dsh 的 system 跟随宿主
     const colorScheme = /midnight|dark/i.test(th) ? "dark" : "light";
-    // 统一通道：bridge WS #2 运行且 dsh 侧已连接 → iframe 走宿主通道路径（SW 拦截转发）；
-    // 未就绪（含宿主 0.769.0 WS #1 端点不可用等）回退直连 127.0.0.1:<port>（旧行为）
-    let channelOk = false;
-    try {
-      const bs = bridgeStatus();
-      channelOk = !!(bs.ws2 && bs.ws2.running && bs.ws2.connected);
-    } catch {
-      /* 诊断失败按通道不可用处理 */
-    }
-    const channelUrl = base + "/web/";
-    const tunnelPath = base + "/bridge/http";
     // 未就绪时服务端同步收集一次自检（首屏即渲染，轮询再刷新）；就绪不收集保持轻量
     const diagnostics = ready ? null : readDiagnostics(ctx, cfg, port);
     return c.html(
@@ -181,9 +151,6 @@ export default function registerWebuiRoutes(app, ctx) {
         port,
         colorScheme,
         diagnostics,
-        channelOk,
-        channelUrl,
-        tunnelPath,
       }),
     );
   });
@@ -195,17 +162,6 @@ export default function registerWebuiRoutes(app, ctx) {
     const ready = await probeHost(port, ctx.log);
     const body = { ok: ready, port, timestamp: Date.now() };
     body.diagnostics = readDiagnostics(ctx, cfg, port);
-    // 统一通道状态：壳页面据此决定 iframe 走通道还是直连（与 /webui 首帧同判据）
-    try {
-      body.bridge = bridgeStatus();
-      body.channelOk = !!(
-        body.bridge.ws2 &&
-        body.bridge.ws2.running &&
-        body.bridge.ws2.connected
-      );
-    } catch {
-      body.channelOk = false;
-    }
     return c.json(body);
   });
 
