@@ -291,6 +291,10 @@ function submitTask(
     let sawChunk = false;
     const seen = new Set();
     let outcome = null; // { stopReason, failure? }
+    // pendingFailure：finish error 帧（LLM 请求失败，如 429 限流）的 failure 兜底记录。
+    // finish error 不是终态信号（DSH 侧可能退避重试继续跑），仅当流异常关闭且无 turn/end
+    // 终态帧时用它把任务判为失败，避免 finish error 后 DSH 断流/崩溃被误判为成功。
+    let pendingFailure = null;
 
     const consume = (async () => {
       try {
@@ -302,21 +306,24 @@ function submitTask(
             if (!d) continue;
             if (ev.type === "assistant/chunk") {
               sawChunk = true;
-              // 错误透传——finish 帧 reason=error（如 429/400）直接带真实信息
+              // finish error 帧不是失败信号：DSH 侧 LLM 请求失败（如 429 限流）会进入
+              // agent/request-error waterfall → dsh-llm-retry recover（指数退避 + jitter，
+              // append llm/retry 后 cancellableDelay 等待），返回 {kind:"retry"} 时 step()
+              // continue 重试、不抛错——任务实际还在跑。只把 failure 记进 pendingFailure
+              // （流异常关闭无 turn/end 时兜底判失败），继续消费后续帧；终态判定以 turn/end
+              // 为准（官方 UI 客户端同语义：event.type !== "turn/end" || reason.kind !== "error"）。
               const c = d?.chunk;
               if (c?.type === "finish" && c.reason?.kind === "error") {
                 const f = c.reason.failure || c.reason.error || {};
-                outcome = {
-                  stopReason: "error",
-                  failure: {
-                    message:
-                      f.message || c.reason.message || "模型调用失败（无详情）",
-                  },
+                pendingFailure = {
+                  message:
+                    f.message || c.reason.message || "模型调用失败（无详情）",
+                  ...(f.code ? { code: f.code } : {}),
                 };
-                return;
+              } else {
+                const t = textFromChunk(d);
+                if (t) collected += t; // 仅本地收集（回调输出用）；不再写 op Map
               }
-              const t = textFromChunk(d);
-              if (t) collected += t; // 仅本地收集（回调输出用）；不再写 op Map
             } else if (ev.type === "assistant/message") {
               const msg = d.message;
               if (msg?.id && typeof msg.id === "string" && !seen.has(msg.id)) {
@@ -399,6 +406,21 @@ function submitTask(
                 };
               else outcome = { stopReason: kind || "end_turn" };
               return; // 一次 prompt = 一个 turn，turn/end 即终态
+            } else if (ev.type === "llm/retry") {
+              // LLM 请求失败退避重试事件（dsh-llm-retry 的 recover 挂 agent/request-error
+              // waterfall，session.append 后 cancellableDelay 等待再返回 {kind:"retry"}）。
+              // 只经会话日志通道记一条（不阻断事件循环、不改卡片渲染），终态仍以 turn/end 为准。
+              // data 含 retryId/turn/step/provider/mode/policyKey/retry（第 N 次）/delayMs/failure。
+              const rd = d || {};
+              const retryN = Number(rd.retry) || 1;
+              const extra = [];
+              if (rd.provider) extra.push(`provider=${rd.provider}`);
+              if (rd.failure?.code) extra.push(`code=${rd.failure.code}`);
+              const extraTxt = extra.length ? `，${extra.join("，")}` : "";
+              getSingleton().appendLog?.(
+                "hana",
+                `[LLM 重试] LLM 请求失败，退避重试中（第 ${retryN} 次，延迟 ${rd.delayMs}ms${extraTxt}）`,
+              );
             }
           } else if (frame.type === "approval/requested") {
             // 审批挂起（approval/policy=ask）：任务会等待应答。把审批上下文（含 respond
@@ -541,7 +563,12 @@ function submitTask(
         const opNow = getSingleton().ops.get(taskRpcId);
         if (opNow?.cancelledRequested && !outcome)
           outcome = { stopReason: "aborted" };
-        // 流正常结束但无终态：视为完成（end_turn 可能已发但流先关）
+        // 兜底增强：流正常关闭但无 turn/end 时，若期间见过 finish error（LLM 请求失败帧，
+        // DSH 退避重试中/断流/崩溃），按失败收尾——避免 finish error 后 DSH 断流被误判为成功。
+        // 取消优先（上面已判 aborted），这里只处理非取消的异常收尾；pendingFailure 为空时
+        // 保持原「视为完成」语义（end_turn 可能已发但流先关）。
+        if (!outcome && pendingFailure)
+          outcome = { stopReason: "error", failure: pendingFailure };
         if (!outcome) outcome = { stopReason: "end_turn" };
       } catch (err) {
         if (err?.name === "AbortError")
@@ -648,7 +675,11 @@ function submitTask(
 
       const fullOutput = collected;
       // 回调/返回值保持 chunk 流文本；结构化 blocks（reasoning 可折叠）由卡片端从 jsonl/实时事件重建
-      const summary = buildSummary(fullOutput, finalMessageText);
+      // minimal 模式不生成摘要（buildSummary 是宿主侧协议层函数，minimal 回调不带 output/摘要）
+      const summary =
+        cfg.callbackMode === "minimal"
+          ? null
+          : buildSummary(fullOutput, finalMessageText);
       return {
         rpcId: taskRpcId,
         sessionId,
@@ -804,6 +835,20 @@ async function doExecute(input, ctx) {
       ? Number(input.timeout) * 1000
       : Number(cfg.defaultTimeoutMs || 600000);
 
+  // callbackMode 三档：full=回传全量输出 / summary=只带最终结论摘要（默认）/
+  // minimal=回调只带 { id, status, rpcId, sessionId } 定位键（不生成摘要、不占上下文）
+  const callbackMode =
+    cfg.callbackMode === "full" || cfg.callbackMode === "minimal"
+      ? cfg.callbackMode
+      : "summary";
+  // 异步提交回执按 callbackMode 展示三档语义
+  const modePhrase =
+    callbackMode === "full"
+      ? "带回完整输出"
+      : callbackMode === "minimal"
+        ? "仅带回任务状态与定位键（id/rpcId/sessionId）"
+        : "带回结果摘要";
+
   const taskCfg = {
     dshPkgDir: cfg.dshPkgDir,
     dataDir: cfg.dataDir,
@@ -811,6 +856,8 @@ async function doExecute(input, ctx) {
     webPort: cfg.webPort,
     // 审批配置唯一键 approvalTimeoutMs（超时兜底，0=禁用；manifest 默认 30000）
     approvalTimeoutMs: cfg.approvalTimeoutMs,
+    // 回调输出模式（minimal 时 submitTask 跳过 buildSummary）
+    callbackMode,
   };
   const taskParams = {
     task: input.task,
@@ -867,9 +914,26 @@ async function doExecute(input, ctx) {
 
     promise.then(
       (res) => {
+        // 回调 result 统一带定位键 id（= sessionId，与 dsh_ops / dsh_search / dsh_run
+        // resume 同键）：主上下文收到回调后凭 id 直接取会话内容或续接，无需 dsh_search 查找。
+        if (callbackMode === "minimal") {
+          // minimal：回调只带定位键（不含 output/outputMeta/summary/usage/stderr 等大字段，
+          // 不生成摘要、不占 Agent 上下文）；主上下文自行审查或凭 id 取具体会话内容。
+          resolveDeferredWake({
+            bus,
+            taskId: deferredTaskId,
+            result: {
+              id: res.sessionId,
+              status: "ok",
+              rpcId: taskRpcId,
+              sessionId: res.sessionId,
+            },
+          });
+          return;
+        }
         // PTC 式回调压缩：默认只带最终结论摘要（callbackMode=summary），
         // 完整输出在卡片（jsonl 恢复）与 dsh web UI（sessionId）可查，不进 Agent 上下文。
-        const outputMode = cfg.callbackMode === "full" ? "full" : "summary";
+        const outputMode = callbackMode === "full" ? "full" : "summary";
         const payloadOutput =
           outputMode === "full"
             ? res.output
@@ -878,6 +942,7 @@ async function doExecute(input, ctx) {
           bus,
           taskId: deferredTaskId,
           result: {
+            id: res.sessionId,
             rpcId: taskRpcId,
             tool: "dsh_run",
             status: "ok",
@@ -897,10 +962,16 @@ async function doExecute(input, ctx) {
         });
       },
       (err) => {
+        // 尽力带定位键：有 sessionId（提交成功后的执行失败）时 error 带 sessionId；
+        // 提交失败无 sessionId 的场景带 rpcId（可为空串）。主上下文凭定位键直接取会话
+        // 内容/对账，无需额外 dsh_search 查找。
+        const error = { message: String(err?.message || err).slice(0, 300) };
+        if (loc?.sessionId) error.sessionId = loc.sessionId;
+        else error.rpcId = taskRpcId;
         failDeferredWake({
           bus,
           taskId: deferredTaskId,
-          error: { message: String(err?.message || err).slice(0, 300) },
+          error,
         });
       },
     );
@@ -909,7 +980,7 @@ async function doExecute(input, ctx) {
       content: [
         {
           type: "text",
-          text: `任务已提交给 DSH（rpcId: ${taskRpcId}），在后台执行中。进度与输出见上方卡片；完成后后台消息带回结果摘要（callbackMode=${cfg.callbackMode === "full" ? "full" : "summary"}，完整输出在卡片与 DSH web UI 可查）。`,
+          text: `任务已提交给 DSH（rpcId: ${taskRpcId}），在后台执行中。进度与输出见上方卡片；完成后后台消息${modePhrase}（callbackMode=${callbackMode}，完整输出在卡片与 DSH web UI 可查）。`,
         },
       ],
       details: {
@@ -928,6 +999,7 @@ async function doExecute(input, ctx) {
     content: [{ type: "text", text }],
     details: {
       dsh: {
+        id: res.sessionId, // 定位键 = sessionId（与异步回调 result.id 同键，凭 id 直接取会话内容/续接）
         stopReason: res.stopReason,
         usage: res.usage,
         cwd,

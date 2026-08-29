@@ -63,7 +63,8 @@
           "type": "string",
           "enum": [
             "summary",
-            "full"
+            "full",
+            "minimal"
           ],
           "default": "summary",
           "title": "回调输出模式",
