@@ -226,6 +226,17 @@ function truncateSummary(text) {
 async function doGet(input, ctx, g, dataDir, projSessions) {
   const sessionId = String(input.sessionId ?? "").trim();
   if (!sessionId) throw new Error("get 模式必须传 sessionId");
+  // 校验 sessionId 格式（session-<uuid>）：sessionId 会拼入 locateSessionDir 的文件路径，
+  // 非法值（路径分隔符 / 穿越段）可导致读取 sessions/ 之外的外部 session.jsonl.zstd——
+  // 只允许字母数字与连字符（uuid 字符集），拒绝空/路径类/超长值。
+  if (
+    !/^session-[0-9a-zA-Z-]+$/.test(sessionId) ||
+    sessionId.length > 64
+  ) {
+    throw new Error(
+      `sessionId 格式非法（应为 session-<uuid>）：${sessionId}`,
+    );
+  }
 
   // 定位会话目录（projcache 猜编码优先，失败遍历 sessions/ 全部子目录）
   const sessionDir = locateSessionDir(dataDir, sessionId, projSessions);
