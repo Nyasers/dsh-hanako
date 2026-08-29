@@ -856,7 +856,7 @@ function ensureProviderPushWatch(cfg) {
 // { state: done|error, version?, error?, at }（dsh 设置页 update-status 路由读）。
 // 并发防护：g.updating 进行中重复调用返回 { ok:false, state:"updating" } 不重复执行；
 // 与 installDepsFromPlugin 内部 g.depsInstalling 独立（本标志管整条更新流程）。----
-export async function updateDsh(cfg) {
+export async function updateDsh(cfg, claimedAt) {
   const g = getSingleton();
   if (g.updating) return { ok: false, state: "updating" };
   g.updating = true;
@@ -937,12 +937,23 @@ export async function updateDsh(cfg) {
     log(`更新失败：${err}`);
     return { ok: false, state: "error", error: err };
   } finally {
-    // ⑥ 清 update-request.json（删文件，无请求态 = 文件不存在，与轮询语义一致；
-    // 防重复触发由 g.updateWatchLastAt 内存去重承担）
-    try {
-      rmSync(requestFile, { force: true });
-    } catch {
-      /* 清理失败不阻断 */
+    // ⑥ 清 update-request.json：仅当当前文件的 at 仍是本次 claim 的 at 才删
+    //（处理期间新写入的请求（新 at）保留——轮询 g.updateWatchLastAt 未设防，
+    // 新请求可正常触发；Agent 工具 dsh_update 直接调用不带 claimedAt，不碰请求文件）
+    if (claimedAt) {
+      try {
+        let cur = null;
+        try {
+          cur = JSON.parse(readFileSync(requestFile, "utf8"));
+        } catch {
+          cur = null;
+        }
+        if (cur && cur.at === claimedAt) {
+          rmSync(requestFile, { force: true });
+        }
+      } catch {
+        /* 清理失败不阻断 */
+      }
     }
     // ⑦ 解锁
     g.updating = false;
@@ -989,6 +1000,15 @@ function ensureUpdateWatch(cfg) {
       return; // 不存在/解析失败：忽略，下轮重试
     }
     if (!req || typeof req !== "object") return;
+    if (req.state === "idle") {
+      // 遗留 idle 文件（v0.21.1 占位写残留）：无请求态 = 文件不存在，删掉
+      try {
+        rmSync(path, { force: true });
+      } catch {
+        /* 清理失败不阻断 */
+      }
+      return;
+    }
     if (req.state !== "requested") return;
     const at = typeof req.at === "string" ? req.at : "";
     if (!at || at === g.updateWatchLastAt) return; // 同请求只处理一次
@@ -1019,7 +1039,9 @@ function onBridgeRequestChanged(dataDir, path, cfg) {
   if (req.state === "requested") {
     if (g.updating) return; // 更新中：跳过（重复触发防护）
     console.log("[dsh-run] 收到 DSH 更新请求（设置页），执行 updateDsh");
-    updateDsh(cfg).catch((e) => {
+    // 传 claimedAt（本次 claim 的请求 at）：updateDsh 收尾只在当前文件 at 仍是
+    // 该 at 时才删——处理期间新写入的请求（新 at）保留，轮询可继续触发
+    updateDsh(cfg, typeof req.at === "string" ? req.at : "").catch((e) => {
       console.warn(`[dsh-run] DSH 更新异常：${e?.message || e}`);
     });
   }
