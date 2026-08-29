@@ -23,33 +23,40 @@
 //      不再依赖 pnpm。「更新到最新」经 **dshana.bus 消息总线**（@dsh-hanako/bridge 提供
 //      dshanaBus 服务）发 update.request 直投宿主（进程内 WebSocket 双向总线，替代旧的
 //      POST /child/post 单向 HTTP 反向信道）触发完整更新（停 web host →
-//      pnpm add @deepseek-ai/dsh latest → 起 web host），结果写
-//      <dataDir>/update-result.json，本插件 update-status 路由读它供前端轮询。
+//      pnpm add @deepseek-ai/dsh latest → 起 web host），结果经总线回投
+//      update.progress / update.result（v0.22.1+ 事件化：本插件订阅缓存，update-status
+//      一次性查询 + update-stream 事件推送，替代前端 2s 轮询；update-result.json 读回
+//      保留作兜底）。
 //
 // 机制（v0.9.5 正规化升级沿用）：分页为**原生渲染**——不再用 tapIndex DOM 注入，而是按
 // dsh client 插件规范声明前端 client 模块（package.json dsh.client 字段 + exports["./client"]
 // 指向 client.js），client 侧注册 settings.section slot（id "dshana-settings"）。设置面板
 // 导航 = settings.section slot ledger 的投影（ui-settings-general 的 useSections 直接
 // 读 ctx.slots.entries("settings.section")），注册即自动出现 tab，点击切换/内容渲染
-// 全走 dsh 原生 React 逻辑，无任何 DOM hack。本文件只保留后端半边：五条路由 +
+// 全走 dsh 原生 React 逻辑，无任何 DOM hack。本文件只保留后端半边：路由 +
 // agentDefaultModel 服务调用；前端表单逻辑见同目录 client.js。
 //   POST /api/hana-settings.read            → agentDefaultModel.currentSelection()
 //   POST /api/hana-settings.save            → agentDefaultModel.saveSelection(...)
 //   POST /api/hana-settings.check-version   → 本地版本直读 + 远端版本 dsh 侧 HTTP 直查（npm registry）
 //   POST /api/hana-settings.request-update  → 经 dshana.bus 消息总线发 update.request（触发更新）
-//   POST /api/hana-settings.update-status   → 读 <dataDir>/update-result.json（更新进度/结果）
+//   POST /api/hana-settings.update-status   → 事件缓存优先 + <dataDir>/update-result.json 兜底（一次性查询）
+//   GET  /api/hana-settings.update-stream   → 事件推送（SSE 式流；前端订阅，终态后关闭）
 // 路由经 webServer.register（kind: exact）注册——webserver 匹配 exact 优先于 apiproxy
 // 的 /api 前缀，冲突只会发生在同 (kind, path) 重复注册（插件重载未清理场景），此时
 // 降级记日志不阻断。错误统一返回 { ok:false, error } 结构。
 //
-// config 注入：dshPkgDir（dsh 包安装目录）、dataDir（宿主插件数据目录）——由宿主 patch
-// 模板渲染（{{DSH_PKG_DIR}}/{{DATA_DIR}}，见 dsh-hanako.patch.yml.tpl / src/lifecycle.js）。
-// v0.18.1 曾注入 npmCliPath / electronNode 供版本检查 dsh 侧 spawn pnpm view；v0.18.2 起
-// 版本检查改 HTTP 直查 npm registry（全局 fetch），不再需要（patch 模板已删除对应占位符）；
-// v0.22.1 起删除 hostApi 注入（/child/post 反向信道退役），更新请求改经 dshanaBus 总线。
+// config 获取：v0.22.1+ 起 patch 静态化（dsh-hanako.patch.yml，零 config 注入）——
+// dshPkgDir（dsh 包安装目录）/ dataDir（宿主插件数据目录）改经 dshanaBus.getConfig() 获取
+// （宿主 bus ready 后经总线 config 帧下发，bridge 缓存；check-version 读 dsh-pkg
+// package.json、update-status 读 update-result.json 的路径来源）。config 未下发时
+// 相关路由返回 { ok:false, error:"总线配置未就绪" }。
+// 历史：v0.18.1 曾注入 npmCliPath / electronNode 供版本检查 dsh 侧 spawn pnpm view；
+// v0.18.2 起版本检查改 HTTP 直查 npm registry（全局 fetch），不再需要（patch 模板已删除
+// 对应占位符）；v0.22.1 起删除 hostApi 注入（/child/post 反向信道退役）与 {{DSH_PKG_DIR}}/
+// {{DATA_DIR}} 占位符（改总线 config 帧下发）。
 //
-// 服务依赖：export const inject = ['webServer', 'agentDefaultModel', 'hanaLogger'] 声明依赖
-// （cordis 服务注入经 inject 声明生效，无声明则 apply 内 ctx.webServer /
+// 服务依赖：export const inject = ['webServer', 'agentDefaultModel', 'hanaLogger', 'dshanaBus']
+// 声明依赖（cordis 服务注入经 inject 声明生效，无声明则 apply 内 ctx.webServer /
 // ctx.agentDefaultModel 抛 "cannot get property ... without inject"），apply 内再经
 // ctx.inject 取作用域上下文。诊断日志经 @dsh-hanako/logger 统一日志服务写入本次会话日志
 // （行格式 [settings]，src 前缀不变）。
@@ -138,7 +145,7 @@ function compareVersions(a, b) {
 // HTTP 能力：dsh web host 运行在宿主 node v24（全局 fetch 可用），零运行时依赖；
 // 不再 spawn 宿主 electron node + pnpm 入口（config 注入字段 electronNode / npmCliPath
 // 已随 patch 模板占位符删除）。
-async function npmViewLatest(cfg) {
+async function npmViewLatest() {
   const fetchJson = async (url) => {
     try {
       const res = await fetch(url, {
@@ -204,12 +211,27 @@ export function apply(ctx, config) {
             }
           };
 
+          // ---- 总线配置（v0.22.1+）：dshPkgDir/dataDir 经 dshanaBus.getConfig() 获取
+          // （宿主 bus ready 后 config 帧下发，bridge 缓存）——替代旧 patch config 注入。
+          // 未下发返回 null（check-version/update-status 等依赖路径的路由报
+          // 「总线配置未就绪」）----
+          const busConfig = () => {
+            try {
+              if (httpCtx.dshanaBus && typeof httpCtx.dshanaBus.getConfig === "function")
+                return httpCtx.dshanaBus.getConfig();
+            } catch {
+              /* 配置读取失败按未下发处理 */
+            }
+            return null;
+          };
           // 本地版本：dsh-pkg 下 @deepseek-ai/dsh 的 package.json（文件不存在 → null；
-          // 零延迟直读，不经桥接）
+          // 零延迟直读，不经桥接；dshPkgDir 来自总线配置）
           const readLocalVersion = () => {
             try {
+              const bc = busConfig();
+              if (!bc || typeof bc.dshPkgDir !== "string" || !bc.dshPkgDir) return null;
               const pkgPath = join(
-                cfg.dshPkgDir || "",
+                bc.dshPkgDir,
                 "node_modules",
                 "@deepseek-ai",
                 "dsh",
@@ -225,6 +247,69 @@ export function apply(ctx, config) {
               return null;
             }
           };
+
+          // ---- 更新事件缓存（v0.22.1+ 事件化）：订阅总线 update.progress / update.result
+          // （宿主 updateDsh 执行期间回投），缓存最新状态供 update-status 一次性查询与
+          // update-stream 事件推送——替代前端 2s 轮询 update-status。update-result.json
+          // 读回保留作兜底（事件丢失/重启后文件仍在）。----
+          let updateEventCache = null; // { state, version?, error?, at } | null
+          const updateStreams = new Set(); // 挂起的 update-stream 响应
+          const broadcastUpdateEvent = (value) => {
+            const line = "data: " + JSON.stringify({ ok: true, value }) + "\n\n";
+            for (const stream of updateStreams) {
+              try {
+                stream.res.write(line);
+              } catch {
+                /* 流已关闭 */
+              }
+            }
+            if (
+              value &&
+              (value.state === "done" || value.state === "error")
+            ) {
+              // 终态：关闭所有挂起的流
+              for (const stream of [...updateStreams]) {
+                try {
+                  stream.res.end();
+                } catch {
+                  /* 已结束 */
+                }
+              }
+              updateStreams.clear();
+            }
+          };
+          try {
+            if (httpCtx.dshanaBus && typeof httpCtx.dshanaBus.on === "function") {
+              disposers.push(
+                httpCtx.dshanaBus.on("update.progress", (payload) => {
+                  const p = payload && typeof payload === "object" ? payload : {};
+                  updateEventCache = {
+                    state: "updating",
+                    at: p.at || new Date().toISOString(),
+                  };
+                  broadcastUpdateEvent(updateEventCache);
+                }),
+              );
+              disposers.push(
+                httpCtx.dshanaBus.on("update.result", (payload) => {
+                  const p = payload && typeof payload === "object" ? payload : {};
+                  updateEventCache = {
+                    state: p.state || "error",
+                    ...(typeof p.version === "string" && p.version
+                      ? { version: p.version }
+                      : {}),
+                    ...(typeof p.error === "string" && p.error
+                      ? { error: p.error }
+                      : {}),
+                    at: new Date().toISOString(),
+                  };
+                  broadcastUpdateEvent(updateEventCache);
+                }),
+              );
+            }
+          } catch {
+            /* 事件订阅失败降级：update-status 走文件兜底 */
+          }
 
           // POST /api/hana-settings.read：返回当前默认（{ provider, model, reasoningEffort? }）
           registerRoute("/api/hana-settings.read", async (req, res) => {
@@ -275,13 +360,20 @@ export function apply(ctx, config) {
           // dsh 侧 HTTP 直查——fetch https://registry.npmjs.org/@deepseek-ai/dsh/latest
           // 的 JSON version 字段（pnpm view 语义等价；官方源失败重试 npmmirror，15s 超时），
           // 响应 { ok:true, value:{ localVersion, latestVersion, updateAvailable, error? } }。
+          // dshPkgDir 来自总线配置（dshanaBus.getConfig()）；config 未下发（bus 未就绪/
+          // hello 未完成）时返回 { ok:false, error:"总线配置未就绪" }。
           // 不再写 update-request.json / 读 check-result.json（v0.18.1 起废弃宿主桥接：
           // resources.watch 链路不可靠导致检查永不完成）。
           registerRoute("/api/hana-settings.check-version", async (req, res) => {
             try {
               await readJsonBody(req);
+              const bc = busConfig();
+              if (!bc || typeof bc.dshPkgDir !== "string" || !bc.dshPkgDir) {
+                json(res, { ok: false, error: "总线配置未就绪" });
+                return;
+              }
               const localVersion = readLocalVersion();
-              const remote = await npmViewLatest(cfg);
+              const remote = await npmViewLatest();
               const latestVersion = remote.version;
               const updateAvailable = !!(
                 localVersion &&
@@ -303,7 +395,8 @@ export function apply(ctx, config) {
           // update.request 直投宿主（v0.22.1 起替代 POST /child/post 单向 HTTP 反向
           // 信道——/child/post 已退役）。@dsh-hanako/bridge 提供 dshanaBus 服务：
           // 握手成功（hello 通过）后 emit 即送达宿主，宿主受理后执行 npm i latest +
-          // 重启 web host，结果写 update-result.json（本插件 update-status 路由读）。
+          // 重启 web host，执行期间/完成后经总线回投 update.progress / update.result
+          // （本插件事件缓存 + update-status 一次性查询 + update-stream 事件推送）。
           // bus 未就绪（无已连接客户端）时返回 { ok:false, error:"消息总线未连接" }。
           registerRoute("/api/hana-settings.request-update", async (req, res) => {
             try {
@@ -354,11 +447,22 @@ export function apply(ctx, config) {
             }
           });
 
-          // POST /api/hana-settings.update-status：读更新结果文件（不存在 → idle；解析失败 → idle）
+          // POST /api/hana-settings.update-status：一次性查询——事件缓存优先（事件化主信道，
+          // v0.22.1+ 替代前端 2s 轮询），无缓存读 update-result.json 兜底（文件不存在 → idle；
+          // 解析失败 → idle）。dataDir 来自总线配置；config 未下发时报「总线配置未就绪」。
           registerRoute("/api/hana-settings.update-status", async (req, res) => {
             try {
               await readJsonBody(req);
-              const f = join(cfg.dataDir || "", "update-result.json");
+              const bc = busConfig();
+              if (!bc || typeof bc.dataDir !== "string" || !bc.dataDir) {
+                json(res, { ok: false, error: "总线配置未就绪" });
+                return;
+              }
+              if (updateEventCache) {
+                json(res, { ok: true, value: updateEventCache });
+                return;
+              }
+              const f = join(bc.dataDir, "update-result.json");
               if (!existsSync(f)) {
                 json(res, { ok: true, value: { state: "idle" } });
                 return;
@@ -378,6 +482,47 @@ export function apply(ctx, config) {
             }
           });
 
+          // GET /api/hana-settings.update-stream：事件推送（SSE 式流）——更新期间前端订阅
+          // （fetch 流式读取），收到 update.progress/result 事件即推，终态（done/error）后
+          // 关闭。首帧回放当前缓存（若已有事件）；事件缺失时前端可手动刷新（update-status
+          // 兜底）。路由挂起期间前端关闭/断连时自动清理。
+          registerRoute("/api/hana-settings.update-stream", (req, res) => {
+            try {
+              res.writeHead(200, {
+                "Content-Type": "text/event-stream",
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+              });
+              // 首帧回放当前缓存（若已有事件）
+              if (updateEventCache) {
+                res.write(
+                  "data: " + JSON.stringify({ ok: true, value: updateEventCache }) + "\n\n",
+                );
+                if (
+                  updateEventCache.state === "done" ||
+                  updateEventCache.state === "error"
+                ) {
+                  res.end();
+                  return;
+                }
+              }
+              const stream = { res };
+              updateStreams.add(stream);
+              const onClose = () => {
+                updateStreams.delete(stream);
+              };
+              res.on("close", onClose);
+              res.on("error", onClose);
+            } catch (e) {
+              try {
+                res.writeHead(200, { "Content-Type": "application/json" });
+                res.end(JSON.stringify({ ok: false, error: e?.message || String(e) }));
+              } catch {
+                /* 响应已不可写 */
+              }
+            }
+          });
+
           return () => {
             for (const dispose of disposers) {
               try {
@@ -388,7 +533,7 @@ export function apply(ctx, config) {
             }
           };
         });
-    });
+      });
   } catch (e) {
     try {
       ctx.logger?.warn?.(`[@dsh-hanako/settings] 插件停用：${e?.message || e}`);

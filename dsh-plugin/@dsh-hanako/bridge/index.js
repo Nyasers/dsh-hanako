@@ -19,23 +19,31 @@
 // 处理与 socket 清理），零运行时依赖（node:http 事件 socket + node:crypto + node:buffer）。
 //
 // 协议（JSON 文本帧，{ channel, payload }）：
-//   { "channel":"hello", "payload":{ "token":"<busToken>" } }   —— 首帧握手（必须）
-//   { "channel":"hello-ok", "payload":{} }                       —— 服务端应答（握手成功）
+//   { "channel":"hello", "payload":{} }                     —— 首帧握手（身份宣告；免鉴权——
+//                                                             总线与 mux、/api/session.* 同级，
+//                                                             本机信任，不再比对 busToken；
+//                                                             config 已清空）
+//   { "channel":"hello-ok", "payload":{} }                  —— 服务端应答（握手成功）
+//   { "channel":"config", "payload":{ dshPkgDir, dataDir } }—— 宿主下发配置（hello 后由宿主
+//                                                             主动发；bridge 缓存供 getConfig()）
+//   { "channel":"log", "payload":{ src, line } }            —— dsh 内部日志转发（宿主写会话文件）
 //   { "channel":"update.request", "payload":{ at, fromVersion } }—— 设置页发起的更新请求
-//   { "channel":"update.result", "payload":{ state, version?, error? } }—— 宿主回投结果
+//   { "channel":"update.progress", "payload":{ state, at } }—— 宿主更新开始/进度回投
+//   { "channel":"update.result", "payload":{ state, version?, error? } }—— 宿主更新结果回投
+//   { "channel":"provider.refresh", "payload":{ routes } }  —— 宿主 provider 路由推送（替代 HTTP）
 //   { "channel":"bus.ping", "payload":{} } / { "channel":"bus.pong", "payload":{} } —— 心跳
-// 首帧必须是 hello：token 与 config 注入的 busToken 比对，不匹配立即关闭（close 1008）；
-// 未收到 hello 前忽略其他消息；5s 未发 hello 关闭（超时）。
-//
-// 单连接语义：宿主是唯一客户端——新连接 hello 通过后旧连接关闭（close 1001 replaced）。
+// 首帧必须是 hello（免鉴权身份宣告，仍要求首帧即 hello）：非 hello 首帧立即关闭
+// （close 1008）；5s 未发 hello 关闭（超时）。单连接语义：宿主是唯一客户端——新连接
+// hello 通过后旧连接关闭（close 1001 replaced）。
 //
 // 提供 'dshanaBus' 服务（cordis provide）：
 //   emit(channel, payload)  —— 向已通过 hello 的连接发 JSON 文本帧（未连接/未握手 no-op）
 //   on(channel, handler)    —— 订阅消息分发（EventEmitter）；返回退订函数
-//   status()                —— { connected, authed, ready } 诊断
-// inject：['webServer', 'hanaLogger']（webServer 注册 upgrade 路由；hanaLogger 统一日志，
-// 行格式 [<HH:mm:ss.SSS>] [bridge] <内容>）。config：{ busToken: string }（patch 模板
-// {{BUS_TOKEN}} 注入）。
+//   status()                —— { connected, ready, path } 诊断
+//   getConfig()             —— 返回宿主下发的配置（{ dshPkgDir, dataDir }）或 null
+// inject：['webServer']（注册 upgrade 路由）。日志不再经 hanaLogger（避免与 logger 插件
+// 的 dshanaBus 注入形成循环依赖）——bridge 自身日志经总线 log 帧直投宿主（已连接时），
+// 未连接时退 ctx.logger（cordis 控制台）。config：{}（patch 静态注入，无任何占位符）。
 //
 // 容错纪律：apply 全程 try/catch 不抛出——依赖缺失/路由重复只记日志，插件降级为
 // 空操作，不阻断 dsh 启动。注释风格同 @dsh-hanako/provider（中文/单引号/无分号）。
@@ -44,30 +52,32 @@ import { EventEmitter } from 'node:events'
 import { handleUpgrade } from './ws-lib.js'
 
 export const name = '@dsh-hanako/bridge'
-export const inject = ['webServer', 'hanaLogger']
+export const inject = ['webServer']
 
 // ---- 常量 ----
 const BUS_PATH = '/api/dshana.bus' // upgrade 路由路径（宿主连 ws://127.0.0.1:<port> 该路径）
 const HELLO_TIMEOUT_MS = 5000 // 握手超时（5s 未发 hello 关闭）
-const HELLO_CLOSE_CODE = 1008 // 鉴权失败关闭码（token 错/非 hello 首帧/超时）
+const HELLO_CLOSE_CODE = 1008 // 握手失败关闭码（非 hello 首帧/超时）
 const REPLACED_CLOSE_CODE = 1001 // 旧连接被新连接顶掉
 
 // ---- 插件 apply：注册 upgrade 路由 + 提供 dshanaBus 服务（全程容错，降级不阻断）----
 export function apply(ctx, config) {
   try {
-    const cfg = config && typeof config === 'object' ? config : {}
-    ctx.inject(['webServer', 'hanaLogger'], (httpCtx) => {
+    ctx.inject(['webServer'], (httpCtx) => {
       httpCtx.effect(() => {
-        let bridgeLog = () => {}
-        try {
-          bridgeLog = (msg) => httpCtx.hanaLogger.log('bridge', msg)
-        } catch {
-          /* 日志失败不阻断 */
+        let bridgeLog = (msg) => {
+          // 未连接/降级时的兜底日志（cordis 控制台）；已连接时经总线 log 帧直投宿主
+          try {
+            ctx.logger?.info?.('[@dsh-hanako/bridge] ' + msg)
+          } catch {
+            /* 日志失败不阻断 */
+          }
         }
-        const busToken = typeof cfg.busToken === 'string' ? cfg.busToken : ''
         const emitter = new EventEmitter()
         let conn = null // 当前已握手连接（单连接语义）
         let upgradeDisposer = null
+        // 宿主下发的配置（hello 后经 config 帧到达；提供 getConfig() 供 settings/provider 取路径）
+        let busConfig = null
 
         // ---- 向当前连接发 JSON 文本帧（未连接/未握手 no-op）----
         const sendFrame = (frame) => {
@@ -80,10 +90,10 @@ export function apply(ctx, config) {
           }
         }
 
-        // ---- 连接接入：首帧 hello 鉴权 + 单连接顶替 + 帧分发 ----
+        // ---- 连接接入：首帧 hello（免鉴权）+ 单连接顶替 + 帧分发 ----
         const onConnection = (wsConn) => {
           let authed = false
-          // 握手超时：5s 未发合法 hello 关闭（token 未到/客户端异常）
+          // 握手超时：5s 未发合法 hello 关闭（客户端异常）
           const helloTimer = setTimeout(() => {
             if (!authed && wsConn.readyState === 1) {
               try {
@@ -104,24 +114,11 @@ export function apply(ctx, config) {
               return
             }
             if (!authed) {
-              // 首帧必须是 hello { channel:"hello", payload:{ token } }
-              if (
-                !frame ||
-                frame.channel !== 'hello' ||
-                !frame.payload ||
-                typeof frame.payload !== 'object'
-              ) {
+              // 首帧必须是 hello（免鉴权身份宣告：不再比对 token——总线与 mux、
+              // /api/session.* 同级，本机信任；payload 可为空对象）
+              if (!frame || frame.channel !== 'hello') {
                 try {
                   wsConn.close(HELLO_CLOSE_CODE, 'hello required')
-                } catch {
-                  /* 忽略 */
-                }
-                return
-              }
-              if (frame.payload.token !== busToken) {
-                bridgeLog('dshana.bus 握手失败（token 不匹配），关闭连接')
-                try {
-                  wsConn.close(HELLO_CLOSE_CODE, 'bad token')
                 } catch {
                   /* 忽略 */
                 }
@@ -139,16 +136,29 @@ export function apply(ctx, config) {
               }
               conn = wsConn
               sendFrame({ channel: 'hello-ok', payload: {} })
-              bridgeLog('dshana.bus 握手成功（宿主已连接）')
+              bridgeLog = (msg) => {
+                // 已连接：经总线 log 帧直投宿主（会话文件行格式 [ts] [bridge] 由宿主侧统一）
+                sendFrame({ channel: 'log', payload: { src: 'bridge', line: msg } })
+              }
+              bridgeLog('dshana.bus 握手成功（宿主已连接，免鉴权）')
               return
             }
-            // 已握手：channel 分发 + 心跳
+            // 已握手：channel 分发 + 心跳 + config 缓存
             if (frame && typeof frame.channel === 'string') {
               if (frame.channel === 'bus.ping') {
                 sendFrame({ channel: 'bus.pong', payload: {} })
                 return
               }
               if (frame.channel === 'bus.pong') return
+              if (frame.channel === 'config') {
+                // 宿主下发配置（dshPkgDir/dataDir 替代 patch 注入）：缓存供 getConfig()
+                const p = frame.payload && typeof frame.payload === 'object' ? frame.payload : {}
+                if (p && (typeof p.dshPkgDir === 'string' || typeof p.dataDir === 'string')) {
+                  busConfig = { ...p }
+                  bridgeLog('宿主配置已下发（dshPkgDir/dataDir，供 getConfig()）')
+                }
+                return
+              }
               // 对端可控 channel 隔离：加 ch: 前缀分发，避免触发 EventEmitter 保留事件
               // （error / newListener / removeListener）；分发异常（监听器抛错）不冒泡崩进程。
               try {
@@ -191,11 +201,6 @@ export function apply(ctx, config) {
           } catch (e) {
             // 重复注册（插件重载未清理）：降级记日志，不阻断
             bridgeLog('upgrade 路由注册失败：' + ((e && e.message) || e))
-            try {
-              ctx.logger?.warn?.('[@dsh-hanako/bridge] upgrade 路由注册失败：' + ((e && e.message) || e))
-            } catch {
-              /* 日志失败不阻断 */
-            }
           }
         } else {
           bridgeLog('webServer.registerUpgrade 不可用（宿主版本过旧），消息总线不可用')
@@ -206,7 +211,7 @@ export function apply(ctx, config) {
           // emit：向已通过 hello 的连接发 JSON 文本帧（未连接/未握手 no-op，返回是否送达）
           emit: (channel, payload) =>
             sendFrame({ channel, payload: payload ?? {} }),
-          // on：订阅消息分发（宿主事件 update.result 等）；返回退订函数。
+          // on：订阅消息分发（update.request / provider.refresh / update.result 等）；返回退订函数。
           // 与分发端一致：channel 映射为 ch:<channel> 后再挂监听（隔离保留事件）。
           on: (channel, cb) => {
             if (typeof channel !== 'string' || typeof cb !== 'function') return () => {}
@@ -220,10 +225,12 @@ export function apply(ctx, config) {
             ready: !!conn && conn.readyState === 1,
             path: BUS_PATH,
           }),
+          // 宿主下发的配置（未下发返回 null——settings/provider 据此报「总线配置未就绪」）
+          getConfig: () => (busConfig ? { ...busConfig } : null),
         }
         const provideDisposer = ctx.provide('dshanaBus', service)
 
-        bridgeLog('bridge 插件已启动（dshana.bus 消息总线服务端）')
+        bridgeLog('bridge 插件已启动（dshana.bus 消息总线服务端，免鉴权）')
 
         return () => {
           // 卸载：注销 provide + upgrade 路由 + 关闭当前连接
