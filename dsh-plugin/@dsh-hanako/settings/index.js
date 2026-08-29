@@ -328,9 +328,23 @@ export function apply(ctx, config) {
               }),
               signal: AbortSignal.timeout(5000),
             });
-            const data = await r.json().catch(() => ({}));
-            if (!r.ok || data?.ok === false) {
-              throw new Error(data?.error || `宿主投递失败（HTTP ${r.status}）`);
+            let data = null;
+            try {
+              data = await r.json();
+            } catch {
+              throw new Error(`宿主响应非 JSON（HTTP ${r.status}）`);
+            }
+            if (!r.ok) {
+              throw new Error(
+                (data && typeof data === "object" && data.error) ||
+                  `宿主投递失败（HTTP ${r.status}）`,
+              );
+            }
+            if (!data || typeof data !== "object" || data.ok !== true) {
+              throw new Error(
+                (data && typeof data === "object" && data.error) ||
+                  `宿主响应缺少 ok:true（HTTP ${r.status}）`,
+              );
             }
             settingsLog("更新请求已直投宿主（/child/post），将自动执行更新");
             json(res, { ok: true, ...data });
