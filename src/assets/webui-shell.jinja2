@@ -262,6 +262,48 @@
         .then(function () { ack(true); })
         .catch(function () { ack(false); });
     });
+    // ---- 统一通道（bridge）模式：SW 拦截 + 通道路径 iframe ----
+    // channelMode 由服务端渲染的 channelOk（bridge WS #2 就绪）初始化，随 health
+    // 轮询结果刷新（d.channelOk）。通道模式下 iframe 走宿主通道路径
+    // （/api/plugins/dsh-hanako/web/）：壳页面先注册 SW（scope 同通道）+ await ready
+    // + postMessage bridge-config（WS #1 url + token，token 取 location.search）再设
+    // iframe src——首载导航本身被 SW 拦截经 WS #1 转发到 dsh。宿主 0.769.0 WS #1
+    // 端点不可用时 channelOk 恒 false，回退直连 127.0.0.1:<port>（旧行为）。
+    var channelMode = {{= it.channelOk === true ? "true" : "false" }};
+    var channelUrl = {{= JSON.stringify(it.channelUrl) }};
+    var ws1Path = {{= JSON.stringify(it.ws1Path) }};
+    function channelToken() {
+      var params = new URLSearchParams(location.search);
+      return params.get("token") || "";
+    }
+    function setupChannel() {
+      // 注册 SW（scope = 通道前缀；脚本在插件命名空间 /sw.js，scope 在其下合法）
+      var swUrl = api + "/sw.js";
+      if (!("serviceWorker" in navigator)) {
+        // 无 SW 支持：回退直连（极端旧浏览器）
+        channelMode = false;
+        return false;
+      }
+      return navigator.serviceWorker.register(swUrl, { scope: channelUrl })
+        .then(function () { return navigator.serviceWorker.ready; })
+        .then(function (reg) {
+          var token = channelToken();
+          var proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+          var wsUrl = proto + "//" + window.location.host + ws1Path;
+          // 向 SW 下发 WS #1 连接参数（url + token）
+          if (reg && reg.active) {
+            reg.active.postMessage({ type: "bridge-config", wsUrl: wsUrl, token: token });
+          }
+          frame.src = channelUrl + "?dshReload=" + Date.now();
+          return true;
+        })
+        .catch(function (err) {
+          // SW 注册/激活失败：回退直连
+          console.warn("[dsh-hanako] SW 注册失败，回退直连:", err);
+          channelMode = false;
+          return false;
+        });
+    }
     function attach() {
       // 就绪：停当前轮询定时器，按需挂载/刷新 iframe，切回主视图
       if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
@@ -272,7 +314,13 @@
       // （带时间戳 bust，避免相同 src 不触发重新加载，保证更新后拿到新版本 UI）；
       // 已挂载且非 pending（检查/验证后的 refreshDiag）不重复 reload，不打断 dsh UI
       if (wasPending || !frame.getAttribute("src")) {
-        frame.src = base + "?dshReload=" + Date.now();
+        if (channelMode) {
+          // 通道模式：SW 注册 + ready + 配置下发后再设 src（首载导航走 SW）
+          setupChannel().catch(function () { /* 失败已在 setupChannel 内回退直连 */ });
+          if (!channelMode) frame.src = base + "?dshReload=" + Date.now();
+        } else {
+          frame.src = base + "?dshReload=" + Date.now();
+        }
       }
       startThemePush();
       // 低频兜底探测：iframe 挂载后不再高频轮询，但 web host 掉线（更新停机/进程
@@ -566,6 +614,7 @@
       fetch(api + "/webui/health", { headers: surfaceHeaders(), signal: AbortSignal.timeout(3000) })
         .then(function (r) { return r.json(); })
         .then(function (d) {
+          if (d && typeof d.channelOk === "boolean") channelMode = d.channelOk;
           if (d && d.ok) { attach(); return; }
           if (d && d.diagnostics) renderDiagList(d.diagnostics);
         })
@@ -630,6 +679,7 @@
       fetch(api + "/webui/health", { headers: surfaceHeaders(), signal: AbortSignal.timeout(3000) })
         .then(function (r) { return r.json(); })
         .then(function (d) {
+          if (d && typeof d.channelOk === "boolean") channelMode = d.channelOk;
           if (d && d.ok) {
             // health 就绪但更新/安装进行中（web host 尚未停机）：保持诊断页显示
             // 进度，避免刚触发更新/安装时切回 iframe 又立刻退回的跳变
