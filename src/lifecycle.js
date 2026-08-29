@@ -14,7 +14,7 @@
 //   更新 DSH         updateDsh（停 host → 装依赖 → 起 host → 读版本，写 update-result.json）
 //   watch           ensureProviderPushWatch（provider 热跟随 watch）
 //   provider 路由     detectHostProviderPaths / readJsonFile / mapModel / readHostConfig / buildProviderRoutes
-//                    → pushProviderRefresh（HTTP push 到 dsh web host）
+//                    → pushProviderRoutes（总线 emit provider.refresh，替代 HTTP push）
 //   config 引导       ensureConfigJson（自动生成 config.json，幂等）
 //   web host 日志     logTs / appendLog / logFileStamp / newWebLogPath（兜底实现）
 // 单例挂载（globalThis.__dshHanako，经 getSingleton()）：g.closeProcess / g.collectDiagnostics /
@@ -33,7 +33,6 @@
 // 拆分前一致；updateDsh 流程（停 host→装依赖→起 host→读版本）保持完整；collectWebDiagnostics 输出的
 // checks 结构（t1 依赖 / t2 进程）令 routes/webui.js 渲染不变。
 import { spawn } from "node:child_process";
-import { randomBytes } from "node:crypto";
 import {
   readFileSync,
   existsSync,
@@ -44,7 +43,6 @@ import {
   unlinkSync,
   renameSync,
   appendFileSync,
-  rmSync,
   readdirSync,
 } from "node:fs";
 import { join, dirname } from "node:path";
@@ -65,7 +63,7 @@ import {
   readDshInstalledVersion,
 } from "./tools/lib/install.js";
 import { checkDshUpdate } from "./tools/lib/check.js";
-import { connectBus, closeBus } from "./lib/bus.js";
+import { connectBus, closeBus, setBusConfigProvider } from "./lib/bus.js";
 
 const STDERR_CAP = 8192;
 const PORT_READY_TIMEOUT_MS = 60000; // web host 端口就绪等待上限
@@ -456,21 +454,18 @@ export async function ensureWebHost(cfg) {
   // session-query-sqlite 注入已移除（权限收敛）：dsh 默认 openAt: never 禁用
   // 全文搜索，插件不再 --patch 覆盖启用——不再有全局全文搜索入口；会话管理以
   // dsh-home 为唯一事实源（sessionId 即访问凭证，见 tools/dsh-session.js）。
-  // 主题注入 overlay + 宿主 provider 跟随 overlay——多份 patch 合并为
-  // dsh-plugin/dsh-hanako.patch.yml.tpl 单一模板：段1 theme
-  // insert + 段2 provider insert（恒渲染：hostProvider 恒开跟随宿主，无关闭选项）
-  // + 段3 settings insert（恒挂载；改名 @dsh-hanako/settings 并注入
-  // 「检查与更新 DSH」链路 config：dshPkgDir/dataDir——远端版本 HTTP 直查 npm registry，
-  // 不再注入 pnpm 入口）+ 段4 bridge insert（dshana.bus 消息总线服务端，config 注入
-  // busToken——更新请求/结果改经总线双向收发，替代 /child/post 反向信道）。
-  // cordis 插件加载：theme/provider/settings/logger/bridge 五段均以包名注册（dsh client
-  // 模块发现按 loader entry 的 name 做 require.resolve('<name>/package.json')，file://
-  // 无法解析），故启动前须在 $DSH_HOME/profiles/node_modules 统一建 junction（包名 →
-  // 插件安装目录 dsh-plugin/<pkg>），与 dsh 自维护的 junction farm 同机制
+  // 主题注入 overlay + 宿主 provider 跟随 overlay——六内嵌插件合并为静态 patch
+  // dsh-plugin/dsh-hanako.patch.yml（v0.22.1+ tpl 整层退役）：纯 insert
+  // logger/clipboard/theme/provider/settings/bridge 六段，全部零 config（busToken
+  // 免鉴权、config 经总线下发、logPath 占位符删除——见下方 patchStatic 注释）。
+  // cordis 插件加载：六段均以包名注册（dsh client 模块发现按 loader entry 的 name 做
+  // require.resolve('<name>/package.json')，file:// 无法解析），故启动前须在
+  // $DSH_HOME/profiles/node_modules 统一建 junction（包名 → 插件安装目录
+  // dsh-plugin/<pkg>），与 dsh 自维护的 junction farm 同机制
   // （ensureCordisJunctions 每次启动无条件重建）。
-  // 启动前渲染模板（占位符→实际路径）到数据目录 dsh-hanako.patch.generated.yml；launcher
-  // flag（--profile/--patch）必须位于应用参数（--port）之前。模板缺失/渲染失败时不挂
-  // 任何 patch 记 warn（内嵌插件降级不可用，dsh 启动不受影响），不阻断 dsh 启动。
+  // --patch 直接指向静态文件；launcher flag（--profile/--patch）必须位于应用参数
+  // （--port）之前。静态文件缺失（安装不完整）时不挂任何 patch 记 warn（内嵌插件
+  // 降级不可用，dsh 启动不受影响），不阻断 dsh 启动。
   // 正规化升级：@dsh-hanako/settings 前身 dsh-hana-default-model 先行改包名注册；
   // 本版 theme/provider 一并正规化——dsh client 模块发现按
   // require.resolve('<name>/package.json') 找 package.json 的 dsh.client 声明，file://
@@ -563,54 +558,20 @@ export async function ensureWebHost(cfg) {
     }
   };
 
+  // 静态 patch：dsh-plugin/dsh-hanako.patch.yml（v0.22.1+ tpl 整层退役）——
+  // 纯 insert 六个内嵌插件（logger/clipboard/theme/provider/settings/bridge），全部
+  // 零 config：busToken 免鉴权（任务 A）、config 经总线下发（任务 B）、logPath 占位符
+  // 删除（任务 C，日志改总线 log 帧转发）。不再渲染 dsh-hanako.patch.generated.yml、
+  // 不再做任何占位符替换（{{DSH_PKG_DIR}}/{{LOG_PATH}}/{{DATA_DIR}}/{{BUS_TOKEN}}
+  // 全部退役）。--patch 直接指向静态文件；文件缺失（安装不完整）时降级：不挂任何
+  // patch 记 warn（内嵌插件不可用，dsh 启动不受影响）。
   const patchFiles = [];
-  const patchTpl = join(PLUGIN_ROOT, "dsh-plugin", "dsh-hanako.patch.yml.tpl");
-  // 渲染各插件的 config 依赖解析基座占位符——theme/provider/settings/logger/bridge
-  // 五段均以包名注册，不再有 file:// URL 占位符；包名经 ensureCordisJunctions 的
-  // junction 解析。B方案：provider 段不再注入 modelsPath/catalogPath（宿主不再经
-  // patch 注入 provider 数据，parse 逻辑上移宿主，route 目录改经 HTTP push 下发）——
-  // provider config 只剩 dshPkgDir（子进程解析 pi-ai 依赖用）。DSH_PKG_DIR = dsh 包
-  // 安装目录（provider/settings 段）；LOG_PATH = 本次会话日志文件路径（logger 段，
-  // 四个内嵌插件经统一日志服务写入同一文件）；DATA_DIR = settings 段「检查与更新
-  // DSH」链路（更新结果文件写入数据目录）；BUS_TOKEN = bridge 段消息总线握手 token
-  // （每次 spawn 生成，宿主侧存 g.busToken，就绪后宿主连 ws://127.0.0.1:<port>/
-  // api/dshana.bus 首帧 hello 校验——替代 DSH_HOST_API 反向信道注入，/child/post
-  // 已退役）。v0.18.2 起远端版本查询改 HTTP 直查 npm registry（settings 侧与
-  // lib/check.js 同款，pnpm view 语义等价），NPM_CLI_PATH / ELECTRON_NODE 占位符
-  // 已从模板删除（settings 不再 spawn pnpm，渲染为同步函数，无异步依赖）。
-  const renderPatchTpl = () => {
-    const gen = join(cfg.dataDir, "dsh-hanako.patch.generated.yml");
-    // dshana.bus 消息总线握手 token：每次 spawn 生成（web host 重启 = 新 token，
-    // 子插件 bridge 段 config 以新 token 鉴权，宿主就绪后以同 token 连接）。存单例
-    // g.busToken 供 bus.js connectBus 读取（bus 连接失败不阻断 dsh 启动/更新，
-    // 信道降级：update.request 报错即可，check-version 不受影响）。
-    g.busToken = randomBytes(16).toString("hex");
-    const content = readFileSync(patchTpl, "utf8")
-      .split("{{DSH_PKG_DIR}}")
-      .join(cfg.dshPkgDir || resolveDshPkgDir(cfg))
-      .split("{{LOG_PATH}}")
-      .join(logPath)
-      .split("{{DATA_DIR}}")
-      .join(cfg.dataDir)
-      .split("{{BUS_TOKEN}}")
-      .join(g.busToken);
-    writeFileSync(gen, content, "utf8");
-    return gen;
-  };
-  if (existsSync(patchTpl)) {
-    try {
-      patchFiles.push(renderPatchTpl());
-    } catch (e) {
-      // 渲染失败（读模板/写数据目录异常）：不挂任何 patch 记 warn（dsh 启动不受影响，
-      // 内嵌插件降级不可用）
-      console.warn(
-        `[dsh-run] patch 模板渲染失败（${e?.message || e}）：不挂任何 patch（DSH 启动不受影响，内嵌插件降级不可用）`,
-      );
-    }
+  const patchStatic = join(PLUGIN_ROOT, "dsh-plugin", "dsh-hanako.patch.yml");
+  if (existsSync(patchStatic)) {
+    patchFiles.push(patchStatic);
   } else {
-    // 模板缺失：不挂任何 patch 记 warn（dsh 启动不受影响，内嵌插件降级不可用）
     console.warn(
-      "[dsh-run] dsh-plugin/dsh-hanako.patch.yml.tpl 缺失：不挂任何 patch（DSH 启动不受影响，内嵌插件降级不可用）",
+      "[dsh-run] dsh-plugin/dsh-hanako.patch.yml 缺失：不挂任何 patch（DSH 启动不受影响，内嵌插件降级不可用）",
     );
   }
   const patchArgs = patchFiles.flatMap((p) => ["--patch", p]);
@@ -717,21 +678,26 @@ export async function ensureWebHost(cfg) {
           web.ready = true;
           // 新进程就绪：清掉上次退出记录（持久字段只反映最近一次退出）
           g.webLastExit = null;
-          // B方案下子进程启动时 snapshot 为空，首批 provider 依赖宿主 push。
-          // 从这里（唯一新进程就绪点）主动推一次最新 routes——任意 spawn 路径
-          // （插件 onload / webui 手动启动 / dsh_run 进程兜底重启 / updateDsh 更新重启）
-          // 都保证有初始 push；内部有界重试覆盖子进程插件 apply() 晚于端口就绪的
-          // 路由空窗（失败不阻断，下轮配置变化/重启仍会触发）。不 await，页面/任务不阻塞。
-          pushProviderRefresh(port);
-          // dshana.bus 消息总线：同一就绪点连接（bridge 段已随 patch 注入 busToken，
-          // 子插件注册了 /api/dshana.bus upgrade 路由）。connectBus 幂等 + 内部退避重连
-          // （连接失败不阻断 dsh 启动——更新请求信道降级：settings 报「消息总线未连接」，
-          // check-version 走 dsh 侧直查不受影响）。不 await，页面/任务不阻塞。
+          // dshana.bus 消息总线：同一就绪点连接（bridge 段随静态 patch 挂载，子插件注册了
+          // /api/dshana.bus upgrade 路由）。connectBus 幂等 + 内部退避重连（连接失败不阻断
+          // dsh 启动——更新请求信道降级：settings 报「消息总线未连接」，check-version 走 dsh 侧
+          // 直查不受影响）。不 await，页面/任务不阻塞。
           try {
             connectBus({ webPort: port });
+            // config 下发 provider（替代 patch config 注入）：hello-ok 后自动发 config 帧
+            // （dshPkgDir/dataDir），settings/provider 子插件经 dshanaBus.getConfig() 取路径。
+            // 每次握手重发，覆盖 web host 重启后新 bridge 实例。
+            setBusConfigProvider(() => ({
+              dshPkgDir: cfg.dshPkgDir || resolveDshPkgDir(cfg),
+              dataDir: cfg.dataDir,
+            }));
           } catch (e) {
             g.appendLog?.("hana", "[dshana.bus] 连接失败：" + (e?.message || e));
           }
+          // provider 路由推送走总线（替代 /api/hana-provider.refresh HTTP push，任务 G）：
+          // 唯一新进程就绪点主动推一次最新 routes（任意 spawn 路径都保证有初始 push）；
+          // bus 未连接（hello-ok 未到）时记待补推，bus.ready 后自动补推——覆盖连接窗口期。
+          pushProviderRoutes();
           return web;
         }
       } catch {
@@ -748,16 +714,77 @@ export async function ensureWebHost(cfg) {
   return readyPromise;
 }
 
-// ---- 宿主侧 provider 跟随 push 链路（fs.watch → ctx.resources.watch + HTTP push）----
+// ---- 宿主侧 provider 跟随 push 链路（fs.watch → ctx.resources.watch + 总线 push）----
 // 语义：@dsh-hanako/provider 插件不再自建 fs.watch（Windows rename 原子替换等平台坑一并消除）——
 // 宿主侧经 ctx.resources.watch 感知 models.json / provider-catalog.json 变化（bus 派发
 // resource.changed，resourceKey 格式 local_fs:<path>），防抖 300ms（与旧实现同 DEBOUNCE
-// 语义）后 POST dsh web host /api/hana-provider.refresh，dsh 侧插件收到通知重读配置
-// refresh()（handle.replace 原子更新）。watch 建立失败降级不阻断（dsh 侧启动时仍会
-// refresh 一次，功能不受影响）。
+// 语义）后经 dshana.bus 消息总线 emit("provider.refresh", { routes }) 推送最新 route 目录
+// （v0.22.1+ 替代 POST /api/hana-provider.refresh HTTP push——HTTP push 链路已退役，
+// 总线为进程间唯一通道），dsh 侧插件收到事件重读配置 refresh()（handle.replace 原子更新）。
+// watch 建立失败降级不阻断（dsh 侧启动时仍会 refresh 一次，功能不受影响）。
 // 幂等：startWebHost 重复调用 / web host 重建时先清理旧 watch 再建；cleanup 挂单例
 // g.providerPushCleanup，closeProcess 回收 web host 时调用（退订 bus + 关 watchers）。
 const PROVIDER_SYNC_DEBOUNCE_MS = 300;
+// provider 路由推送（总线版）：组装最新 route 目录（buildProviderRoutes）→
+// g.dshanaBus.emit("provider.refresh", { routes })。bus 未连接（hello-ok 未到）时记待补推
+// 标志，bus.ready（本机事件）后自动补推最新 routes——覆盖「web host 就绪点早于 bus 握手」
+// 的连接窗口期；子进程侧 @dsh-hanako/provider 监听 provider.refresh 事件执行 refresh()。
+// 幂等：任意时刻调用都基于最新组装结果（读取失败保留旧 routes，见 buildProviderRoutes）；
+// 失败不阻断（下轮配置变化/重启仍会触发）。
+let providerPushPending = false; // bus 未连接期间待补推标志（模块级单例）
+function pushProviderRoutes() {
+  const g = getSingleton();
+  const bus = g.dshanaBus;
+  if (!bus || typeof bus.emit !== "function") {
+    providerPushPending = true;
+    return;
+  }
+  let host;
+  try {
+    host = buildProviderRoutes();
+  } catch (e) {
+    // routes 组装异常（防御性）：本轮 push 放弃，下轮配置变化/重启再试
+    try {
+      g.appendLog?.("hana", "[dsh-run] provider routes 组装失败，本轮 push 放弃：" + (e?.message || e));
+    } catch {
+      /* 日志失败不阻断 */
+    }
+    return;
+  }
+  const delivered = bus.emit("provider.refresh", { routes: host.routes });
+  if (delivered) {
+    providerPushPending = false;
+    try {
+      g.appendLog?.("hana", "[dsh-run] provider 路由已经总线推送（" + host.routes.length + " 条 routes）");
+    } catch {
+      /* 日志失败不阻断 */
+    }
+    console.log("[dsh-run] provider 路由已经总线推送（" + host.routes.length + " 条 routes）");
+  } else {
+    // 未送达（bus 未连接/未握手）：记待补推，bus.ready 后自动补推
+    providerPushPending = true;
+    try {
+      g.appendLog?.("hana", "[dsh-run] provider 路由总线推送未送达（bus 未连接），标记待补推");
+    } catch {
+      /* 日志失败不阻断 */
+    }
+  }
+}
+// bus.ready 补推接线（幂等，只挂一次）：总线连接成功后如有待补推 routes 立即补推
+let providerPushWired = false;
+function wireProviderPushOnBusReady() {
+  if (providerPushWired) return;
+  providerPushWired = true;
+  const g = getSingleton();
+  if (g.dshanaBus && typeof g.dshanaBus.on === "function") {
+    g.dshanaBus.on("bus.ready", () => {
+      if (providerPushPending) {
+        providerPushPending = false;
+        pushProviderRoutes();
+      }
+    });
+  }
+}
 function ensureProviderPushWatch(cfg) {
   const g = getSingleton();
   // 幂等：先清理旧 watch + 退订（startWebHost 重复调用 / web host 重建时）
@@ -770,7 +797,7 @@ function ensureProviderPushWatch(cfg) {
     g.providerPushCleanup = null;
   }
   const resources = g.resources;
-  const bus = g.bus;
+  const bus = g.dshanaBus;
   // resources/bus 缺失（旧宿主无此服务 / onload 未注入）：降级不阻断
   if (!resources || typeof resources.watch !== "function") {
     console.warn(
@@ -788,7 +815,6 @@ function ensureProviderPushWatch(cfg) {
   const paths = [hostProvider.modelsPath, hostProvider.catalogPath].filter(
     Boolean,
   );
-  const port = Number(cfg.webPort) || 3080;
   const handles = [];
   const resourceKeys = new Set();
   let timer = null;
@@ -796,7 +822,7 @@ function ensureProviderPushWatch(cfg) {
     if (timer) clearTimeout(timer);
     timer = setTimeout(() => {
       timer = null;
-      pushProviderRefresh(port);
+      pushProviderRoutes();
     }, PROVIDER_SYNC_DEBOUNCE_MS);
   };
   for (const path of paths) {
@@ -835,7 +861,7 @@ function ensureProviderPushWatch(cfg) {
     if (event.type !== "resource.changed") return;
     const key = event.resourceKey;
     if (typeof key === "string" && resourceKeys.has(key)) {
-      console.log(`[dsh-run] 宿主配置变化（${key}），防抖后 push DSH 刷新`);
+      console.log(`[dsh-run] 宿主配置变化（${key}），防抖后总线推送 DSH 刷新`);
       triggerPush();
     }
   });
@@ -867,7 +893,7 @@ function ensureProviderPushWatch(cfg) {
     g.providerPushCleanup = null;
   };
   console.log(
-    `[dsh-run] provider 热跟随 watch 已建立（${paths.length} 文件），宿主配置变化将 push DSH 刷新`,
+    `[dsh-run] provider 热跟随 watch 已建立（${paths.length} 文件），宿主配置变化将总线推送 DSH 刷新`,
   );
 }
 // ---- DSH 检查能力（checkDshUpdate / npmViewLatest / semver 比较 / 本地版本
@@ -879,7 +905,8 @@ function ensureProviderPushWatch(cfg) {
 // npm i 要替换被 web host 占用的 dsh 包文件）→ installDepsFromPlugin（npm i
 // @deepseek-ai/dsh = 装 latest，成功即新版本）→ 起 web host（ensureWebHost，失败不阻断
 // 结果上报，记 error 字段）→ 读新版本。全程写 <dataDir>/update-result.json
-// { state: done|error, version?, error?, at }（dsh 设置页 update-status 路由读）。
+// { state: done|error, version?, error?, at }（dsh 设置页 update-status 一次性查询读；
+// v0.22.1+ 事件化：开始/完成经总线 emit update.progress/update.result，设置页事件缓存）。
 // 并发防护：g.updating 进行中重复调用返回 { ok:false, state:"updating" } 不重复执行；
 // 与 installDepsFromPlugin 内部 g.depsInstalling 独立（本标志管整条更新流程）。----
 export async function updateDsh(cfg) {
@@ -907,8 +934,10 @@ export async function updateDsh(cfg) {
     }
   };
   try {
-    // ① 进度态（前端轮询 update-status 可见）
+    // ① 进度态（事件化：bus emit update.progress 直投设置页事件缓存——v0.22.1+
+    // 替代前端 2s 轮询 update-status；update-result.json 读回保留作兜底）
     writeResult({ state: "updating", at: stamp() });
+    emitBus("update.progress", { state: "updating", at: stamp() });
     // ② 停 web host（Windows 文件锁前提）
     log("停止 web host…");
     await closeProcess();
@@ -946,6 +975,12 @@ export async function updateDsh(cfg) {
       ...(restartError ? { error: restartError } : {}),
       at: stamp(),
     });
+    // 事件化：bus emit update.result（设置页事件缓存；update-result.json 兜底）
+    emitBus("update.result", {
+      state: "done",
+      ...(version ? { version } : {}),
+      ...(restartError ? { error: restartError } : {}),
+    });
     log(
       `更新完成（version=${version || "未知"}${restartError ? "，web host 重启失败：" + restartError : ""}）`,
     );
@@ -959,6 +994,8 @@ export async function updateDsh(cfg) {
     const err = String(e?.message || e).slice(0, 1500);
     g.updateError = err;
     writeResult({ state: "error", error: err, at: stamp() });
+    // 事件化：bus emit update.result（失败态）
+    emitBus("update.result", { state: "error", error: err });
     log(`更新失败：${err}`);
     return { ok: false, state: "error", error: err };
   } finally {
@@ -966,79 +1003,16 @@ export async function updateDsh(cfg) {
     g.updating = false;
   }
 }
-// push dsh web host 刷新（回环调用 127.0.0.1:{port}；结果写入统一会话日志 + console 简记，
-// 失败不阻断。B方案：body 携带组装好的 route 目录（buildProviderRoutes() 的
-// 最新 routes），子进程 applySnapshot 直接消费，不再自读宿主文件（buildProviderRoutes
-// 内部已处理「读取失败保留旧 routes」回退）。
-//
-// 有界重试 + 回环 fetch 直连：B方案下子进程启动时 snapshot 为空、首批 provider
-// 全依赖这次 push。但 dsh web host 的 /api/host.describe 就绪（宿主判定 ready）早于
-// 子进程内插件的 apply() 完成——@dsh-hanako/provider 的 apply 要先 await 动态导入
-// pi-ai/dsh-llm/dsh-timeout，之后才经 ctx.inject(['webServer']).effect 注册
-// /api/hana-provider.refresh 路由。启动 push 若只发一次，会打在路由注册前的空窗上
-// （404/连接拒绝），provider 快照将一直为空直到宿主配置变化触发下一轮 push——即
-// 「@dsh-hanako/provider 失效」。因此 push 改为对非 2xx（尤其 404）与网络错误按退避表
-// 重试，直到路由就绪送达。
-// 另：发送不经过 ctx.network.fetch——回环控制调用走全局 fetch（与 ensureWebHost
-// 就绪探测 / routes/webui.js probeHost 同一通道，实测可用）；宿主的 network 服务是
-// 出站/计费代理，代理策略可能拦截明文回环 POST，曾导致 push 静默永不送达。结果与
-// 异常统一写会话日志（g.appendLog hana 前缀，与插件诊断同一文件），不再只 console。
-const PROVIDER_PUSH_RETRY_DELAYS_MS = [300, 500, 800, 1200, 1800, 2500, 3000];
-async function pushProviderRefresh(port) {
-  const g = getSingleton();
-  const url = `http://127.0.0.1:${port}/api/hana-provider.refresh`;
-  const pushLog = (msg) => {
-    try {
-      // 统一会话日志（[ts] [hana] 行）：push 结果对用户可见（插件日志文件）
-      appendLog(g.logPath || g.web?.logPath, "hana", msg);
-    } catch {
-      /* 日志失败不阻断 */
-    }
-    console.log(msg);
-  };
-  let host;
+// 经总线 emit（best-effort：bus 未连接 no-op，不阻断主流程；事件缓存由设置页后端维护）
+function emitBus(channel, payload) {
   try {
-    host = buildProviderRoutes();
-  } catch (e) {
-    // routes 组装异常（防御性）：本轮 push 放弃，下轮变化/重启再试
-    pushLog(
-      `[dsh-run] provider routes 组装失败，本轮 push 放弃：${e?.message || e}`,
-    );
-    return;
-  }
-  let lastNote = "未知错误";
-  for (let attempt = 0; ; attempt++) {
-    try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ routes: host.routes }),
-        signal: AbortSignal.timeout(2000),
-      });
-      if (res.ok) {
-        pushLog(
-          `[dsh-run] provider push 成功（${host.routes.length} 条 routes，第 ${attempt + 1} 次尝试）：${url}`,
-        );
-        return;
-      }
-      lastNote = `HTTP ${res.status}`;
-      if (attempt === PROVIDER_PUSH_RETRY_DELAYS_MS.length) {
-        pushLog(`[dsh-run] provider push 失败（${lastNote}）：${url}`);
-        return;
-      }
-    } catch (e) {
-      // 网络错误（连接拒绝/超时等）：同样进退避重试；全失败静默忽略不阻断
-      lastNote = e?.message || String(e);
-      if (attempt === PROVIDER_PUSH_RETRY_DELAYS_MS.length) {
-        pushLog(`[dsh-run] provider push 未送达（${lastNote}）：${url}`);
-        return;
-      }
-    }
-    await new Promise((r) =>
-      setTimeout(r, PROVIDER_PUSH_RETRY_DELAYS_MS[attempt]),
-    );
+    const g = getSingleton();
+    if (g.dshanaBus && typeof g.dshanaBus.emit === "function") g.dshanaBus.emit(channel, payload);
+  } catch {
+    /* 总线 emit 失败不阻断 */
   }
 }
+
 // 单例挂载：index.js 不 import 本文件（避免模块缓存），onload 时通过单例拉起 web host。
 // 构建 cfg（manifest 默认 + 用户配置 + dataDir/dshPkgDir fallback）后调 ensureWebHost。
 // 失败不抛出（onload 不能被 dsh 启动失败阻塞），由工具调用时的 ensureWebHost 重试。
@@ -1060,8 +1034,10 @@ getSingleton().startWebHost = async function startWebHostFromPlugin(
     await ensureWebHost(cfg);
     // web host 就绪后建立宿主侧 provider 跟随 push watch（幂等：先清理旧 watch 再建）
     ensureProviderPushWatch(cfg);
-    // 首批 provider 的初始 push 已收敛进 ensureWebHost（唯一就绪点，含重试），
-    // 此处不再重复推；后续每次 resource.changed 经防抖 watch 增量 push。
+    // bus.ready 补推接线（幂等）：总线连接成功后如有待补推 routes 立即补推
+    wireProviderPushOnBusReady();
+    // 首批 provider 的初始 push 已收敛进 ensureWebHost（唯一就绪点，bus 就绪后自动
+    // 送达或待补推），此处不再重复推；后续每次 resource.changed 经防抖 watch 增量 push。
     // DSH 更新请求 v0.22.1 起由子插件经 dshana.bus 消息总线直投（connectBus 已
     // 在同一就绪点建立连接），/child/post 反向信道已退役，无宿主侧轮询/文件。
     return true;
@@ -1076,6 +1052,15 @@ getSingleton().startWebHost = async function startWebHostFromPlugin(
     const logPath = g.web?.logPath || g.webLastExit?.logPath || null;
     if (logPath) g.webLastLogPath = logPath;
     g.webLastErrorAt = new Date().toISOString();
+    // web host 启动失败：通知壳页就绪事件流推诊断（routes/webui.js 注册回调，
+    // 诊断对象由 readDiagnostics 收集；无订阅者 no-op）
+    if (typeof g.notifyWebStartFailed === "function") {
+      try {
+        g.notifyWebStartFailed();
+      } catch {
+        /* 通知失败不阻断 */
+      }
+    }
     return false;
   }
 };

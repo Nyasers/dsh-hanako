@@ -20,7 +20,7 @@ description: "dsh_update 工具手册（源码 tools/dsh-update.js + tools/dsh-r
 
 **check**：本地版本（运行级验证 verifyDepsSmoke 缓存优先，无则直读 dsh-pkg package.json）+ 远端版本（HTTP 直查 npm registry——fetch `https://registry.npmjs.org/@deepseek-ai/dsh/latest` 的 JSON `version` 字段（pnpm view 语义等价），官方源失败自动重试 npmmirror，15s 超时）→ zero-dep semver 比较（major.minor.patch 三段数字逐个比，预发布 `-rc.x` 视为低于同版本正式版）→ `{ localVersion, latestVersion, updateAvailable, error? }`。结果缓存 `g.checkResult`（内存；不再写 `<dataDir>/check-result.json` 桥接文件——dsh 设置页「DSH 版本」卡片检查已改 dsh 侧直查，Agent 工具与 DSHana 标签页直接读返回值）。
 
-**update**：① 写 `<dataDir>/update-result.json { state:'updating', at }` → ② 停 web host（closeProcess，Windows 文件锁前提：pnpm add 要替换被 web host 占用的 dsh 包文件）→ ③ `installDepsFromPlugin`（pnpm add @deepseek-ai/dsh latest，官方源失败重试 npmmirror）→ ④ 起 web host（ensureWebHost，失败不阻断结果上报，记 error 字段）→ ⑤ 读新版本 → 写 `{ state:'done', version, at }`；任一步失败写 `{ state:'error', error, at }`（截断 ≤1500）。**触发信道**：设置页经 **dshana.bus 消息总线**发 `update.request` 直投（`src/lib/bus.js` 订阅 → 调 `updateDsh` → 完成后总线回投 `update.result { state, version?, error? }`；v0.22.1 起替代 update-request.json 文件桥与 POST /child/post 反向信道，均已退役，无请求文件可清理）。**并发防护**：更新执行中（`g.updating`）重复调用返回 `{ ok:false, state:'updating' }` 不重复执行；检查（`g.checking`）同理。
+**update**：① 写 `<dataDir>/update-result.json { state:'updating', at }` → ② 停 web host（closeProcess，Windows 文件锁前提：pnpm add 要替换被 web host 占用的 dsh 包文件）→ ③ `installDepsFromPlugin`（pnpm add @deepseek-ai/dsh latest，官方源失败重试 npmmirror）→ ④ 起 web host（ensureWebHost，失败不阻断结果上报，记 error 字段）→ ⑤ 读新版本 → 写 `{ state:'done', version, at }`；任一步失败写 `{ state:'error', error, at }`（截断 ≤1500）。**触发信道**：设置页经 **dshana.bus 消息总线**发 `update.request` 直投（`src/lib/bus.js` 订阅 → 调 `updateDsh` → 开始/完成经总线回投 `update.progress { state, at }` / `update.result { state, version?, error? }`（v0.22.1+ 事件化：设置页事件缓存 + update-stream 推送，替代 2s 轮询；update-result.json 读回兜底）；v0.22.1 起替代 update-request.json 文件桥与 POST /child/post 反向信道，均已退役，无请求文件可清理）。**并发防护**：更新执行中（`g.updating`）重复调用返回 `{ ok:false, state:'updating' }` 不重复执行；检查（`g.checking`）同理。
 
 **异步模式**：`update` 默认异步——立即返回「已后台执行」，经宿主 deferred 通道注册唤醒（taskId `dup_*`），完成后后台消息带回 `{ tool:'dsh_update', action:'update', status:'done', version }`（失败带 error）。
 
@@ -48,5 +48,5 @@ dsh_update(action="update", wait=true)    # 同步：等更新跑完直接返回
 
 ## 关联
 
-- 更新进度/结果也可在 dsh 设置页「DSH 版本」卡片（每 2s 轮询 update-status）或 DSHana 标签页 deps 卡片（3s 轮询诊断）查看——同一份 `update-result.json`。
+- 更新进度/结果也可在 dsh 设置页「DSH 版本」卡片（v0.22.1+ 事件驱动：订阅 update-stream 事件流，update.progress/result 驱动；事件缺失手动刷新）或 DSHana 标签页 deps 卡片（30s 超时兜底/手动刷新诊断）查看——同一份 `update-result.json` 兜底。
 - 更新后新任务将使用新版本；建议重启 DSHana 使完全生效。更新失败按 deps 卡片/设置页的 error 字段排查（registry 网络、web host 重启失败等，见 dsh-hanako 技能排错表）。
