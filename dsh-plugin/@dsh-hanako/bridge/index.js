@@ -83,8 +83,10 @@ export function apply(ctx, config) {
         const sendFrame = (frame) => {
           if (!conn || conn.readyState !== 1) return false
           try {
-            conn.sendText(JSON.stringify(frame))
-            return true
+            // 返回语义：true 仅表示消息已入串行写队列（排队成功），不保证已写 socket；
+            // socket 已死时 sendText 同步返回 false（传播写入失败，调用方按未排队处理）。
+            const r = conn.sendText(JSON.stringify(frame))
+            return r !== false
           } catch {
             return false
           }
@@ -216,8 +218,17 @@ export function apply(ctx, config) {
           on: (channel, cb) => {
             if (typeof channel !== 'string' || typeof cb !== 'function') return () => {}
             const key = 'ch:' + channel
-            emitter.on(key, cb)
-            return () => emitter.off(key, cb)
+            // 每个订阅回调独立异常隔离包装：一个监听器抛错不影响后续监听器执行
+            // （EventEmitter 的 emit 同步串行调用，裸 cb 抛错会中断后续监听器）。
+            const wrapped = (payload) => {
+              try {
+                cb(payload)
+              } catch (e) {
+                bridgeLog('监听器异常（channel=' + channel + '）：' + ((e && e.message) || e))
+              }
+            }
+            emitter.on(key, wrapped)
+            return () => emitter.off(key, wrapped)
           },
           // 连接状态（诊断 / settings request-update 判空）
           status: () => ({

@@ -169,6 +169,15 @@ export class WsConnection extends EventEmitter {
       case 0x1: // 文本
       case 0x2: {
         // 二进制帧也按文本处理（本总线只发 JSON 文本；防御性容错）
+        if (opcode !== 0x0 && this._fragmentOpcode !== 0) {
+          // 分片消息进行中收到新的数据帧（RFC6455 违规：分片期间只能发 continuation 帧）：
+          // 拒绝而非并入/重组，清空分片状态。
+          this.close(1002, "new data frame during fragmented message");
+          this._fragments = [];
+          this._fragmentOpcode = 0;
+          this._fragmentBytes = 0;
+          return;
+        }
         if (opcode === 0x0 && this._fragmentOpcode === 0) {
           // 无进行中分片却收到续帧：协议错误关闭
           this.close(1002, "unexpected continuation");
@@ -189,7 +198,14 @@ export class WsConnection extends EventEmitter {
           }
           this._fragments.push(payload);
         } else if (this._fragmentOpcode !== 0) {
-          // 分片结束帧（含续帧 FIN=1）：重组发出
+          // 分片结束帧（含续帧 FIN=1）：最终 payload 先计入大小检查再重组
+          if (this._fragmentBytes + payload.length > MAX_FRAME_SIZE) {
+            this.close(1009, "message too large");
+            this._fragments = [];
+            this._fragmentOpcode = 0;
+            this._fragmentBytes = 0;
+            return;
+          }
           this._fragments.push(payload);
           const full = Buffer.concat(this._fragments).toString("utf8");
           this._fragments = [];
@@ -236,7 +252,8 @@ export class WsConnection extends EventEmitter {
   }
 
   /** 串行写（socket 并发写会交错帧）；连接已关闭/销毁时写为 no-op（不 reject——close 路径
-   * 与竞态下静默丢弃即可，调用方不需要因关闭而报错） */
+   * 与竞态下静默丢弃即可，调用方不需要因关闭而报错）。sendText 在 socket 已死时同步
+   * 返回 false，让调用方感知「未排队」（bus 层 emit 的已排队语义依赖此传播）。 */
   _write(buf) {
     this._writeQueue = this._writeQueue.then(
       () =>
@@ -254,8 +271,9 @@ export class WsConnection extends EventEmitter {
     return this._writeQueue;
   }
 
-  /** 发文本帧（> 16KB 自动续帧分片） */
+  /** 发文本帧（> 16KB 自动续帧分片）；socket 已死（CLOSED/destroyed）时同步返回 false */
   sendText(text) {
+    if (this.readyState === READY_CLOSED || this.socket.destroyed) return false;
     const data = Buffer.from(String(text ?? ""), "utf8");
     if (data.length <= MAX_FRAME_PAYLOAD) {
       return this._write(encodeFrame(0x1, data));
