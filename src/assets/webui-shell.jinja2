@@ -288,9 +288,10 @@
       // 始终返回 promise：成功 resolve(true)（已设通道 src）；无 SW 支持 / 注册失败
       // resolve(false)（已设直连 src）——调用方无需再按 channelMode 补设 src。
       var base = "http://127.0.0.1:{{= it.port }}/";
-      // SW 脚本经宿主官方 assets 通道提供（/api/plugins/<id>/assets/sw.js，带 token
-      // 过墙）；自定义 /sw.js 路由仅作兼容兜底（宿主规范：静态资源归 assets/）。
-      var swUrl = api + "/assets/sw.js" + (pageToken() ? "?token=" + encodeURIComponent(pageToken()) : "");
+      // SW 脚本在插件根（宿主白名单原生 serve /api/plugins/<id>/sw.js）：根路径的
+      // max scope = /api/plugins/<id>/，web/ 通道 scope 合法（assets/ 下会 scope 非法）；
+      // 自定义 /sw.js 路由 serve 内联版作兼容兜底。
+      var swUrl = api + "/sw.js" + (pageToken() ? "?token=" + encodeURIComponent(pageToken()) : "");
       if (!("serviceWorker" in navigator)) {
         // 无 SW 支持：回退直连（极端旧浏览器）
         channelMode = false;
@@ -316,19 +317,22 @@
           frame.src = channelUrl + "?dshReload=" + Date.now();
           return true;
         });
-      // 超时兜底：SW 注册/激活挂起（不 settle 也不 reject）时，10s 后强制回退直连，
-      // 保证界面永不白屏（本地体验不退化；隧道链路留待下次刷新重试）。
+      // 超时兜底：SW 首次注册需下载+编译+激活，Electron 环境下可能超过 10s（此前
+      // 10s 误伤慢激活，register 本身正常）。放宽到 20s：仅真正挂起（网络层无响应）
+      // 才回退直连；激活慢的等它完成。
+      var setupTimer = null;
       var setupTimeout = new Promise(function (resolve) {
-        setTimeout(function () {
-          console.warn("[dsh-hanako] SW 通道挂起（10s），回退直连");
+        setupTimer = setTimeout(function () {
+          console.warn("[dsh-hanako] SW 通道挂起（20s），回退直连");
           channelMode = false;
           frame.src = base + "?dshReload=" + Date.now();
           resolve(false);
-        }, 10000);
+        }, 20000);
       });
       return Promise.race([setupChain, setupTimeout])
         .catch(function (err) {
-          // SW 注册/激活失败：回退直连
+          // SW 注册/激活失败：回退直连（先清超时定时器，避免已 settle 后误报挂起）
+          if (setupTimer) { clearTimeout(setupTimer); setupTimer = null; }
           console.warn("[dsh-hanako] SW 注册失败，回退直连:", err);
           channelMode = false;
           frame.src = base + "?dshReload=" + Date.now();
