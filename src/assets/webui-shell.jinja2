@@ -295,7 +295,7 @@
         frame.src = base + "?dshReload=" + Date.now();
         return Promise.resolve(false);
       }
-      return navigator.serviceWorker.register(swUrl, { scope: channelUrl })
+      var setupChain = navigator.serviceWorker.register(swUrl, { scope: channelUrl })
         .then(function () { return navigator.serviceWorker.ready; })
         .then(function (reg) {
           // HTTP 隧道配置：tunnelUrl 在壳页面拼一次（origin + tunnelPath，SW 零拼接），
@@ -313,7 +313,18 @@
           }
           frame.src = channelUrl + "?dshReload=" + Date.now();
           return true;
-        })
+        });
+      // 超时兜底：SW 注册/激活挂起（不 settle 也不 reject）时，10s 后强制回退直连，
+      // 保证界面永不白屏（本地体验不退化；隧道链路留待下次刷新重试）。
+      var setupTimeout = new Promise(function (resolve) {
+        setTimeout(function () {
+          console.warn("[dsh-hanako] SW 通道挂起（10s），回退直连");
+          channelMode = false;
+          frame.src = base + "?dshReload=" + Date.now();
+          resolve(false);
+        }, 10000);
+      });
+      return Promise.race([setupChain, setupTimeout])
         .catch(function (err) {
           // SW 注册/激活失败：回退直连
           console.warn("[dsh-hanako] SW 注册失败，回退直连:", err);
@@ -350,6 +361,27 @@
       var params = new URLSearchParams(location.search);
       var sess = params.get("pluginSurfaceSession");
       return sess ? { "X-Hana-Plugin-Surface-Session": sess } : {};
+    }
+    // 双向握手：SW 配置缺失（ready 未完成/冷启动缓存空）时主动来要，这里补发
+    // bridge-config（与 setupChannel 成功路径同款 payload；SW 零拼接）。
+    function sendBridgeConfig() {
+      var tunnelUrl = window.location.origin + tunnelPath;
+      var surfaceSession = surfaceSessionToken();
+      if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+        navigator.serviceWorker.controller.postMessage({
+          type: "bridge-config",
+          mode: "http-tunnel",
+          tunnelUrl: tunnelUrl,
+          surfaceSession: surfaceSession,
+        });
+      }
+    }
+    if (navigator.serviceWorker) {
+      navigator.serviceWorker.addEventListener("message", function (ev) {
+        if (ev.data && ev.data.type === "bridge-config-request") {
+          sendBridgeConfig();
+        }
+      });
     }
     // 连接失败自检渲染——服务端收集的 checks 列表（每项：状态图标/检查项名/
     // 详情/修复指引）；escHtml 兜底转义（诊断文本含路径与 stderr，需防注入）

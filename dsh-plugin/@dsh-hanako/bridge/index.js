@@ -134,6 +134,12 @@ async function dispatchInProcess(webServer, method, path, headers, bodyBuf) {
       req.url = path
       req.method = String(method || 'GET').toUpperCase()
       req.headers = headers && typeof headers === 'object' ? { ...headers } : {}
+      // 剥离 Origin：dsh web 的 API 层对 POST 做跨源校验（CSRF 防护，带宿主
+      // Origin 的请求返回 403 forbidden）。进程内执行无跨源概念，Origin 必须
+      // 移除（保留其它头，含 surface session / cookie 语义由 dsh 侧自行处理）。
+      for (const k of Object.keys(req.headers)) {
+        if (k.toLowerCase() === 'origin') delete req.headers[k]
+      }
       req.socket = sock
       // body 喂入（IncomingMessage 是 Readable）
       if (bodyBuf && bodyBuf.length > 0) req.push(bodyBuf)
@@ -195,6 +201,20 @@ async function dispatchInProcess(webServer, method, path, headers, bodyBuf) {
       }
       const route = webServer.match(pathname)
       if (!route || typeof route.handler !== 'function') {
+        // match 未命中 → 走 webServer 的 fallback 席位（SPA dist 服务/静态资源）：
+        // 与真实 server 的 handle() 同语义（L180-197：match → handler，未命中 →
+        // fallback，fallback 未注册才 404）。此前只 match 导致首页/静态资源 404。
+        if (typeof webServer.fallback === 'function') {
+          // fallback 与 route handler 同语义：内部走 res.end（被覆盖触发 settle），
+          // 这里 promise 仅捕同步/异步错误
+          Promise.resolve()
+            .then(function () { return webServer.fallback(req, res) })
+            .catch(function (e) {
+              clearTimeout(timeout)
+              resolve({ status: 500, headers: {}, body: Buffer.from(String(e?.message || e)) })
+            })
+          return
+        }
         clearTimeout(timeout)
         resolve({ status: 404, headers: {}, body: Buffer.from('not found') })
         return

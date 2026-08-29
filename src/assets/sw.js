@@ -51,7 +51,10 @@ function persistConfig() {
 }
 function restoreConfig() {
   try {
-    return caches.open(CONFIG_CACHE).then(function (cache) {
+    // 超时保护：activate 不能被缓存恢复阻塞（CacheStorage 初始化异常时挂起会让
+    // worker 卡在 activating，ready 永不 resolve，壳页面 iframe 白屏）。500ms 超时
+    // 忽略恢复，配置缺失由页面下次 bridge-config 消息补齐。
+    var restore = caches.open(CONFIG_CACHE).then(function (cache) {
       return cache.match("/bridge-config").then(function (resp) {
         if (!resp) return;
         return resp.json().then(function (data) {
@@ -63,6 +66,12 @@ function restoreConfig() {
         });
       });
     }).catch(function () { /* 恢复失败忽略 */ });
+    return new Promise(function (resolve) {
+      var done = false;
+      var finish = function () { if (!done) { done = true; resolve(); } };
+      restore.then(finish, finish);
+      setTimeout(finish, 500);
+    });
   } catch (e) {
     return Promise.resolve();
   }
@@ -92,15 +101,69 @@ function bytesFromBase64(b64) {
   return bytes;
 }
 
+// ---- 配置主动索取（双向握手）----
+// 壳页面在 navigator.serviceWorker.ready 后才 postMessage bridge-config；若 ready
+// 卡住（activate 延迟）或 SW 冷启动后缓存缺失，config.tunnelUrl 为空，拦截请求会
+// 502 bridge_unavailable。这里在隧道请求前检查：配置缺失时向所有 window 客户端
+// 发 bridge-config-request，壳页面收到后重发 bridge-config（1.5s 超时，拿不到就 502）。
+var configRequestId = 0;
+function ensureConfig() {
+  if (config.tunnelUrl) return Promise.resolve(true);
+  var id = ++configRequestId;
+  return new Promise(function (resolve) {
+    var timer = null;
+    var done = false;
+    var finish = function (ok) {
+      if (done) return;
+      done = true;
+      if (timer) clearTimeout(timer);
+      self.removeEventListener("message", onMsg);
+      resolve(ok);
+    };
+    var onMsg = function (ev) {
+      var d = ev.data;
+      if (
+        d &&
+        d.type === "bridge-config" &&
+        d.mode === "http-tunnel" &&
+        typeof d.tunnelUrl === "string" &&
+        d.tunnelUrl
+      ) {
+        config.tunnelUrl = d.tunnelUrl;
+        config.surfaceSession = d.surfaceSession || config.surfaceSession || "";
+        persistConfig();
+        log("配置缺失时从客户端获取 bridge-config（" + config.tunnelUrl + "）");
+        finish(true);
+      }
+    };
+    self.addEventListener("message", onMsg);
+    self.clients.matchAll({ type: "window" }).then(function (clients) {
+      clients.forEach(function (c) {
+        try {
+          c.postMessage({ type: "bridge-config-request", id: id });
+        } catch (e) { /* 单个客户端失败忽略 */ }
+      });
+    }).catch(function () { /* matchAll 失败忽略 */ });
+    timer = setTimeout(function () {
+      log("bridge-config 索取超时（1.5s），请求将 502");
+      finish(false);
+    }, 1500);
+  });
+}
+
 // ---- HTTP 隧道请求（v7）----
 // 封装原始 dsh 请求为 JSON POST 到隧道 URL；响应 { ok, id, status, headers, body(base64) }。
 // 大 body 以 base64 单段携带（WS #2 通道内部 >256KB 分段对 SW 透明）。失败/未就绪 reject
 // （status 502/504 由调用方转 HTTP 状态码）。
 async function tunnelRequest(method, path, headers, bodyBuf) {
   if (!config.tunnelUrl) {
-    var e0 = new Error("bridge 未就绪（隧道 URL 未配置）");
-    e0.status = 502;
-    throw e0;
+    // 配置缺失：先主动向客户端索取（双向握手），仍拿不到才 502
+    var got = await ensureConfig();
+    if (!got) {
+      var e0 = new Error("bridge 未就绪（隧道 URL 未配置）");
+      e0.status = 502;
+      throw e0;
+    }
   }
   var envelope = {
     id: nextId(),
