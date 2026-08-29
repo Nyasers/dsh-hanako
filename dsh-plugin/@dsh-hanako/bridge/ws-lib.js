@@ -165,9 +165,17 @@ export class WsConnection extends EventEmitter {
 
   _handleFrame(fin, opcode, payload) {
     switch (opcode) {
+      case 0x0: // 续帧（continuation）：并入分片重组（无进行中分片时协议错误）
       case 0x1: // 文本
       case 0x2: {
         // 二进制帧也按文本处理（本总线只发 JSON 文本；防御性容错）
+        if (opcode === 0x0 && this._fragmentOpcode === 0) {
+          // 无进行中分片却收到续帧：协议错误关闭
+          this.close(1002, "unexpected continuation");
+          this._fragments = [];
+          this._fragmentBytes = 0;
+          return;
+        }
         if (!fin) {
           // 续帧开始/中间：暂存（累计上限 MAX_FRAME_SIZE，超限协议错误关闭）
           if (this._fragmentOpcode === 0) this._fragmentOpcode = opcode;
@@ -181,6 +189,7 @@ export class WsConnection extends EventEmitter {
           }
           this._fragments.push(payload);
         } else if (this._fragmentOpcode !== 0) {
+          // 分片结束帧（含续帧 FIN=1）：重组发出
           this._fragments.push(payload);
           const full = Buffer.concat(this._fragments).toString("utf8");
           this._fragments = [];
@@ -188,6 +197,7 @@ export class WsConnection extends EventEmitter {
           this._fragmentBytes = 0;
           this.emit("message", full);
         } else {
+          // 独立帧（FIN=1 首帧，无续帧）
           this.emit("message", payload.toString("utf8"));
         }
         break;
@@ -390,6 +400,13 @@ export function handleUpgrade(req, socket, head, options = {}) {
   }
   const conn = new WsConnection(socket, req);
   if (onError) conn.on("error", onError);
+  // 先注册连接监听器（onConnection），再处理 head 首帧数据——
+  // 避免首帧消息在监听器注册前被触发而丢失。
+  try {
+    onConnection?.(conn);
+  } catch (err) {
+    onError?.(err);
+  }
   if (head && head.length > 0) {
     // 首帧数据可能随 upgrade 请求一起到达
     try {
@@ -397,11 +414,6 @@ export function handleUpgrade(req, socket, head, options = {}) {
     } catch {
       /* 解析失败由连接错误路径兜底 */
     }
-  }
-  try {
-    onConnection?.(conn);
-  } catch (err) {
-    onError?.(err);
   }
 }
 

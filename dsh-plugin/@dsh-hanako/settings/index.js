@@ -316,12 +316,33 @@ export function apply(ctx, config) {
               if (!st || st.connected !== true) {
                 throw new Error("消息总线未连接");
               }
-              const sent = bus.emit("update.request", {
-                at: new Date().toISOString(),
-                fromVersion: readLocalVersion(),
+              // 受理确认：带 reqId 发 update.request，等宿主 update.ack（5s 超时）——
+              // 避免 fire-and-forget 导致宿主未受理时前端仍误报已在更新。
+              const reqId =
+                "ur_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8);
+              const acked = await new Promise((resolve) => {
+                let settled = false;
+                const timer = setTimeout(() => {
+                  if (settled) return;
+                  settled = true;
+                  off();
+                  resolve(false);
+                }, 5000);
+                const off = bus.on("update.ack", (ack) => {
+                  if (settled || !ack || ack.reqId !== reqId) return;
+                  settled = true;
+                  clearTimeout(timer);
+                  off();
+                  resolve(true);
+                });
+                bus.emit("update.request", {
+                  reqId,
+                  at: new Date().toISOString(),
+                  fromVersion: readLocalVersion(),
+                });
               });
-              if (!sent) throw new Error("消息总线未连接");
-              settingsLog("更新请求已经消息总线直投宿主，将自动执行更新");
+              if (!acked) throw new Error("宿主未受理更新请求（总线确认超时）");
+              settingsLog("更新请求已受理，将自动执行更新");
               json(res, { ok: true, state: "updating" });
             } catch (e) {
               try {

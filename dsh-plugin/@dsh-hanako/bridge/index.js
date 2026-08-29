@@ -149,7 +149,13 @@ export function apply(ctx, config) {
                 return
               }
               if (frame.channel === 'bus.pong') return
-              emitter.emit(frame.channel, frame.payload ?? {})
+              // 对端可控 channel 隔离：加 ch: 前缀分发，避免触发 EventEmitter 保留事件
+              // （error / newListener / removeListener）；分发异常（监听器抛错）不冒泡崩进程。
+              try {
+                emitter.emit('ch:' + frame.channel, frame.payload ?? {})
+              } catch {
+                bridgeLog('消息分发异常（channel=' + frame.channel + '），已隔离')
+              }
             }
           }
           const onClose = () => {
@@ -195,16 +201,18 @@ export function apply(ctx, config) {
           bridgeLog('webServer.registerUpgrade 不可用（宿主版本过旧），消息总线不可用')
         }
 
-        // ---- provide 'dshanaBus' 服务 ----
+        // provide 'dshanaBus' 服务（保存 disposer：effect 重执行/卸载时移除旧注册，防重复注册）
         const service = {
           // emit：向已通过 hello 的连接发 JSON 文本帧（未连接/未握手 no-op，返回是否送达）
           emit: (channel, payload) =>
             sendFrame({ channel, payload: payload ?? {} }),
-          // on：订阅消息分发（宿主事件 update.result 等）；返回退订函数
+          // on：订阅消息分发（宿主事件 update.result 等）；返回退订函数。
+          // 与分发端一致：channel 映射为 ch:<channel> 后再挂监听（隔离保留事件）。
           on: (channel, cb) => {
             if (typeof channel !== 'string' || typeof cb !== 'function') return () => {}
-            emitter.on(channel, cb)
-            return () => emitter.off(channel, cb)
+            const key = 'ch:' + channel
+            emitter.on(key, cb)
+            return () => emitter.off(key, cb)
           },
           // 连接状态（诊断 / settings request-update 判空）
           status: () => ({
@@ -213,12 +221,19 @@ export function apply(ctx, config) {
             path: BUS_PATH,
           }),
         }
-        ctx.provide('dshanaBus', service)
+        const provideDisposer = ctx.provide('dshanaBus', service)
 
         bridgeLog('bridge 插件已启动（dshana.bus 消息总线服务端）')
 
         return () => {
-          // 卸载：注销 upgrade 路由 + 关闭当前连接
+          // 卸载：注销 provide + upgrade 路由 + 关闭当前连接
+          if (provideDisposer && typeof provideDisposer === 'function') {
+            try {
+              provideDisposer()
+            } catch {
+              /* 注销失败忽略 */
+            }
+          }
           if (upgradeDisposer) {
             try {
               upgradeDisposer()
