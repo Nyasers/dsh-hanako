@@ -277,12 +277,18 @@
       var params = new URLSearchParams(location.search);
       return params.get("pluginSurfaceSession") || "";
     }
+    // 页面访问 token（location.search 的 token）：SW 注册脚本请求是浏览器发起、
+    // 不带自定义 header，必须走 query token 过宿主鉴权墙（无凭据 403，实测）。
+    function pageToken() {
+      var params = new URLSearchParams(location.search);
+      return params.get("token") || "";
+    }
     function setupChannel() {
       // 注册 SW（scope = 通道前缀；脚本在插件命名空间 /sw.js，scope 在其下合法）。
       // 始终返回 promise：成功 resolve(true)（已设通道 src）；无 SW 支持 / 注册失败
       // resolve(false)（已设直连 src）——调用方无需再按 channelMode 补设 src。
       var base = "http://127.0.0.1:{{= it.port }}/";
-      var swUrl = api + "/sw.js";
+      var swUrl = api + "/sw.js" + (pageToken() ? "?token=" + encodeURIComponent(pageToken()) : "");
       if (!("serviceWorker" in navigator)) {
         // 无 SW 支持：回退直连（极端旧浏览器）
         channelMode = false;
