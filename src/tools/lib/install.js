@@ -213,13 +213,13 @@ function pnpmNdjsonLineToText(line, sizes) {
       return parts.length ? "[pnpm] peer 依赖告警：" + parts.join("，") : "[pnpm] peer 依赖告警";
     }
     case "pnpm:link": {
-      // 文件链接事件（链接阶段每链接一个依赖/文件发一条 debug，pnpm 11.24.0 字段
-      // target=store 实际位置、link=落位路径，见 pnpm.mjs linkLogger.debug）：
-      // 生成链接日志供诊断链接阶段进度；字段缺失时回退原行透传。
+      // 文件链接事件（pnpm 11.24.0：linkLogger.debug({ target, link })，字段
+      // target=store 实际位置、link=落位路径）：两字段齐备才格式化输出链接日志；
+      // 任一缺失视为不完整事件，原行透传保留原始信息供诊断。
       const link = typeof obj.link === "string" && obj.link ? obj.link : "";
       const target = typeof obj.target === "string" && obj.target ? obj.target : "";
-      if (!link && !target) return line;
-      return "[pnpm] 链接 " + link + (target ? " ← " + target : "");
+      if (!link || !target) return line;
+      return "[pnpm] 链接 " + link + " ← " + target;
     }
     default: {
       // 其它事件（scope/summary/context 等）：有 message 透传 message，否则跳过
