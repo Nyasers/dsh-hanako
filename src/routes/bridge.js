@@ -169,29 +169,37 @@ export default function registerBridgeRoutes(app, ctx) {
   // 端口与 webui.js 同源（manifest 默认 + 用户配置合并的 ctx.config；非对象回退 3080）
   const dshCfg = ctx && typeof ctx.config === "object" && ctx.config ? ctx.config : {};
   const dshPort = () => Number(dshCfg.webPort) || 3080;
-  // HTML 改写（绝对路径 → scope 相对，与 sw.js rewriteHtmlUrls 同逻辑）
-  function rewriteHtmlUrls(html) {
+  // 凭据注入：改写后的资源 URL 必须带 token（浏览器子资源请求无法带自定义 header，
+  // 宿主鉴权墙对无凭据请求 403 missing_credential——实测）。token 取自代理请求自身
+  // 的 query（页面 URL /web?token=xxx），附加到每个改写后的资源 URL。
+  function injectToken(url, token) {
+    if (!token) return url;
+    return url + (url.indexOf("?") !== -1 ? "&" : "?") + "token=" + encodeURIComponent(token);
+  }
+  // HTML 改写（绝对路径 → scope 相对 + 凭据注入，与 sw.js rewriteHtmlUrls 同逻辑）
+  function rewriteHtmlUrls(html, token) {
     return String(html).replace(
       /([ \t\r\n](?:href|src)[ \t\r\n]*=[ \t\r\n]*)(["'])\/(?!\/)([^"']*)\2/g,
       (all, prefix, quote, path) => {
         if (path.indexOf("api/plugins/dsh-hanako/") === 0) return all;
-        return prefix + quote + "/api/plugins/dsh-hanako/web/" + path + quote;
+        return prefix + quote + injectToken("/api/plugins/dsh-hanako/web/" + path, token) + quote;
       },
     );
   }
-  // CSS 改写（url() 绝对路径 → scope 相对）
-  function rewriteCssUrls(css) {
+  // CSS 改写（url() 绝对路径 → scope 相对 + 凭据注入）
+  function rewriteCssUrls(css, token) {
     return String(css).replace(
       /url\((["']?)\/(?!\/)([^"')]+)\1\)/g,
       (all, quote, path) => {
         if (path.indexOf("api/plugins/dsh-hanako/") === 0) return all;
-        return "url(" + quote + "/api/plugins/dsh-hanako/web/" + path + quote + ")";
+        return "url(" + quote + injectToken("/api/plugins/dsh-hanako/web/" + path, token) + quote + ")";
       },
     );
   }
   // /web 与 /web/* 统一代理（GET/POST/HEAD；HTML/CSS 改写，其余透传）
   app.all("/web*", async (c) => {
     const url = new URL(c.req.url, "http://dsh.internal");
+    const token = url.searchParams.get("token") || "";
     let path = url.pathname;
     if (path === "/web" || path === "/web/") path = "/";
     else if (path.startsWith("/web/")) path = path.slice(4);
@@ -220,9 +228,9 @@ export default function registerBridgeRoutes(app, ctx) {
       let out = buf;
       if (buf.length < 2 * 1024 * 1024) {
         if (ct.indexOf("text/html") !== -1) {
-          out = Buffer.from(rewriteHtmlUrls(buf.toString("utf8")), "utf8");
+          out = Buffer.from(rewriteHtmlUrls(buf.toString("utf8"), token), "utf8");
         } else if (ct.indexOf("text/css") !== -1) {
-          out = Buffer.from(rewriteCssUrls(buf.toString("utf8")), "utf8");
+          out = Buffer.from(rewriteCssUrls(buf.toString("utf8"), token), "utf8");
         }
       }
       const outHeaders = {};
