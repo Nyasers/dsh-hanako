@@ -435,6 +435,10 @@ export function apply(ctx, config) {
                 });
               });
               if (!acked) throw new Error("宿主未受理更新请求（总线确认超时）");
+              // 新轮次受理：清空事件缓存，防 update-status/update-stream 回放上一轮
+              // done/error 终态（新轮次由 update.progress/result 重新填充；更新未开始
+              // 前缓存为 null，update-status 走 update-result.json 文件兜底）
+              updateEventCache = null;
               settingsLog("更新请求已受理，将自动执行更新");
               json(res, { ok: true, state: "updating" });
             } catch (e) {

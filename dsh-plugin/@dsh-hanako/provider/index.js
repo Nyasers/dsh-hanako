@@ -1022,6 +1022,20 @@ export async function apply(ctx, config) {
                 );
               }),
             );
+            // 订阅建立后显式请求宿主重放最新 routes（就绪握手，CodeRabbit 时序意见）：
+            // 覆盖「hello-ok 后本插件 loadDeps/effect 尚未完成、宿主首批 push 到达时
+            // 订阅未注册」的窗口——首批 provider.refresh 事件可能丢失，导致退出
+            // empty-snapshot 状态（provider 永不注册）。宿主收到 provider.refresh.request
+            // 即重推最新 routes（lifecycle.js wireProviderPushOnBusReady 订阅）；bus 未
+            // 连接时本帧丢失，由宿主 bus.ready 待补推机制兜底（pushProviderRoutes 内部
+            // 未送达记 pending，bus.ready 后自动补推）。
+            try {
+              if (typeof busCtx.dshanaBus.emit === "function") {
+                busCtx.dshanaBus.emit("provider.refresh.request", {});
+              }
+            } catch {
+              /* 请求失败不阻断（宿主补推兜底） */
+            }
           }
         } catch (e) {
           try {

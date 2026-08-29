@@ -17,7 +17,9 @@
 // 宿主侧 src/lib/bus.js 监听 log 通道 → g.appendLog(src, line) 写会话文件
 // （行格式 [<HH:mm:ss.SSS>] [<src>] <内容> 由宿主侧统一，src 前缀不变）。
 // bus 未连接（宿主未连/握手未完成）时：有界环形缓冲（≤500 行），连接后按序补发
-// （逐条 emit，保证顺序；缓冲满丢最旧，不阻塞主流程）。
+// （逐条 emit，保证顺序；缓冲满丢最旧，不阻塞主流程）。发送失败（emit 返回 false/
+// 异常）的记录不清除——保留在缓冲中，重连后下次补发重试；live 行发送失败同样入缓冲
+// 待重试，不丢日志。
 //
 // 依赖：inject ['dshanaBus']（@dsh-hanako/bridge 提供的消息总线服务）。bridge 不再
 // 注入 hanaLogger（避免循环依赖——bridge 自身日志经总线 log 帧直投宿主 + ctx.logger
@@ -47,17 +49,21 @@ export function apply(ctx, config) {
         const buffer = []
         let lastConnected = false
 
+        // 发送单行：返回是否送达（bus.emit 结果为 false = 未入队/写失败；异常按未送达处理）
         const sendLine = (src, line) => {
           try {
             if (bus && typeof bus.emit === 'function') {
-              bus.emit('log', { src, line })
+              return bus.emit('log', { src, line }) === true
             }
           } catch {
-            /* 发送失败静默（下一条日志重试） */
+            /* 发送异常：按未送达处理（调用方保留记录待重试） */
           }
+          return false
         }
 
-        // 连接状态检查 + 缓冲补发：每次 log 调用时判断——未连接入缓冲，已连接先补发再直发
+        // 连接状态检查 + 缓冲补发：每次 log 调用时判断——未连接入缓冲，已连接先补发再直发。
+        // 补发仅清除送达成功的记录（sendLine 返回 true）；发送失败的记录保留在缓冲中，
+        // 重连后下次补发重试（有界缓冲满丢最旧仍由入缓冲侧保证，不丢已送达的顺序）。
         const flushBuffer = () => {
           if (!bus || typeof bus.status !== 'function') return
           try {
@@ -66,10 +72,13 @@ export function apply(ctx, config) {
             return
           }
           if (buffer.length === 0) return
-          const pending = buffer.splice(0, buffer.length)
-          for (const item of pending) {
-            sendLine(item.src, item.line)
+          const retained = []
+          for (const item of buffer) {
+            if (!sendLine(item.src, item.line)) retained.push(item)
           }
+          // 只保留发送失败的记录：成功清掉，失败原序保留
+          if (retained.length === 0) buffer.length = 0
+          else buffer.splice(0, buffer.length, ...retained)
         }
 
         const service = {
@@ -100,7 +109,12 @@ export function apply(ctx, config) {
                   lastConnected = false
                 }
                 if (connected) {
-                  sendLine(src, t)
+                  // live 直发：发送失败（未入队/写失败）也保留入缓冲，重连后补发重试
+                  if (!sendLine(src, t)) {
+                    // 有界环形缓冲：满则丢最旧
+                    if (buffer.length >= BUFFER_CAP) buffer.shift()
+                    buffer.push({ src, line: t })
+                  }
                 } else {
                   // 有界环形缓冲：满则丢最旧
                   if (buffer.length >= BUFFER_CAP) buffer.shift()

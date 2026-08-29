@@ -770,13 +770,21 @@ function pushProviderRoutes() {
     }
   }
 }
-// bus.ready 补推接线（幂等，只挂一次）：总线连接成功后如有待补推 routes 立即补推
+// bus.ready 补推接线（幂等，只挂一次）：总线连接成功后如有待补推 routes 立即补推。
+// 另订阅 dsh 侧 provider 插件的 provider.refresh.request 就绪握手（CodeRabbit 时序意见）：
+// 子插件订阅建立后显式请求重放最新 routes——覆盖「宿主首批 push 早于子插件订阅建立」
+// 的窗口（loadDeps/effect 未完成时首批 provider.refresh 事件丢失，provider 卡
+// empty-snapshot）。收到请求即重推（pushProviderRoutes 内部未送达记 pending，
+// bus.ready 后自动补推，无需在此重复判 pending）。
 let providerPushWired = false;
 function wireProviderPushOnBusReady() {
   if (providerPushWired) return;
   providerPushWired = true;
   const g = getSingleton();
   if (g.dshanaBus && typeof g.dshanaBus.on === "function") {
+    g.dshanaBus.on("provider.refresh.request", () => {
+      pushProviderRoutes();
+    });
     g.dshanaBus.on("bus.ready", () => {
       if (providerPushPending) {
         providerPushPending = false;

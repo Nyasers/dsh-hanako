@@ -36,7 +36,8 @@
 import { render as webuiShellHtml } from "../assets/webui-shell.jinja2";
 
 // ---- 就绪事件流订阅者（web host 启动失败通知；lifecycle.js 调 g.notifyWebStartFailed）----
-// 多个壳页 tab 可同时订阅；Set 保存，流关闭时移除。挂钩只装一次（幂等）。
+// 多个壳页 tab 可同时订阅；Set 保存，流关闭时移除。notifyWebStartFailed 每次模块加载
+// 都重新赋值（闭包指向当前模块的 Set，见下方挂钩处），不设一次性守卫。
 const webStartFailedListeners = new Set();
 
 function esc(v) {
@@ -190,16 +191,6 @@ export default function registerWebuiRoutes(app, ctx) {
   // 事件格式：SSE data: JSON，{ type: "ready" | "pending" | "diagnostics", diagnostics? }。
   // 实现与 routes/card.js 的 /ops/dep-stream 同构（ReadableStream + c.body）；客户端
   // 断开（ReadableStream cancel）时清理订阅与挂钩，不泄漏。
-  // 就绪事件流（GET /webui/events，SSE 式 chunked）——壳页就绪事件化的宿主推送通道：
-  //   · 打开时已 ready（bus 已连接）→ 立即推 ready 事件并关闭；
-  //   · 未 ready → 先推 pending 事件（壳页保持加载态），挂起等待：
-  //       - bus.ready（本机事件，hello-ok 到达）→ 推 ready 事件并关闭；
-  //       - bus.disconnect（web host 停机/重启窗口）→ 推 pending 事件（壳页退回加载态）；
-  //       - web host 启动失败（lifecycle notifyWebStartFailed）→ 推 diagnostics 事件
-  //         （诊断对象由 readDiagnostics 收集；壳页直接显示自检），随后关闭。
-  // 事件格式：SSE data: JSON，{ type: "ready" | "pending" | "diagnostics", diagnostics? }。
-  // 实现与 routes/card.js 的 /ops/dep-stream 同构（ReadableStream + c.body）；客户端
-  // 断开（ReadableStream cancel）时清理订阅与挂钩，不泄漏。
   app.get("/webui/events", (c) => {
     let unsubs = [];
     let onStartFailed = null;
@@ -261,22 +252,24 @@ export default function registerWebuiRoutes(app, ctx) {
             }),
           );
         }
-        // 挂钩 web host 启动失败通知（lifecycle startWebHostFromPlugin catch 调用）；
-        // 挂钩只装一次（幂等），后续流只增删监听器
+        // 挂钩 web host 启动失败通知（lifecycle startWebHostFromPlugin catch 调用）。
+        // 每次模块加载都重新赋值 notifyWebStartFailed（不设 __webStartFailedHooked 守卫）：
+        // 回调闭包始终指向**当前模块**的 webStartFailedListeners Set——宿主以 ?t= 时间戳
+        // 加载 routes/webui.js 模块（见头部注释，避免 Node ESM URL 缓存读到旧模块），若
+        // 只装一次，重载后旧闭包仍指向旧模块的 Set，新模块 add 的监听器永远不会被通知。
+        // 每次赋值覆盖为新模块的 Set，与新加载的模块实例保持一致（lifecycle 经单例调用，
+        // 幂等无害）。
         webStartFailedListeners.add(onStartFailed);
         const hookG = globalThis.__dshHanako || (globalThis.__dshHanako = {});
-        if (!hookG.__webStartFailedHooked) {
-          hookG.__webStartFailedHooked = true;
-          hookG.notifyWebStartFailed = () => {
-            for (const fn of [...webStartFailedListeners]) {
-              try {
-                fn();
-              } catch {
-                /* 通知失败不阻断 */
-              }
+        hookG.notifyWebStartFailed = () => {
+          for (const fn of [...webStartFailedListeners]) {
+            try {
+              fn();
+            } catch {
+              /* 通知失败不阻断 */
             }
-          };
-        }
+          }
+        };
         if (busReady()) {
           send({ type: "ready" });
           close();

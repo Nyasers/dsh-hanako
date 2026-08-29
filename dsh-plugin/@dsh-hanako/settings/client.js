@@ -737,7 +737,11 @@ window.__ModuleLoader__.load({
                     applyUpdateEvent(d2.value);
                     if (streamClosed) return;
                   }
-                  reader.read().then(process);
+                  // 递归 read 同样附加 rejection 处理：流错误时置 reader 为 null，
+                  // 与 done/streamClosed/初始 read 的 catch 分支一致（不留悬空 reader）
+                  reader.read().then(process).catch(function () {
+                    reader = null;
+                  });
                 }).catch(function () {
                   reader = null;
                 });
@@ -785,7 +789,10 @@ window.__ModuleLoader__.load({
                 })
                 .catch(() => { /* 手动刷新失败：保持当前状态 */ });
             };
-            // 卸载清理：关闭流
+            // 卸载清理：关闭流。先 stopPoll() 清掉 pending 的 check 轮询定时器再接管
+            // pollTimerRef——否则旧定时器仍会继续 applyCheck 覆盖状态，且其结束时的
+            // stopPoll() 会误关新流句柄（{ close } 被当 interval clearInterval 清掉）
+            stopPoll();
             pollTimerRef.current = { close: closeStream }; // 复用 stopPoll 清理槽
             fetch(streamUrl, { headers: { "Accept": "text/event-stream" } })
               .then(function (r) {

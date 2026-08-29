@@ -517,7 +517,7 @@
       })
         .then(function (r) { return r.json(); })
         .then(function (d) {
-          if (d && d.ok && d.state === "ready") { attach(); return; } // 已就绪：直接切 iframe
+          if (d && d.ok && d.state === "ready") { mountReady(); return; } // 已就绪：mountReady（置 readyReceived + attach），与其他 ready 路径一致
           if (d && d.ok) { return; } // starting：保持禁用，轮询检测就绪
           // 失败：恢复按钮并提示错误
           startRequested = false;
@@ -713,7 +713,11 @@
                 else if (ev.type === "pending") { if (!readyReceived) showLoading(); }
                 else if (ev.type === "diagnostics") { if (!readyReceived) showDiagnostics(ev.diagnostics); }
               }
-              reader.read().then(process);
+              // 递归 read 同样附加 rejection 处理：仅 readyReceived false 时重开流
+              // （ready 已收到后流错误不再重试，与 done/初始 read 的 catch 分支一致）
+              reader.read().then(process).catch(function () {
+                if (!readyReceived) scheduleReopen();
+              });
             }).catch(function () {
               if (!readyReceived) scheduleReopen();
             });

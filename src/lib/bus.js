@@ -29,6 +29,9 @@
 //   { "channel":"update.progress", "payload":{ state, at } } —— 更新开始/进度（本模块 emit）
 //   { "channel":"update.result", "payload":{ state, version?, error? } }—— 更新结果（本模块 emit）
 //   { "channel":"provider.refresh", "payload":{ routes } }   —— provider 路由推送（本模块 emit）
+//   { "channel":"provider.refresh.request", "payload":{} } —— dsh 侧订阅建立后就绪握手
+//                                                              （子插件 emit，宿主收到即重推最新 routes，
+//                                                              覆盖首批 push 早于子插件订阅的窗口）
 //   { "channel":"bus.ping", "payload":{} } / { "channel":"bus.pong", "payload":{} } —— 心跳
 //
 // 连接管理：断线指数退避重连（1s 起、×2、封顶 30s）；心跳应用级 { channel:"bus.ping" }
@@ -316,16 +319,16 @@ function wireUpdateRequest() {
       .then((r) => {
         // 并发请求（已在更新中）：不重复触发、不回投（首个请求拥有结果上报）
         if (r && r.state === "updating") return;
-        // updateDsh 内部已 emit update.result（lifecycle.js 完成点）；这里兜底一次
-        // （防御 updateDsh 直调路径未 emit 的情况——幂等，settings 事件缓存去重）
-        const state = r && r.ok ? "done" : (r && r.state) || "error";
-        const out = { state };
-        if (r && r.version) out.version = r.version;
-        if (r && r.error) out.error = r.error;
-        log("更新完成（state=" + state + "），回投 update.result");
-        sendFrame({ channel: "update.result", payload: out });
+        // 终态已由 updateDsh 内部 emitBus 回投（lifecycle.js 完成点：done/error 都
+        // emitBus("update.result")；bus 未连接时 sendFrame 会把 update.result 排队
+        // 待 hello-ok 补发，不丢终态）——这里不再重复 sendFrame，确保只发一个终态
+        // （CodeRabbit 三轮意见：双发 update.result 属协议冗余；settings 事件缓存
+        // 虽幂等去重，但流侧会收到两次终态）。
+        log("更新完成（state=" + (r && r.state) + "），终态已由 lifecycle 回投");
       })
       .catch((e) => {
+        // 兜底：updateDsh 理论异常 reject（正常路径内部已 emit 终态；此分支仅防御
+        // 未来重构去掉内部 try/catch 时不丢终态）
         sendFrame({
           channel: "update.result",
           payload: { state: "error", error: String(e?.message || e).slice(0, 1500) },
