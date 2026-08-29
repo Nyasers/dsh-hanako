@@ -115,21 +115,3 @@ export function resolveDefaultCwd(cfg) {
   }
   return String(cfg.defaultCwd || "");
 }
-
-// callbackMode 解析（「配置单一事实源」哲学，与 defaultCwd/approvalTimeoutMs 同款直读兜底）：
-// 优先直读 dataDir/config.json 的 global.callbackMode（设置界面改动即时生效；Agent 直改文件
-// 同样生效），无则回退配置快照。三档合法值 summary/full/minimal 采用，非法/缺失回 summary。
-export function resolveCallbackMode(cfg) {
-  try {
-    const cf = join(cfg.dataDir, "config.json");
-    if (existsSync(cf)) {
-      const j = JSON.parse(readFileSync(cf, "utf8"));
-      const v = j?.global?.callbackMode;
-      if (v === "summary" || v === "full" || v === "minimal") return v;
-    }
-  } catch {
-    /* 读配置失败忽略 */
-  }
-  const v = cfg.callbackMode;
-  return v === "summary" || v === "full" || v === "minimal" ? v : "summary";
-}

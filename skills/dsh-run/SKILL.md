@@ -1,11 +1,11 @@
 ---
 name: dsh-run
-description: "dsh_run 工具调用手册（源码 tools/dsh-run.js 核对）。触发场景：dsh_run 怎么传参（task/cwd/timeout/wait/agentPreset/reasoningEffort/provider/model/sessionId 的语义与副作用）、异步/同步模式区别与返回结构、后台回调 payload 结构、callbackMode 三档（summary/full/minimal）、超时语义（审批挂起暂停计时）、错误码 DSH_ERROR/DSH_TIMEOUT/DSH_ABORTED、provider/model 显式指定的写回副作用（显式即成为 dsh 新默认）、resume 复用会话、agentPreset 选型（standard/code/cordis/minimal）、config.json 单一事实源实时生效。需要提交 dsh 任务前先读本技能。"
+description: "dsh_run 工具调用手册（源码 tools/dsh-run.js 核对）。触发场景：dsh_run 怎么传参（task/cwd/timeout/wait/agentPreset/reasoningEffort/provider/model/sessionId 的语义与副作用）、异步/同步模式区别与返回结构、后台回调 payload 结构（固定 minimal 定位键）、超时语义（审批挂起暂停计时）、错误码 DSH_ERROR/DSH_TIMEOUT/DSH_ABORTED、provider/model 显式指定的写回副作用（显式即成为 dsh 新默认）、resume 复用会话、agentPreset 选型（standard/code/cordis/minimal）、config.json 单一事实源实时生效。需要提交 dsh 任务前先读本技能。"
 ---
 
 # dsh_run 工具手册
 
-把任务交给 DeepSeek Harness（dsh）的常驻 web host（--profile web）执行：完整编码 agent、沙箱 bash/文件系统工具、上下文压缩、subagent 级联。权限 `external_side_effect`（external_llm_api，消耗宿主 provider 额度）。实现 `tools/dsh-run.js`（单文件自包含，1029 行）。
+把任务交给 DeepSeek Harness（dsh）的常驻 web host（--profile web）执行：完整编码 agent、沙箱 bash/文件系统工具、上下文压缩、subagent 级联。权限 `external_side_effect`（external_llm_api，消耗宿主 provider 额度）。实现 `tools/dsh-run.js`（单文件自包含，989 行）。
 
 ## 参数契约（源码 parameters + doExecute + submitTask 核实）
 
@@ -33,7 +33,7 @@ ensureWebHost（resolveDshPkgDir 定位依赖 → spawn dsh web，DSH_HOME=数�
 → events.mux 事件循环 → 终态
 ```
 
-事件处理要点：`assistant/chunk` 文本流累积（finish 帧 `reason.kind==="error"` **不是终态信号**——只记 pendingFailure 兜底后继续消费：DSH 侧 LLM 请求失败如 429/400 会进入 agent/request-error waterfall → dsh-llm-retry 指数退避重试，任务实际还在跑，可能继续出 chunk / assistant/message，终态判定以 `turn/end` 为准——官方 UI 客户端同语义）；`llm/retry` 事件经会话日志通道记「LLM 请求失败，退避重试中（第 N 次，延迟 Xms）」（不阻断、不改卡片渲染）；`assistant/message` 收集 usage + 摘要锚点；`tool/call` 与 `tool/code-dispatch-start` 缓存工具参数原文（审批决策数据源）；`turn/end` 终态判定；`approval/requested`/`approval/resolved` 审批；`stream/error` 事件流错误。
+事件处理要点：`assistant/chunk` 文本流累积（finish 帧 `reason.kind==="error"` **不是终态信号**——只记 pendingFailure 兜底后继续消费：DSH 侧 LLM 请求失败如 429/400 会进入 agent/request-error waterfall → dsh-llm-retry 指数退避重试，任务实际还在跑，可能继续出 chunk / assistant/message，终态判定以 `turn/end` 为准——官方 UI 客户端同语义）；`llm/retry` 事件经会话日志通道记「LLM 请求失败，退避重试中（第 N 次，延迟 Xms）」（不阻断、不改卡片渲染）；`assistant/message` 收集 usage；`tool/call` 与 `tool/code-dispatch-start` 缓存工具参数原文（审批决策数据源）；`turn/end` 终态判定；`approval/requested`/`approval/resolved` 审批；`stream/error` 事件流错误。
 
 **终态映射**：`completed → end_turn` / `max-tokens → max_tokens` / `aborted → aborted` / `error → error`（failure.message 透传）。流结束无终态帧时：已请求取消（cancelledRequested）且 mux 断流判 aborted（防误报完成）；期间见过 finish error（LLM 请求失败帧）按 error 收尾（pendingFailure 兜底，防 DSH 退避重试中断流/崩溃被误判成功）；否则兜底 end_turn。
 
@@ -41,16 +41,11 @@ ensureWebHost（resolveDshPkgDir 定位依赖 → spawn dsh web，DSH_HOME=数�
 
 **异步模式（默认）**：立即返回 `{ content: "任务已提交给 dsh（rpcId: xxx）…", details: { dsh: { rpcId, status: "running", cwd, wait: false }, card: { route: "/card/op?sessionId=…&rpcId=…&timeoutMs=…", … } } }`。deferred 注册 taskId=任务 rpcId（type=dsh-run，trigger_parent_turn，失败也唤醒），完成后宿主投递 `<hana-background-result>`。
 
-**后台回调 payload**（callbackMode 三档，见下）：
+**后台回调 payload（固定 minimal，v0.21.3 后续演进收口）**：
 ```
-{ id, rpcId, tool: "dsh_run", status: "ok", cwd, sessionId,
-  output,                    // summary/full 时存在（体量由 callbackMode 决定）
-  outputMeta: { mode, fullLength, summaryLength, summaryOf },
-  stopReason, usage, stderr }
+{ id, status, rpcId, sessionId }
 ```
-`id` = sessionId（与 dsh_ops / dsh_search / dsh_run resume 的定位键一致）：主上下文收到回调后凭 id 直接取会话内容或续接，无需 dsh_search 查找。失败回调（failDeferredWake）error 尽力带定位键：有 sessionId（提交成功后的执行失败）时 `error.sessionId`；提交失败无 sessionId 时 `error.rpcId`（可为空串）。
-
-**callbackMode 三档**（config.json `global.callbackMode`，默认 summary）：`summary`=只回传最终结论摘要（buildSummary：锚点 = 最后一条 assistant/message 文本，`summaryOf: "final-message"`；无 finalText 时超长 >1500+600 head-tail 折叠，`summaryOf: "head-tail"`；短输出原样，`summaryOf: "full"`）；`full`=回传全量输出；`minimal`=回调只带 `{ id, status, rpcId, sessionId }` 定位键（**不调用 buildSummary**、不含 output/outputMeta/summary/usage/stderr 等大字段，主上下文自行审查或凭 id 取具体会话内容）。**完整输出永远在卡片（会话 jsonl 恢复）+ dsh Web UI（sessionId 定位）可查**。
+只带定位键，不含 output/outputMeta/summary/usage/stderr 等大字段、不生成摘要、不占 Agent 上下文。`id` = sessionId（与 dsh_session / dsh_run resume 的定位键一致）：主上下文收到回调后**凭 id 直接取会话内容**——`dsh_session(action="get", sessionId=<id>)` 直取最终结论 summary（读会话 jsonl），或 dsh_run resume 续接。失败回调（failDeferredWake）error 尽力带定位键：有 sessionId（提交成功后的执行失败）时 `error.sessionId`；提交失败无 sessionId 时 `error.rpcId`（可为空串）。**完整输出永远在卡片（会话 jsonl 恢复）+ dsh Web UI（sessionId 定位）可查**。
 
 **同步模式（wait=true）**：content = `res.output` +（非 end_turn 附 `[stopReason: …]`）；details.dsh = `{ id, stopReason, usage, cwd, rpcId, sessionId, wait: true }`（`id` = sessionId，同异步回调定位键），stderr 附 `dshStderr`（截 2000）。阻塞当前回合、无卡片进度；长任务建议异步。
 
@@ -85,7 +80,6 @@ defaultCwd / approvalTimeoutMs 优先直读 `<dataDir>/config.json` 的 `global.
 | approvalTimeoutMs | 30000 | 0/负数 = 禁用超时拒绝 |
 | defaultTimeoutMs | 1800000 (30min) | 未显式传 timeout 时用；可被 config.json 覆盖 |
 | webPort | 3080 | 0 不生效 |
-| callbackMode | summary | summary=摘要（默认）/ full=全量 / minimal=只带定位键 `{ id, status, rpcId, sessionId }`（不生成摘要、不占上下文） |
 
 依赖位置：数据目录 `dsh-pkg/` 优先（升级不丢），回退插件 node_modules。
 
@@ -94,4 +88,4 @@ defaultCwd / approvalTimeoutMs 优先直读 `<dataDir>/config.json` 的 `global.
 - 需要完整编码 agent 深度执行（实现/重构/调试/测试、沙箱实验、与当前对话隔离的长任务）→ dsh_run 默认异步提交。
 - 日常小代码任务 → subagent 协作（平台原生、隔离上下文），不注入 dsh。
 - **provider/model 显式指定 = 写回 dsh 全局新默认**（settings.yaml），要长期固定某模型请在 dsh models 页设默认。
-- resume 复用：dsh_search 命中历史会话或复用上次回调 sessionId → `dsh_run(sessionId=…)`，省上下文重建。
+- resume 复用：dsh_session action=search 命中历史会话或复用上次回调 sessionId → `dsh_run(sessionId=…)`，省上下文重建。

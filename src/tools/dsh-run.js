@@ -13,7 +13,7 @@
 // 完整模块结构与分发纪律见 DESIGN.md「架构」。
 // dataDir 解析：ctx.dataDir（宿主 onload 注入）→ g.dataDir（单例，onload 已正确初始化）
 // → PLUGIN_ROOT/data（冷启动兜底）。工具调用 ctx 通常没有 dataDir，回退链经单例兜底；
-// 回退值绝不写回单例（防污染 g.dataDir → 卡片 readOp / dsh_ops 定位错目录），
+// 回退值绝不写回单例（防污染 g.dataDir → 卡片 readOp / dsh_session 定位错目录），
 // 详见 doExecute 内注释。
 //
 // 权限：external_side_effect（调用 dsh 编码 agent 执行任务，消耗 Hana 宿主 provider 额度，Auto 模式送审）。
@@ -26,7 +26,6 @@ import {
   resolveReasoningEffort,
   resolveApprovalTimeoutMs,
   resolveDefaultCwd,
-  resolveCallbackMode,
 } from "./lib/config.js";
 import {
   registerDeferredWake,
@@ -39,7 +38,6 @@ import {
   openMux,
   textFromChunk,
   textFromMessageBlocks,
-  buildSummary,
 } from "./lib/protocol.js";
 // 生命周期能力（web host 拉起 / config.json 引导）——本模块只做任务提交，这两者对单例/web host
 // 的依赖经 app/lifecycle.js 转发（lifecycle.js 顶层 mountLifecycle 已把 closeProcess / collectDiagnostics /
@@ -287,7 +285,6 @@ function submitTask(
     if (signal) signal.addEventListener("abort", onAbort, { once: true });
 
     let collected = "";
-    let finalMessageText = ""; // 最后一条 assistant/message 的文本（回调摘要锚点）
     let blocksSeq = []; // assistant/message 的 blocks（终态回调输出结构化，reasoning 可折叠）
     let sawChunk = false;
     const seen = new Set();
@@ -334,7 +331,6 @@ function submitTask(
                   // chunk 流已提供文本时跳过拼接，避免重复
                   collected += t;
                 }
-                if (t) finalMessageText = t; // 每条覆盖，结束时即最终汇报（摘要锚点）
                 // 收集结构化 blocks（text/reasoning/tool-call）：终态 op.output 供卡片完整输出折叠渲染
                 const blocks = Array.isArray(msg.content) ? msg.content : [];
                 for (const b of blocks) {
@@ -676,16 +672,12 @@ function submitTask(
 
       const fullOutput = collected;
       // 回调/返回值保持 chunk 流文本；结构化 blocks（reasoning 可折叠）由卡片端从 jsonl/实时事件重建
-      // minimal 模式不生成摘要（buildSummary 是宿主侧协议层函数，minimal 回调不带 output/摘要）
-      const summary =
-        cfg.callbackMode === "minimal"
-          ? null
-          : buildSummary(fullOutput, finalMessageText);
+      // 回调固定 minimal：summary 恒为 null（不生成摘要），取内容走 dsh_session get
       return {
         rpcId: taskRpcId,
         sessionId,
         output: fullOutput,
-        summary,
+        summary: null,
         stopReason: outcome.stopReason,
         usage: usageTotal ?? null,
         stderr: web.stderr ? web.stderr.slice(-2000) : null,
@@ -744,7 +736,7 @@ export const description =
   "把任务交给 DeepSeek Harness（DSH）的常驻 web host 执行（完整编码 agent：沙箱 shell 与文件系统、上下文压缩、subagent 级联）。" +
   "适合需要独立 agent 上下文深度执行的代码任务（实现/重构/调试/测试）或与当前对话隔离的长任务。" +
   "默认异步：提交即渲染实时卡片、完成后宿主唤醒结果后台送达；wait=true 同步直接返回。任务会话在 DSH Web UI（webPort，默认 3080）可见可继续。" +
-  "完整调用手册（agentPreset/reasoningEffort/provider/model/sessionId resume/审批/回调模式）见 SKILL: skills/dsh-run/SKILL.md";
+  "完整调用手册（agentPreset/reasoningEffort/provider/model/sessionId resume/审批/固定 minimal 回调）见 SKILL: skills/dsh-run/SKILL.md";
 
 export const parameters = {
   type: "object",
@@ -818,14 +810,14 @@ async function doExecute(input, ctx) {
   // 插件数据目录（宿主注入）：DSH_HOME 数据根落在这里（账本随插件生命周期）。
   // 回退链对齐 dsh-update/dsh-install 的 ctx.dataDir || g.dataDir：宿主只对 onload
   // 生命周期 ctx 注入 dataDir，工具调用 ctx 通常没有（缺 g.dataDir 兜底会回退到
-  // PLUGIN_ROOT/data 并把错误值写进单例，污染 g.dataDir → 卡片 readOp / dsh_ops
+  // PLUGIN_ROOT/data 并把错误值写进单例，污染 g.dataDir → 卡片 readOp / dsh_session
   // 全落到不存在的 dsh-home → 404「任务记录不存在」）。
   const g = getSingleton();
   const dataDir = ctx.dataDir || g.dataDir || join(PLUGIN_ROOT, "data");
   cfg.dataDir = dataDir;
   // 首次工具调用即自动生成 config.json（不存在时按 manifest 默认值；幂等，失败静默）
   ensureConfigJson(cfg);
-  // 单例记数据目录（dsh_ops 经 g.dataDir 定位 dsh 会话缓存等数据文件）——
+  // 单例记数据目录（dsh_session 经 g.dataDir 定位 dsh 会话缓存等数据文件）——
   // 只在显式注入（ctx.dataDir 非空）或单例为空（冷启动兜底）时写入；ctx.dataDir
   // 为空且单例已有值时保留单例原值，绝不把 PLUGIN_ROOT/data 回退值覆盖进去。
   if (ctx.dataDir && ctx.dataDir !== g.dataDir) g.dataDir = ctx.dataDir;
@@ -842,19 +834,9 @@ async function doExecute(input, ctx) {
       ? Number(input.timeout) * 1000
       : Number(cfg.defaultTimeoutMs || 600000);
 
-  // callbackMode 三档：full=回传全量输出 / summary=只带最终结论摘要（默认）/
-  // minimal=回调只带 { id, status, rpcId, sessionId } 定位键（不生成摘要、不占上下文）。
-  // 直读 dataDir/config.json 的 global.callbackMode（单一事实源，设置界面改动/Agent 直改
-  // 文件均即时生效），无则回退配置快照；与 defaultCwd/approvalTimeoutMs 同款直读兜底。
-  const callbackMode = resolveCallbackMode(cfg);
-  // 异步提交回执按 callbackMode 展示三档语义
-  const modePhrase =
-    callbackMode === "full"
-      ? "带回完整输出"
-      : callbackMode === "minimal"
-        ? "仅带回任务状态与定位键（id/rpcId/sessionId）"
-        : "带回结果摘要";
-
+  // callbackMode 收口固定 minimal（v0.21.3 后续演进）：所有回调只带定位键
+  // { id, status, rpcId, sessionId }（id=sessionId），不生成摘要、不占上下文；
+  // 取会话内容统一走 dsh_session action=get（凭 sessionId 直取 summary）。
   const taskCfg = {
     dshPkgDir: cfg.dshPkgDir,
     dataDir: cfg.dataDir,
@@ -862,8 +844,6 @@ async function doExecute(input, ctx) {
     webPort: cfg.webPort,
     // 审批配置唯一键 approvalTimeoutMs（超时兜底，0=禁用；manifest 默认 30000）
     approvalTimeoutMs: cfg.approvalTimeoutMs,
-    // 回调输出模式（minimal 时 submitTask 跳过 buildSummary）
-    callbackMode,
   };
   const taskParams = {
     task: input.task,
@@ -920,57 +900,25 @@ async function doExecute(input, ctx) {
 
     promise.then(
       (res) => {
-        // 回调 result 统一带定位键 id（= sessionId，与 dsh_ops / dsh_search / dsh_run
-        // resume 同键）：主上下文收到回调后凭 id 直接取会话内容或续接，无需 dsh_search 查找。
-        if (callbackMode === "minimal") {
-          // minimal：回调只带定位键（不含 output/outputMeta/summary/usage/stderr 等大字段，
-          // 不生成摘要、不占 Agent 上下文）；主上下文自行审查或凭 id 取具体会话内容。
-          resolveDeferredWake({
-            bus,
-            taskId: deferredTaskId,
-            result: {
-              id: res.sessionId,
-              status: "ok",
-              rpcId: taskRpcId,
-              sessionId: res.sessionId,
-            },
-          });
-          return;
-        }
-        // PTC 式回调压缩：默认只带最终结论摘要（callbackMode=summary），
-        // 完整输出在卡片（jsonl 恢复）与 dsh web UI（sessionId）可查，不进 Agent 上下文。
-        const outputMode = callbackMode === "full" ? "full" : "summary";
-        const payloadOutput =
-          outputMode === "full"
-            ? res.output
-            : (res.summary?.text ?? res.output);
+        // 回调固定 minimal：只带定位键 { id, status, rpcId, sessionId }（id=sessionId，
+        // 与 dsh_session / dsh_run resume 同键），不含 output/outputMeta/summary/usage/stderr
+        // 等大字段、不生成摘要、不占 Agent 上下文；取会话内容统一走 dsh_session
+        // action=get（凭 sessionId 直取 summary），完整输出在卡片与 dsh Web UI 可查。
         resolveDeferredWake({
           bus,
           taskId: deferredTaskId,
           result: {
             id: res.sessionId,
-            rpcId: taskRpcId,
-            tool: "dsh_run",
             status: "ok",
-            cwd,
+            rpcId: taskRpcId,
             sessionId: res.sessionId,
-            output: payloadOutput,
-            outputMeta: {
-              mode: outputMode,
-              fullLength: (res.output || "").length,
-              summaryLength: (res.summary?.text || payloadOutput).length,
-              summaryOf: res.summary?.summaryOf ?? null,
-            },
-            stopReason: res.stopReason,
-            usage: res.usage,
-            stderr: res.stderr,
           },
         });
       },
       (err) => {
         // 尽力带定位键：有 sessionId（提交成功后的执行失败）时 error 带 sessionId；
         // 提交失败无 sessionId 的场景带 rpcId（可为空串）。主上下文凭定位键直接取会话
-        // 内容/对账，无需额外 dsh_search 查找。
+        // 内容/对账，无需额外搜索（dsh_session get 直取）。
         const error = { message: String(err?.message || err).slice(0, 300) };
         // 定位键优先级：rejected error 自带的 sessionId（submitTask 内已附加，session.prompt
         // 失败时 loc 为 null 也保留已创建的会话）→ loc.sessionId → taskRpcId（可为空串）。
@@ -992,7 +940,7 @@ async function doExecute(input, ctx) {
       content: [
         {
           type: "text",
-          text: `任务已提交给 DSH（rpcId: ${taskRpcId}），在后台执行中。进度与输出见上方卡片；完成后后台消息${modePhrase}（callbackMode=${callbackMode}，完整输出在卡片与 DSH web UI 可查）。`,
+          text: `任务已提交给 DSH（rpcId: ${taskRpcId}），在后台执行中。进度与输出见上方卡片；完成后后台消息仅带回任务状态与定位键（id/rpcId/sessionId），取内容用 dsh_session get。`,
         },
       ],
       details: {

@@ -58,17 +58,6 @@
           "default": 1800000,
           "title": "默认超时（毫秒）",
           "description": "单次任务默认超时，工具调用未显式传 timeout 时使用。默认 30 分钟。"
-        },
-        "callbackMode": {
-          "type": "string",
-          "enum": [
-            "summary",
-            "full",
-            "minimal"
-          ],
-          "default": "summary",
-          "title": "回调输出模式",
-          "description": "异步任务完成后回调给 Agent 的输出体量：summary=只回传最终结论摘要（默认，省上下文；完整输出在卡片 op 快照与 dsh web UI 可查）；full=回传完整输出（上下文占用大）；minimal=回调只带定位键 { id, status, rpcId, sessionId }，不生成摘要（buildSummary 跳过），主上下文自行审查或凭 id 取具体会话内容。"
         }
       }
     },

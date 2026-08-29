@@ -1,6 +1,6 @@
 ## 工具
 
-七个工具由插件注册（实现 `tools/*.js`），**完整调用手册（参数语义、返回结构、错误码、审批通道、副作用）见各工具的 SKILL**：
+六个工具由插件注册（实现 `tools/*.js`），**完整调用手册（参数语义、返回结构、错误码、审批通道、副作用）见各工具的 SKILL**：
 
 | 工具 | 用途 | 调用手册 |
 | --- | --- | --- |
@@ -9,8 +9,7 @@
 | `dsh_update` | 检查/更新 dsh 版本（action=check/update；update 重启 web host，正在执行的任务中断，渲染升级卡片） | [dsh-update](skills/dsh-update/SKILL.md) |
 | `dsh_approve` | 应答 dsh 任务挂起的权限审批（allowed-once / rejected） | [dsh-approve](skills/dsh-approve/SKILL.md) |
 | `dsh_cancel` | 取消运行中的 dsh 任务（主动止损，幂等） | [dsh-cancel](skills/dsh-cancel/SKILL.md) |
-| `dsh_ops` | 查询 dsh 会话清单与摘要（解析 dsh 会话缓存 session_projcache 可查，支持 limit） | [dsh-ops](skills/dsh-ops/SKILL.md) |
-| `dsh_search` | 跨会话搜索历史内容，命中可 resume | [dsh-search](skills/dsh-search/SKILL.md) |
+| `dsh_session` | 统一会话查询（list=清单与摘要 / get=凭 sessionId 直取内容（summary）/ search=按关键词搜历史内容） | [dsh-session](skills/dsh-session/SKILL.md) |
 
 ## dsh Web UI（DSHana 标签页）
 
@@ -87,7 +86,7 @@ web host 未就绪时，DSHana 标签页不再只显示「正在重试…」—�
 - 提交即显示「运行中」卡片，实时刷新状态与耗时
 - **SSE 推送渲染**：卡片启动先收 baseline（会话 jsonl 恢复快照），再经 `/ops/stream` 收 DSH mux 实时事件（assistant/chunk 文本增量节流渲染、blocks/usage 收集、turn/end 定终态）。插件零任务状态存储，session.jsonl 为唯一事实源，重启后旧卡片仍可从日志恢复
 - **两级输出（PTC 式压缩）**：摘要区默认展开（运行中为输出尾部实时预览；完成后为最终结论摘要），完整输出超长时经「完整输出」按钮懒加载（默认折叠）
-- **回调压缩**：异步完成回调默认只带最终结论摘要（`callbackMode=summary`，锚点 = dsh 最后一条 assistant 消息），完整输出保留在卡片（jsonl 恢复）与 dsh Web UI，不占 Agent 上下文；设 `callbackMode=full` 可回传全量
+- **回调压缩（固定 minimal）**：异步完成回调只带定位键 `{ id, status, rpcId, sessionId }`（id=sessionId），不生成摘要、不占 Agent 上下文；取会话内容用 `dsh_session(action="get", sessionId=<id>)`（读会话 jsonl 直取最终结论 summary），完整输出在卡片（jsonl 恢复）与 dsh Web UI
 - **Token 账目**：任务完成后卡片详情区显示 usage 统计 `Token: in / out / cache / thinking`（API 未返回 cache/thinking 明细时不显示对应项）
 - 失败时显示错误信息
 
@@ -132,7 +131,7 @@ dsh 的 `/api/events.mux` **要求 WebSocket 升级**：GET 返回 `426 Upgrade 
   - `lib/check.js` — checkDshUpdate（npmViewLatest + 本地版本直读 + semver 比较）
   - `lib/config.js` — 配置解析（纯解析零状态）：readDshDefaultModel / readDshDefaultPreset / resolveReasoningEffort / resolveApprovalTimeoutMs / resolveDefaultCwd
   - `lib/wake.js` — deferred 唤醒协议 + 审批挂起通知：registerDeferredWake / resolveDeferredWake / failDeferredWake / notifyApprovalWake（dsh-run / dsh-install / dsh-update 三入口共享，消除三重复；meta.type 由调用方传入保留各自标识）
-  - `lib/protocol.js` — dsh web /api 网关协议层（纯协议零状态）：nextRpcId / callUnary / openMux / textFromChunk / textFromMessageBlocks / SUMMARY_HEAD/TAIL / buildSummary
+  - `lib/protocol.js` — dsh web /api 网关协议层（纯协议零状态）：nextRpcId / callUnary / openMux / textFromChunk / textFromMessageBlocks
   - `app/lifecycle.js` — web host 生命周期（启动/自检/更新/三条 watch）：原在本文件，分离后独立，经静态 import 供 dsh-run 使用 ensureWebHost / ensureConfigJson，顶层 mountLifecycle 挂单例字段
   - **保留在 dsh-run**：createOpEntry（运行期协调条目，键 = 任务 rpcId）/ respondApprovalLocal / approvalTimers / toolCallCache / cacheToolCall / submitTask / doExecute / execute / 工具契约——与审批状态机（g.ops 协调状态（键 = 任务 rpcId）/ approvalTimers / toolCallCache）紧耦合，拆出要跨模块传递大量运行状态，保留在此
 - **分发纪律（历史约束）**：Hana 以带 ?t= 时间戳的 URL 加载 tools/*.js（热更新缓存破坏），但 tools 内部静态 import 的相对模块是无 query 的固定 URL，Node ESM 按 URL 缓存、永不刷新。分发形态宿主加载 dist/tools/*.js（rspack bundle，build.mjs 入口内联 import），?t= 重载即刷新；因此 rspack 入口（dsh-run 等）可静态 import lib 与本插件 app/lifecycle.js（内联进 bundle）。非 bundle 侧（routes/webui.js、index.js）保持经 globalThis 单例调用

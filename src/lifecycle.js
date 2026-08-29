@@ -1060,7 +1060,7 @@ getSingleton().startWebHost = async function startWebHostFromPlugin(
   cfg.dataDir = ctxDataDir || join(PLUGIN_ROOT, "data");
   // 插件初始化（拉起 web host）即自动生成 config.json（不存在时按 manifest 默认值）
   ensureConfigJson(cfg);
-  // 单例记数据目录（dsh_ops 经 g.dataDir 定位 dsh 会话缓存等数据文件）
+  // 单例记数据目录（dsh_session 经 g.dataDir 定位 dsh 会话缓存等数据文件）
   getSingleton().dataDir = cfg.dataDir;
   if (!cfg.dshPkgDir) cfg.dshPkgDir = resolveDshPkgDir(cfg);
   try {

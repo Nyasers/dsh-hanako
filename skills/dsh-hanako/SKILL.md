@@ -1,6 +1,6 @@
 ---
 name: dsh-hanako
-description: "dsh-hanako 插件（把 DeepSeek Harness 接进 Hana 的进程外 subagent 执行器）的配置辅助与使用指南。触发场景：dsh-hanako 刚装好需要配置 defaultCwd、依赖缺失需要安装（DSHana 标签页自装 / Agent 用 dsh_install 工具 / 手动 pnpm add）、标签页自检/自愈（安装依赖/手动启动/检测依赖/检查更新/更新 DSH）、web host 起不来（先看标签页自检 t1/t2）、dsh 任务失败排查、审批怎么应答、dsh_run/dsh_install/dsh_approve/dsh_cancel/dsh_ops/dsh_search/dsh_update 怎么用、默认模型怎么配（dsh 设置页「DSHana 设置」分页，provider/model/思考三级联动）、DSH 版本检查与更新（dsh_update 工具 / 设置页 DSH 版本块 / 标签页 deps 卡片）、安装/升级卡片（dsh_install / dsh_update 异步渲染 /card/dep 实时日志）、DeepSeek Harness 相关。遇到 dsh-hanako 相关需求优先读本技能再动手。"
+description: "dsh-hanako 插件（把 DeepSeek Harness 接进 Hana 的进程外 subagent 执行器）的配置辅助与使用指南。触发场景：dsh-hanako 刚装好需要配置 defaultCwd、依赖缺失需要安装（DSHana 标签页自装 / Agent 用 dsh_install 工具 / 手动 pnpm add）、标签页自检/自愈（安装依赖/手动启动/检测依赖/检查更新/更新 DSH）、web host 起不来（先看标签页自检 t1/t2）、dsh 任务失败排查、审批怎么应答、dsh_run/dsh_install/dsh_approve/dsh_cancel/dsh_session/dsh_update 怎么用、默认模型怎么配（dsh 设置页「DSHana 设置」分页，provider/model/思考三级联动）、DSH 版本检查与更新（dsh_update 工具 / 设置页 DSH 版本块 / 标签页 deps 卡片）、安装/升级卡片（dsh_install / dsh_update 异步渲染 /card/dep 实时日志）、DeepSeek Harness 相关。遇到 dsh-hanako 相关需求优先读本技能再动手。"
 ---
 
 # dsh-hanako 配置辅助与使用指南
@@ -15,7 +15,7 @@ config.json 由宿主设置界面生成、**不随包分发**；defaultCwd 初�
 
 **1. defaultCwd（建议）**：为空且未传 cwd 时报 `cwd 不能为空`；设为项目沙箱目录。
 
-**2. 其余项默认可用**：approvalTimeoutMs（30000）/ webPort（3080）/ callbackMode（summary）/ defaultTimeoutMs（1800000）。agentPreset / reasoningEffort 不需要配置：工具不显式传时用 dsh 默认（dsh Web UI 可调 agent 预设与思考强度）。任务模型不需要配置：默认用 dsh 默认模型（settings.yaml `agent-default-model`），可在 **dsh 设置页「DSHana 设置」分页 → 「默认模型」卡片**直接配置（Provider/模型/思考强度三级联动，选项 = dsh 全部可用 provider，保存即生效），`dsh_run` 工具参数 `provider`/`model`/`reasoningEffort` 可显式覆盖（显式时 selectModel，dsh 会把所选模型写回全局默认 settings.yaml——显式指定即成为新默认）。**DSH 版本**：同分页「DSH 版本」卡片可检查 `@deepseek-ai/dsh` 版本并一键更新（检查 dsh 侧直查远端 registry，更新走宿主能力层；Agent 用 `dsh_update` 工具 / 标签页 deps 卡片「检查更新」「更新 DSH」同结果）。
+**2. 其余项默认可用**：approvalTimeoutMs（30000）/ webPort（3080）/ defaultTimeoutMs（1800000）。agentPreset / reasoningEffort 不需要配置：工具不显式传时用 dsh 默认（dsh Web UI 可调 agent 预设与思考强度）。任务模型不需要配置：默认用 dsh 默认模型（settings.yaml `agent-default-model`），可在 **dsh 设置页「DSHana 设置」分页 → 「默认模型」卡片**直接配置（Provider/模型/思考强度三级联动，选项 = dsh 全部可用 provider，保存即生效），`dsh_run` 工具参数 `provider`/`model`/`reasoningEffort` 可显式覆盖（显式时 selectModel，dsh 会把所选模型写回全局默认 settings.yaml——显式指定即成为新默认）。**DSH 版本**：同分页「DSH 版本」卡片可检查 `@deepseek-ai/dsh` 版本并一键更新（检查 dsh 侧直查远端 registry，更新走宿主能力层；Agent 用 `dsh_update` 工具 / 标签页 deps 卡片「检查更新」「更新 DSH」同结果）。
 
 **3. 配置生效铁律（实时）**：「改完都要重启 Hana」不成立：t1 依赖/t2 进程状态直读 config.json/单例实时；t2 手动启动链路 resolveDshPkgDir → spawn，直写后无需重启；仅旧进程存活（g.web.ready=true）需先杀进程或重启。
 
@@ -65,10 +65,9 @@ $node = <本机 node.exe 绝对路径，如 C:\Program Files\nodejs\node.exe>
 | `dsh_update(action?, wait?)` | 检查/更新 DSH | action=check 查版本（默认）；action=update 完整更新（停 web host → pnpm add latest → 起 web host，**正在执行的任务会中断**，渲染升级卡片）；update 默认异步后台执行 + 完成回调，wait=true 同步；更新中重复调用返回状态不重复执行 | [dsh-update 技能](dsh-update) |
 | `dsh_approve(rpcId, approvalId, outcome?)` | 应答审批 | allowed-once 放行 / rejected 拒绝；通知带 args 命令原文 | [dsh-approve 技能](dsh-approve) |
 | `dsh_cancel(sessionId)` | 取消任务 | 误派/卡死止损；幂等 | [dsh-cancel 技能](dsh-cancel) |
-| `dsh_ops(limit?)` | 查会话清单与摘要 | 解析 dsh 会话缓存 session_projcache 可查；limit 默认 10；最新在前 | [dsh-ops 技能](dsh-ops) |
-| `dsh_search(query)` | 跨会话搜索 | 命中后可 resume；snippet ≤240 字符 | [dsh-search 技能](dsh-search) |
+| `dsh_session(action, limit?, sessionId?, query?)` | 统一会话查询 | list=清单与摘要（projcache，limit 默认 10）；get=凭 sessionId 直取内容（summary）；search=按关键词搜（命中可 resume） | [dsh-session 技能](dsh-session) |
 
-**工具调用的完整参数语义、返回结构、错误码、审批通道、副作用分别见上述七个独立工具技能（均从源码 tools/*.js 核对）**——本表只是速查。
+**工具调用的完整参数语义、返回结构、错误码、审批通道、副作用分别见上述六个独立工具技能（均从源码 tools/*.js 核对）**——本表只是速查。
 
 ### 标签页自愈路由（浏览器按钮调用，Agent 一般不直接调）
 

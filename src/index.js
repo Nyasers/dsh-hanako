@@ -34,21 +34,20 @@ import { join, dirname } from "node:path";
 // ---- bundle 收敛 ----（单 bundle 形态）
 // 生命周期能力：src/lifecycle.js 顶层 mountLifecycle() 在 import 时即挂单例
 import "./lifecycle.js";
-// 7 个工具模块（ESM 导出 name/description/parameters/execute(+sessionPermission)）
+// 6 个工具模块（ESM 导出 name/description/parameters/execute(+sessionPermission)）
 import * as dshRun from "./tools/dsh-run.js";
 import * as dshUpdate from "./tools/dsh-update.js";
 import * as dshInstall from "./tools/dsh-install.js";
 import * as dshApprove from "./tools/dsh-approve.js";
 import * as dshCancel from "./tools/dsh-cancel.js";
-import * as dshOps from "./tools/dsh-ops.js";
-import * as dshSearch from "./tools/dsh-search.js";
+import * as dshSession from "./tools/dsh-session.js";
 // 路由工厂（默认导出）
 import registerWebuiRoutes from "./routes/webui.js";
 import registerCardRoutes from "./routes/card.js";
 import registerChildRoutes from "./routes/child.js";
 
 // 工具清单（registerTool 消费普通契约；宿主自动加 pluginId_ 前缀）
-const HANAKO_TOOLS = [dshRun, dshUpdate, dshInstall, dshApprove, dshCancel, dshOps, dshSearch];
+const HANAKO_TOOLS = [dshRun, dshUpdate, dshInstall, dshApprove, dshCancel, dshSession];
 
 // ---- 统一日志（时间戳会话文件 + 旧日志 zstd 压缩保留）----
 // DSHana 插件全量运行日志：每次插件会话创建 <YYYYMMDD-HHmmss-SSS>.log 真实文件（文件名
