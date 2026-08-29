@@ -39,7 +39,7 @@ sessionId 来源（**取消一律显式传 sessionId**）：
 
 1. **dsh_run 异步回调**：任务完成/失败时后台消息带 `sessionId`（形如 `session-xxxx`）——直接抄用
 2. **运行卡片 URL**：卡片 iframe 地址带 `sessionId=<session-xxxx>&rpcId=<r_xxx>`——从 URL 取
-3. **dsh_ops**：查会话清单（`dsh_ops`）按 `sessionId` 定位，再取消
+3. **dsh_session**：查会话清单（`dsh_session(action="list")`）按 `sessionId` 定位，再取消
 4. 任务 rpcId 不再用于取消定位（g.ops 条目按任务 rpcId 键控，但 cancel 参数只收 sessionId）——**取消一律传 sessionId**
 
 ```
@@ -49,4 +49,4 @@ dsh_cancel(sessionId="session-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx")
 ## 关联
 
 - 取消后的终态、错误码 DSH_ABORTED、usage 对账见 dsh-run 技能「错误码速查」。
-- 取消后查终态看运行卡片（SSE 卡片从 jsonl 恢复，重启后仍可看）；跨会话清单/摘要（含取消后遗留的会话）用 dsh_ops（详见 dsh-ops 技能）。
+- 取消后查终态看运行卡片（SSE 卡片从 jsonl 恢复，重启后仍可看）；跨会话清单/摘要（含取消后遗留的会话）用 dsh_session action=list（详见 dsh-session 技能）。

@@ -3,16 +3,17 @@
 //
 // tools/lib/protocol.js — dsh web /api 网关协议层共用模块（lib 提取）
 // 从 tools/dsh-run.js 剥离的纯协议/纯函数：HTTP RPC 客户端、事件流（WS mux）、文本
-// 提取与回调摘要构建。全部零宿主状态（不碰 globalThis 单例），dsh-run.js 静态 import。
+// 提取。全部零宿主状态（不碰 globalThis 单例），dsh-run.js 与 dsh-session.js 静态 import。
 //
 // 归类说明：callUnary / nextRpcId / openMux 是 dsh web host /api 网关的传输协议（Unary
-// RPC + WebSocket 事件流）；textFromChunk / textFromMessageBlocks / buildSummary 是同一
-// 网关事件帧的文本/摘要格式化面（assistant/chunk、assistant/message 的载荷提取与 PTC
-// 式回调压缩）。两者同属"与 dsh web 通信的线上协议"一条线，收敛在一个 protocol.js 里
-// （若拆 format.js 反而让 callUnary 与它消费的事件帧解析分处两文件，语义更散）。
+// RPC + WebSocket 事件流）；textFromChunk / textFromMessageBlocks 是同一网关事件帧的
+// 文本提取面（assistant/chunk、assistant/message 的载荷提取）。两者同属"与 dsh web
+// 通信的线上协议"一条线，收敛在一个 protocol.js 里（若拆 format.js 反而让 callUnary
+// 与它消费的事件帧解析分处两文件，语义更散）。
 //
 // 消费方：tools/dsh-run.js submitTask（事件循环 / session.create / session.prompt /
-// session.selectModel / session.cancel 全经此层）。routes/card.js 另有一份独立 openMux
+// session.selectModel / session.cancel 全经此层）+ tools/dsh-session.js（get 模式
+// textFromMessageBlocks 提取会话最终结论）。routes/card.js 另有一份独立 openMux
 // 事件流实现，但它不 import 本模块（是独立实现，见 dsh-run.js 头注释），不在此归并。
 
 // ---- HTTP RPC 客户端（dsh web /api 网关，fetch 载波）----
@@ -145,42 +146,10 @@ function textFromMessageBlocks(content) {
     .join("");
 }
 
-// ---- 回调摘要构建（PTC 式压缩：中间步骤不进 Agent 上下文）----
-// 参考 dsh PTC 模式（Code Mode SDK：一次程序执行替代多次工具往返）的思路：
-// 中间过程是噪音，最终结论才是信号。完整输出保留在 op 快照（卡片可查）
-// 与 dsh web UI（sessionId 定位），回调只带最终结论摘要。
-// 摘要锚点：最后一条 assistant/message 的文本，即 dsh 对任务的最终汇报。
-const SUMMARY_HEAD = 1500;
-const SUMMARY_TAIL = 600;
-
-function buildSummary(output, finalText) {
-  const full = String(output ?? "");
-  const candidate = String(finalText ?? "").trim();
-  if (candidate) {
-    return {
-      text: candidate,
-      summaryOf: "final-message",
-      fullLength: full.length,
-    };
-  }
-  if (full.length > SUMMARY_HEAD + SUMMARY_TAIL) {
-    const hidden = full.length - SUMMARY_HEAD - SUMMARY_TAIL;
-    return {
-      text: `${full.slice(0, SUMMARY_HEAD)}\n\n…[中间过程 ${hidden} 字符已折叠，完整输出见 op 快照 / DSH web UI]…\n\n${full.slice(-SUMMARY_TAIL)}`,
-      summaryOf: "head-tail",
-      fullLength: full.length,
-    };
-  }
-  return { text: full, summaryOf: "full", fullLength: full.length };
-}
-
 export {
   nextRpcId,
   callUnary,
   openMux,
   textFromChunk,
   textFromMessageBlocks,
-  buildSummary,
-  SUMMARY_HEAD,
-  SUMMARY_TAIL,
 };
