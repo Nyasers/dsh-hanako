@@ -347,9 +347,13 @@ async function doExecute(input, ctx) {
         return item;
       });
     }
-    // 排序：lastPromptAt 降序（最新在前；缺失时兜底 createdAt，仍缺失排最后）
+    // 排序：lastPromptAt 降序（最新在前；缺失时兜底 createdAt，仍缺失排最后）。
+    // 注意：projcache 缺失兜底分支（按注册表返回）构造的 item 无 lastPromptAt，
+    // 必须用 createdAt 兜底，否则比较值全为 -Infinity、排序退化为注册表插入顺序。
     items.sort(
-      (a, b) => (b.lastPromptAt ?? -Infinity) - (a.lastPromptAt ?? -Infinity),
+      (a, b) =>
+        (b.lastPromptAt ?? b.createdAt ?? -Infinity) -
+        (a.lastPromptAt ?? a.createdAt ?? -Infinity),
     );
     const top = items.slice(0, limit);
     if (top.length === 0) {
