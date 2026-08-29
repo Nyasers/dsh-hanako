@@ -266,15 +266,16 @@
     // channelMode 由服务端渲染的 channelOk（bridge WS #2 就绪）初始化，随 health
     // 轮询结果刷新（d.channelOk）。通道模式下 iframe 走宿主通道路径
     // （/api/plugins/dsh-hanako/web/）：壳页面先注册 SW（scope 同通道）+ await ready
-    // + postMessage bridge-config（WS #1 url + token，token 取 location.search）再设
-    // iframe src——首载导航本身被 SW 拦截经 WS #1 转发到 dsh。宿主 0.769.0 WS #1
-    // 端点不可用时 channelOk 恒 false，回退直连 127.0.0.1:<port>（旧行为）。
+    // + postMessage bridge-config（v7 起 HTTP 隧道：mode/tunnelUrl/surfaceSession）再
+    // 设 iframe src——首载导航本身被 SW 拦截经 HTTP 隧道转发到 dsh。宿主 0.769.0
+    // WS #1 端点不可用（rft 丢 socket）已由 HTTP 隧道替代；WS #2 未就绪时 channelOk
+    // 恒 false，回退直连 127.0.0.1:<port>（旧行为）。
     var channelMode = {{= it.channelOk === true ? "true" : "false" }};
     var channelUrl = {{= JSON.stringify(it.channelUrl) }};
-    var ws1Path = {{= JSON.stringify(it.ws1Path) }};
-    function channelToken() {
+    var tunnelPath = {{= JSON.stringify(it.tunnelPath) }};
+    function surfaceSessionToken() {
       var params = new URLSearchParams(location.search);
-      return params.get("token") || "";
+      return params.get("pluginSurfaceSession") || "";
     }
     function setupChannel() {
       // 注册 SW（scope = 通道前缀；脚本在插件命名空间 /sw.js，scope 在其下合法）
@@ -287,12 +288,18 @@
       return navigator.serviceWorker.register(swUrl, { scope: channelUrl })
         .then(function () { return navigator.serviceWorker.ready; })
         .then(function (reg) {
-          var token = channelToken();
-          var proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-          var wsUrl = proto + "//" + window.location.host + ws1Path;
-          // 向 SW 下发 WS #1 连接参数（url + token）
+          // HTTP 隧道配置：tunnelUrl 在壳页面拼一次（origin + tunnelPath，SW 零拼接），
+          // surfaceSession 取 location.search 的 pluginSurfaceSession（与壳页面
+          // surfaceHeaders() 同款宿主鉴权 header）。
+          var tunnelUrl = window.location.origin + tunnelPath;
+          var surfaceSession = surfaceSessionToken();
           if (reg && reg.active) {
-            reg.active.postMessage({ type: "bridge-config", wsUrl: wsUrl, token: token });
+            reg.active.postMessage({
+              type: "bridge-config",
+              mode: "http-tunnel",
+              tunnelUrl: tunnelUrl,
+              surfaceSession: surfaceSession,
+            });
           }
           frame.src = channelUrl + "?dshReload=" + Date.now();
           return true;

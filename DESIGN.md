@@ -57,17 +57,19 @@ dsh 设置页左下角齿轮打开设置面板，导航栏出现**原生**「DSH
 
 **机制**：`@dsh-hanako/settings` 插件按 dsh client 插件规范双端部署——后端（`index.js`）注册 `POST /api/hana-settings.read` / `.save` / `.check-version` / `.request-update` / `.update-status` 五条路由（`webServer.register` exact，read/save 经 `agentDefaultModel` 服务读写，check-version dsh 侧直查远端，request-update 经 `@dsh-hanako/bridge` 的 `bridge.emit("update.request")` 事件推送（v0.21 起，update-request.json 文件桥接退役），update-status 读 `update-result.json` 文件（宿主仍写））；前端（`client.js`，package.json 的 `dsh.client` 声明 + `exports["./client"]` 指向）注册 `settings.section` slot 原生渲染分页。包名注册经 `$DSH_HOME/profiles/node_modules` junction 解析（dsh-run.js 启动前幂等创建）
 
-## 统一通道（bridge，v0.21 一期）
+## 统一通道（bridge，v0.21 一期 + v7 修正）
 
-dsh WebUI 的 iframe 从直连 `http://127.0.0.1:3080/` 逐步迁移到**双层 WS 通道**（远程访问可用）。
-完整设计：`_tmp/design/design-unified-channel.md`（v4.1）。
+dsh WebUI 的 iframe 从直连 `http://127.0.0.1:3080/` 逐步迁移到**双层通道**（远程访问可用）。
+完整设计：`_tmp/design/design-unified-channel.md`（v4.1）。**v7 修正**：SW ↔ 宿主传输由
+WS #1 改为 **HTTP 隧道**（宿主 0.769.0 插件路由 rft 再分发丢 upgrade socket，WS #1 101 无法
+完成——见下方边界），`POST /bridge/http` 普通 HTTP 路由无 socket 依赖。
 
 ```
 dsh 页面（iframe，宿主 origin：/api/plugins/dsh-hanako/web/）
-  └─ SW fetch handler 拦截 scope 内请求 → WS #1（宿主插件 WS 端点 /api/plugins/dsh-hanako/bridge，
-     query token 宿主鉴权）
+  └─ SW fetch handler 拦截 scope 内请求 → HTTP 隧道：POST /api/plugins/dsh-hanako/bridge/http
+     { id, method, path, headers, body(base64) }，X-Hana-Plugin-Surface-Session 宿主鉴权
   ▼
-宿主侧 bridge（lib/bridge.js：WS #2 server + WS #1 连接桥 + 帧分发）
+宿主侧 bridge（lib/bridge.js：WS #2 server + requestHttp 宿主发起 + 帧分发）
   ▼  ── WS #2（127.0.0.1 随机端口 + 私有 token 首帧握手，spawn env DSH_BRIDGE_URL/TOKEN 注入）──
 dsh 侧 @dsh-hanako/bridge 插件
   ├─ handleHttp：webServer.match 定位 (req,res) handler，真实 http.IncomingMessage/ServerResponse
@@ -76,22 +78,29 @@ dsh 侧 @dsh-hanako/bridge 插件
   └─ 响应原路回传（dsh → 宿主 → SW → 页面 ReadableStream）
 ```
 
-- **帧协议**（JSON 文本帧）：`{ type:"http.request", id, method, path, headers, body }` /
-  `{ type:"http.response", id, status, headers, body }` / `{ type:"http.error", id, message }` /
-  `{ type:"event", name, payload }` / ping/pong；body > 256KB 分段 `{ chunk, data(base64), done }`
-  （首段随请求/响应帧，续段 `{ type:"http.chunk", id, chunk, data, done }`）；id 配对 + 30s 超时
+- **HTTP 隧道（v7，SW ↔ 宿主）**：SW 封装原始 dsh 请求 JSON POST `POST /bridge/http`（宿主
+  普通 HTTP 路由，与 `/webui/*` 同层鉴权——页面 token / `X-Hana-Plugin-Surface-Session`）；宿主
+  经 `lib/bridge.js bridgeRequestHttp` 发起 WS #2 `http.request` 帧转发 dsh 并等待响应（hostPending
+  挂起表，id 配对 + 30s 超时 + 分帧重组）→ 回传 `{ ok, id, status, headers, body(base64) }`；
+  WS #2 未连接 → 502。无长连接/心跳；SW 侧单请求超时 30s 失败 502
 - **WS #2 握手**：dsh 侧连入后首帧 `{ type:"hello", token }`，宿主校验私有 token（每次 web host
   启动生成）→ `{ type:"hello-ok" }`；心跳 30s（协议级 ping / 应用级 ping-pong），90s 无消息判死
+- **帧协议**（WS #2 JSON 文本帧）：`{ type:"http.request", id, method, path, headers, body }` /
+  `{ type:"http.response", id, status, headers, body }` / `{ type:"http.error", id, message }` /
+  `{ type:"event", name, payload }` / ping/pong；body > 256KB 分段 `{ chunk, data(base64), done }`
+  （首段随请求/响应帧，续段 `{ type:"http.chunk", id, chunk, data, done }`）——对 SW 透明
 - **宿主侧**：`lib/ws-lib.js`（零依赖 RFC6455 服务端原语：握手 + 帧编解码 + 心跳）→
-  `lib/bridge.js`（WS #2 server + 帧分发 + WS #1 连接桥 + 单例 `g.bridge`；导出 ensureBridge /
-  stopBridge / onBridgeEvent / emitBridgeEvent / registerSwConnection / bridgeStatus）；
-  `routes/bridge.js` 注册 `/bridge`（WS #1 端点）+ `/bridge/status`（诊断）+ `/sw.js`（SW 脚本）
+  `lib/bridge.js`（WS #2 server + requestHttp 宿主发起 + hostPending 挂起 + SW 连接桥保留 + 单例
+  `g.bridge`；导出 ensureBridge / stopBridge / bridgeRequestHttp / onBridgeEvent / emitBridgeEvent /
+  registerSwConnection / bridgeStatus）；`routes/bridge.js` 注册 `POST /bridge/http`（隧道，v7）+
+  `GET /bridge`（WS #1 端点，保留 deprecated）+ `/bridge/status`（诊断）+ `/sw.js`（SW 脚本）
 - **dsh 侧**：`dsh-plugin/@dsh-hanako/bridge`（cordis 插件，provide 'bridge' 服务：handleHttp /
   emit / on；inject webServer + hanaLogger；指数退避重连 1s→30s）
-- **浏览器侧**：`assets/sw.js`（fetch 拦截 scope `/api/plugins/dsh-hanako/web/` → WS #1 转发；
-  ReadableStream respondWith；断线重连；pending 请求 502；对 text/html 响应做绝对路径 → scope
-  相对改写）；壳页面注册 SW + await ready 后设 iframe src 为通道路径，token（location.search）与
-  WS #1 URL 经 postMessage 下发（bridge-config）
+- **浏览器侧**：`assets/sw.js`（fetch 拦截 scope `/api/plugins/dsh-hanako/web/` → HTTP 隧道转发；
+  ReadableStream respondWith；单请求超时 502；对 text/html 响应做绝对路径 → scope 相对改写）；
+  壳页面注册 SW + await ready 后设 iframe src 为通道路径，隧道 URL（location.origin +
+  `/bridge/http`，壳页面拼一次）与 surfaceSession（location.search 的 pluginSurfaceSession）
+  经 postMessage 下发（bridge-config，`{ mode:"http-tunnel", tunnelUrl, surfaceSession }`）
 - **更新链路事件化**：settings `request-update` → `bridge.emit("update.request")` → WS #2 event 帧
   → 宿主 `updateDsh`（写 update-result.json + `bridge.emit("update.result")` 推送）；`update-request.json`
   文件桥接与宿主 5s 轮询退役；settings `update-status` 保留读文件（改动最小，推送供前端可选消费）
@@ -99,13 +108,13 @@ dsh 侧 @dsh-hanako/bridge 插件
   `DSH_BRIDGE_URL`/`DSH_BRIDGE_TOKEN`；`closeProcess` 调 `stopBridge`；updateDsh 重启 web host 时
   bridge 重建（新端口/token）；junction farm 加 `@dsh-hanako/bridge`；patch 模板加 bridge 段（无 config）
 
-> ⚠️ **宿主 0.769.0 实测边界（实现时考古确认）**：v1 插件路由经宿主 `rft` 再分发
+> ⚠️ **宿主 0.769.0 实测边界（v7 修正依据）**：v1 插件路由经宿主 `rft` 再分发
 > （`t.fetch(d, { pluginRouteRequest })`，bundle L43942）——upgrade 请求的 raw socket 与 env
 > （`{ incoming, outgoing }`）在再分发中丢失，插件 handler 拿不到 `c.env.incoming`；宿主
-> `upgradeWebSocket` helper 依赖模块私有 Symbol 与闭包 pending 表，插件侧无法复刻。因此
-> `routes/bridge.js` 的 /bridge 端点按「能拿到 raw socket 就完成 RFC6455 升级，拿不到返回明确
-> 诊断」实现——当前 0.769.0 下返回 400 + JSON 诊断（WS #1 通道运行时验证由实机判定）；壳页面
-> `channelOk`（bridge WS #2 就绪）恒为 false 时回退直连 iframe（旧行为），通道模式不退化本地体验。
+> `upgradeWebSocket` helper 依赖模块私有 Symbol 与闭包 pending 表，插件侧无法复刻 → WS #1 101
+> 无法完成。**v7 以 HTTP 隧道替代 WS #1**（无 socket 依赖）；`GET /bridge` WS #1 端点保留作宿主
+> 未来支持 upgrade 时的通道。壳页面 `channelOk`（bridge WS #2 就绪，经 health）为 false 时回退
+> 直连 iframe（旧行为），通道模式不退化本地体验。
 > 另：dsh 前端 `resolveBase()` = location.origin，通道下页面 API/WS 请求指向宿主 origin——运行期
 > 绝对 `/api/*` 调用与实时 WS（events.mux/host）需二期 `__DSH_TRANSPORT__` 隧道（SW 拦不了 WS）。
 

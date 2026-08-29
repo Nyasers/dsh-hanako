@@ -97,7 +97,8 @@ function readDiagnostics(ctx, cfg, port) {
  * + postMessage bridge-config（WS #1 url + token，token 取 location.search）再设 iframe
  * src（导航本身被 SW 拦截转发到 dsh）；否则回退直连 http://127.0.0.1:<port>/（旧行为）。
  * channelOk = bridge 可用（WS #2 运行且 dsh 侧已连接）；channelUrl = 通道路径；
- * ws1Path = WS #1 端点相对路径（浏览器端拼 ws(s)://<location.host>）。 */
+ * tunnelPath = HTTP 隧道端点相对路径（base + /bridge/http；壳页面拼
+ * location.origin + tunnelPath 后整体注入 SW，SW 零拼接）。 */
 function buildShell({
   ready,
   hcLink,
@@ -108,7 +109,7 @@ function buildShell({
   diagnostics,
   channelOk,
   channelUrl,
-  ws1Path,
+  tunnelPath,
 }) {
   // dsh-frame 保持裸嵌（曾尝试显式声明 sandbox/allow 绕过宿主沙箱，实测跨源继承链
   // 下内层声明无法生效，属无效方案已回滚，见 CHANGELOG）。
@@ -139,7 +140,7 @@ function buildShell({
     port,
     channelOk: !!channelOk,
     channelUrl: channelUrl || "",
-    ws1Path: ws1Path || "",
+    tunnelPath: tunnelPath || "",
   });
 }
 
@@ -168,7 +169,7 @@ export default function registerWebuiRoutes(app, ctx) {
       /* 诊断失败按通道不可用处理 */
     }
     const channelUrl = base + "/web/";
-    const ws1Path = base + "/bridge";
+    const tunnelPath = base + "/bridge/http";
     // 未就绪时服务端同步收集一次自检（首屏即渲染，轮询再刷新）；就绪不收集保持轻量
     const diagnostics = ready ? null : readDiagnostics(ctx, cfg, port);
     return c.html(
@@ -182,7 +183,7 @@ export default function registerWebuiRoutes(app, ctx) {
         diagnostics,
         channelOk,
         channelUrl,
-        ws1Path,
+        tunnelPath,
       }),
     );
   });

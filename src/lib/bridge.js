@@ -1,15 +1,18 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/lib/bridge.js — DSHana 统一通道（bridge）宿主侧核心（M1，WS #2 server + WS #1 连接桥）
+// src/lib/bridge.js — DSHana 统一通道（bridge）宿主侧核心（M1，WS #2 server + HTTP 隧道宿主端）
 //
-// 架构（见 _tmp/design/design-unified-channel.md v4.1）：
+// 架构（见 _tmp/design/design-unified-channel.md v4.1 + v7 修正）：
 //   WS #2：宿主 ↔ dsh 子进程的进程间通道。宿主侧起 127.0.0.1 随机端口 WS 服务端
 //     （零依赖 RFC6455，src/lib/ws-lib.js），私有 token（每次 web host 启动生成）经
 //     spawn env（DSH_BRIDGE_URL / DSH_BRIDGE_TOKEN）注入，dsh 侧 @dsh-hanako/bridge
 //     插件连接后首帧 { type:"hello", token } 握手校验。
-//   WS #1：SW ↔ 宿主 web server 的插件 WS 端点（routes/bridge.js 注册 /bridge），
-//     本模块提供 SW 连接的对象化接入（registerSwConnection）与帧分发。
+//   HTTP 隧道（v7 起，替代 WS #1）：SW ↔ 宿主走普通 HTTP 路由（POST /bridge/http，
+//     routes/bridge.js），宿主侧经本模块 requestHttp() 发起 http.request 帧转发 dsh
+//     并等待响应（hostPending 挂起表，id 配对 + 30s 超时 + 分帧重组）。WS #1 的
+//     WsConnection 通道（registerSwConnection）保留作宿主未来支持 upgrade 时的通道，
+//     当前宿主（0.769.0 插件路由 rft 再分发丢 socket）不可用。
 //
 // 帧协议（JSON 文本帧，见设计 §3）：
 //   { "type":"hello", "token":"<私有>" } / { "type":"hello-ok" }        —— WS #2 握手
@@ -23,13 +26,15 @@
 //
 // 职责：
 //   · ensureBridge(cfg)：幂等启动 WS #2 服务端（已运行直接复用），返回 { port, token }
-//   · stopBridge()：关闭服务端 + 全部连接（closeProcess 调用）
-//   · http 请求背面转发：WS #1 的 http.request 帧（id 透传）→ 经 WS #2 转发 dsh；
-//     dsh 侧响应（http.response/http.error）→ 回传对应 WS #1 连接
+//   · stopBridge()：关闭服务端 + 全部连接 + 清空 hostPending（closeProcess 调用）
+//   · http 请求背面转发：HTTP 隧道（requestHttp，宿主发起）+ WS #1 帧（registerSwConnection，
+//     保留通道）→ 经 WS #2 转发 dsh；dsh 侧响应（http.response/http.chunk/http.error）
+//     → 按 id 先查 hostPending（隧道）再查 SW 连接挂起，回传
 //   · event 帧分发：WS #2 的 event 帧 → 本进程 EventEmitter（g.bridgeEvents，宿主
 //     lifecycle.js 订阅 update.request 等）；宿主侧也可经 emitEvent(name, payload)
 //     向 dsh 推事件（update.result 等）
-//   · id 配对 + 超时（30s）：WS #1 请求挂起表；分帧重组（> 256KB base64 分段）
+//   · id 配对 + 超时（30s）：hostPending（隧道，internalId 空间独立）+ SW 连接挂起表；
+//     分帧重组（> 256KB base64 分段）
 //   · 心跳：WS #2 服务端每 30s 协议级 ping，90s 无 pong 判死；dsh 侧同时有应用级
 //     ping/pong（见 dsh 插件），服务端对应用级 ping 回 pong
 //
@@ -105,7 +110,9 @@ class BridgeCore {
     this.ws = null; // { server, port, connections, close }
     this.token = null; // 私有 token（每次 web host 启动生成）
     this.conn = null; // 当前 WS #2 连接（dsh 侧；一次只有一个）
-    this.swConnections = new Map(); // WsConnection → { id, pending: Map<id, entry> }
+    this.swConnections = new Map(); // WsConnection → { id, pending: Map<id, entry> }（WS #1 保留通道）
+    this.hostPending = new Map(); // HTTP 隧道挂起：internalId → { internalId, origId, resolve, reject, timer, ... }
+    this._hostReqSeq = 0; // HTTP 隧道请求内部 id 序号（与 SW 连接帧 id 空间隔离）
     this.pending = new Map(); // WS #2 → WS #1 回传挂起（一般不用，WS #1 挂起在连接上）
     this.events = new EventEmitter(); // event 帧 → 本进程分发（宿主订阅）
     this._heartbeatTimer = null;
@@ -144,6 +151,12 @@ class BridgeCore {
       sw.pending.clear();
     }
     this.swConnections.clear();
+    // HTTP 隧道挂起：全部 reject（调用方路由层转 502）
+    for (const entry of this.hostPending.values()) {
+      clearTimeout(entry.timer);
+      entry.reject(Object.assign(new Error("bridge 关闭"), { status: 502 }));
+    }
+    this.hostPending.clear();
     if (this.ws) {
       const ws = this.ws;
       this.ws = null;
@@ -235,7 +248,26 @@ class BridgeCore {
     switch (frame?.type) {
       case "http.response":
       case "http.error": {
-        // 回传发起方 WS #1 连接（按 id 反查）
+        // ① 宿主侧发起（HTTP 隧道 /bridge/http）挂起优先（internalId 空间独立，不冲突）
+        const hostEntry = this.hostPending.get(frame.id);
+        if (hostEntry) {
+          if (frame.type === "http.response") {
+            if (frame.body && frame.body.done === false) {
+              // 大响应首段随响应帧，后续分段经 http.chunk 帧到达（entry.chunks 只收续段）
+              hostEntry.metaBody = frame.body;
+              hostEntry.metaHeaders =
+                frame.headers && typeof frame.headers === "object" ? frame.headers : {};
+              hostEntry.metaStatus = Number(frame.status) || 200;
+              hostEntry.nextChunk = 1;
+              return;
+            }
+            this._completeHostEntry(hostEntry, frame);
+          } else {
+            this._rejectHostEntry(hostEntry, frame.message || "dsh 请求失败");
+          }
+          break;
+        }
+        // ② 回传发起方 WS #1 连接（按 id 反查，保留通道）
         const { sw, entry } = this._findSwPending(frame.id);
         if (!sw || !entry) return; // 超时已清理：丢弃
         if (frame.type === "http.response") {
@@ -254,6 +286,25 @@ class BridgeCore {
         break;
       }
       case "http.chunk": {
+        // ① 宿主侧发起挂起优先
+        const hostEntry = this.hostPending.get(frame.id);
+        if (hostEntry) {
+          if (process.env.DSH_BRIDGE_DEBUG) console.log("[bridge-debug] host chunk: metaBody=", !!hostEntry.metaBody, "chunk=", frame.chunk, "next=", hostEntry.nextChunk);
+          if (hostEntry.metaBody && frame.chunk === hostEntry.nextChunk) {
+            hostEntry.chunks.push(frame);
+            hostEntry.nextChunk += 1;
+            if (frame.done) {
+              const headers = hostEntry.metaHeaders || {};
+              const status = hostEntry.metaStatus || 200;
+              const body = rebuildBody(hostEntry.metaBody, hostEntry.chunks);
+              this._finishHostEntry(hostEntry, { status, headers, body });
+            }
+          } else {
+            this._rejectHostEntry(hostEntry, "分帧序列错误");
+          }
+          break;
+        }
+        // ② WS #1 连接挂起
         const { sw, entry } = this._findSwPending(frame.id);
         if (!sw || !entry) {
           if (process.env.DSH_BRIDGE_DEBUG) console.log("[bridge-debug] chunk: no pending for", frame.id);
@@ -390,6 +441,80 @@ class BridgeCore {
     }
   }
 
+  /**
+   * 宿主侧发起 http.request 并等待响应（HTTP 隧道 /bridge/http 用；v7）。
+   * 内部生成唯一 id（hx-<seq>-<rand>）经 WS #2 转发 dsh——与 SW 连接帧 id 空间隔离，
+   * 避免多页面/多请求并发时 id 冲突（dsh 侧 inflight 按 id 去重）。响应分帧重组后
+   * resolve({ id: origId, status, headers, body: Buffer|null })，origId 原样回传调用方
+   * （SW 用它配对）。WS #2 未连接 reject（Error.status=502，路由层转 HTTP 502）。
+   */
+  requestHttp({ id, method, path, headers, body }) {
+    if (!this.conn) {
+      return Promise.reject(
+        Object.assign(new Error("bridge 未就绪（dsh 侧未连接）"), { status: 502 }),
+      );
+    }
+    const internalId = "hx" + ++this._hostReqSeq + "-" + randomBytes(3).toString("hex");
+    return new Promise((resolve, reject) => {
+      const entry = {
+        internalId,
+        origId: String(id ?? internalId),
+        resolve,
+        reject,
+        timer: setTimeout(() => {
+          this.hostPending.delete(internalId);
+          reject(
+            Object.assign(
+              new Error("请求超时（" + Math.round(REQUEST_TIMEOUT_MS / 1000) + "s）"),
+              { status: 504 },
+            ),
+          );
+        }, REQUEST_TIMEOUT_MS),
+        metaBody: null,
+        metaHeaders: null,
+        metaStatus: null,
+        nextChunk: 1,
+        chunks: [],
+      };
+      entry.timer.unref?.();
+      this.hostPending.set(internalId, entry);
+      // 转发到 dsh（internalId 透传；body 分帧——复用 WS #1 路径同一套编码）
+      const out = {
+        type: "http.request",
+        id: internalId,
+        method: String(method || "GET").toUpperCase(),
+        path: String(path || "/"),
+        headers: headers && typeof headers === "object" ? headers : {},
+      };
+      const bodyEnc = encodeBody(body ?? null);
+      if (bodyEnc) out.body = bodyEnc;
+      const chunkFrames = chunkBodyFrames(internalId, body ?? null);
+      this._send(this.conn, out);
+      for (const cf of chunkFrames) this._send(this.conn, cf);
+    });
+  }
+
+  _completeHostEntry(entry, frame) {
+    const body = rebuildBody(frame.body, entry.chunks);
+    this._finishHostEntry(entry, {
+      status: Number(frame.status) || 200,
+      headers: frame.headers && typeof frame.headers === "object" ? frame.headers : {},
+      body,
+    });
+  }
+
+  _finishHostEntry(entry, result) {
+    clearTimeout(entry.timer);
+    this.hostPending.delete(entry.internalId);
+    entry.resolve({ id: entry.origId, ...result });
+  }
+
+  _rejectHostEntry(entry, message) {
+    clearTimeout(entry.timer);
+    this.hostPending.delete(entry.internalId);
+    entry.reject(Object.assign(new Error(String(message)), { status: 502 }));
+  }
+
   _completeResponse(sw, entry, frame) {
     const body = rebuildBody(frame.body, entry.chunks);
     this._sendSw(sw, {
@@ -516,9 +641,18 @@ export function emitBridgeEvent(name, payload) {
   return getBridge().emitEvent(name, payload);
 }
 
-/** WS #1 连接接入（routes/bridge.js 调用） */
+/** WS #1 连接接入（routes/bridge.js 调用，保留通道） */
 export function registerSwConnection(conn) {
   getBridge().registerSwConnection(conn);
+}
+
+/**
+ * 宿主侧发起 http.request 并等待响应（HTTP 隧道 /bridge/http 路由调用；v7）。
+ * req = { id, method, path, headers, body: Buffer|null } →
+ * Promise<{ id, status, headers, body: Buffer|null }>；失败 reject（status=502/504）。
+ */
+export function bridgeRequestHttp(req) {
+  return getBridge().requestHttp(req);
 }
 
 /** 桥状态（诊断用） */

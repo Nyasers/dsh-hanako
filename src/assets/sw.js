@@ -1,56 +1,38 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// assets/sw.js — DSHana 统一通道（bridge）浏览器侧 service worker（M4）
+// assets/sw.js — DSHana 统一通道（bridge）浏览器侧 service worker（M4 + v7）
 //
-// 职责：拦截 scope（/api/plugins/dsh-hanako/web/）内 dsh 页面的一切请求，经 WS #1
-// （宿主插件 WS 端点 /api/plugins/dsh-hanako/bridge，query token 宿主鉴权）封装为
-// http.request 帧转发到宿主 bridge → WS #2 → dsh 进程内执行，响应分帧回传后经
-// ReadableStream respondWith。断线重连 + pending 请求失败返回 502。
+// 职责：拦截 scope（/api/plugins/dsh-hanako/web/）内 dsh 页面的一切请求，经 **HTTP 隧道**
+// （v7 起，替代一期 WS #1——宿主 0.769.0 插件路由 rft 再分发丢 upgrade socket，WS #1 101
+// 无法完成）转发：封装 { id, method, path, headers, body(base64) } POST 到隧道 URL（宿主
+// 普通 HTTP 路由 /api/plugins/dsh-hanako/bridge/http，宿主鉴权层经 X-Hana-Plugin-Surface-
+// Session 放行）→ 宿主经 WS #2 转发 dsh 进程内执行 → 响应 { id, status, headers,
+// body(base64) } 回传 → event.respondWith(new Response(bytes, { status, headers }))。
 //
-// 帧协议（JSON 文本帧，见 design-unified-channel §3）：
-//   SW → 宿主：{ "type":"http.request", "id":"r1", "method":"GET", "path":"/",
-//                "headers":{...}, "body":{ "chunk":0,"data":"<base64>","done":true } }
-//              大 body 分段：首段随请求帧，后续 { "type":"http.chunk","id","chunk",
-//              "data","done" }
-//   宿主 → SW：{ "type":"http.response","id","status","headers","body":<分帧> }
-//              { "type":"http.error","id","message" }
-//              { "type":"ping" } / { "type":"pong" }
+// 无长连接：HTTP 隧道每次请求独立往返，无重连/心跳；pending 请求超时（30s）失败返回 502。
 //
 // HTML 改写（scope 收窄的配套）：dsh index.html 用绝对路径引用资源（/assets/* 等），
 // 在宿主 origin 下会解析到宿主根路径（脱离 scope）。本 SW 对 text/html 响应做一次
 // 轻量改写：把属性值里的 "/xxx" 绝对路径改写为 scope 相对（"/api/plugins/dsh-hanako/
 // web/xxx"），让静态资源请求落入 scope 被本 SW 继续转发。dsh 运行期 JS 的绝对
 // /api/* 调用与实时 WebSocket（events.mux/host）不受 SW 控制，属二期 __DSH_TRANSPORT__
-// 隧道范围（一期保持直连 3080 本地可用）。
+// 隧道范围。
 //
-// 注入：WS #1 URL + token 由壳页面经 navigator.serviceWorker.controller.postMessage
-// 下发（{ type:"bridge-config", wsUrl, token }）；壳页面 await
-// navigator.serviceWorker.ready 后才挂 iframe。
+// 注入：隧道 URL + surfaceSession 由壳页面经 navigator.serviceWorker.controller.postMessage
+// 下发（{ type:"bridge-config", mode:"http-tunnel", tunnelUrl, surfaceSession }）；
+// 壳页面 await navigator.serviceWorker.ready 后才挂 iframe。tunnelUrl 在壳页面拼一次
+// （location.origin + /api/plugins/dsh-hanako/bridge/http），SW 零拼接。
 //
 // 本文件以纯脚本（非模块）形式经宿主通道 /api/plugins/dsh-hanako/sw.js 提供
-// （routes/bridge.js 或 webui.js 路由 serve，content-type: application/javascript）。
+// （routes/bridge.js 路由 serve，content-type: application/javascript）。
 
-/* global self, fetch, Response, ReadableStream, TextDecoder, WebSocket */
+/* global self, fetch, Response, ReadableStream, TextDecoder, btoa, atob */
 
 var CHANNEL_PREFIX = "/api/plugins/dsh-hanako/web"; // scope（无尾斜杠比较用）
-var CHUNK_THRESHOLD = 256 * 1024; // 分帧阈值（与宿主 lib/bridge.js 一致）
-var CHUNK_SIZE = 224 * 1024; // 每段原始字节
-var REQUEST_TIMEOUT_MS = 30000; // 请求挂起超时
-var RECONNECT_BASE_MS = 1000; // WS #1 重连退避基数
-var RECONNECT_MAX_MS = 30000; // 重连退避封顶
-var HEARTBEAT_MS = 30000; // 心跳间隔（ping）
-var DEAD_MS = 90000; // 无消息判死
+var REQUEST_TIMEOUT_MS = 30000; // 单次隧道请求超时
 
-var config = { wsUrl: null, token: null }; // 壳页面注入（bridge-config）
-var ws = null;
-var wsOpen = false;
-var wsHandshake = false; // WS #1 无应用层握手（宿主鉴权在 HTTP upgrade），预留
-var reconnectTimer = null;
-var reconnectAttempt = 0;
-var heartbeatTimer = null;
-var lastMessageAt = 0;
-var pending = {}; // id → { resolve, reject, timer, metaBody, chunks, nextChunk }
+var config = { tunnelUrl: null, surfaceSession: null }; // 壳页面注入（bridge-config）
 var seq = 0;
 
 // ---- 日志（调试用；正式环境可关）----
@@ -58,146 +40,13 @@ function log(msg) {
   console.log("[dsh-hanako-sw] " + msg);
 }
 
-// ---- WS #1 连接管理（断线重连 + 心跳）----
 function nextId() {
   seq += 1;
   return "r" + seq;
 }
 
-function connect() {
-  if (!config.wsUrl || !config.token) {
-    // 壳页面尚未下发配置：等 bridge-config 消息
-    return;
-  }
-  var url = config.wsUrl;
-  if (url.indexOf("?") === -1) url += "?token=" + encodeURIComponent(config.token);
-  else url += "&token=" + encodeURIComponent(config.token);
-  var sock;
-  try {
-    sock = new WebSocket(url);
-  } catch (e) {
-    log("WS #1 构造失败：" + (e && e.message));
-    scheduleReconnect();
-    return;
-  }
-  ws = sock;
-  wsOpen = false;
-  sock.addEventListener("open", function () {
-    wsOpen = true;
-    lastMessageAt = Date.now();
-    reconnectAttempt = 0;
-    log("WS #1 已连接");
-    // 连接恢复：pending 请求在断线时已全部 502，无需重发
-  });
-  sock.addEventListener("message", function (ev) {
-    lastMessageAt = Date.now();
-    if (typeof ev.data !== "string") return;
-    var frame;
-    try {
-      frame = JSON.parse(ev.data);
-    } catch (e) {
-      return;
-    }
-    onFrame(frame);
-  });
-  sock.addEventListener("close", function () {
-    if (ws === sock) ws = null;
-    wsOpen = false;
-    log("WS #1 连接关闭，pending 请求 502");
-    failAllPending("SW 连接断开");
-    scheduleReconnect();
-  });
-  sock.addEventListener("error", function () {
-    /* close 接手重连 */
-  });
-}
-
-function scheduleReconnect() {
-  if (reconnectTimer) return;
-  var delay = Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * Math.pow(2, reconnectAttempt));
-  reconnectAttempt += 1;
-  reconnectTimer = setTimeout(function () {
-    reconnectTimer = null;
-    connect();
-  }, delay);
-}
-
-function startHeartbeat() {
-  heartbeatTimer = setInterval(function () {
-    if (wsOpen) {
-      sendFrame({ type: "ping" });
-      if (Date.now() - lastMessageAt > DEAD_MS) {
-        log("WS #1 心跳超时，断开重连");
-        try { ws.close(); } catch (e) { /* 忽略 */ }
-      }
-    }
-  }, HEARTBEAT_MS);
-}
-
-function sendFrame(frame) {
-  if (!wsOpen || !ws) return false;
-  try {
-    ws.send(JSON.stringify(frame));
-    return true;
-  } catch (e) {
-    return false;
-  }
-}
-
-// ---- 帧处理 ----
-function onFrame(frame) {
-  if (frame && frame.type === "pong") return;
-  if (frame && frame.type === "ping") {
-    sendFrame({ type: "pong" });
-    return;
-  }
-  if (frame && frame.type === "http.response") {
-    var entry = pending[frame.id];
-    if (!entry) return;
-    clearTimeout(entry.timer);
-    var body = rebuildBody(frame.body, entry.chunks);
-    delete pending[frame.id];
-    entry.resolve({
-      status: Number(frame.status) || 200,
-      headers: frame.headers || {},
-      body: body,
-    });
-    return;
-  }
-  if (frame && frame.type === "http.error") {
-    var entry2 = pending[frame.id];
-    if (!entry2) return;
-    clearTimeout(entry2.timer);
-    delete pending[frame.id];
-    entry2.reject(new Error(frame.message || "bridge 请求失败"));
-    return;
-  }
-  // http.chunk：分帧续段（当前实现宿主侧对 SW 恒单段回传——大响应在宿主侧合并后
-  // 一次性回传；此处保留重组逻辑以兼容后续流式分帧）
-  if (frame && frame.type === "http.chunk") {
-    var entry3 = pending[frame.id];
-    if (!entry3) return;
-    if (entry3.metaBody && frame.chunk === entry3.nextChunk) {
-      entry3.chunks.push(frame);
-      entry3.nextChunk += 1;
-    } else {
-      clearTimeout(entry3.timer);
-      delete pending[frame.id];
-      entry3.reject(new Error("分帧序列错误"));
-    }
-  }
-}
-
-// ---- 分帧（base64；与宿主同协议）----
-function encodeBody(buf) {
-  if (!buf || buf.length === 0) return null;
-  if (buf.length <= CHUNK_THRESHOLD) {
-    return { chunk: 0, data: base64FromBytes(buf), done: true };
-  }
-  return { chunk: 0, data: base64FromBytes(buf.subarray ? buf.subarray(0, CHUNK_SIZE) : buf.slice(0, CHUNK_SIZE)), done: false };
-}
+// ---- base64 编解码（浏览器无 Buffer）----
 function base64FromBytes(buf) {
-  // ArrayBuffer/视图 → base64（浏览器无 Buffer）
   var bytes = new Uint8Array(buf);
   var bin = "";
   for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
@@ -209,75 +58,60 @@ function bytesFromBase64(b64) {
   for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   return bytes;
 }
-function rebuildBody(metaBody, chunks) {
-  var parts = [];
-  var total = 0;
-  if (metaBody && metaBody.data) {
-    var b = bytesFromBase64(metaBody.data);
-    parts.push(b);
-    total += b.length;
-  }
-  for (var i = 0; i < chunks.length; i++) {
-    var c = bytesFromBase64(chunks[i].data);
-    parts.push(c);
-    total += c.length;
-  }
-  if (total === 0) return null;
-  var out = new Uint8Array(total);
-  var off = 0;
-  for (var j = 0; j < parts.length; j++) {
-    out.set(parts[j], off);
-    off += parts[j].length;
-  }
-  return out;
-}
 
-// ---- 请求挂起 ----
-function sendHttpRequest(method, path, headers, bodyBuf) {
-  return new Promise(function (resolve, reject) {
-    if (!wsOpen) {
-      reject(new Error("bridge 未连接（502）"));
-      return;
-    }
-    var id = nextId();
-    var frame = {
-      type: "http.request",
-      id: id,
-      method: method,
-      path: path,
-      headers: headers || {},
-    };
-    var enc = encodeBody(bodyBuf);
-    if (enc) frame.body = enc;
-    var entry = {
-      resolve: resolve,
-      reject: reject,
-      timer: setTimeout(function () {
-        delete pending[id];
-        reject(new Error("请求超时（" + Math.round(REQUEST_TIMEOUT_MS / 1000) + "s）"));
-      }, REQUEST_TIMEOUT_MS),
-      metaBody: enc && enc.done === false ? enc : null,
-      chunks: [],
-      nextChunk: 1,
-    };
-    pending[id] = entry;
-    var ok = sendFrame(frame);
-    if (!ok) {
-      clearTimeout(entry.timer);
-      delete pending[id];
-      reject(new Error("bridge 未连接（502）"));
-    }
-  });
-}
-
-function failAllPending(msg) {
-  var ids = Object.keys(pending);
-  for (var i = 0; i < ids.length; i++) {
-    var entry = pending[ids[i]];
-    clearTimeout(entry.timer);
-    entry.reject(new Error(msg || "bridge 未连接（502）"));
-    delete pending[ids[i]];
+// ---- HTTP 隧道请求（v7）----
+// 封装原始 dsh 请求为 JSON POST 到隧道 URL；响应 { ok, id, status, headers, body(base64) }。
+// 大 body 以 base64 单段携带（WS #2 通道内部 >256KB 分段对 SW 透明）。失败/未就绪 reject
+// （status 502/504 由调用方转 HTTP 状态码）。
+async function tunnelRequest(method, path, headers, bodyBuf) {
+  if (!config.tunnelUrl) {
+    var e0 = new Error("bridge 未就绪（隧道 URL 未配置）");
+    e0.status = 502;
+    throw e0;
   }
+  var envelope = {
+    id: nextId(),
+    method: method,
+    path: path,
+    headers: headers || {},
+    body: bodyBuf && bodyBuf.byteLength > 0 ? base64FromBytes(bodyBuf) : null,
+  };
+  var resp;
+  try {
+    resp = await fetch(config.tunnelUrl, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        // 宿主鉴权（与壳页面 surfaceHeaders() 同款 legacy 底层协议）
+        "X-Hana-Plugin-Surface-Session": config.surfaceSession || "",
+      },
+      body: JSON.stringify(envelope),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+  } catch (err) {
+    // 网络错误/超时
+    var e1 = new Error("隧道请求失败：" + String((err && err.message) || err));
+    e1.status = err && err.name === "TimeoutError" ? 504 : 502;
+    throw e1;
+  }
+  var data = null;
+  try {
+    data = await resp.json();
+  } catch (err) {
+    var e2 = new Error("隧道响应解析失败（HTTP " + resp.status + "）");
+    e2.status = 502;
+    throw e2;
+  }
+  if (!data || data.ok !== true) {
+    var e3 = new Error((data && data.error) || ("隧道 HTTP " + resp.status));
+    e3.status = resp.status || 502;
+    throw e3;
+  }
+  return {
+    status: Number(data.status) || 200,
+    headers: data.headers && typeof data.headers === "object" ? data.headers : {},
+    body: typeof data.body === "string" && data.body.length > 0 ? bytesFromBase64(data.body) : null,
+  };
 }
 
 // ---- HTML 改写（绝对路径 → scope 相对）----
@@ -296,7 +130,7 @@ function rewriteHtmlUrls(html) {
   );
 }
 
-// ---- fetch 拦截 ----
+// ---- SW 生命周期 ----
 self.addEventListener("install", function (event) {
   // 立即激活（不等待旧 SW 释放页面控制）
   event.waitUntil(self.skipWaiting());
@@ -307,14 +141,14 @@ self.addEventListener("activate", function (event) {
 
 self.addEventListener("message", function (ev) {
   var data = ev.data;
-  if (data && data.type === "bridge-config") {
-    config.wsUrl = data.wsUrl || config.wsUrl;
-    config.token = data.token || config.token;
-    log("收到 bridge-config（wsUrl=" + (config.wsUrl || "(none)") + "）");
-    if (!ws) connect();
+  if (data && data.type === "bridge-config" && data.mode === "http-tunnel") {
+    config.tunnelUrl = data.tunnelUrl || config.tunnelUrl;
+    config.surfaceSession = data.surfaceSession || config.surfaceSession || "";
+    log("收到 bridge-config（http-tunnel，tunnelUrl=" + (config.tunnelUrl || "(none)") + "）");
   }
 });
 
+// ---- fetch 拦截 ----
 self.addEventListener("fetch", function (event) {
   var url = new URL(event.request.url);
   var pathname = url.pathname;
@@ -339,12 +173,12 @@ self.addEventListener("fetch", function (event) {
       }
       var resp;
       try {
-        resp = await sendHttpRequest(method, dshPath, headers, bodyBuf);
+        resp = await tunnelRequest(method, dshPath, headers, bodyBuf);
       } catch (e) {
         return new Response(
-          JSON.stringify({ error: "bridge_unavailable", detail: String(e && e.message || e) }),
+          JSON.stringify({ error: "bridge_unavailable", detail: String((e && e.message) || e) }),
           {
-            status: 502,
+            status: (e && e.status) || 502,
             headers: { "Content-Type": "application/json; charset=utf-8" },
           },
         );
@@ -354,7 +188,7 @@ self.addEventListener("fetch", function (event) {
       if (resp.headers) {
         Object.keys(resp.headers).forEach(function (k) {
           var v = resp.headers[k];
-          if (/^content-length$/i.test(k)) return; // 流式长度由 ReadableStream 自算
+          if (/^content-length$/i.test(k)) return; // 流式长度由 Response 自算
           if (/^content-type$/i.test(k) && String(v).indexOf("text/html") !== -1) isHtml = true;
           respHeaders.set(k, v);
         });
@@ -383,7 +217,3 @@ self.addEventListener("fetch", function (event) {
     })(),
   );
 });
-
-// ---- 启动 ----
-connect();
-startHeartbeat();

@@ -1,29 +1,31 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/routes/bridge.js — DSHana 统一通道 WS #1 端点（M2）
+// src/routes/bridge.js — DSHana 统一通道宿主侧路由（M2 + v7 修正）
 //
-// 挂宿主 web server 插件命名空间：<宿主>/api/plugins/dsh-hanako/bridge
-//   SW（浏览器 service worker）连入：query token 过宿主全局鉴权墙后，upgrade 事件
-//   经宿主 Hono app 分发到插件路由（实证：宿主 injectWebSocket 把 upgrade 交给
-//   e.app.request(c, { headers }, u) 完整路由分发，见 artifacts/server/0.769.0/
-//   bundle/index.js L1916-1942），这里注册 /bridge 处理升级。
-//
-// ⚠️ 宿主 0.769.0 实测边界（实现时考古确认，见 design-unified-channel §1/§7 与
-// 下方注释）：插件路由经宿主 `rft` 再分发（t.fetch(d, { pluginRouteRequest })，
-// bundle L43942-43960）——raw socket 与 env（{ incoming, outgoing }）在再分发中
-// 丢失，插件 handler 拿不到 c.env.incoming；且宿主 upgradeWebSocket helper 依赖
-// 模块私有 Symbol（CONNECTION_SYMBOL_KEY）与闭包 pending 表，插件侧无法复刻。
-// 因此本端点按「能拿到底层 socket 就完成 RFC6455 升级，拿不到则返回明确诊断」实现：
-//   · 若宿主未来版本把 raw socket 经 env 传给插件路由（env.incoming），本端点
-//     直接完成握手 + 接入 bridge 帧分发（registerSwConnection），无需改动；
-//   · 当前 0.769.0 下返回 HTTP 400 + JSON 诊断（WS 客户端会看到握手失败，
-//     错误体解释宿主限制），WS #1 通道的运行时验证由主上下文实机判定。
-//
-// 另注册 GET /bridge/status：桥诊断（WS #2 是否运行/连接、WS #1 连接数），供
-// 壳页面 /webui/health 与人工排查使用（非升级请求，普通 HTTP 可达）。
+// 挂宿主 web server 插件命名空间 <宿主>/api/plugins/dsh-hanako/：
+//   POST /bridge/http   HTTP 隧道（v7 起，SW ↔ 宿主的实际传输）：SW 封装原始 dsh
+//                       请求为 JSON { id, method, path, headers, body(base64) } POST
+//                       到这里；宿主解包 → 经 WS #2 转发 dsh（lib/bridge.js
+//                       bridgeRequestHttp，id 配对 + 分帧重组 + 30s 超时）→ 回传
+//                       { ok, id, status, headers, body(base64) }。无 socket 依赖，
+//                       走宿主普通 HTTP 路由；凭据由宿主鉴权层处理（页面 token /
+//                       X-Hana-Plugin-Surface-Session，与 /webui/* 同层），路由内
+//                       不再额外鉴权。WS #2 未连接 → 502 { ok:false, error }。
+//   GET  /bridge         WS #1 端点（一期实现，保留作宿主未来支持 upgrade 时的通道，
+//                        标记 deprecated）。宿主 0.769.0 实测边界：插件路由经宿主
+//                        `rft` 再分发（t.fetch(d, { pluginRouteRequest })，
+//                        bundle L43942-43960）——upgrade 的 raw socket 与 env
+//                        （{ incoming, outgoing }）在再分发中丢失，插件 handler 拿
+//                        不到 c.env.incoming；且宿主 upgradeWebSocket helper 依赖
+//                        模块私有 Symbol（CONNECTION_SYMBOL_KEY）与闭包 pending 表，
+//                        插件侧无法复刻 → 101 无法完成。本端点按「能拿到底层 socket
+//                        就完成 RFC6455 升级，拿不到返回明确诊断 400」实现；宿主
+//                        未来版本若把 socket 经 env 暴露，无需改动即可工作。
+//   GET  /bridge/status  桥诊断（WS #2 运行/连接 + SW 连接数），壳页面 health 用。
+//   GET  /sw.js          service worker 脚本（scope /api/plugins/dsh-hanako/web/）。
 import { createHash } from "node:crypto";
-import { bridgeStatus, registerSwConnection } from "../lib/bridge.js";
+import { bridgeStatus, bridgeRequestHttp, registerSwConnection } from "../lib/bridge.js";
 import { WsConnection } from "../lib/ws-lib.js";
 // SW 脚本（构建期 asset/source 内联为字符串；经 /sw.js 路由 serve，content-type 正确）
 import swSource from "../assets/sw.js";
@@ -98,6 +100,51 @@ export default function registerBridgeRoutes(app, ctx) {
     const conn = new WsConnection(socket, incoming);
     registerSwConnection(conn);
     return c.body(null);
+  });
+
+  // ---- HTTP 隧道（v7 起，SW ↔ 宿主的实际传输）----
+  // SW 封装原始 dsh 请求 { id, method, path, headers, body(base64) } POST 到这里；
+  // 宿主经 lib/bridge.js bridgeRequestHttp 发起 WS #2 http.request 帧转发 dsh，
+  // 等待响应（id 配对 + 分帧重组 + 30s 超时）后回传 { ok, id, status, headers,
+  // body(base64) }。凭据由宿主鉴权层处理（页面 token / X-Hana-Plugin-Surface-Session，
+  // 与 /webui/* 同层）；路由内不额外鉴权。WS #2 未连接 → 502。body 大时分帧由
+  // WS #2 通道内部处理（>256KB base64 分段），本路由对 SW 恒定单 JSON 往返。
+  app.post("/bridge/http", async (c) => {
+    let envelope = null;
+    try {
+      envelope = await c.req.json();
+    } catch {
+      return c.json({ ok: false, error: "请求体不是合法 JSON" }, 400);
+    }
+    if (!envelope || typeof envelope !== "object") {
+      return c.json({ ok: false, error: "请求体缺失" }, 400);
+    }
+    const id = typeof envelope.id === "string" ? envelope.id : null;
+    try {
+      const result = await bridgeRequestHttp({
+        id,
+        method: envelope.method,
+        path: envelope.path,
+        headers: envelope.headers,
+        body:
+          typeof envelope.body === "string" && envelope.body.length > 0
+            ? Buffer.from(envelope.body, "base64")
+            : null,
+      });
+      return c.json({
+        ok: true,
+        id: result.id,
+        status: result.status,
+        headers: result.headers,
+        body: result.body === null ? null : result.body.toString("base64"),
+      });
+    } catch (e) {
+      // WS #2 未连接（502）/ 超时（504）/ dsh 错误（502）：统一回 JSON + 状态码
+      return c.json(
+        { ok: false, id, error: String(e?.message || e) },
+        e?.status || 502,
+      );
+    }
   });
 
   // 桥诊断端点（非升级请求，普通 HTTP）：WS #2 运行/连接状态 + WS #1 连接数
