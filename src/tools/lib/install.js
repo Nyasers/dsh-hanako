@@ -431,18 +431,21 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir) {
     //    node.cmd/node 让 install script 找到宿主 electron node）
     const run = async (registry) => {
       let out = ""; // 仅用于错误信息提取（失败时拼进错误文本）；cap 尾环 ≤64KB
-      let pending = ""; // ndjson 跨 chunk 行缓冲（JSON 行可能被拆到两个 data chunk）
+      // stdout/stderr 各持独立跨 chunk 行缓冲（JSON 行可能被拆到两个 data chunk）：两条
+      // 管道的 chunk 边界互不相关，共用一个缓冲会把不同流的片段拼成一行，破坏 ndjson
+      // 行重组（JSON.parse 失败 → 降级为脏文本透传）。makePipe 工厂按流各自创建回调。
+      const buffers = { out: { pending: "" }, err: { pending: "" } };
       const pkgSizes = new Map(); // fetching-progress 包大小记录（started 事件记 size）
       // pnpm ndjson 输出逐 chunk 实时进统一日志通道（emitLog：内存尾环 ≤DEPS_LOG_CAP
       // + 会话日志 src=pnpm 实时写，行规范化 \r\n/\r → \n）；每行先做 ndjson 解析转
       // 可读进度行（JSON 事件 → "[pnpm] …"，非 JSON 行原样透传，见上方解析区）——取代
       // 旧 --loglevel=http 非结构化输出直写。每次 data 刷新 depsInstallAt——前端 3s 轮询
       // health 随诊断刷新 installLog 尾部，呈现实时进度
-      const cap = (d) => {
+      const makePipe = (buf) => (d) => {
         const text = String(d).replace(/\r\n/g, "\n").replace(/\r/g, "\n");
         out = (out + text).slice(-65536);
-        const lines = (pending + text).split("\n");
-        pending = lines.pop() ?? ""; // 末段可能是不完整行，留到下个 chunk
+        const lines = (buf.pending + text).split("\n");
+        buf.pending = lines.pop() ?? ""; // 末段可能是不完整行，留到下个 chunk
         for (const line of lines) {
           if (line === "") continue;
           const readable = pnpmNdjsonLineToText(line, pkgSizes);
@@ -457,12 +460,15 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir) {
           ...ELECTRON_NODE_ENV,
           PATH: pkgDir + delimiter + (process.env.PATH || ""),
         },
-        onStdout: cap,
-        onStderr: cap,
+        onStdout: makePipe(buffers.out),
+        onStderr: makePipe(buffers.err),
       });
-      if (pending) {
-        const readable = pnpmNdjsonLineToText(pending, pkgSizes);
-        if (readable !== "") emitLog(readable + "\n", "pnpm");
+      // 收尾 flush：两条管道各自的残留半行分别处理（互不拼接，见 buffers 注释）
+      for (const buf of [buffers.out, buffers.err]) {
+        if (buf.pending) {
+          const readable = pnpmNdjsonLineToText(buf.pending, pkgSizes);
+          if (readable !== "") emitLog(readable + "\n", "pnpm");
+        }
       }
       if (r.code !== 0)
         throw new Error(
