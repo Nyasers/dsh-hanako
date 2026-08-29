@@ -285,13 +285,19 @@
       return params.get("token") || "";
     }
     function setupChannel() {
-      // 地址分流（插件唯一职责）：iframe 直连 dsh web host 本身——本地 127.0.0.1:<port>
-      // （同源，POST/WS 全通）；远程用配置的 dsh 远程地址（cloudflared 转发 3080，
-      // dsh trustedHosts 已放行远程 Host）。前端零感知，无 SW/代理/隧道。
+      // 远程分流（插件自包含，不假设用户有 cloudflared）：
+      // - 本地：iframe 直连 127.0.0.1:<port>（同源，POST/WS 全通）
+      // - 远程：优先配了 dshRemoteUrl（用户有转发能力）→ 直连远程 dsh 域（同源全通）；
+      //   否则走宿主代理 /web（插件内置，@dsh-hanako/transport 前端桥把 fetch/WS
+      //   改写为 /web 前缀经宿主转发；WS 受宿主 upgrade 限制，一期标注）
       var base = "http://127.0.0.1:{{= it.port }}/";
       var remoteUrl = {{= JSON.stringify(it.remoteUrl || "") }};
-      if (isRemote && remoteUrl) {
-        frame.src = remoteUrl + (remoteUrl.indexOf("?") !== -1 ? "&" : "?") + "dshReload=" + Date.now();
+      if (isRemote) {
+        if (remoteUrl) {
+          frame.src = remoteUrl + (remoteUrl.indexOf("?") !== -1 ? "&" : "?") + "dshReload=" + Date.now();
+        } else {
+          frame.src = api + "/web" + (pageToken() ? "?token=" + encodeURIComponent(pageToken()) : "") + "&dshReload=" + Date.now();
+        }
       } else {
         frame.src = base + "?dshReload=" + Date.now();
       }

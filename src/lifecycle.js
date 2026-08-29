@@ -520,6 +520,10 @@ export async function ensureWebHost(cfg) {
         link: "@dsh-hanako/bridge",
         target: join(PLUGIN_ROOT, "dsh-plugin", "@dsh-hanako", "bridge"),
       },
+      {
+        link: "@dsh-hanako/transport",
+        target: join(PLUGIN_ROOT, "dsh-plugin", "@dsh-hanako", "transport"),
+      },
     ];
     const nmDir = join(dshHome, "profiles", "node_modules");
     // 清理旧名 junction：profiles/node_modules 下 dsh-hana-*（非 @dsh-hanako scope）

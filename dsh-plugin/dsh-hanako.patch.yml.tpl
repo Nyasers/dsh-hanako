@@ -35,3 +35,6 @@
     surfaceContext: true
     trustedHosts:
       - '{{DSH_TRUSTED_HOST}}'
+- insert:
+    - id: '@dsh-hanako/transport'
+      name: '@dsh-hanako/transport'

@@ -1,0 +1,12 @@
+{
+  "name": "@dsh-hanako/transport",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "dsh": {
+    "cordis": {
+      "plugin": "index.js"
+    }
+  }
+}
