@@ -229,8 +229,9 @@ function pnpmErrorTail(stdoutTail, stderrTail) {
     const lines = tail.split("\n").filter((s) => s.length > 0).slice(-10);
     return lines.map((ln) => pnpmNdjsonLineToText(ln)).filter((s) => s.length > 0).join("\n");
   };
-  // stderr 在前（错误/警告通常走 stderr），stdout 在后（ndjson 进度/结构化错误也可能在 stdout）
-  const parts = [parse(stderrTail), parse(stdoutTail)].filter((s) => s.length > 0);
+  // stdout 在前、stderr 在后：join 后 slice(-300) 取末尾窗口，stderr（错误/警告优先级高）
+  // 落在截断窗口内不被挤出；stdout 的 ndjson 进度/结构化错误在前段作上下文。
+  const parts = [parse(stdoutTail), parse(stderrTail)].filter((s) => s.length > 0);
   return parts.join("\n").slice(-300) || "无输出";
 }
 
