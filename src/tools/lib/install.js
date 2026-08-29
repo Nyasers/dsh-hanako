@@ -212,6 +212,15 @@ function pnpmNdjsonLineToText(line, sizes) {
       if (conflicts) parts.push(conflicts + " 处冲突");
       return parts.length ? "[pnpm] peer 依赖告警：" + parts.join("，") : "[pnpm] peer 依赖告警";
     }
+    case "pnpm:link": {
+      // 文件链接事件（链接阶段每链接一个依赖/文件发一条 debug，pnpm 11.24.0 字段
+      // target=store 实际位置、link=落位路径，见 pnpm.mjs linkLogger.debug）：
+      // 生成链接日志供诊断链接阶段进度；字段缺失时回退原行透传。
+      const link = typeof obj.link === "string" && obj.link ? obj.link : "";
+      const target = typeof obj.target === "string" && obj.target ? obj.target : "";
+      if (!link && !target) return line;
+      return "[pnpm] 链接 " + link + (target ? " ← " + target : "");
+    }
     default: {
       // 其它事件（scope/summary/context 等）：有 message 透传 message，否则跳过
       const m = typeof obj.message === "string" && obj.message ? obj.message : "";
