@@ -58,7 +58,7 @@
 // 空操作，不阻断 dsh 启动（边界要求）。注释风格同 @dsh-hanako/provider（中文/单引号/无分号）。
 
 export const name = "@dsh-hanako/settings";
-export const inject = ["webServer", "agentDefaultModel", "hanaLogger", "bridge"];
+export const inject = ["webServer", "agentDefaultModel", "hanaLogger"];
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -175,7 +175,7 @@ async function npmViewLatest(cfg) {
 export function apply(ctx, config) {
   const cfg = config && typeof config === "object" ? config : {};
   try {
-    ctx.inject(["webServer", "agentDefaultModel", "hanaLogger", "bridge"], (httpCtx) => {
+    ctx.inject(["webServer", "agentDefaultModel", "hanaLogger"], (httpCtx) => {
       httpCtx.effect(() => {
         const disposers = [];
         const settingsLog = (msg) => {
@@ -305,7 +305,14 @@ export function apply(ctx, config) {
         registerRoute("/api/hana-settings.request-update", async (req, res) => {
           try {
             await readJsonBody(req);
-            const bridge = httpCtx.bridge;
+            // bridge 服务惰性获取（不声明进 inject 依赖，settings 初始化不等 bridge
+            // 就绪；未注入时 get 抛错/返回空，由下方 guard 与 catch 兜底为 ok:false）
+            let bridge = null;
+            try {
+              bridge = httpCtx.get ? httpCtx.get("bridge") : httpCtx.bridge;
+            } catch {
+              /* 服务未注入 */
+            }
             if (!bridge || typeof bridge.emit !== "function") {
               throw new Error("bridge 服务不可用（@dsh-hanako/bridge 未加载？）");
             }
