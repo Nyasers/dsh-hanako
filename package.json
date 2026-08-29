@@ -1,6 +1,6 @@
 {
   "name": "dsh-hanako",
-  "version": "0.21.3",
+  "version": "0.22.0",
   "private": true,
   "packageManager": "pnpm@11.24.0",
   "type": "module",
