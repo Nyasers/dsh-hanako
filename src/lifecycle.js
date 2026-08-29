@@ -856,14 +856,13 @@ function ensureProviderPushWatch(cfg) {
 // { state: done|error, version?, error?, at }（dsh 设置页 update-status 路由读）。
 // 并发防护：g.updating 进行中重复调用返回 { ok:false, state:"updating" } 不重复执行；
 // 与 installDepsFromPlugin 内部 g.depsInstalling 独立（本标志管整条更新流程）。----
-export async function updateDsh(cfg, claimedAt) {
+export async function updateDsh(cfg, claimedPath) {
   const g = getSingleton();
   if (g.updating) return { ok: false, state: "updating" };
   g.updating = true;
   g.updateError = null;
   const dataDir = cfg.dataDir || g.dataDir;
   const resultFile = join(dataDir, "update-result.json");
-  const requestFile = join(dataDir, "update-request.json");
   const stamp = () => new Date().toISOString();
   const log = (s) => {
     try {
@@ -937,20 +936,13 @@ export async function updateDsh(cfg, claimedAt) {
     log(`更新失败：${err}`);
     return { ok: false, state: "error", error: err };
   } finally {
-    // ⑥ 清 update-request.json：仅当当前文件的 at 仍是本次 claim 的 at 才删
-    //（处理期间新写入的请求（新 at）保留——轮询 g.updateWatchLastAt 未设防，
-    // 新请求可正常触发；Agent 工具 dsh_update 直接调用不带 claimedAt，不碰请求文件）
-    if (claimedAt) {
+    // ⑥ 清请求文件：删本次 claim 的私有路径（claimedPath）。claimed 是原子
+    // rename 出来的独占文件，处理期间新写入的请求在 update-request.json（原路径）
+    // 独立存在，删 claimed 不会误删新请求。Agent 工具/webui 直接调用不带
+    // claimedPath，不碰请求文件。
+    if (claimedPath) {
       try {
-        let cur = null;
-        try {
-          cur = JSON.parse(readFileSync(requestFile, "utf8"));
-        } catch {
-          cur = null;
-        }
-        if (cur && cur.at === claimedAt) {
-          rmSync(requestFile, { force: true });
-        }
+        rmSync(claimedPath, { force: true });
       } catch {
         /* 清理失败不阻断 */
       }
@@ -1001,11 +993,15 @@ function ensureUpdateWatch(cfg) {
     }
     if (!req || typeof req !== "object") return;
     if (req.state === "idle") {
-      // 遗留 idle 文件（v0.21.1 占位写残留）：无请求态 = 文件不存在，删掉
-      try {
-        rmSync(path, { force: true });
-      } catch {
-        /* 清理失败不阻断 */
+      // 遗留 idle 文件（v0.21.1 占位写残留）：无请求态 = 文件不存在。
+      // 先原子 claim（rename）再删 claimed——读-删之间的并发写入不会被误删
+      const claimed = claimRequest(path);
+      if (claimed) {
+        try {
+          rmSync(claimed, { force: true });
+        } catch {
+          /* 清理失败不阻断 */
+        }
       }
       return;
     }
@@ -1013,7 +1009,11 @@ function ensureUpdateWatch(cfg) {
     const at = typeof req.at === "string" ? req.at : "";
     if (!at || at === g.updateWatchLastAt) return; // 同请求只处理一次
     g.updateWatchLastAt = at;
-    onBridgeRequestChanged(dataDir, path, cfg);
+    // 原子 claim：rename 后原路径即刻消失，处理期间新写入的请求（新 at）落在
+    // 原路径独立成文件，下轮轮询读到即可触发——与本次处理互不干扰
+    const claimed = claimRequest(path);
+    if (!claimed) return; // claim 失败（并发竞争）：下轮重试
+    onBridgeRequestChanged(dataDir, claimed, cfg, at);
   }, 5000);
   g.updateWatchCleanup = () => {
     clearInterval(timer);
@@ -1024,27 +1024,39 @@ function ensureUpdateWatch(cfg) {
   );
 }
 
-// update-request.json 分发（requested → 更新）。v0.18.1 起仅剩更新桥接（版本检查
+// claimRequest：原子 claim——把 update-request.json rename 为唯一 claimed 路径。
+// rename 是文件系统原子操作：claim 后原路径即刻不存在，并发写入的新请求落在
+// 原路径（新文件），与 claimed 文件互不干扰。返回 claimed 路径（失败返回 null）。
+function claimRequest(path) {
+  const claimed = `${path}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}.claimed`;
+  try {
+    renameSync(path, claimed);
+    return claimed;
+  } catch {
+    return null;
+  }
+}
+
+// update-request.json 分发（claimed → 更新）。v0.18.1 起仅剩更新桥接（版本检查
 // 改 dsh 侧直查 HTTP 直查 npm registry，不走此通道）；防抖沿用能力层运行期标志（g.updating）。
 // 失败只记日志不抛出。
-function onBridgeRequestChanged(dataDir, path, cfg) {
+// claimedPath 是轮询原子 claim（rename）后的私有路径：本请求独占，处理完成由
+// updateDsh 收尾删除；g.updating 跳过时此处直接删（请求已 claim = 已消费，不重放）。
+function onBridgeRequestChanged(dataDir, claimedPath, cfg, at) {
   const g = getSingleton();
-  let req = null;
-  try {
-    req = JSON.parse(readFileSync(path, "utf8"));
-  } catch {
-    return; // 解析失败/不存在：忽略
+  if (g.updating) {
+    // 更新中：跳过（重复触发防护）。claimed 文件已消费（不重放），直接删
+    try {
+      rmSync(claimedPath, { force: true });
+    } catch {
+      /* 清理失败不阻断 */
+    }
+    return;
   }
-  if (!req || typeof req !== "object") return;
-  if (req.state === "requested") {
-    if (g.updating) return; // 更新中：跳过（重复触发防护）
-    console.log("[dsh-run] 收到 DSH 更新请求（设置页），执行 updateDsh");
-    // 传 claimedAt（本次 claim 的请求 at）：updateDsh 收尾只在当前文件 at 仍是
-    // 该 at 时才删——处理期间新写入的请求（新 at）保留，轮询可继续触发
-    updateDsh(cfg, typeof req.at === "string" ? req.at : "").catch((e) => {
-      console.warn(`[dsh-run] DSH 更新异常：${e?.message || e}`);
-    });
-  }
+  console.log("[dsh-run] 收到 DSH 更新请求（设置页），执行 updateDsh");
+  updateDsh(cfg, claimedPath).catch((e) => {
+    console.warn(`[dsh-run] DSH 更新异常：${e?.message || e}`);
+  });
 }
 // push dsh web host 刷新（回环调用 127.0.0.1:{port}；结果写入统一会话日志 + console 简记，
 // 失败不阻断。B方案：body 携带组装好的 route 目录（buildProviderRoutes() 的
