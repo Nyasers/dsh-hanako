@@ -64,7 +64,7 @@ dsh WebUI 的 iframe 从直连 `http://127.0.0.1:3080/` 逐步迁移到**双层�
 WS #1 改为 **HTTP 隧道**（宿主 0.769.0 插件路由 rft 再分发丢 upgrade socket，WS #1 101 无法
 完成——见下方边界），`POST /bridge/http` 普通 HTTP 路由无 socket 依赖。
 
-```
+```text
 dsh 页面（iframe，宿主 origin：/api/plugins/dsh-hanako/web/）
   └─ SW fetch handler 拦截 scope 内请求 → HTTP 隧道：POST /api/plugins/dsh-hanako/bridge/http
      { id, method, path, headers, body(base64) }，X-Hana-Plugin-Surface-Session 宿主鉴权

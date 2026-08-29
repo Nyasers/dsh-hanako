@@ -278,12 +278,16 @@
       return params.get("pluginSurfaceSession") || "";
     }
     function setupChannel() {
-      // 注册 SW（scope = 通道前缀；脚本在插件命名空间 /sw.js，scope 在其下合法）
+      // 注册 SW（scope = 通道前缀；脚本在插件命名空间 /sw.js，scope 在其下合法）。
+      // 始终返回 promise：成功 resolve(true)（已设通道 src）；无 SW 支持 / 注册失败
+      // resolve(false)（已设直连 src）——调用方无需再按 channelMode 补设 src。
+      var base = "http://127.0.0.1:{{= it.port }}/";
       var swUrl = api + "/sw.js";
       if (!("serviceWorker" in navigator)) {
         // 无 SW 支持：回退直连（极端旧浏览器）
         channelMode = false;
-        return false;
+        frame.src = base + "?dshReload=" + Date.now();
+        return Promise.resolve(false);
       }
       return navigator.serviceWorker.register(swUrl, { scope: channelUrl })
         .then(function () { return navigator.serviceWorker.ready; })
@@ -308,6 +312,7 @@
           // SW 注册/激活失败：回退直连
           console.warn("[dsh-hanako] SW 注册失败，回退直连:", err);
           channelMode = false;
+          frame.src = base + "?dshReload=" + Date.now();
           return false;
         });
     }
@@ -322,9 +327,10 @@
       // 已挂载且非 pending（检查/验证后的 refreshDiag）不重复 reload，不打断 dsh UI
       if (wasPending || !frame.getAttribute("src")) {
         if (channelMode) {
-          // 通道模式：SW 注册 + ready + 配置下发后再设 src（首载导航走 SW）
-          setupChannel().catch(function () { /* 失败已在 setupChannel 内回退直连 */ });
-          if (!channelMode) frame.src = base + "?dshReload=" + Date.now();
+          // 通道模式：SW 注册 + ready + 配置下发后再设 src（首载导航走 SW）；
+          // setupChannel 始终返回 promise 并内部处理成功（通道 src）/失败（直连 src），
+          // 这里 fire-and-forget（错误已在内部捕获回退直连）
+          setupChannel();
         } else {
           frame.src = base + "?dshReload=" + Date.now();
         }

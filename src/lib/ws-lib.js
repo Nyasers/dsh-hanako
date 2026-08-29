@@ -153,24 +153,52 @@ class WsConnection extends EventEmitter {
     return true;
   }
 
+  /** 消息分发统一出口：emit "message"（监听器异常不逃出 socket data 回调，转 emit "error"） */
+  _emitMessage(text) {
+    try {
+      this.emit("message", text);
+    } catch (err) {
+      this.emit("error", err);
+    }
+  }
+
+  /** 分片重组收尾：拼接已收集分片 → 文本 → 清空分片状态 → _emitMessage */
+  _finishFragment() {
+    const full = Buffer.concat(this._fragments).toString("utf8");
+    this._fragments = [];
+    this._fragmentOpcode = 0;
+    this._emitMessage(full);
+  }
+
   _handleFrame(fin, opcode, payload) {
     switch (opcode) {
       case 0x1: // 文本
       case 0x2: {
         // 二进制帧也按文本处理（本通道只发 JSON 文本；防御性容错）
         if (!fin) {
-          // 续帧开始/中间：暂存
+          // 初始数据帧分片（fin=false）：暂存（首片）
           if (this._fragmentOpcode === 0) this._fragmentOpcode = opcode;
           this._fragments.push(payload);
         } else if (this._fragmentOpcode !== 0) {
+          // 防御性容错：分片中间收到 fin=1 的初始帧（RFC6455 5.4 不允许续帧用初始 opcode，
+          // 但兼容对端实现）——按既有行为收尾
           this._fragments.push(payload);
-          const full = Buffer.concat(this._fragments).toString("utf8");
-          this._fragments = [];
-          this._fragmentOpcode = 0;
-          this.emit("message", full);
+          this._finishFragment();
         } else {
-          this.emit("message", payload.toString("utf8"));
+          // 完整单帧消息
+          this._emitMessage(payload.toString("utf8"));
         }
+        break;
+      }
+      case 0x0: {
+        // 续帧（continuation）：必须处于活跃分片状态；FIN=1 时重组并发消息
+        if (this._fragmentOpcode === 0) {
+          // 无活跃分片就收到续帧：协议错误（RFC6455 5.4）
+          this.close(1002, "continuation without fragmented message");
+          return;
+        }
+        this._fragments.push(payload);
+        if (fin) this._finishFragment();
         break;
       }
       case 0x8: {

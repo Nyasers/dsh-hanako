@@ -160,9 +160,20 @@ async function dispatchInProcess(webServer, method, path, headers, bodyBuf) {
         sock.write(chunk, enc, cb)
         return true
       }
-      const origEnd = res.end.bind(res)
+      // res.end 覆盖：把剩余响应体写入假 socket 后触发 settle（幂等）——流式/回调式
+      // handler 在响应体完整写完后才 resolve，不以 handler promise 完成为准
+      let settled = false
+      const settle = () => {
+        if (settled) return
+        settled = true
+        clearTimeout(timeout)
+        const body = sock.getChunks()
+        const status = Number(res.statusCode) || 200
+        resolve({ status, headers: outHeaders, body: body.length > 0 ? body : null })
+      }
       res.end = (chunk, enc, cb) => {
         sock.end(chunk, enc, cb)
+        settle()
         return res
       }
 
@@ -188,21 +199,13 @@ async function dispatchInProcess(webServer, method, path, headers, bodyBuf) {
         resolve({ status: 404, headers: {}, body: Buffer.from('not found') })
         return
       }
-      const settle = () => {
-        clearTimeout(timeout)
-        const body = sock.getChunks()
-        const status = Number(res.statusCode) || 200
-        resolve({ status, headers: outHeaders, body: body.length > 0 ? body : null })
-      }
-      // 兼容同步/异步 handler
+      // handler promise 仅用于捕获同步/异步错误——成功 settle 由 res.end 触发
       try {
         const invoke = route.handler(req, res)
-        Promise.resolve(invoke)
-          .then(() => settle())
-          .catch((err) => {
-            clearTimeout(timeout)
-            reject(err)
-          })
+        Promise.resolve(invoke).catch((err) => {
+          clearTimeout(timeout)
+          reject(err)
+        })
       } catch (err) {
         clearTimeout(timeout)
         reject(err)
@@ -256,8 +259,25 @@ export function apply(ctx, config) {
           }
         }
 
-        // 进程内执行一个 http.request 帧 → 回 http.response / http.error
-        const handleHttpRequestFrame = async (frame) => {
+        // 进程内执行一个 http.request 帧 → 回 http.response / http.error。
+        // body 分帧重组：初始帧带 body（done=false 表示大请求体首段），后续经
+        // http.chunk 帧到达（onFrame 收集），全部收齐（done=true）后才 dispatch，
+        // 大请求体不截断。
+        const dispatchEntry = async (id, entry) => {
+          try {
+            const result = await dispatchInProcess(
+              httpCtx.webServer,
+              entry.method,
+              entry.path,
+              entry.headers,
+              rebuildBody(entry.metaBody, entry.chunks),
+            )
+            entry.resolve(result)
+          } catch (err) {
+            entry.reject(err)
+          }
+        }
+        const handleHttpRequestFrame = (frame) => {
           const id = String(frame.id || '')
           if (!id || inflight.has(id)) {
             sendFrame({ type: 'http.error', id: id || '?', message: '请求 id 缺失或重复' })
@@ -266,6 +286,14 @@ export function apply(ctx, config) {
           const entry = {
             resolve: null,
             reject: null,
+            method: String(frame.method || 'GET').toUpperCase(),
+            path: String(frame.path || '/'),
+            headers: frame.headers && typeof frame.headers === 'object' ? frame.headers : {},
+            // body 统一存 metaBody：done=true 单段由 rebuildBody 解码；done=false 首段
+            // 等 http.chunk 续段一起重组（dispatchEntry 的 rebuildBody 统一处理）
+            metaBody: frame.body && typeof frame.body === 'object' ? frame.body : null,
+            chunks: [],
+            nextChunk: 1,
           }
           const promise = new Promise((resolve, reject) => {
             entry.resolve = resolve
@@ -292,18 +320,9 @@ export function apply(ctx, config) {
                 message: String((err && err.message) || err).slice(0, 1000),
               })
             })
-          try {
-            const result = await dispatchInProcess(
-              httpCtx.webServer,
-              frame.method,
-              frame.path,
-              frame.headers,
-              rebuildBody(frame.body, []),
-            )
-            entry.resolve(result)
-          } catch (err) {
-            entry.reject(err)
-          }
+          // 初始帧 body done=true（或无 body）：直接 dispatch；done=false：等 http.chunk
+          if (frame.body && frame.body.done === false) return
+          dispatchEntry(id, entry)
         }
 
         const onFrame = (text) => {
@@ -319,8 +338,28 @@ export function apply(ctx, config) {
             sendFrame({ type: 'pong' })
             return
           }
+          // hello-ok：认证成功——此后 sendFrame / status().connected 才正常
+          if (frame && frame.type === 'hello-ok') {
+            handshook = true
+            reconnectAttempt = 0 // 重连成功后重置退避
+            bridgeLog('WS #2 握手成功（hello-ok）')
+            return
+          }
           if (frame && frame.type === 'http.request') {
             handleHttpRequestFrame(frame)
+            return
+          }
+          if (frame && frame.type === 'http.chunk') {
+            const id = String(frame.id || '')
+            const entry = inflight.get(id)
+            if (!entry) return // 超时/已清理：丢弃
+            if (entry.metaBody && frame.chunk === entry.nextChunk) {
+              entry.chunks.push(frame)
+              entry.nextChunk += 1
+              if (frame.done) dispatchEntry(id, entry)
+            } else {
+              entry.reject(new Error('分帧序列错误'))
+            }
             return
           }
           if (frame && frame.type === 'event') {

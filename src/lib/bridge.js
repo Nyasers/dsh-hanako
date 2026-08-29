@@ -223,6 +223,14 @@ class BridgeCore {
         this.conn = null;
         this._log("hana", "bridge WS #2 连接断开（code=" + code + " " + (reason || "") + "）");
       }
+      // 清理该连接的在途 hostPending（HTTP 隧道 /bridge/http 挂起）：立即 reject 502，
+      // 不让挂起的请求等 30s 超时。按 entry.conn 归属只清本连接，新连接条目不受影响。
+      for (const entry of this.hostPending.values()) {
+        if (entry.conn !== conn) continue;
+        clearTimeout(entry.timer);
+        this.hostPending.delete(entry.internalId);
+        entry.reject(Object.assign(new Error("bridge 已断开（dsh 侧连接关闭）"), { status: 502 }));
+      }
     };
     conn.on("message", onMessage);
     conn.once("close", onClose);
@@ -455,10 +463,13 @@ class BridgeCore {
       );
     }
     const internalId = "hx" + ++this._hostReqSeq + "-" + randomBytes(3).toString("hex");
+    // 记录发起时的连接归属：WS #2 断开时只清本连接的 in-flight 条目，不误伤新连接
+    const ownerConn = this.conn;
     return new Promise((resolve, reject) => {
       const entry = {
         internalId,
         origId: String(id ?? internalId),
+        conn: ownerConn,
         resolve,
         reject,
         timer: setTimeout(() => {

@@ -175,7 +175,7 @@ async function npmViewLatest(cfg) {
 export function apply(ctx, config) {
   const cfg = config && typeof config === "object" ? config : {};
   try {
-    ctx.inject(["webServer", "agentDefaultModel", "hanaLogger"], (httpCtx) => {
+    ctx.inject(["webServer", "agentDefaultModel", "hanaLogger", "bridge"], (httpCtx) => {
       httpCtx.effect(() => {
         const disposers = [];
         const settingsLog = (msg) => {
@@ -313,11 +313,13 @@ export function apply(ctx, config) {
               fromVersion: readLocalVersion(),
               at: new Date().toISOString(),
             });
-            settingsLog(
-              sent
-                ? "更新请求已经 bridge 推送（update.request，宿主将执行更新）"
-                : "更新请求经 bridge 推送未送达（宿主未连接，更新将不执行）",
-            );
+            if (!sent) {
+              // 投递失败：回 ok:false（前端按既有失败分支处理，不进入 update-status 轮询）
+              settingsLog("更新请求经 bridge 推送未送达（宿主未连接，更新将不执行）");
+              json(res, { ok: false, error: "更新请求发送失败（bridge 未连接）" });
+              return;
+            }
+            settingsLog("更新请求已经 bridge 推送（update.request，宿主将执行更新）");
             json(res, { ok: true });
           } catch (e) {
             try {

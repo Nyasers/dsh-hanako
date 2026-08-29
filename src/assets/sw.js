@@ -35,6 +35,39 @@ var REQUEST_TIMEOUT_MS = 30000; // 单次隧道请求超时
 var config = { tunnelUrl: null, surfaceSession: null }; // 壳页面注入（bridge-config）
 var seq = 0;
 
+// ---- 配置持久化（cacheStorage）----
+// SW worker 可能被浏览器回收（空闲销毁）后冷启动重建，内存 config 丢失；页面若未
+// 重新 postMessage bridge-config，隧道请求会因 tunnelUrl 为空而 502。这里把配置写入
+// Cache Storage，冷启动时（activate）恢复；写入失败不影响运行（下次页面消息再补）。
+var CONFIG_CACHE = "dsh-hanako-bridge-config-v1";
+function persistConfig() {
+  try {
+    return caches.open(CONFIG_CACHE).then(function (cache) {
+      return cache.put("/bridge-config", new Response(JSON.stringify(config)));
+    }).catch(function () { /* 持久化失败不影响 */ });
+  } catch (e) {
+    return Promise.resolve();
+  }
+}
+function restoreConfig() {
+  try {
+    return caches.open(CONFIG_CACHE).then(function (cache) {
+      return cache.match("/bridge-config").then(function (resp) {
+        if (!resp) return;
+        return resp.json().then(function (data) {
+          if (data && typeof data.tunnelUrl === "string" && data.tunnelUrl) {
+            config.tunnelUrl = data.tunnelUrl;
+            config.surfaceSession = (data.surfaceSession || "");
+            log("从缓存恢复 bridge-config（tunnelUrl=" + config.tunnelUrl + "）");
+          }
+        });
+      });
+    }).catch(function () { /* 恢复失败忽略 */ });
+  } catch (e) {
+    return Promise.resolve();
+  }
+}
+
 // ---- 日志（调试用；正式环境可关）----
 function log(msg) {
   console.log("[dsh-hanako-sw] " + msg);
@@ -118,14 +151,16 @@ async function tunnelRequest(method, path, headers, bodyBuf) {
 // dsh index.html 的资源引用是 "/assets/..." 等绝对路径；改写为
 // "/api/plugins/dsh-hanako/web/assets/..."（scope 相对）后落入本 SW 拦截范围。
 // 只改属性值中的路径（href=/src=），不改协议绝对 URL（http(s)://、//、data:、#）。
+// 引号处理：捕获开头引号（' 或 "），用反向引用 \2 复用同一引号闭合重写后的值——
+// 单引号属性（href='/assets/x.js'）不会变成双引号开头单引号结尾的不闭合串。
 function rewriteHtmlUrls(html) {
   if (typeof html !== "string") return html;
   return html.replace(
-    /([ \t\r\n](?:href|src)[ \t\r\n]*=[ \t\r\n]*["'])\/(?!\/)([^"']*)["']/g,
-    function (all, prefix, path) {
+    /([ \t\r\n](?:href|src)[ \t\r\n]*=[ \t\r\n]*)(["'])\/(?!\/)([^"']*)\2/g,
+    function (all, prefix, quote, path) {
       // 跳过已带 scope 前缀的
       if (path.indexOf("api/plugins/dsh-hanako/") === 0) return all;
-      return prefix + CHANNEL_PREFIX + "/" + path + '"';
+      return prefix + quote + CHANNEL_PREFIX + "/" + path + quote;
     },
   );
 }
@@ -136,7 +171,7 @@ self.addEventListener("install", function (event) {
   event.waitUntil(self.skipWaiting());
 });
 self.addEventListener("activate", function (event) {
-  event.waitUntil(self.clients.claim());
+  event.waitUntil(Promise.all([self.clients.claim(), restoreConfig()]));
 });
 
 self.addEventListener("message", function (ev) {
@@ -145,6 +180,8 @@ self.addEventListener("message", function (ev) {
     config.tunnelUrl = data.tunnelUrl || config.tunnelUrl;
     config.surfaceSession = data.surfaceSession || config.surfaceSession || "";
     log("收到 bridge-config（http-tunnel，tunnelUrl=" + (config.tunnelUrl || "(none)") + "）");
+    // 持久化：SW 被回收冷启动后从缓存恢复（见 persistConfig/restoreConfig）
+    persistConfig();
   }
 });
 

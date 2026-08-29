@@ -27,8 +27,9 @@
 //      （request-update 后端改 bridge.emit("update.request")，宿主经 WS #2 事件触发
 //      npm i latest + 重启 web host；前端调用不变）——挂载时自动调一次 POST
 //      /api/hana-settings.check-version（本地版本后端直读 dsh-pkg package.json 零延迟；
-//      远端版本后端 HTTP 直查，慢时返回 pending 由前端轮询兜底），显示本地/最新版本
-//      与状态；「检查更新」手动刷新；「更新到最新」（仅 updateAvailable 时可用，两段式
+//      远端版本后端 HTTP 直查 npm registry 后**同步返回**结果——慢则等后端 15s 超时，
+//      无 pending 中间态），显示本地/最新版本与状态；「检查更新」手动刷新；
+//      「更新到最新」（仅 updateAvailable 时可用，两段式
 //      确认）→ POST /api/hana-settings.request-update（宿主经 bridge 收到后自动
 //      npm i latest + 重启 web host；web host 重启窗口连接失败视为仍在更新，继续轮询）；
 //      更新期间每 2s 轮询 POST /api/hana-settings.update-status（读 update-result.json）
