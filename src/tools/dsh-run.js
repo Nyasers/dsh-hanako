@@ -928,11 +928,23 @@ async function doExecute(input, ctx) {
       content: [
         {
           type: "text",
-          text: `任务已提交给 DSH（rpcId: ${taskRpcId}），在后台执行中。进度与输出见上方卡片；完成后后台消息仅带回任务状态与定位键（rpcId/sessionId），取内容用 dsh_session get。`,
+          // 提交返回即带 sessionId（持久定位键，jsonl 文件级，不依赖 g.ops 内存态）：
+          // loc.sessionId 在 await ready 后已可用（session.create + prompt 提交成功），
+          // 与卡片 URL locQuery 同源。放 content text 而非仅 details——details 不进入
+          // Agent 上下文（实机：wait 返回只有 text），Agent 凭 text 里的 sessionId 立即
+          // dsh_cancel / dsh_session get，无需反查 list 或等终态回调。提交失败（loc
+          // null）时 sessionId 占位「（提交失败）」，rpcId 仍可定位（deferred 回调兜底）。
+          text: `任务已提交给 DSH（rpcId: ${taskRpcId}，sessionId: ${(loc && loc.sessionId) || "（提交失败）"}），在后台执行中。进度与输出见上方卡片；完成后后台消息仅带回任务状态与定位键（rpcId/sessionId），取内容用 dsh_session get。`,
         },
       ],
       details: {
-        dsh: { rpcId: taskRpcId, status: "running", cwd, wait: false },
+        dsh: {
+          sessionId: (loc && loc.sessionId) || "",
+          rpcId: taskRpcId,
+          status: "running",
+          cwd,
+          wait: false,
+        },
         card: cardBase,
       },
     };
