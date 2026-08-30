@@ -344,7 +344,7 @@ export default function registerWebuiRoutes(app, ctx) {
   });
 
   // 自动安装 dsh 依赖（deps 卡片「安装依赖」按钮调用）：读单例按状态返回——
-  // 部署中（g.depsInstalling）→ {ok:true,state:"installing"}；否则异步触发
+  // 部署中（g.deps.status === "installing"）→ {ok:true,state:"installing"}；否则异步触发
   // g.installDeps(ctx.config, dataDir)（不 await 其完成，页面靠诊断刷新）→ installing。
   // 单例缺失/无函数/异常一律容错回 {ok:false}，本路由不抛异常。
   app.post("/webui/install-deps", (c) => {
@@ -353,8 +353,14 @@ export default function registerWebuiRoutes(app, ctx) {
       if (!g || typeof g.installDeps !== "function") {
         return c.json({ ok: false, error: "插件工具模块未加载，稍后重试" });
       }
-      if (g.depsInstalling) return c.json({ ok: true, state: "installing" });
-      // 异步触发（installDepsFromPlugin 内部已 try/catch 记 depsInstallError 返回结果；
+      // installing+running 都是「依赖操作进行中」（install 内部重验期间 status 短暂为
+      // running），此时重复 install 直接返回状态不重复触发（与能力层内部守卫一致）
+      if (
+        g.deps.status === "installing" ||
+        g.deps.status === "running"
+      )
+        return c.json({ ok: true, state: "installing" });
+      // 异步触发（installDepsFromPlugin 内部已 try/catch 记 g.deps.error 返回结果；
       // 这里再 .catch 兜底——路由不等待完成、不抛异常）。dataDir 缺省用单例记录值。
       Promise.resolve(
         g.installDeps(ctx.config, ctx.dataDir || g.dataDir),
@@ -370,11 +376,11 @@ export default function registerWebuiRoutes(app, ctx) {
   });
 
   // 运行级依赖检测（deps 卡片「检测依赖」按钮 + 进标签页自动一次；GET 只读）：
-  // 检测中（g.depsSmoke.running）→ {ok:true,running:true}；否则 await verifyDepsSmoke(cfg)
-  // （dsh 冒烟 ≤10s + pnpm 引导检查并行；自愈下载可能更久）→
+  // 检测中（g.deps.status === "running"）→ {ok:true,running:true}；否则 await
+  // verifyDepsSmoke(cfg)（dsh 冒烟 ≤10s + pnpm 引导检查并行；自愈下载可能更久）→
   // {ok:true, verified, version, error, running:false, pnpmReady, pnpmVersion, pnpmError}。
   // pnpm 引导状态为独立子项（不进 verified 判定）：未就绪时 pnpmError 为原因，自愈
-  // 路径（缺缓存自动重下）恢复就绪。结果写入 g.depsSmoke，前端随后经 health 读取
+  // 路径（缺缓存自动重下）恢复就绪。结果写入 g.deps.result，前端随后经 health 读取
   // 诊断刷新 deps 卡片。单例缺失/无函数/异常一律容错回 {ok:false}。
   app.get("/webui/verify-deps", async (c) => {
     const g = globalThis.__dshHanako;
@@ -382,7 +388,8 @@ export default function registerWebuiRoutes(app, ctx) {
       if (!g || typeof g.verifyDeps !== "function") {
         return c.json({ ok: false, error: "插件工具模块未加载，稍后重试" });
       }
-      if (g.depsSmoke?.running) return c.json({ ok: true, running: true });
+      if (g.deps.status === "running" || g.deps.status === "installing")
+        return c.json({ ok: true, running: true });
       const smoke = await g.verifyDeps({
         dataDir: ctx.dataDir || g.dataDir,
         webPort: port,
@@ -407,11 +414,11 @@ export default function registerWebuiRoutes(app, ctx) {
   });
 
   // 版本检查（deps 卡片「检查更新」按钮 + Agent 工具 dsh_update 共用能力层；
-  // GET 只读）：检查中（g.checking）→ {ok:true,running:true}；否则 await
-  // g.checkDshUpdate(cfg)（HTTP 直查 npm registry ≤~15s，官方源失败重试 npmmirror）→
-  // {ok:true, localVersion, latestVersion, updateAvailable, error?}。结果缓存进
-  // g.checkResult（内存，不再写 check-result.json——v0.18.1 起设置页检查改 dsh 侧
-  // 直查），前端随后经 health 读取诊断刷新 deps 卡片。
+  // GET 只读）：检查中（g.check.status === "running"）→ {ok:true,running:true}；否则
+  // await g.checkDshUpdate(cfg)（HTTP 直查 npm registry ≤~15s，官方源失败重试
+  // npmmirror）→ {ok:true, localVersion, latestVersion, updateAvailable, error?}。结果
+  // 缓存进 g.check.result（内存，不再写 check-result.json——v0.18.1 起设置页检查改
+  // dsh 侧直查），前端随后经 health 读取诊断刷新 deps 卡片。
   // 单例缺失/无函数/异常一律容错回 {ok:false}，本路由不抛异常。
   app.get("/webui/check-update", async (c) => {
     const g = globalThis.__dshHanako;
@@ -419,7 +426,7 @@ export default function registerWebuiRoutes(app, ctx) {
       if (!g || typeof g.checkDshUpdate !== "function") {
         return c.json({ ok: false, error: "插件工具模块未加载，稍后重试" });
       }
-      if (g.checking) return c.json({ ok: true, running: true });
+      if (g.check.status === "running") return c.json({ ok: true, running: true });
       const r = await g.checkDshUpdate({
         dataDir: ctx.dataDir || g.dataDir,
         webPort: port,
@@ -439,18 +446,19 @@ export default function registerWebuiRoutes(app, ctx) {
   });
 
   // 更新 DSH（deps 卡片「更新 DSH」按钮 + Agent 工具 dsh_update 共用能力层）：
-  // 更新中（g.updating）→ {ok:true,state:"updating"}；否则异步触发 g.updateDsh(cfg)
-  // （不 await 其完成——npm i 可能耗时数分钟，前端经诊断/设置页 update 事件看进度）→
-  // {ok:true,state:"updating"}。更新会重启 web host，正在执行的 dsh 任务会中断
-  // （前端按钮已有确认文案）。单例缺失/无函数/异常一律容错回 {ok:false}，本路由不抛异常。
+  // 更新中（g.update.status === "running"）→ {ok:true,state:"updating"}；否则异步触发
+  // g.updateDsh(cfg)（不 await 其完成——npm i 可能耗时数分钟，前端经诊断/设置页
+  // update 事件看进度）→ {ok:true,state:"updating"}。更新会重启 web host，正在执行的
+  // dsh 任务会中断（前端按钮已有确认文案）。单例缺失/无函数/异常一律容错回
+  // {ok:false}，本路由不抛异常。
   app.post("/webui/update-dsh", (c) => {
     const g = globalThis.__dshHanako;
     try {
       if (!g || typeof g.updateDsh !== "function") {
         return c.json({ ok: false, error: "插件工具模块未加载，稍后重试" });
       }
-      if (g.updating) return c.json({ ok: true, state: "updating" });
-      // 异步触发（updateDsh 内部已 try/catch 写 update-result.json + 总线回投事件；
+      if (g.update.status === "running") return c.json({ ok: true, state: "updating" });
+      // 异步触发（updateDsh 内部已 try/catch 置 g.update 状态 + 总线回投事件；
       // 这里再 .catch 兜底——路由不等待完成、不抛异常）。dataDir 缺省用单例记录值。
       Promise.resolve(
         g.updateDsh({ dataDir: ctx.dataDir || g.dataDir, webPort: port }),

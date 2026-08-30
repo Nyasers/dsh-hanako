@@ -34,7 +34,7 @@
 //      npm i latest + 重启 web host（web host 重启窗口流断开视为仍在更新）；更新期间
 //      订阅 GET /api/hana-settings.update-stream 事件流（v0.22.1+ 事件驱动，替代旧 2s
 //      轮询 update-status）直到 done/error；事件缺失时手动刷新（update-status 一次性
-//      查询兜底：事件缓存优先 + update-result.json 读回），计时器/流卸载时清理。
+//      查询兜底：事件缓存优先；v0.24 起 update-result.json 退役，无文件兜底），计时器/流卸载时清理。
 // 样式用 dsw CSS 变量（--dsw-alias-*），对齐设置面板原生观感（hs-* 类，设置中心：
 // 页头品牌区 + 圆角分组卡片 + 卡片头分隔线 + 版本信息面板；hs 前缀 = hana-settings，
 // 替代改名前的 hdm（hana-default-model）标识）。

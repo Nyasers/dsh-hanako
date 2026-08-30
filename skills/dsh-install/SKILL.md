@@ -19,9 +19,9 @@ description: "dsh_install 工具手册（源码 tools/dsh-install.js + tools/lib
 
 ## 行为（源码核实）
 
-**install**：① 并发防护——依赖安装中（`g.depsInstalling`）重复调用返回 `{ ok:false, state:'installing' }` 不重复执行；② `g.installDeps(cfg)`：停 web host（`closeProcess`，Windows 文件锁前提，部署要删旧 node_modules）→ 写最小 package.json（无 devDeps）+ 复制插件根 `pnpm-workspace.yaml`（`allowBuilds` 放行 dsh 树 build scripts；pnpm 11 配置已迁至 pnpm-workspace.yaml）到 `dsh-pkg/` → 创建指向宿主 electron node 的代理脚本（node.cmd/node，PATH 首部指向 pkgDir 让 koffi/node-pty 的 install script 找到宿主 node）→ **npm → pnpm 升级兼容清理**（删 `package-lock.json` / `pnpm-lock.yaml` / 扁平 `node_modules`，旧 npm 体系残留与 pnpm 的 `.pnpm` 结构混装会破坏 cordis 依赖解析）→ `pnpm add @deepseek-ai/dsh --reporter=ndjson`（官方源失败自动重试 `--registry=https://registry.npmmirror.com`）→ 校验 cliBin → 清缓存强制运行级重验（`verifyDepsSmoke`，`g.depsSmoke` 刷新）；③ 完成后 autoStart（默认 true）：`g.web.ready` 已就绪跳过（返回 null）/ 未起经 `g.startWebHost(ctx.config, dataDir)` 拉起（成功 true / 失败 false，**失败不阻断结果上报**）→ `{ ok:true, state:'installed', cliBin, version?, autoStart? }`。
+**install**：① 并发防护——依赖安装中（`g.deps.status === "installing"`）重复调用返回 `{ ok:false, state:'installing' }` 不重复执行；② `g.installDeps(cfg)`：停 web host（`closeProcess`，Windows 文件锁前提，部署要删旧 node_modules）→ 写最小 package.json（无 devDeps）+ 复制插件根 `pnpm-workspace.yaml`（`allowBuilds` 放行 dsh 树 build scripts；pnpm 11 配置已迁至 pnpm-workspace.yaml）到 `dsh-pkg/` → 创建指向宿主 electron node 的代理脚本（node.cmd/node，PATH 首部指向 pkgDir 让 koffi/node-pty 的 install script 找到宿主 node）→ **npm → pnpm 升级兼容清理**（删 `package-lock.json` / `pnpm-lock.yaml` / 扁平 `node_modules`，旧 npm 体系残留与 pnpm 的 `.pnpm` 结构混装会破坏 cordis 依赖解析）→ `pnpm add @deepseek-ai/dsh --reporter=ndjson`（官方源失败自动重试 `--registry=https://registry.npmmirror.com`）→ 校验 cliBin → 清缓存强制运行级重验（`verifyDepsSmoke`，`g.deps.result` 刷新）；③ 完成后 autoStart（默认 true）：`g.web.ready` 已就绪跳过（返回 null）/ 未起经 `g.startWebHost(ctx.config, dataDir)` 拉起（成功 true / 失败 false，**失败不阻断结果上报**）→ `{ ok:true, state:'installed', cliBin, version?, autoStart? }`。
 
-**verify**：`g.verifyDeps(cfg)`（node cliBin --version 冒烟，10s 超时，结果缓存 `g.depsSmoke`）→ `{ verified, version, error? }`。
+**verify**：`g.verifyDeps(cfg)`（node cliBin --version 冒烟，10s 超时，结果缓存 `g.deps.result`）→ `{ verified, version, error? }`。
 
 **异步模式**：`install` 默认异步——立即返回 + 渲染**安装卡片**（`/card/dep`，见下节），经宿主 deferred 通道注册唤醒（taskId `dsh_install_*`），后台完成/失败后宿主唤醒带回结果。
 
@@ -32,7 +32,7 @@ description: "dsh_install 工具手册（源码 tools/dsh-install.js + tools/lib
 - **页面** `GET /card/dep?taskId=`（iframe 内容，`data-kind="dep"`）
 - **SSE** `GET /ops/dep-stream?taskId=`：首帧快照 + 每 1s 推一次（running 时 pnpm 日志实时滚动），终态（ok/error）推送后关闭；30s 心跳防代理超时
 - **兜底** `GET /ops/dep-status?taskId=`：EventSource 建立失败时卡片回退一次
-- **数据源** = 宿主单例 `g.depTasks`（Map：taskId → { kind: install|update, state: running|ok|error, log, at, result }）+ `g.depsInstallLog`（pnpm add 输出实时尾部）+ `update-result.json`（kind=update 时合并）
+- **数据源** = 宿主单例 `g.depTasks`（Map：taskId → { kind: install|update, state: running|ok|error, log, at, result }）+ `g.deps.log`（pnpm add 输出实时尾部）+ 更新终态直接取条目 `result`（v0.24 起 update-result.json 退役）
 - **渲染**：标题（DSH 安装 / DSH 升级）+ 状态徽标（安装中/升级中/完成/失败）+ pnpm 日志尾部预格式实时滚动（运行中隐藏滚动条 + 固定滚底）+ 完成结果行（「已安装 vX.Y.Z，web host 已自动启动」/ 错误信息）
 
 ## 返回
@@ -59,6 +59,6 @@ dsh_install(action="verify")               # 只检测依赖完整性
 
 ## 关联
 
-- 安装进度/日志也可在 DSHana 标签页 deps 卡片查看（同一份 `g.depsInstallLog`）。
+- 安装进度/日志也可在 DSHana 标签页 deps 卡片查看（同一份 `g.deps.log`）。
 - 装完调一次 `dsh_run` 触发任务；web host 未自动启动时可在 DSHana 标签页点「手动启动 web host」。
 - 更新 dsh 版本用 `dsh_update`（升级卡片同款形态）；依赖部署细节见 dsh-hanako 技能「依赖自主部署」。

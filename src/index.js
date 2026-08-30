@@ -3,8 +3,9 @@
 //
 // src/index.js — dsh-hanako 生命周期 + bundle 收敛入口（单 bundle 形态）
 // 四件事：
-//  1. onload 最前初始化统一日志（插件会话边界：时间戳会话文件，旧日志 zstd 压缩保留；挂单例 logPath/appendLog，
-//     dsh-run.js 与 @dsh-hanako/provider 复用同一日志文件）
+//  1. onload 最前初始化统一日志（插件会话边界：时间戳会话文件；旧日志 zstd 压缩保留经
+//     src/migrate.js 统一迁移入口（g.runMigrations，archive-old-logs 步骤）执行——须在建新
+//     会话文件之前；挂单例 logPath/appendLog，dsh-run.js 与 @dsh-hanako/provider 复用同一日志文件）
 //  2. onload 时把插件实例 ctx 的 bus / resources / network 存进 globalThis 单例
 //     （bus：deferred 唤醒兜底来源，工具执行 ctx 的 bus 宿主按调用注入，但 dev
 //     invoke / 特殊路径可能缺失，双兜底；resources/network：dsh-run.js 宿主侧
@@ -17,18 +18,7 @@
 // 单例挂在 globalThis.__dshHanako（tools/dsh-run.js 的 rspack bundle 内联 app/lifecycle.js，
 // mountLifecycle 挂 closeProcess/collectDiagnostics/updateDsh/startWebHost/installDeps/verifyDeps/
 // checkDshUpdate）。本文件为 bundle 收敛入口：静态 import 全部插件模块（单 bundle 内无模块缓存问题）。
-import {
-  existsSync,
-  mkdirSync,
-  renameSync,
-  readdirSync,
-  unlinkSync,
-  appendFileSync,
-  lstatSync,
-  writeFileSync,
-  readFileSync,
-} from "node:fs";
-import { zstdCompressSync } from "node:zlib";
+import { existsSync, mkdirSync, appendFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 
 // ---- bundle 收敛 ----（单 bundle 形态）
@@ -48,18 +38,19 @@ import registerCardRoutes from "./routes/card.js";
 // 工具清单（registerTool 消费普通契约；宿主自动加 pluginId_ 前缀）
 const HANAKO_TOOLS = [dshRun, dshUpdate, dshInstall, dshApprove, dshCancel, dshSession];
 
-// ---- 统一日志（时间戳会话文件 + 旧日志 zstd 压缩保留）----
+// ---- 统一日志（时间戳会话文件；旧日志 zstd 压缩保留经 migrate.js 统一迁移入口）----
 // DSHana 插件全量运行日志：每次插件会话创建 <YYYYMMDD-HHmmss-SSS>.log 真实文件（文件名
 // = 应用层生成的创建时刻，毫秒级唯一，不受 NTFS CreationTime 怪癖影响）；诊断面板/
 // 错误信息直接引用该会话文件路径（g.logPath）。
-// 旧日志策略（同 dsh session 持久化：全部保留，体积靠压缩）：onload 时把上一会话及
-// 更早的时间戳 .log 用 Node 内置 node:zlib zstd 压缩为 .log.zst（标准 zstd 格式，
-// magic 28b52ffd，任何 zstd 工具/库可解），删除原 .log——全部保留不删除。
-// 会话边界 = 插件 onload：旧 latest.log 残留（历史版本遗留）归档/清理 → 压缩旧日志
-// → 建新会话文件（空文件，无首行；会话开始以 onload 日志行为标识）。行格式
-// [<HH:mm:ss.SSS>] [<src>] <内容>，src ∈ out/err/provider/theme/settings/hana/npm
-// （npm = 依赖安装/升级的 npm i 原始输出实时流，install.js emitLog 写入）；写失败静默。
-const LOG_NAME_RE = /^\d{8}-\d{6}(?:-\d+)?\.log$/;
+// 旧日志策略（同 dsh session 持久化：全部保留，体积靠压缩）：上一会话及更早的时间戳
+// .log 用 Node 内置 node:zlib zstd 压缩为 .log.zst（标准 zstd 格式，magic 28b52ffd，任何
+// zstd 工具/库可解），删除原 .log——全部保留不删除。该动作（含历史版本遗留的 latest.log
+// 残留归档/清理）已收敛进 src/migrate.js 的 archive-old-logs 迁移步骤，经 g.runMigrations
+// 单例调度（须在建新会话文件之前执行——见 onload）。
+// 会话边界 = 插件 onload：经统一迁移入口归档/压缩旧日志 → 建新会话文件（空文件，无首行；
+// 会话开始以 onload 日志行为标识）。行格式 [<HH:mm:ss.SSS>] [<src>] <内容>，
+// src ∈ out/err/provider/theme/settings/hana/npm（npm = 依赖安装/升级的 npm i 原始输出
+// 实时流，install.js emitLog 写入）；写失败静默。
 function logTs() {
   const d = new Date();
   const p = (n, w) => String(n).padStart(w || 2, "0");
@@ -108,32 +99,6 @@ function nextTimestampLogPath(logsDir) {
   }
   return target;
 }
-// 旧日志 zstd 压缩（全部保留，不删除；同 dsh session 持久化哲学）：扫描时间戳 .log
-// （未压缩；.log.zst 不匹配正则自然跳过），zstd 压缩为 .log.zst 后删原文件；单个失败
-// 保留原文件下次再试
-function compressArchivedLogs(logsDir) {
-  let count = 0;
-  try {
-    if (!existsSync(logsDir)) return 0;
-    for (const f of readdirSync(logsDir)) {
-      if (!LOG_NAME_RE.test(f)) continue;
-      const src = join(logsDir, f);
-      try {
-        const raw = readFileSync(src);
-        writeFileSync(src + ".zst", zstdCompressSync(raw));
-        unlinkSync(src);
-        count += 1;
-      } catch {
-        /* 单个压缩失败跳过（保留原文件） */
-      }
-    }
-  } catch {
-    /* 扫描失败不阻断 */
-  }
-  return count;
-}
-
-
 // routes 具名导出：dist/routes/index.js 壳 import { pluginRoutes } 转发（组合工厂，一次挂全部路由）
 export const pluginRoutes = (app, ctx) => {
   registerWebuiRoutes(app, ctx);
@@ -151,25 +116,17 @@ export default class DshHanakoPlugin {
 
     const logsDir = join(dataDir, "logs");
     mkdirSync(logsDir, { recursive: true });
-    // 旧 latest.log 残留（历史版本遗留）：归档避免残留（内容保留，会被 zstd 压缩）；
-    // 旧链接直接删（内容在真实文件里）
-    const latest = join(logsDir, "latest.log");
-    let archivedName = null;
-    if (existsSync(latest)) {
-      try {
-        const st = lstatSync(latest);
-        if (st.isSymbolicLink()) unlinkSync(latest);
-        else {
-          archivedName = nextTimestampLogPath(logsDir);
-          renameSync(latest, archivedName);
-        }
-      } catch {
-        /* 旧文件处理失败不阻断 */
-      }
-    }
-    // 压缩旧日志（上一会话及更早的时间戳 .log → .log.zst，全部保留不删除；须在建新
-    // 会话文件之前执行，避免把新会话文件也压缩）
-    const compressed = compressArchivedLogs(logsDir);
+    // 统一迁移入口（src/migrate.js，经单例挂载调用）：archive-old-logs 步骤做旧日志归档
+    // 压缩（latest.log 残留归档/清理 + 时间戳 .log → .log.zst，全部保留不删除）——须在
+    // 建新会话文件之前执行（步骤内部先归档 latest.log 再压缩旧日志，避免把新会话文件
+    // 也压缩）；返回 { archivedName, compressed } 供下方记日志。config.json schema /
+    // junction 收敛等其余迁移在 lifecycle.js 启动路径经统一入口执行，不在此处。
+    const migration = g.runMigrations
+      ? g.runMigrations({ dataDir }, { steps: ["archive-old-logs"] })
+      : null;
+    const archiveStep = migration?.find?.((s) => s.id === "archive-old-logs");
+    const archivedName = archiveStep?.detail?.archivedName ?? null;
+    const compressed = archiveStep?.detail?.compressed ?? 0;
     const sessionFile = nextTimestampLogPath(logsDir);
     const logPath = sessionFile;
     // 挂单例：dsh-run.js 的 logPath 优先取 g.logPath；appendLog 供 dsh-run 复用（行格式一致）

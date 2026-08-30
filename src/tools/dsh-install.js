@@ -12,11 +12,12 @@
 //   action=verify：检测依赖完整性（g.verifyDeps：node cliBin --version 冒烟，能跑 =
 //     依赖图完整）→ { verified, version, error? }。
 // 默认异步：立即返回 + 渲染「安装卡片」（/card/dep，见 routes/card.js /ops/dep-stream，
-// 数据源 = 宿主单例 g.depTasks + g.depsInstallLog 实时日志），完成/失败经宿主 deferred
+// 数据源 = 宿主单例 g.depTasks + g.deps.log 实时日志），完成/失败经宿主 deferred
 // 通道唤醒 Agent 带回结果；wait=true 同步等待直接返回。
-// 并发防护：依赖安装中（g.depsInstalling）重复 install 返回 { ok:false, state:'installing' }。
+// 并发防护：依赖安装中（g.deps.status === "installing"）重复 install 返回
+// { ok:false, state:'installing' }。
 // 与 dsh-run.js 同一分发纪律：本工具经 globalThis 单例
-// （g.installDeps / g.verifyDeps / g.startWebHost / g.depTasks / g.depsInstallLog）调用能力层；
+// （g.installDeps / g.verifyDeps / g.startWebHost / g.depTasks / g.deps.log）调用能力层；
 // deferred 唤醒协议（register/resolve/fail）不再各自内联，统一 import 共享的 ./lib/wake.js（
 // 三入口 dsh-run/dsh-install/dsh-update 共用一份，消除三重复；meta.type 由调用方传入保留本工具
 // 标识 dsh-install）。lib/wake.js 是纯协议零状态模块，rspack 入口静态 import 内联进 bundle，
@@ -93,13 +94,13 @@ export const sessionPermission = {
 };
 
 // 生成安装/升级卡片任务登记（g.depTasks，routes/card.js /ops/dep-stream 读）；
-// log 在运行期由路由直接读 g.depsInstallLog 实时值，终态定格为 entry.log。
+// log 在运行期由路由直接读 g.deps.log 实时值，终态定格为 entry.log。
 function registerDepTask(g, taskId, kind) {
   const entry = {
     taskId,
     kind, // install | update
     state: "running", // running | ok | error
-    log: null, // 终态定格日志（运行期由路由读 g.depsInstallLog）
+    log: null, // 终态定格日志（运行期由路由读 g.deps.log）
     at: new Date().toISOString(),
     result: null,
   };
@@ -155,7 +156,12 @@ async function doExecute(input, ctx) {
   }
 
   // action === "install"
-  if (g.depsInstalling) {
+  // installing+running 都是「依赖操作进行中」（install 内部重验期间 status 短暂为
+  // running），此时重复 install 直接返回状态不重复执行（与能力层内部守卫一致）
+  if (
+    g.deps.status === "installing" ||
+    g.deps.status === "running"
+  ) {
     return {
       content: [
         {
@@ -201,7 +207,7 @@ async function doExecute(input, ctx) {
     .then((r) => {
       entry.state = r && r.ok ? "ok" : "error";
       entry.result = r || { ok: false, error: "安装无结果" };
-      entry.log = (g.depsInstallLog || "").slice(-2000); // 终态定格日志
+      entry.log = (g.deps.log || "").slice(-2000); // 终态定格日志
       if (r && r.ok) {
         resolveDeferredWake({
           bus,
@@ -226,7 +232,7 @@ async function doExecute(input, ctx) {
     .catch((e) => {
       entry.state = "error";
       entry.result = { ok: false, error: String(e?.message || e) };
-      entry.log = (g.depsInstallLog || "").slice(-2000);
+      entry.log = (g.deps.log || "").slice(-2000);
       failDeferredWake({
         bus,
         taskId,

@@ -4,15 +4,16 @@
 // tools/lib/check.js — DSH 版本检查共用模块（lib 提取）
 // 从 tools/dsh-run.js 剥离：npmViewLatest（HTTP 直查 npm registry 查远端版本）+ checkDshUpdate
 // （本地版本 + 远端版本 → { localVersion, latestVersion, updateAvailable, error? }）。
-// 依赖 lib/install.js 的 verifyDepsSmoke 缓存（g.depsSmoke）+ 本地版本直读
+// 依赖 lib/install.js 的 verifyDepsSmoke 缓存（g.deps.result）+ 本地版本直读
 // （readDshInstalledVersion）+ semver 比较（compareSemver）；状态经 lib/state.js
-// getSingleton 访问（g.checking / g.checkResult / g.checkAt）。
+// getSingleton 访问分组 g.check = { status, result, error, time, log }（v0.24 状态
+// 收敛：旧平铺 g.checking/g.checkResult/g.checkAt 全废）。
 // 消费方：dsh-run.js（挂单例 g.checkDshUpdate）、tools/dsh-update.js、routes/webui.js
 // （/webui/check-update）。dsh 设置页「DSH 版本」卡片 v0.18.1 起由 dsh 侧
 // @dsh-hanako/settings 内嵌直查远端（同款 HTTP 直查 npm registry），不再经本函数桥接。
 //
 // 容错纪律：远端版本查询全败只置 error 字段不抛（调用方按需降级）；结果只缓存
-// g.checkResult（内存，不再写 check-result.json 桥接文件——v0.18.1 起设置页检查
+// g.check.result（内存，不再写 check-result.json 桥接文件——v0.18.1 起设置页检查
 // 改 dsh 侧直查，无跨进程读回需求）。注释风格保持宿主侧（中文/双引号/分号）。
 
 import { getSingleton } from "./state.js";
@@ -57,15 +58,15 @@ async function npmViewLatest() {
 }
 
 // ---- 检查 DSH 更新（能力层）：本地版本 + 远端版本 → { localVersion, latestVersion,
-// updateAvailable, error? }。并发防护：g.checking 进行中返回上次结果 + running 标志。
-// 结果缓存 g.checkResult / g.checkAt（内存，供 dsh_update 工具与 /webui/check-update
-// 直读返回值；不再写 check-result.json——v0.18.1 起设置页检查改 dsh 侧直查）。
-// 失败（远端查询全败）只置 error 字段不抛。----
+// updateAvailable, error? }。并发防护：g.check.status === "running" 进行中返回上次结果
+// + running 标志。结果缓存 g.check.result / g.check.time（内存，供 dsh_update 工具与
+// /webui/check-update 直读返回值；不再写 check-result.json——v0.18.1 起设置页检查改
+// dsh 侧直查）。失败（远端查询全败）只置 error 字段不抛。----
 export async function checkDshUpdate(cfg) {
   const g = getSingleton();
-  if (g.checking) {
+  if (g.check.status === "running") {
     return {
-      ...(g.checkResult || {
+      ...(g.check.result || {
         localVersion: null,
         latestVersion: null,
         updateAvailable: false,
@@ -73,7 +74,9 @@ export async function checkDshUpdate(cfg) {
       running: true,
     };
   }
-  g.checking = true;
+  g.check.status = "running";
+  g.check.error = null;
+  g.check.time = Date.now();
   const dataDir = cfg.dataDir || g.dataDir;
   const diagCfg = { ...cfg, dataDir };
   // 会话日志（src=hana）：开始/完成 里程碑——故障诊断（远端查询失败、版本比较异常、
@@ -90,7 +93,7 @@ export async function checkDshUpdate(cfg) {
   };
   try {
     // 本地版本：verifyDepsSmoke 缓存优先（能跑 = 依赖图完整，版本号即真值）；无则直读 package.json
-    const smoke = g.depsSmoke;
+    const smoke = g.deps.result;
     const fromSmoke = !!(smoke && !smoke.running && smoke.ok);
     let localVersion = fromSmoke ? smoke.version : null;
     if (!localVersion) localVersion = readDshInstalledVersion(diagCfg);
@@ -109,13 +112,15 @@ export async function checkDshUpdate(cfg) {
     slog(
       `完成（本地=${localVersion || "未安装"}，远端=${latestVersion || "查询失败"}${remote.error ? "，" + remote.error : ""}${updateAvailable ? "，可更新" : ""}）`,
     );
-    g.checkResult = result;
-    g.checkAt = Date.now();
+    g.check.result = result;
+    g.check.time = Date.now();
+    g.check.error = result.error || null;
     console.log(
       `[dsh-run] 版本检查：本地 ${localVersion || "未安装"} / 远端 ${latestVersion || "查询失败"}${updateAvailable ? "（可更新）" : ""}`,
     );
     return result;
   } finally {
-    g.checking = false;
+    // 检查链路终态（ok/error 保留；下次入口才回到 running）
+    g.check.status = g.check.error ? "error" : "ok";
   }
 }

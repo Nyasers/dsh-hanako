@@ -87,11 +87,11 @@ $node = <本机 node.exe 绝对路径，如 C:\Program Files\nodejs\node.exe>
 `@deepseek-ai/dsh` 版本检查与更新收敛为**宿主能力层单一事实源**（tools/lib/ `checkDshUpdate` / `updateDsh` / `installDepsFromPlugin` / `verifyDepsSmoke`，经单例挂载），Agent 工具与标签页共用同一套逻辑，结果一致；dsh 设置页「DSH 版本」卡片 v0.18.1 起**检查改 dsh 侧直查**（v0.18.2 起 HTTP 直查 npm registry，pnpm view 语义等价），更新仍走宿主能力层：
 
 1. **Agent 工具 `dsh_update`**：`action=check`（默认）查 `{ localVersion, latestVersion, updateAvailable, error? }`，只读不改；`action=update` 执行完整更新（停 web host → pnpm add @deepseek-ai/dsh latest → 起 web host），默认异步（后台执行 + **升级卡片**实时日志，完成后宿主唤醒带回结果），`wait=true` 同步等待；更新会重启 web host、正在执行的任务会中断，`update` 前确认无运行中任务；更新执行中重复调用返回状态不重复执行
-2. **DSHana 标签页 deps 卡片**（web host 未就绪时可见）：版本行显示「当前版本 / 最新版本 / 可更新状态」+「检查更新」「更新 DSH」按钮（更新前两段式确认）；更新中显示进度（update-result.json 状态），完成显示「更新完成 vX，请重启 DSHana 使完全生效」；更新/安装期间页面自动退到诊断页显示进度，完成后自动切回并刷新
+2. **DSHana 标签页 deps 卡片**（web host 未就绪时可见）：版本行显示「当前版本 / 最新版本 / 可更新状态」+「检查更新」「更新 DSH」按钮（更新前两段式确认）；更新中显示进度（内存态 g.update 状态），完成显示「更新完成 vX，请重启 DSHana 使完全生效」；更新/安装期间页面自动退到诊断页显示进度，完成后自动切回并刷新
 3. **dsh 设置页「DSHana 设置」分页 → 「DSH 版本」卡片**：本地版本直读 dsh-pkg package.json（挂载即显示），远端版本 **dsh 侧直查**（v0.18.2 起 HTTP 直查 npm registry——fetch `https://registry.npmjs.org/@deepseek-ai/dsh/latest` 的 JSON `version` 字段（pnpm view 语义等价），官方源失败重试 npmmirror，15s 超时，不再 spawn pnpm；v0.18.1 起不再经宿主桥接——修复了宿主 resources.watch 桥接不可靠导致检查永不完成的问题）；「更新到最新」→ 两段式确认 → 经 **dshana.bus 消息总线**（@dsh-hanako/bridge 提供的 dshanaBus 服务）发 update.request 直投宿主（v0.22.1 起替代 update-request.json 文件桥与 POST /child/post 反向信道，均已退役；bus 未就绪时 request-update 返回「消息总线未连接」）→ 宿主执行更新 → **v0.22.1+ 事件化**：订阅 update-stream 事件流（update.progress/result 驱动）直到 done/error；事件缺失手动刷新（update-status 一次性查询兜底）
-4. **Agent 工具 `dsh_install`**（依赖缺失/安装场景）：`action=install`（默认）pnpm add @deepseek-ai/dsh 到 dsh-pkg（registry 兜底 + 自动运行级重验 + autoStart 自动拉起 web host），默认异步 + **安装卡片**实时日志 + 完成回调，`wait=true` 同步；`action=verify` 只检测依赖完整性（运行级冒烟）；安装中（`g.depsInstalling`）重复调用返回状态不重复执行
+4. **Agent 工具 `dsh_install`**（依赖缺失/安装场景）：`action=install`（默认）pnpm add @deepseek-ai/dsh 到 dsh-pkg（registry 兜底 + 自动运行级重验 + autoStart 自动拉起 web host），默认异步 + **安装卡片**实时日志 + 完成回调，`wait=true` 同步；`action=verify` 只检测依赖完整性（运行级冒烟）；安装中（`g.deps.status === "installing"`）重复调用返回状态不重复执行
 
-**并发与一致性**：检查 `g.checking` / 更新 `g.updating` / 安装 `g.depsInstalling` 进行中重复请求跳过（请求触发层 + 能力层双重防护）；检查结果缓存 `g.checkResult`（内存，5s 时间窗防远端查询重复跑；不再写 check-result.json 桥接文件）；更新结果写 `<dataDir>/update-result.json { state: done|error, version?, error?, at }`（设置页事件缓存优先 + update-status 一次性查询读，标签页诊断路径读）。
+**并发与一致性**：检查 `g.check.status` / 更新 `g.update.status` / 安装 `g.deps.status` 进行中重复请求跳过（请求触发层 + 能力层双重防护）；检查结果缓存 `g.check.result`（内存，5s 时间窗防远端查询重复跑；不再写 check-result.json 桥接文件）；更新结果走内存态 `g.update`（v0.24 起 update-result.json 退役，设置页事件缓存优先 + update-status 一次性查询读）。
 
 **安装/升级卡片（v0.13.0）**：dsh_install / dsh_update 异步流程渲染 iframe 卡片（`/card/dep`，与任务卡片同构）——登记宿主单例 `g.depTasks`（taskId → kind/state/log/at/result），SSE `/ops/dep-stream`（首帧快照 + 每 1s npm 日志实时滚动，终态关闭）+ 兜底 `/ops/dep-status`；显示标题（DSH 安装 / DSH 升级）+ 状态徽标 + 日志实时滚动 + 完成结果（「已安装 vX，web host 已自动启动」/「更新完成 vX，请重启 DSHana 使完全生效」/ 错误信息）。
 
@@ -127,7 +127,7 @@ dsh 请求越界权限时任务挂起，插件经 deferred 发 dsh-approval 通�
 | bash 报 `E_ACCESSDENIED` | dsh bash 沙箱 Windows 限制 | 改用文件系统工具（write/read/edit） |
 | pnpm add 下载失败/超时 | registry 网络 | 切 `--registry=https://registry.npmmirror.com`（页面自装已内置重试），仍失败查代理 |
 | 版本检查显示「检查失败」/「最新版本 未知」 | 远端查询官方源 + npmmirror 都失败（网络/registry） | 稍后重试（能力层已自动重试镜像一次）；查代理/网络 |
-| 更新 DSH 后 web host 起不来 / 更新失败 | pnpm add 失败或 web host 重启失败 | 看 deps 卡片/设置页更新状态（update-result.json 的 error 字段）；按 t1→t2 自检修复后「手动启动 web host」 |
+| 更新 DSH 后 web host 起不来 / 更新失败 | pnpm add 失败或 web host 重启失败 | 看 deps 卡片/设置页更新状态（内存态 g.update.error）；按 t1→t2 自检修复后「手动启动 web host」 |
 | 改了配置/代码不生效 | 宿主 tools 模块缓存 | 重启 Hana |
 
 ## 已知限制

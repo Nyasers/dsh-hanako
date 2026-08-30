@@ -39,7 +39,7 @@
 //   POST /api/hana-settings.save            → agentDefaultModel.saveSelection(...)
 //   POST /api/hana-settings.check-version   → 本地版本直读 + 远端版本 dsh 侧 HTTP 直查（npm registry）
 //   POST /api/hana-settings.request-update  → 经 dshana.bus 消息总线发 update.request（触发更新）
-//   POST /api/hana-settings.update-status   → 事件缓存优先 + <dataDir>/update-result.json 兜底（一次性查询）
+//   POST /api/hana-settings.update-status   → 事件缓存优先；v0.24 起 update-result.json 退役，无缓存即 idle（一次性查询）
 //   GET  /api/hana-settings.update-stream   → 事件推送（SSE 式流；前端订阅，终态后关闭）
 // 路由经 webServer.register（kind: exact）注册——webserver 匹配 exact 优先于 apiproxy
 // 的 /api 前缀，冲突只会发生在同 (kind, path) 重复注册（插件重载未清理场景），此时
@@ -48,7 +48,7 @@
 // config 获取：v0.22.1+ 起 patch 静态化（dsh-hanako.patch.yml，零 config 注入）——
 // dshPkgDir（dsh 包安装目录）/ dataDir（宿主插件数据目录）改经 dshanaBus.getConfig() 获取
 // （宿主 bus ready 后经总线 config 帧下发，bridge 缓存；check-version 读 dsh-pkg
-// package.json、update-status 读 update-result.json 的路径来源）。config 未下发时
+// package.json、update-status 的 dataDir 路径来源）。config 未下发时
 // 相关路由返回 { ok:false, error:"总线配置未就绪" }。
 // 历史：v0.18.1 曾注入 npmCliPath / electronNode 供版本检查 dsh 侧 spawn pnpm view；
 // v0.18.2 起版本检查改 HTTP 直查 npm registry（全局 fetch），不再需要（patch 模板已删除
@@ -250,8 +250,8 @@ export function apply(ctx, config) {
 
           // ---- 更新事件缓存（v0.22.1+ 事件化）：订阅总线 update.progress / update.result
           // （宿主 updateDsh 执行期间回投），缓存最新状态供 update-status 一次性查询与
-          // update-stream 事件推送——替代前端 2s 轮询 update-status。update-result.json
-          // 读回保留作兜底（事件丢失/重启后文件仍在）。----
+          // update-stream 事件推送——替代前端 2s 轮询 update-status。v0.24 起
+          // update-result.json 退役，无文件兜底（事件缓存丢失即 idle）。----
           let updateEventCache = null; // { state, version?, error?, at } | null
           const updateStreams = new Set(); // 挂起的 update-stream 响应
           const broadcastUpdateEvent = (value) => {
@@ -437,7 +437,7 @@ export function apply(ctx, config) {
               if (!acked) throw new Error("宿主未受理更新请求（总线确认超时）");
               // 新轮次受理：清空事件缓存，防 update-status/update-stream 回放上一轮
               // done/error 终态（新轮次由 update.progress/result 重新填充；更新未开始
-              // 前缓存为 null，update-status 走 update-result.json 文件兜底）
+              // 前缓存为 null，update-status 返回 idle（文件兜底已随 v0.24 退役移除）
               updateEventCache = null;
               settingsLog("更新请求已受理，将自动执行更新");
               json(res, { ok: true, state: "updating" });
@@ -452,8 +452,8 @@ export function apply(ctx, config) {
           });
 
           // POST /api/hana-settings.update-status：一次性查询——事件缓存优先（事件化主信道，
-          // v0.22.1+ 替代前端 2s 轮询），无缓存读 update-result.json 兜底（文件不存在 → idle；
-          // 解析失败 → idle）。dataDir 来自总线配置；config 未下发时报「总线配置未就绪」。
+          // v0.22.1+ 替代前端 2s 轮询），无缓存返回 idle（v0.24 起 update-result.json 退役，无文件兜底）。
+          // dataDir 来自总线配置；config 未下发时报「总线配置未就绪」。
           registerRoute("/api/hana-settings.update-status", async (req, res) => {
             try {
               await readJsonBody(req);
@@ -466,21 +466,8 @@ export function apply(ctx, config) {
                 json(res, { ok: true, value: updateEventCache });
                 return;
               }
-              const f = join(bc.dataDir, "update-result.json");
-              if (!existsSync(f)) {
-                json(res, { ok: true, value: { state: "idle" } });
-                return;
-              }
-              let value = null;
-              try {
-                value = JSON.parse(readFileSync(f, "utf8"));
-              } catch (e) {
-                // 解析失败（写入中/损坏）：视为 idle，不阻断
-                settingsLog(`update-result.json 解析失败：${e?.message || e}`);
-                json(res, { ok: true, value: { state: "idle" } });
-                return;
-              }
-              json(res, { ok: true, value });
+              // v0.24 起 update-result.json 退役：无事件缓存即 idle（无文件兜底）
+              json(res, { ok: true, value: { state: "idle" } });
             } catch (e) {
               json(res, { ok: false, error: e?.message || String(e) });
             }

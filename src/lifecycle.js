@@ -11,22 +11,26 @@
 //   web host 拉起    ensureWebHost（spawn dsh web + 端口就绪等待，幂等）+ startWebHostFromPlugin（挂 g.startWebHost）
 //   关闭回收         closeProcess（先清 provider/update watch，再 kill 子进程）
 //   连接失败自检     collectWebDiagnostics + buildDepsDiagCheck + buildProcessDiagCheck + pickProcessFix
-//   更新 DSH         updateDsh（停 host → 装依赖 → 起 host → 读版本，写 update-result.json）
+//   更新 DSH         updateDsh（停 host → 装依赖 → 起 host → 读版本，结果走内存态 g.update）
 //   watch           ensureProviderPushWatch（provider 热跟随 watch）
 //   provider 路由     detectHostProviderPaths / readJsonFile / mapModel / readHostConfig / buildProviderRoutes
 //                    → pushProviderRoutes（总线 emit provider.refresh，替代 HTTP push）
-//   config 引导       ensureConfigJson（自动生成 config.json，幂等）
+//   config 引导       config.json 初始化/升级已收敛进 src/migrate.js（config-schema 步骤），
+//                    本模块经 runMigrations 统一调度（startWebHostFromPlugin 调 config-schema；
+//                    junction 收敛同样迁入 migrate.js，ensureWebHost 调 junction-converge）
 //   web host 日志     logTs / appendLog / logFileStamp / newWebLogPath（兜底实现）
 // 单例挂载（globalThis.__dshHanako，经 getSingleton()）：g.closeProcess / g.collectDiagnostics /
 // g.updateDsh / g.startWebHost / g.installDeps / g.verifyDeps / g.checkDshUpdate 均在本模块顶层完成
-// （installDeps/verifyDeps/checkDshUpdate 直接引用 lib/install.js & lib/check.js）。routes/webui.js、
-// index.js、tools/dsh-*.js 仍经 globalThis 单例调用，不受影响。
+// （installDeps/verifyDeps/checkDshUpdate 直接引用 lib/install.js & lib/check.js）；g.runMigrations
+// 由 src/migrate.js 顶层挂载（本模块 import 时即挂好）。routes/webui.js、index.js、tools/dsh-*.js
+// 仍经 globalThis 单例调用，不受影响。
 //
-// 分发形态与理由：本模块只被 tools/dsh-run.js（rspack 入口）静态 import，会被 rspack 内联进
-// dist/tools/dsh-run.js bundle（build.mjs 的 staticUrlToMeta 已递归收集 ROOT 下全部 .js 路径做
-// import.meta.url 替换；工具 ?t= 重载即刷新整包）。index.js / routes/webui.js 不做静态 import（违反
-// 缓存纪律，见 tools/dsh-run.js 文件头），仍经单例调用。本文件自身的 ../tools/lib/* 引用随 dsh-run
-// bundle 内联，无固定 URL 缓存问题。
+// 分发形态与理由：本模块被 index.js（bundle 收敛入口，单 bundle 形态）与 tools/dsh-run.js 静态
+// import，随 rspack 单 bundle 内联进 dist/index.js（build.mjs 的 staticUrlToMeta 递归收集 ROOT 下
+// 全部 .js 路径做 import.meta.url 替换）。src/migrate.js 同样经本模块静态 import 内联；index.js
+// 不静态 import migrate.js（避免 Node ESM 固定 URL 缓存读到旧模块），经 globalThis 单例
+// （g.runMigrations）调用——与 g.startWebHost / g.closeProcess 同纪律。本文件自身的 ../tools/lib/*
+// 引用随 bundle 内联，无固定 URL 缓存问题。
 //
 // 语义不变：ensureWebHost 重复调用幂等；web host 进程随插件 onload/卸载生命周期拉起/回收
 // （index.js register 回收调用 g.closeProcess）；providerPushCleanup / updateWatchCleanup 清理时机与
@@ -38,12 +42,7 @@ import {
   existsSync,
   mkdirSync,
   writeFileSync,
-  symlinkSync,
-  lstatSync,
-  unlinkSync,
-  renameSync,
   appendFileSync,
-  readdirSync,
 } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
@@ -54,8 +53,11 @@ import {
   manifestDefaults,
   ELECTRON_NODE,
   ELECTRON_NODE_ENV,
-  IS_WIN,
 } from "./tools/lib/state.js";
+// 统一版本迁移入口（注册表式调度器）：config.json schema 初始化/升级（config-schema）
+// 与 cordis junction 收敛（junction-converge）迁入本模块后由 migrate.js 统一调度——
+// 本文件经 runMigrations 调用（随 dsh-run bundle 内联，见文件头「分发形态」）
+import { runMigrations } from "./migrate.js";
 import {
   resolveDshPkgDir,
   installDepsFromPlugin,
@@ -369,41 +371,6 @@ function buildProviderRoutes() {
   g.latestProviderRoutes = result.routes;
   return result;
 }
-// ---- config.json 自动初始化（全新安装免「先保存一次」引导）----
-// config.json 不随包分发（宿主设置界面生成，路径 <插件数据目录>/config.json），
-// 全新安装时不存在。插件初始化（onload 拉起 web host / 首次工具调用）时按 manifest
-// 默认值自动生成 { schemaVersion: 1, global: { ...manifestDefaults }, agents: {}, sessions: {} }，
-// 用户装完即可在设置界面看到默认值，无需先手动保存一次。
-// 幂等：文件已存在直接返回，绝不覆盖用户配置/宿主生成内容。失败静默：resolve* 有
-// 配置快照兜底，不阻塞主流程（生成的只是初始默认值，被覆盖/缺失都不影响功能）。
-export function ensureConfigJson(cfg) {
-  try {
-    const dataDir =
-      cfg.dataDir || getSingleton().dataDir || join(PLUGIN_ROOT, "data");
-    const cf = join(dataDir, "config.json");
-    if (existsSync(cf)) return; // 已存在（宿主生成/用户修改）：幂等跳过
-    mkdirSync(dataDir, { recursive: true });
-    const tmp = join(dataDir, ".config.json.tmp");
-    // 先写临时文件再 rename 原子落位（中断不留半成品），对齐 scripts/pack.mjs 惯例
-    writeFileSync(
-      tmp,
-      JSON.stringify(
-        {
-          schemaVersion: 1,
-          global: { ...manifestDefaults },
-          agents: {},
-          sessions: {},
-        },
-        null,
-        2,
-      ),
-      "utf8",
-    );
-    renameSync(tmp, cf);
-  } catch {
-    /* 生成失败静默：resolve* 有配置快照兜底 */
-  }
-}
 // ---- web host 生命周期：spawn dsh web（DSH_HOME 锁进插件数据目录）----
 // dsh 依赖位置解析（resolveDshPkgDir）已提取到 lib/install.js——数据目录
 // dsh-pkg/ 优先（Agent npm i @deepseek-ai/dsh 部署的轻量分发形态），插件安装目录
@@ -461,103 +428,12 @@ export async function ensureWebHost(cfg) {
   // cordis 插件加载：六段均以包名注册（dsh client 模块发现按 loader entry 的 name 做
   // require.resolve('<name>/package.json')，file:// 无法解析），故启动前须在
   // $DSH_HOME/profiles/node_modules 统一建 junction（包名 → 插件安装目录
-  // dsh-plugin/<pkg>），与 dsh 自维护的 junction farm 同机制
-  // （ensureCordisJunctions 每次启动无条件重建）。
+  // dsh-plugin/<pkg>），与 dsh 自维护的 junction farm 同机制。该动作（旧名清理 +
+  // @dsh-hanako scope 无条件收敛，每次启动重建）已收敛进 src/migrate.js 的
+  // junction-converge 迁移步骤，经 runMigrations 统一调度（下方 spawn 前调用）。
   // --patch 直接指向静态文件；launcher flag（--profile/--patch）必须位于应用参数
   // （--port）之前。静态文件缺失（安装不完整）时不挂任何 patch 记 warn（内嵌插件
   // 降级不可用，dsh 启动不受影响），不阻断 dsh 启动。
-  // 正规化升级：@dsh-hanako/settings 前身 dsh-hana-default-model 先行改包名注册；
-  // 本版 theme/provider 一并正规化——dsh client 模块发现按
-  // require.resolve('<name>/package.json') 找 package.json 的 dsh.client 声明，file://
-  // 形式无法解析。包名解析锚点是 $DSH_HOME/profiles（baseUrl 父目录的 node_modules），
-  // 启动前统一建 junction：$DSH_HOME/profiles/node_modules/
-  // <@dsh-hanako/theme|@dsh-hanako/provider|@dsh-hanako/settings|@dsh-hanako/logger> → 插件安装目录
-  // dsh-plugin/<同名包>（与 dsh 自维护的 junction farm 同机制；dsh 的
-  // healProfilesModuleFallback 只管理自身依赖闭包，不碰外来 link）。
-  // 无条件重建：每次启动删旧建新（不比较 readlink）——junction 状态无条件收敛到当前
-  // 代码期望，杜绝一切残留（悬空 junction / 指向旧路径）导致的解析失败；与 patch 每次
-  // 渲染覆盖同一哲学。存在性用 lstatSync（不跟随目标）判断——existsSync 沿目标解析，
-  // 悬空 junction 会误判不存在，导致 symlinkSync EEXIST。非 junction 同名实体报错
-  // 不静默覆盖。
-  const ensureCordisJunctions = (dshHome) => {
-    // @dsh-hanako scope 收敛（v0.18.1）：六个插件包统一命名空间（v0.22.1 +bridge），
-    // junction 名与包名一致（profiles/node_modules/@dsh-hanako/<pkg> → 插件安装目录
-    // dsh-plugin/@dsh-hanako/<pkg>）。顺带清理旧名遗留 junction（dsh-hana-* 前缀，
-    // 含 v0.13.0 改名前的 dsh-hana-default-model / dsh-hana-proxy 等历史残留），
-    // 无条件收敛到当前命名，杜绝混装。
-    const packages = [
-      {
-        link: "@dsh-hanako/theme",
-        target: join(PLUGIN_ROOT, "dsh-plugin", "@dsh-hanako", "theme"),
-      },
-      {
-        link: "@dsh-hanako/provider",
-        target: join(PLUGIN_ROOT, "dsh-plugin", "@dsh-hanako", "provider"),
-      },
-      {
-        link: "@dsh-hanako/settings",
-        target: join(PLUGIN_ROOT, "dsh-plugin", "@dsh-hanako", "settings"),
-      },
-      {
-        link: "@dsh-hanako/logger",
-        target: join(PLUGIN_ROOT, "dsh-plugin", "@dsh-hanako", "logger"),
-      },
-      {
-        link: "@dsh-hanako/clipboard",
-        target: join(PLUGIN_ROOT, "dsh-plugin", "@dsh-hanako", "clipboard"),
-      },
-      {
-        link: "@dsh-hanako/bridge",
-        target: join(PLUGIN_ROOT, "dsh-plugin", "@dsh-hanako", "bridge"),
-      },
-    ];
-    const nmDir = join(dshHome, "profiles", "node_modules");
-    // 清理旧名 junction：profiles/node_modules 下 dsh-hana-*（非 @dsh-hanako scope）
-    // 的符号链接一律删（旧插件实例遗留，如 dsh-hana-default-model / dsh-hana-proxy）
-    try {
-      const legacy = readdirSync(nmDir).filter(
-        (n) => n.startsWith("dsh-hana-") && !n.startsWith("@"),
-      );
-      for (const name of legacy) {
-        const p = join(nmDir, name);
-        try {
-          if (lstatSync(p).isSymbolicLink()) {
-            unlinkSync(p);
-            console.log(`[dsh-run] 清理旧插件 junction：${name}`);
-          }
-        } catch {
-          /* 非链接或已删：忽略 */
-        }
-      }
-    } catch {
-      /* nmDir 不存在/读失败：忽略（下方 mkdir 兜底） */
-    }
-    for (const pkg of packages) {
-      const link = join(nmDir, ...pkg.link.split("/"));
-      try {
-        let existed = false;
-        let isLink = false;
-        try {
-          isLink = lstatSync(link).isSymbolicLink();
-          existed = true;
-        } catch {
-          /* 不存在（含 lstat 失败） */
-        }
-        if (existed && !isLink)
-          throw new Error(link + " 已存在且不是符号链接请移除后重试");
-        if (existed) unlinkSync(link);
-        mkdirSync(dirname(link), { recursive: true });
-        symlinkSync(pkg.target, link, IS_WIN ? "junction" : null);
-      } catch (e) {
-        // 符号链接创建失败降级：仅记 warn，不阻断 dsh 启动——对应插件会退化为
-        // 不可用（client 模块未发现），后端路由与其余插件不受影响
-        console.warn(
-          `[dsh-run] ${pkg.link} junction 创建失败（${e?.message || e}），该插件将不可用`,
-        );
-      }
-    }
-  };
-
   // 静态 patch：dsh-plugin/dsh-hanako.patch.yml（v0.22.1+ tpl 整层退役）——
   // 纯 insert 六个内嵌插件（logger/clipboard/theme/provider/settings/bridge），全部
   // 零 config：busToken 免鉴权（任务 A）、config 经总线下发（任务 B）、logPath 占位符
@@ -575,8 +451,15 @@ export async function ensureWebHost(cfg) {
     );
   }
   const patchArgs = patchFiles.flatMap((p) => ["--patch", p]);
-  // 四段 cordis 插件均以包名注册，spawn 前确保 junction 就绪（幂等）
-  ensureCordisJunctions(dshHome);
+  // 六段 cordis 插件均以包名注册，spawn 前确保 junction 就绪（幂等，无条件收敛）——
+  // 经统一迁移入口调度 junction-converge 步骤（旧名清理 + @dsh-hanako scope 重建）。
+  // 非链接碰撞（确定性冲突）由迁移步骤抛出 → runMigrations 记录 error → 此处拒绝
+  // 启动（带病启动会导致插件模块解析失败）；symlink 环境性失败仍为 warn 降级不阻断。
+  const mig = runMigrations(cfg, { steps: ["junction-converge"] });
+  const jm = mig.find((m) => m.id === "junction-converge");
+  if (jm && !jm.ok && /不是符号链接/.test(jm.error || "")) {
+    throw new Error("junction 收敛失败：" + (jm.error || "非链接碰撞"));
+  }
   // launcher flag（--profile/--patch）必须位于应用参数（--port）之前；且 --patch 是
   // 顶层 dsh 选项，必须位于 --profile 之前（dsh 0.1.x：--profile 之后的参数视为
   // web app 参数，--patch 会被 web app 拒为 unknown option）
@@ -915,19 +798,22 @@ function ensureProviderPushWatch(cfg) {
 // ---- 更新 DSH（能力层）：停 web host（closeProcess——回收子进程，Windows 文件锁前提：
 // npm i 要替换被 web host 占用的 dsh 包文件）→ installDepsFromPlugin（npm i
 // @deepseek-ai/dsh = 装 latest，成功即新版本）→ 起 web host（ensureWebHost，失败不阻断
-// 结果上报，记 error 字段）→ 读新版本。全程写 <dataDir>/update-result.json
-// { state: done|error, version?, error?, at }（dsh 设置页 update-status 一次性查询读；
-// v0.22.1+ 事件化：开始/完成经总线 emit update.progress/update.result，设置页事件缓存）。
-// 并发防护：g.updating 进行中重复调用返回 { ok:false, state:"updating" } 不重复执行；
-// 与 installDepsFromPlugin 内部 g.depsInstalling 独立（本标志管整条更新流程）。----
+// 结果上报，记 error 字段）→ 读新版本。结果走内存态分组 g.update = { status, result,
+// error, time, log }（v0.24 状态收敛：update-result.json 退役——总线事件化已打通
+// update.progress/result + 断线排队补发，设置页依赖总线、Agent 工具结果全走内存态，
+// 文件兜底场景不存在；遗留文件由 migrate.js cleanup-update-result 步骤删除）。
+// v0.22.1+ 事件化：开始/完成经总线 emit update.progress/update.result，设置页事件缓存。
+// 并发防护：g.update.status === "running" 进行中重复调用返回 { ok:false, state:"updating" }
+// 不重复执行；与 installDepsFromPlugin 内部 g.deps.status 独立（本状态管整条更新流程）。
+// status 状态机：入口置 running、成功置 ok、catch 置 error——finally 不重置（终态保留，
+// 下次更新入口才回到 running）；g.update.result = updateDsh 返回值终态对象。----
 export async function updateDsh(cfg) {
   const g = getSingleton();
-  if (g.updating) return { ok: false, state: "updating" };
-  g.updating = true;
-  g.updateError = null;
+  if (g.update.status === "running") return { ok: false, state: "updating" };
+  g.update.status = "running";
+  g.update.error = null;
+  g.update.time = new Date().toISOString();
   const dataDir = cfg.dataDir || g.dataDir;
-  const resultFile = join(dataDir, "update-result.json");
-  const stamp = () => new Date().toISOString();
   const log = (s) => {
     try {
       g.appendLog?.("hana", `[DSH 更新] ${s}`);
@@ -936,24 +822,15 @@ export async function updateDsh(cfg) {
     }
     console.log(`[dsh-run] DSH 更新：${s}`);
   };
-  const writeResult = (obj) => {
-    try {
-      mkdirSync(dataDir, { recursive: true });
-      writeFileSync(resultFile, JSON.stringify(obj), "utf8");
-    } catch (e) {
-      log(`update-result.json 写入失败：${e?.message || e}`);
-    }
-  };
   try {
     // ① 进度态（事件化：bus emit update.progress 直投设置页事件缓存——v0.22.1+
-    // 替代前端 2s 轮询 update-status；update-result.json 读回保留作兜底）
-    writeResult({ state: "updating", at: stamp() });
-    emitBus("update.progress", { state: "updating", at: stamp() });
+    // 替代前端 2s 轮询 update-status；不再写文件，结果走内存态 g.update）
+    emitBus("update.progress", { state: "updating", at: g.update.time });
     // ② 停 web host（Windows 文件锁前提）
     log("停止 web host…");
     await closeProcess();
-    // ③ 装 latest（installDepsFromPlugin 内部有 g.depsInstalling 防并发；成功后
-    // 会自动运行级重验刷新 g.depsSmoke）
+    // ③ 装 latest（installDepsFromPlugin 内部有 g.deps.status === "installing" 防并发；
+    // 成功后会自动运行级重验刷新 g.deps.result）
     log("执行 pnpm add @deepseek-ai/dsh（latest）…");
     const install = await installDepsFromPlugin(cfg, dataDir);
     if (!install || !install.ok)
@@ -973,20 +850,27 @@ export async function updateDsh(cfg) {
     ensureProviderPushWatch(cfg);
     // 重启用进程后首批 provider 的初始 push 已由 ensureWebHost（唯一就绪点）
     // 发出；此处只重建跟随 watch，不再重复 push。
-    // ⑤ 读新版本 → done（installDepsFromPlugin 已刷新 g.depsSmoke，优先用；无则直读 package.json）
+    // ⑤ 读新版本 → done（installDepsFromPlugin 已刷新 g.deps.result，优先用；无则直读 package.json）
     const version =
-      (g.depsSmoke && !g.depsSmoke.running && g.depsSmoke.ok
-        ? g.depsSmoke.version
+      (g.deps.result && !g.deps.result.running && g.deps.result.ok
+        ? g.deps.result.version
         : null) ||
       readDshInstalledVersion({ ...cfg, dataDir }) ||
       null;
-    writeResult({
+    const result = {
+      ok: true,
       state: "done",
       version,
       ...(restartError ? { error: restartError } : {}),
-      at: stamp(),
-    });
-    // 事件化：bus emit update.result（设置页事件缓存；update-result.json 兜底）
+    };
+    // 终态对象写入 g.update.result（= updateDsh 返回值，单一事实源；不再写 update-result.json）
+    g.update.result = result;
+    // 重启失败也是「本次更新的错误」：同步进 g.update.error（诊断 buildDepsDiagCheck
+    // 的 updateError 查找可见），result 与总线事件中的 error 数据均保留
+    if (restartError) g.update.error = restartError;
+    g.update.status = "ok";
+    g.update.time = new Date().toISOString(); // 终态时刻（卡片/诊断的完成时间）
+    // 事件化：bus emit update.result（设置页事件缓存；无文件兜底——update-result.json 已退役）
     emitBus("update.result", {
       state: "done",
       ...(version ? { version } : {}),
@@ -995,24 +879,19 @@ export async function updateDsh(cfg) {
     log(
       `更新完成（version=${version || "未知"}${restartError ? "，web host 重启失败：" + restartError : ""}）`,
     );
-    return {
-      ok: true,
-      state: "done",
-      version,
-      ...(restartError ? { error: restartError } : {}),
-    };
+    return result;
   } catch (e) {
     const err = String(e?.message || e).slice(0, 1500);
-    g.updateError = err;
-    writeResult({ state: "error", error: err, at: stamp() });
+    g.update.error = err;
+    g.update.result = { ok: false, state: "error", error: err };
+    g.update.status = "error";
+    g.update.time = new Date().toISOString(); // 终态时刻（失败时刻）
     // 事件化：bus emit update.result（失败态）
     emitBus("update.result", { state: "error", error: err });
     log(`更新失败：${err}`);
     return { ok: false, state: "error", error: err };
-  } finally {
-    // ⑥ 解锁（更新请求信道已由 dshana.bus 消息总线受理，无请求文件可清理）
-    g.updating = false;
   }
+  // 无 finally 重置——终态（ok/error）保留，下次更新入口才回到 running
 }
 // 经总线 emit（best-effort：bus 未连接 no-op，不阻断主流程；事件缓存由设置页后端维护）
 function emitBus(channel, payload) {
@@ -1036,8 +915,11 @@ getSingleton().startWebHost = async function startWebHostFromPlugin(
     if (v !== undefined && v !== null && v !== "") cfg[k] = v;
   }
   cfg.dataDir = ctxDataDir || join(PLUGIN_ROOT, "data");
-  // 插件初始化（拉起 web host）即自动生成 config.json（不存在时按 manifest 默认值）
-  ensureConfigJson(cfg);
+  // 插件初始化（拉起 web host）即自动生成 config.json（不存在时按 manifest 默认值；
+  // 幂等不覆盖已有配置）+ 清理退役的 update-result.json 遗留文件——经统一迁移入口
+  // 调度 config-schema / cleanup-update-result 步骤（src/migrate.js；不得跑全量——
+  // archive-old-logs 须在建会话文件前单独调度，见 index.js onload）
+  runMigrations(cfg, { steps: ["config-schema", "cleanup-update-result"] });
   // 单例记数据目录（dsh_session 经 g.dataDir 定位 dsh 会话缓存等数据文件）
   getSingleton().dataDir = cfg.dataDir;
   if (!cfg.dshPkgDir) cfg.dshPkgDir = resolveDshPkgDir(cfg);
@@ -1102,7 +984,7 @@ export function collectWebDiagnostics(cfg = {}) {
       (g.web?.dshHome ? dirname(g.web.dshHome) : "");
     const diagCfg = { ...cfg, dataDir };
     // 不再自动触发运行级检测（去掉 maybeTriggerDepsSmoke）——检测改为「进标签页
-    // 自动一次 + 手动「检测依赖」按钮」，经 GET /webui/verify-deps 路由驱动；g.depsSmoke
+    // 自动一次 + 手动「检测依赖」按钮」，经 GET /webui/verify-deps 路由驱动；g.deps.result
     // 只存最近一次检测结果供诊断展示（不随 3s 轮询重复 spawn）。
     out.checks.push(buildDepsDiagCheck(g, diagCfg));
     out.checks.push(buildProcessDiagCheck(g, out));
@@ -1120,11 +1002,14 @@ export function collectWebDiagnostics(cfg = {}) {
 }
 
 /** ① dsh 依赖：cliBin 存在性（resolveDshPkgDir 同款：数据目录 dsh-pkg 优先，插件根兑底）
- * v0.8.6: 叠加部署状态——g.depsInstalling（npm i 进行中）/ g.depsInstallError（上次失败）/ g.depsInstallLog
- * v0.8.7: 叠加运行级完整性验证——g.depsSmoke（verifyDepsSmoke 缓存 { ok, version, error, stderr, at, running }）。
+ * v0.8.6: 叠加部署状态——g.deps.status（installing 进行中）/ g.deps.error（上次失败）/ g.deps.log
+ * v0.8.7: 叠加运行级完整性验证——g.deps.result（verifyDepsSmoke 缓存 { ok, version, error, stderr, at, running }）。
+ * v0.24: 单例分组结构化——g.deps = { status, result, error, time, log }、g.update =
+ * { status, result, error, time, log }、g.check = { status, result, error, time, log }
+ * （旧平铺字段全废；update-result.json 退役，updateResult 改内存态组合）。
  * v0.13.0: 叠加版本/检查/更新状态——version（当前版本）、check（最近一次 checkDshUpdate
  * 缓存：latest/updateAvailable/at/error）、checking/updating（进行中）、updateResult
- * （update-result.json 文件内容：state/version/error/at）——deps 卡片版本行 + 「检查更新」
+ * （内存态：g.update.status + g.update.result.version）——deps 卡片版本行 + 「检查更新」
  * 「更新 DSH」按钮数据源。
  * ok 判定升级：存在 且（未验证/验证中视为暂通过，验证过必须通过）——文件存在 ≠ 依赖完整。 */
 function buildDepsDiagCheck(g, cfg) {
@@ -1149,13 +1034,13 @@ function buildDepsDiagCheck(g, cfg) {
     ),
   ];
   const installed = existsSync(cliBin);
-  // 部署状态（installDeps 写入单例；只回非敏感布尔与截断文本）
-  const installing = Boolean(g.depsInstalling);
-  const installError = String(g.depsInstallError || "").slice(0, 300);
-  const installLog = String(g.depsInstallLog || "").slice(-800);
-  const installAt = g.depsInstallAt || null; // 最近一次 npm i 输出时间（实时进度）
-  // 运行级验证状态（verifyDepsSmoke 缓存；非敏感：布尔/版本号/截断错误文本）
-  const smoke = g.depsSmoke || null;
+  // 部署状态（installDeps 写入单例分组 g.deps；只回非敏感布尔与截断文本）
+  const installing = g.deps.status === "installing";
+  const installError = String(g.deps.error || "").slice(0, 300);
+  const installLog = String(g.deps.log || "").slice(-800);
+  const installAt = g.deps.time || null; // 最近一次 npm i 输出时间（实时进度）
+  // 运行级验证状态（verifyDepsSmoke 缓存于 g.deps.result；非敏感：布尔/版本号/截断错误文本）
+  const smoke = g.deps.result || null;
   const verifyRunning = Boolean(smoke?.running);
   const verified = installed && smoke ? Boolean(smoke.ok) : null; // null = 未安装/未验证过（暂通过）
   const verifyError =
@@ -1175,23 +1060,29 @@ function buildDepsDiagCheck(g, cfg) {
     ? String(smoke.pnpmError).slice(0, 300)
     : null;
   // 当前版本（运行级验证缓存优先，无则直读 dsh-pkg package.json）+ 版本检查
-  // 状态（g.checkResult 缓存：最近一次 checkDshUpdate 结果）+ 更新状态（g.updating /
-  // g.updateError + update-result.json 文件内容）。只回非敏感布尔/版本号/截断文本。
+  // 状态（g.check.result 缓存：最近一次 checkDshUpdate 结果）+ 更新状态（g.update.status /
+  // g.update.error + 内存态 updateResult，v0.24 起不再读 update-result.json）。
+  // 只回非敏感布尔/版本号/截断文本。
   const currentVersion =
     (smoke && !smoke.running && smoke.ok ? smoke.version : null) ||
     readDshInstalledVersion(cfg) ||
     null;
-  const checkResult = g.checkResult || null;
-  const checking = Boolean(g.checking);
-  const updating = Boolean(g.updating);
-  const updateError = String(g.updateError || "").slice(0, 300);
-  let updateResult = null;
-  try {
-    const uf = join(cfg.dataDir, "update-result.json");
-    if (existsSync(uf)) updateResult = JSON.parse(readFileSync(uf, "utf8"));
-  } catch {
-    /* 解析失败忽略 */
-  }
+  const checkResult = g.check.result || null;
+  const checking = g.check.status === "running";
+  const updating = g.update.status === "running";
+  const updateError = String(g.update.error || "").slice(0, 300);
+  // 更新结果内存态组合（v0.24：update-result.json 退役，不再读文件；状态 + 终态版本 +
+  // 错误 + 时间，version 更新终态优先、依赖验证缓存兜底）
+  // 状态值域映射：g.update.status（idle/running/ok/error）→ 诊断对外契约值
+  // （done/updating/error；webui-shell.jinja2 按 state === "done" 渲染完成文案）
+  const updateState =
+    { ok: "done", running: "updating" }[g.update.status] || g.update.status;
+  const updateResult = {
+    state: updateState,
+    version: g.update.result?.version || g.deps.result?.version || null,
+    error: g.update.error || null,
+    at: g.update.time || null,
+  };
   // ok：存在 且（未验证/验证中暂通过；验证过必须通过）——验证失败 → ok=false
   const ok = installed && (!smoke || smoke.ok || smoke.running);
   const check = {
