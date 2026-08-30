@@ -29,7 +29,7 @@ description: "dsh_approve 工具手册（源码 tools/dsh-approve.js 核对）�
    ```
    args 来源：事件循环按 callId 从 toolCallCache 反查（tool/call 与 code-dispatch 子调用 subCallId 形如 `root:code:N` 均缓存；miss 时剥 `:code:N` 后缀回退 run_code 根调用兜底）。
 3. **决策**：**看 args（具体执行了什么），不听 reason（model 自述）**。合理 → `allowed-once`；危险 → `rejected`。
-4. **应答**：`dsh_approve(rpcId, approvalId, outcome)`，内部调 web host `POST /api/respond`（client-response 信封，用审批对象的 `respondRpcId` 路由 pending 表）。
+4. **应答**：`dsh_approve(rpcId, approvalId, outcome)`，经总线 RPC（`callUnaryBus`，rpc.request/rpc.result 通道）发 `method="respond"`——bridge 在 dsh 进程内自环调 `POST /api/respond`（client-response 信封，用审批对象的 `respondRpcId` 路由 pending 表），回投 `{ accepted }` 校验 `j.accepted` 语义不变；总线未连接时降级 HTTP 直连。
 5. **超时**：`approvalTimeoutMs`（默认 30000；0 = 禁用）内无人应答自动 rejected（`auto: "expired"`）。应答方失联检测：正常应答几秒内完成。
 6. **恢复**：approval/resolved（allowed-once/rejected/cancelled 一律视为已解决）→ 清该审批超时计时器，无 pending 项时恢复任务执行计时。
 7. **兜底**：也可在 dsh Web UI 人工处理；通知失败不影响任务。
