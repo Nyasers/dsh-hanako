@@ -21,9 +21,9 @@ config.json 由宿主设置界面生成、**不随包分发**；defaultCwd 初�
 
 ## 依赖自主部署（页面自装首选，Agent pnpm add 兜底）
 
-dsh 依赖（@deepseek-ai/dsh + node-pty/koffi）位置：**数据目录 dsh-pkg/**（优先，升级不丢依赖）→ 插件目录 node_modules（zip 自带，兑底）。部署 = 在 pkgDir 写入**最小 package.json**（无 devDeps，插件根的 devDeps 是 rspack 构建树，不复制进部署目录）+ 复制插件根 `pnpm-workspace.yaml`（`allowBuilds` 白名单放行 dsh 树 build scripts）→ 在 pkgDir 下创建指向宿主 electron node 的代理脚本（node.cmd/node）→ 清理旧依赖残留（`package-lock.json` / `pnpm-lock.yaml` / 扁平 node_modules，npm 体系升级兼容）→ `node <pnpm 入口> add @deepseek-ai/dsh --reporter=ndjson`。pnpm 入口 = **运行时引导**（插件 `tools/lib/pnpm.js` `ensurePnpm`：下载 `pnpm-{version}` 的 `pnpm.mjs`（入口 CLI）+ `worker.js`（导入 worker，pnpm add 必需）到数据目录 `pnpm-dist/`，缓存独立于 dsh-pkg，zip 不再内置 node_modules/pnpm）。pnpm 11 的 `add` 命令不支持 `--omit` 旗标，最小 package.json 无 devDeps 即天然只装 dsh 运行时树。
+dsh 依赖（@deepseek-ai/dsh + node-pty/koffi）位置：**数据目录 dsh-pkg/**（优先，升级不丢依赖）→ 插件目录 node_modules（zip 自带，兑底）。部署 = 在 pkgDir 写入**最小 package.json**（无 devDeps，插件根的 devDeps 是 rspack 构建树，不复制进部署目录）+ 复制插件根 `pnpm-workspace.yaml`（`allowBuilds` 白名单放行 dsh 树 build scripts）→ 在 pkgDir 下创建指向解析后 node 执行体的代理脚本（node.cmd/node，优先有效 nodejsPath 配置，缺省 Electron 自带 node）→ 清理旧依赖残留（`package-lock.json` / `pnpm-lock.yaml` / 扁平 node_modules，npm 体系升级兼容）→ `node <pnpm 入口> add @deepseek-ai/dsh --reporter=ndjson`。pnpm 入口 = **运行时引导**（插件 `tools/lib/pnpm.js` `ensurePnpm`：下载 `pnpm-{version}` 的 `pnpm.mjs`（入口 CLI）+ `worker.js`（导入 worker，pnpm add 必需）到数据目录 `pnpm-dist/`，缓存独立于 dsh-pkg，zip 不再内置 node_modules/pnpm）。pnpm 11 的 `add` 命令不支持 `--omit` 旗标，最小 package.json 无 devDeps 即天然只装 dsh 运行时树。
 
-**页面自装（首选，v0.8.6+，无需 Agent）**：打开 DSHana 标签页（未就绪显示 t1/t2）→ deps 卡片点「安装依赖」→ 插件自动完成（停 web host → 写最小 package.json + 复制 pnpm-workspace.yaml 到 dsh-pkg → 创建 node 代理脚本（pkgDir/node.cmd → 宿主 electron node）→ 清旧 npm 残留 → `pnpm add @deepseek-ai/dsh --reporter=ndjson`（pnpm 入口为运行时引导产物，见上），PATH 首部指向 pkgDir 让 install script 找到宿主 node，官方源失败自动重试 npmmirror → 校验 cliBin → 自动运行级重验 `node cliBin --version`）。安装中显示实时进度（--reporter=ndjson 结构化事件流解析为可读进度行 + 更新时间，3s 轮询刷新）；完成后无需重启，去 t2 点「手动启动」。验证失败（「存在但依赖不完整」）→ 点「重新安装依赖」；可随时点「检测依赖」重验。**t1→t2 门禁**：t1 未过（缺失/验证失败/安装中/检测中）时 t2 按钮禁用（msg「依赖未就绪，请先安装/重新安装依赖」）。
+**页面自装（首选，v0.8.6+，无需 Agent）**：打开 DSHana 标签页（未就绪显示 t1/t2）→ deps 卡片点「安装依赖」→ 插件自动完成（停 web host → 写最小 package.json + 复制 pnpm-workspace.yaml 到 dsh-pkg → 创建 node 代理脚本（pkgDir/node.cmd → 解析后的 node 执行体：优先 nodejsPath，缺省 Electron node）→ 清旧 npm 残留 → `pnpm add @deepseek-ai/dsh --reporter=ndjson`（pnpm 入口为运行时引导产物，见上），PATH 首部指向 pkgDir 让 install script 找到宿主 node，官方源失败自动重试 npmmirror → 校验 cliBin → 自动运行级重验 `node cliBin --version`）。安装中显示实时进度（--reporter=ndjson 结构化事件流解析为可读进度行 + 更新时间，3s 轮询刷新）；完成后无需重启，去 t2 点「手动启动」。验证失败（「存在但依赖不完整」）→ 点「重新安装依赖」；可随时点「检测依赖」重验。**t1→t2 门禁**：t1 未过（缺失/验证失败/安装中/检测中）时 t2 按钮禁用（msg「依赖未就绪，请先安装/重新安装依赖」）。
 
 **手动兜底仅用于标签页不可访问的情况**。手动命令详见下方。
 
@@ -36,14 +36,14 @@ $pkgDir = <数据目录>/dsh-pkg
 # 首次会联网下载 pnpm.mjs + worker.js 到数据目录 pnpm-dist/）
 $pnpmCli = <数据目录>/pnpm-dist/pnpm-11.24.0/pnpm.mjs
 
-# 优先用本机已安装的 Node；无则需先创建 node 代理脚本指向宿主 electron node
+# 优先用本机已安装的 Node；无则需先创建 node 代理脚本指向解析后的 node 执行体（优先 nodejsPath，缺省 Electron 自带 node）
 $node = <本机 node.exe 绝对路径，如 C:\Program Files\nodejs\node.exe>
 & $node $pnpmCli add @deepseek-ai/dsh --reporter=ndjson
 ```
 
 > **注意**：koffi/node-pty 的 install script 会起子进程调用 `node`。本机 Node 已在 PATH 中时直接可用；若 PATH 缺 node，报 `'node' is not recognized` 时需要创建代理脚本。手动兜底前先停 web host（部署要删旧 node_modules，Windows 上被运行中进程加载的原生模块会锁文件）。
 
-- **无 --omit 旗标**：pnpm 11 的 add 命令不支持 `--omit`（报 Unknown option: 'omit'）；部署目录用最小 package.json（无 devDeps），pnpm add 天然只装 dsh 运行时树，不装 rspack 构建树（~40MB）。**不可用 --omit=peer**（跳过 dsh 的 peer → ERR_MODULE_NOT_FOUND）。allowBuilds 放行由 pnpm-workspace.yaml 提供（package.json 的 allowScripts 在 pnpm 11 不再读取）。pnpm 入口定位：运行时引导（`tools/lib/pnpm.js` `ensurePnpm` 下载 pnpm.mjs + worker.js 到数据目录 pnpm-dist/，zip 不再内置 pnpm；首次引导需联网，unpkg/jsdelivr 双源 + sha256 校验）。PATH 处理：代理脚本（pkgDir/node.cmd）将子进程 node 请求转发到宿主 electron node，PATH 首部指向 pkgDir 即可。
+- **无 --omit 旗标**：pnpm 11 的 add 命令不支持 `--omit`（报 Unknown option: 'omit'）；部署目录用最小 package.json（无 devDeps），pnpm add 天然只装 dsh 运行时树，不装 rspack 构建树（~40MB）。**不可用 --omit=peer**（跳过 dsh 的 peer → ERR_MODULE_NOT_FOUND）。allowBuilds 放行由 pnpm-workspace.yaml 提供（package.json 的 allowScripts 在 pnpm 11 不再读取）。pnpm 入口定位：运行时引导（`tools/lib/pnpm.js` `ensurePnpm` 下载 pnpm.mjs + worker.js 到数据目录 pnpm-dist/，zip 不再内置 pnpm；首次引导需联网，unpkg/jsdelivr 双源 + sha256 校验）。PATH 处理：代理脚本（pkgDir/node.cmd）将子进程 node 请求转发到解析后的 node 执行体（优先有效 nodejsPath 配置，缺省 Electron 自带 node），PATH 首部指向 pkgDir 即可。
 - **registry 镜像**：默认源失败切 `--registry=https://registry.npmmirror.com`（或持久化 `pnpm config set registry https://registry.npmmirror.com`）；镜像只影响 registry 层，koffi/node-pty 产物同源。重跑前残留不完整先 `Remove-Item node_modules -Recurse -Force`（会连带清 package-lock.json / pnpm-lock.yaml，全新构建）。
 - **部署后**：Agent 手动路径依赖就位后重启 Hana（tools 缓存）；页面自装无需重启。装完调一次 dsh_run 触发拉起。
 

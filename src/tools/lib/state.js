@@ -29,7 +29,7 @@
 // 变化点显式维护。g.update.log 定义为 getter 投影 g.deps.log（updateDsh 内部走
 // installDepsFromPlugin 写同一日志尾环，同源实时可见，不复制字符串）。
 
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -75,10 +75,18 @@ export function resolveNodeExec(opts) {
   }
   if (!custom) return process.execPath; // 未配置：Electron 自带 node
   if (custom === process.execPath) return custom; // 配置值即 Electron node
-  if (existsSync(custom)) return custom;
-  // 路径不存在：warn 降级回退 Electron node（不抛错崩流程）
+  // 必须是「常规可执行文件」才采用：目录 / 不可执行文件会在 spawn 时抛 EACCES/ENOEXEC
+  // 炸流程，在此直接降级回退 Electron node（warn 说明）。非 Windows 平台检查执行位
+  // （mode & 0o111）；Windows 无统一可执行位语义，isFile 即放行（.exe/.cmd/.bat 均
+  // 为普通文件）。
+  try {
+    const st = statSync(custom);
+    if (st.isFile() && (IS_WIN || (st.mode & 0o111) !== 0)) return custom;
+  } catch {
+    /* stat 失败（路径不存在等）：走降级 */
+  }
   console.warn(
-    "[dsh-hanako] nodejsPath 配置的路径不存在（" +
+    "[dsh-hanako] nodejsPath 配置的路径不存在或不可执行（" +
       custom +
       "），降级使用 Electron 自带 node",
   );

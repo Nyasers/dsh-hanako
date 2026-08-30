@@ -358,9 +358,11 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir) {
   const dataDir = ctxDataDir || g.dataDir || join(PLUGIN_ROOT, "data");
   cfg.dataDir = dataDir;
   // 子进程 node 解析（每次部署解析一次；wrapper 与 pnpm add 用同一解析结果——自定义
-  // nodejsPath 时 wrapper 也指向系统 node，macOS 签名校验问题一并解决）
-  const nodeExec = resolveNodeExec({ dataDir });
-  const nodeEnv = resolveNodeExecEnv({ dataDir });
+  // nodejsPath 时 wrapper 也指向系统 node，macOS 签名校验问题一并解决）。同时传
+  // dataDir（直读 config.json 的 global.nodejsPath，单一事实源）与 cfg.nodejsPath
+  // （配置快照兑底：global.nodejsPath 缺失/dev invoke 场景时仍能解析到自定义 node）
+  const nodeExec = resolveNodeExec({ dataDir, nodejsPath: cfg.nodejsPath });
+  const nodeEnv = resolveNodeExecEnv({ dataDir, nodejsPath: cfg.nodejsPath });
   g.deps.status = "installing";
   g.deps.error = null;
   g.deps.time = new Date().toISOString();

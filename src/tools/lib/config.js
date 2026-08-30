@@ -115,17 +115,17 @@ export function resolveApprovalTimeoutSec(cfg) {
 }
 
 // defaultTimeoutSec 解析（单次任务默认超时，单位：秒）：优先直读 dataDir/config.json 的
-// global.defaultTimeoutSec（设置界面改动即时生效）：数字 > 0 采用；非数字/缺失回退配置快照
-// cfg.defaultTimeoutSec（manifest 默认 1800）。旧键兼容：新键缺失且旧毫秒键存在时按毫秒
-// 换算（迁移尚未跑时的兜底；0 语义与旧实现一致——旧代码 `|| 600000` 把 0 视为
-// 未设置，此处同样回落 600s 硬编码兜底，不产生「0=禁用」歧义）。
+// global.defaultTimeoutSec（设置界面改动即时生效）：新键为合法数值即权威——正数采用，
+// 0/负数回落 600s 兑底（与旧 `|| 600000` 把 0 视为未设置的语义一致，不再 consult 旧键）；
+// 新键缺失/非数字回退配置快照 cfg.defaultTimeoutSec（manifest 默认 1800）。旧键兼容：
+// 新键不可用时旧毫秒键存在则按毫秒换算（迁移尚未跑时的兜底，保证升级不丢用户配置）。
 export function resolveDefaultTimeoutSec(cfg) {
   try {
     const cf = join(cfg.dataDir, "config.json");
     if (existsSync(cf)) {
       const j = JSON.parse(readFileSync(cf, "utf8"));
       const v = j?.global?.defaultTimeoutSec;
-      if (typeof v === "number" && Number.isFinite(v) && v > 0) return v;
+      if (typeof v === "number" && Number.isFinite(v)) return v > 0 ? v : 600;
       const old = msToSec(j?.global?.defaultTimeoutMs);
       if (old !== null && old > 0) return old;
     }

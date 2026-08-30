@@ -539,11 +539,35 @@ export async function ensureWebHost(cfg) {
     };
     if (g.web === web) g.web = null;
   });
+  // spawn 失败（node 路径不可执行 / EACCES / ENOENT 等）：子进程上触发 'error' 且不再
+  // 触发 'exit'——必须监听，否则 unhandled 'error' 事件会直接抛崩插件进程。处理：记入
+  // stderr/webLastExit 并置 web.spawnError，让下方 readyPromise 立即失败（否则空等端口
+  // 超时）；resolveNodeExec 已做可执行文件校验 + 降级，此处是兜底防御。
+  child.once("error", (err) => {
+    const msg = err?.message || String(err);
+    web.stderr += `\n[dsh web spawn 失败：${msg}]`;
+    emitLog("err", `dsh web spawn 失败：${msg}`);
+    web.spawnError = err;
+    g.webLastExit = {
+      code: null,
+      signal: null,
+      at: new Date().toISOString(),
+      stderr: web.stderr.slice(-800),
+      logPath,
+    };
+    if (g.web === web) g.web = null;
+  });
 
   // 等端口就绪（stdout 出现 "dsh web: http://" 或端口可连）
   const readyPromise = (async () => {
     const deadline = Date.now() + PORT_READY_TIMEOUT_MS;
     while (Date.now() < deadline) {
+      // spawn 失败（见 error 监听）：立即抛出，不等端口超时
+      if (web.spawnError) {
+        throw new Error(
+          `DSH web 进程 spawn 失败（node=${nodeExec}）：${web.spawnError.message}（完整日志：${logPath}）`,
+        );
+      }
       if (child.exitCode !== null) {
         throw new Error(
           `DSH web 进程提前退出 (code=${child.exitCode})：${web.stderr.slice(-1200) || "无 stderr"}（完整日志：${logPath}）`,

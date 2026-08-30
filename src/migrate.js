@@ -331,11 +331,18 @@ function migrateTimeoutSec(cfg) {
       return Math.max(1, Math.round(ms / 1000));
     };
     const converted = [];
-    // 单键换算：旧键存在且新键缺失（或非数字）→ 换算写新键删旧键；新键已存在 → 零动作
+    // 单键换算：旧键存在时——新键已存在且为合法数值 → 新键权威，删除残留旧键（清理
+    // 避免单位歧义；新键为 number 类型，宿主写入必为 number）；新键缺失/非数值 → 换算
+    // 写新键删旧键（旧值非数字则不动，读取侧快照兑底）；旧键不存在 → 零动作
     const convert = (oldKey, newKey) => {
       if (!(oldKey in g)) return; // 旧键不存在：零动作
-      if (newKey in g && g[newKey] !== undefined && g[newKey] !== null)
-        return; // 新键已存在：零动作（新键为权威，旧键残留无害——读取侧优先新键）
+      const nv = g[newKey];
+      if (typeof nv === "number" && Number.isFinite(nv)) {
+        // 新键已存在且为合法数值：权威新键，删残留旧键（读取侧新键优先，旧键不再 consult）
+        delete g[oldKey];
+        converted.push({ oldKey, newKey, removed: true, value: nv });
+        return;
+      }
       const s = msToSec(Number(g[oldKey]));
       if (s === null) return; // 旧值非数字：不动（读取侧快照兜底）
       g[newKey] = s;
