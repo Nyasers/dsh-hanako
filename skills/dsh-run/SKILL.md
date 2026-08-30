@@ -15,7 +15,7 @@ description: "dsh_run 工具调用手册（源码 tools/dsh-run.js 核对）。�
 |---|---|---|
 | `task` | string | 必填。作为用户消息发给 dsh agent；先 trim，空串抛 `task 不能为空`。应含完整上下文与明确交付物 |
 | `cwd` | string | 沙箱工作目录。缺省用 config.json `global.defaultCwd`。校验：`cwd 为空且未传 sessionId` 抛 `cwd 不能为空`；**resume（传 sessionId）时 cwd 可空，以会话已有 cwd 为准，传入值被忽略** |
-| `timeout` | number（秒） | `> 0` 才采用（×1000），否则 `defaultTimeoutMs`（manifest 默认 1800000=30min，可被 config.json 覆盖）。审批挂起时间不计入（见下） |
+| `timeout` | number（秒） | `> 0` 才采用（×1000），否则 `defaultTimeoutSec`（manifest 默认 1800=30min，可被 config.json 覆盖）。审批挂起时间不计入（见下） |
 | `wait` | boolean | false（默认）异步：立即返回 + 运行卡片 + 完成后台送达；true 同步：阻塞当前回合等最终结果直接返回 |
 | `agentPreset` | enum: standard/code/cordis/minimal | 显式传优先；缺省 config.json `global.agentPreset`（回退 standard）。code=工具呈现批量调用（适合读改文件 + node --check 编码序列）；standard=完整编码 agent；cordis=可读写运行时；minimal=精简 |
 | `reasoningEffort` | enum: off/high/max | v0.9.5 起无全局配置，只接受显式参数；不传为 null（dsh 默认处理，通常 high） |
@@ -51,7 +51,7 @@ ensureWebHost（resolveDshPkgDir 定位依赖 → spawn dsh web，DSH_HOME=数�
 
 ## 超时语义
 
-- 窗口 = `input.timeout × 1000` 或 `defaultTimeoutMs`（manifest 默认 30min）。
+- 窗口 = `input.timeout × 1000` 或 `defaultTimeoutSec × 1000`（manifest 默认 1800s=30min）。
 - **审批挂起暂停计时**：approval/requested 时扣减已流逝时间清 timer，全部审批解决后按 remaining 续算（外部决策等待不计入执行时间）；多审批以「无任何 pending 项」为准恢复。
 - 超时抛 `DSH_TIMEOUT`，随后 best-effort 调 session.cancel；取消抛 `DSH_ABORTED`。
 - 失败路径也带 usage（取消/超时前消耗可对账）；catch 以 `status: "error"` 终态收尾并落盘。
@@ -66,19 +66,19 @@ ensureWebHost（resolveDshPkgDir 定位依赖 → spawn dsh web，DSH_HOME=数�
 
 ## 审批（挂起 → dsh_approve 应答）
 
-dsh agent 请求越界权限时任务挂起，插件经 deferred 通知（taskId = `` `${rpcId}::approval::${approvalId}` ``，rpcId 为任务级 rpcId），payload 带 `toolName/callId/reason/args(命令路径原文)/taskPreview`。用 `dsh_approve(rpcId, approvalId, "allowed-once"/"rejected")` 应答（默认 allowed-once）；超时 `approvalTimeoutMs`（默认 30000，0=禁用）无人应答自动 rejected；也可靠 Web UI 人工处理。**决策看 args（执行了什么），不听 reason（model 自述）**。详见 dsh-approve 技能。
+dsh agent 请求越界权限时任务挂起，插件经 deferred 通知（taskId = `` `${rpcId}::approval::${approvalId}` ``，rpcId 为任务级 rpcId），payload 带 `toolName/callId/reason/args(命令路径原文)/taskPreview`。用 `dsh_approve(rpcId, approvalId, "allowed-once"/"rejected")` 应答（默认 allowed-once）；超时 `approvalTimeoutSec`（默认 30s，0=禁用）无人应答自动 rejected；也可靠 Web UI 人工处理。**决策看 args（执行了什么），不听 reason（model 自述）**。详见 dsh-approve 技能。
 
 ## 配置单一事实源（resolve* 函数）
 
-defaultCwd / approvalTimeoutMs 优先直读 `<dataDir>/config.json` 的 `global.*`（设置界面或 Agent 直写都即时生效），无则回退快照 → manifest 默认。**config.json 由插件自动初始化**（ensureConfigJson：无文件时按 manifest 默认值生成，幂等不覆盖、原子写、失败静默），全新安装免手动保存。**「改完都要重启 Hana」不成立**（仅 tools 模块缓存场景需重启）。
+defaultCwd / approvalTimeoutSec / defaultTimeoutSec / nodejsPath 优先直读 `<dataDir>/config.json` 的 `global.*`（设置界面或 Agent 直写都即时生效），无则回退快照 → manifest 默认。旧毫秒键（approvalTimeoutMs / defaultTimeoutMs）由迁移自动换算为秒并删除，读取侧也保留旧键兜底（迁移未跑时不丢配置）。**config.json 由插件自动初始化**（ensureConfigJson：无文件时按 manifest 默认值生成，幂等不覆盖、原子写、失败静默），全新安装免手动保存。**「改完都要重启 Hana」不成立**（仅 tools 模块缓存场景需重启）。
 
 下表为 manifest 默认值（随包分发的事实）；实际生效值以 config.json 为准（未覆盖时等于默认）：
 
 | 配置 | manifest 默认 | 备注 |
 |---|---|---|
 | agentPreset | standard | 工具显式传时优先 |
-| approvalTimeoutMs | 30000 | 0/负数 = 禁用超时拒绝 |
-| defaultTimeoutMs | 1800000 (30min) | 未显式传 timeout 时用；可被 config.json 覆盖 |
+| approvalTimeoutSec | 30 | 单位：秒；0/负数 = 禁用超时拒绝 |
+| defaultTimeoutSec | 1800 (30min) | 单位：秒；未显式传 timeout 时用；可被 config.json 覆盖 |
 | webPort | 3080 | 0 不生效 |
 
 依赖位置：数据目录 `dsh-pkg/` 优先（升级不丢），回退插件 node_modules。

@@ -51,8 +51,8 @@ import {
   getSingleton,
   PLUGIN_ROOT,
   manifestDefaults,
-  ELECTRON_NODE,
-  ELECTRON_NODE_ENV,
+  resolveNodeExec,
+  resolveNodeExecEnv,
 } from "./tools/lib/state.js";
 // 统一版本迁移入口（注册表式调度器）：config.json schema 初始化/升级（config-schema）
 // 与 cordis junction 收敛（junction-converge）迁入本模块后由 migrate.js 统一调度——
@@ -469,8 +469,12 @@ export async function ensureWebHost(cfg) {
   // （node-addon-require-builtin: Unsupported/no-getter (arm64 …)），导致 `dsh web` boot 崩溃。
   // 显式注入 flag 切到 require('internal/modules/esm/loader') 直连路径，绕开崩溃 addon；
   // Windows x64 等其余平台走直连同样成立、行为不变（Hana 内置 node 24.15，v2 loader）。
+  // 子进程 node 解析（每次 spawn 前解析，运行期改 nodejsPath 即时生效）：默认
+  // Electron 自带 node（ELECTRON_RUN_AS_NODE=1）；配置自定义系统 node 时用自定义路径
+  // （macOS 上 Electron 内嵌 node 签名校验失败场景的解法）
+  const nodeExec = resolveNodeExec(cfg);
   const child = spawn(
-    ELECTRON_NODE,
+    nodeExec,
     [
       "--expose-internals",
       cliBin,
@@ -489,7 +493,7 @@ export async function ensureWebHost(cfg) {
       // 恒不注入 API Key 环境变量——凭据由 @dsh-hanako/provider 插件直读
       // 宿主 provider-catalog.json（dsh models 页/任务均走 Hana 宿主 provider）
       env: {
-        ...ELECTRON_NODE_ENV,
+        ...resolveNodeExecEnv(cfg),
         DSH_HOME: dshHome,
         DSH_TELEMETRY_DISABLED: "1",
       },
@@ -916,10 +920,12 @@ getSingleton().startWebHost = async function startWebHostFromPlugin(
   }
   cfg.dataDir = ctxDataDir || join(PLUGIN_ROOT, "data");
   // 插件初始化（拉起 web host）即自动生成 config.json（不存在时按 manifest 默认值；
-  // 幂等不覆盖已有配置）+ 清理退役的 update-result.json 遗留文件——经统一迁移入口
-  // 调度 config-schema / cleanup-update-result 步骤（src/migrate.js；不得跑全量——
-  // archive-old-logs 须在建会话文件前单独调度，见 index.js onload）
-  runMigrations(cfg, { steps: ["config-schema", "cleanup-update-result"] });
+  // 幂等不覆盖已有配置）+ 清理退役的 update-result.json 遗留文件 + 超时配置毫秒→秒
+  // 迁移——经统一迁移入口调度 config-schema / cleanup-update-result / timeout-sec 步骤
+  // （src/migrate.js；不得跑全量——archive-old-logs 须在建会话文件前单独调度，见 index.js onload）
+  runMigrations(cfg, {
+    steps: ["config-schema", "cleanup-update-result", "timeout-sec"],
+  });
   // 单例记数据目录（dsh_session 经 g.dataDir 定位 dsh 会话缓存等数据文件）
   getSingleton().dataDir = cfg.dataDir;
   if (!cfg.dshPkgDir) cfg.dshPkgDir = resolveDshPkgDir(cfg);

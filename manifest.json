@@ -47,17 +47,23 @@
           "title": "默认工作目录",
           "description": "dsh agent 的沙箱工作目录（bash 与文件系统工具的活动范围）。初始为空（不预设路径），建议安装后设置为你自己的项目工作目录；工具调用显式传 cwd 时优先。"
         },
-        "approvalTimeoutMs": {
+        "approvalTimeoutSec": {
           "type": "number",
-          "default": 30000,
-          "title": "审批超时自动拒绝（毫秒）",
-          "description": "审批唯一配置。dsh agent 请求越界权限时任务挂起，插件通知 Agent 应答（附命令/路径原文）；挂起超过该时长无人应答自动 rejected（默认 30s：应答方失联检测，正常应答几秒内完成；宿主重启场景由会话中断兜底，不走超时拒绝）；0=禁用超时拒绝。改后对新审批立即生效。"
+          "default": 30,
+          "title": "审批超时自动拒绝（秒）",
+          "description": "审批唯一配置（单位：秒）。dsh agent 请求越界权限时任务挂起，插件通知 Agent 应答（附命令/路径原文）；挂起超过该时长无人应答自动 rejected（默认 30 秒：应答方失联检测，正常应答几秒内完成；宿主重启场景由会话中断兜底，不走超时拒绝）；0=禁用超时拒绝。改后对新审批立即生效。旧键 approvalTimeoutMs（毫秒）由迁移自动换算并删除。"
         },
-        "defaultTimeoutMs": {
+        "defaultTimeoutSec": {
           "type": "number",
-          "default": 1800000,
-          "title": "默认超时（毫秒）",
-          "description": "单次任务默认超时，工具调用未显式传 timeout 时使用。默认 30 分钟。"
+          "default": 1800,
+          "title": "默认超时（秒）",
+          "description": "单次任务默认超时（单位：秒），工具调用未显式传 timeout 时使用。默认 1800 秒（30 分钟）。旧键 defaultTimeoutMs（毫秒）由迁移自动换算并删除。"
+        },
+        "nodejsPath": {
+          "type": "string",
+          "default": "",
+          "title": "自定义 Node.js 路径",
+          "description": "可选：指定系统安装的 node 可执行文件绝对路径（如 /opt/homebrew/bin/node）。留空（默认）用 Electron 自带 node。macOS 上 Electron 内嵌 node 跑 pnpm 会触发签名校验失败（Electron 的 node 二进制非标准 node 签名），此时填系统 node 绝对路径解决。路径不存在时警告并降级回退 Electron node。改后对下一次子进程（pnpm / web host / wrapper）立即生效。"
         }
       }
     },

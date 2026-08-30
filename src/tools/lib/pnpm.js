@@ -46,8 +46,8 @@ import { join } from "node:path";
 import {
   getSingleton,
   PLUGIN_ROOT,
-  ELECTRON_NODE,
-  ELECTRON_NODE_ENV,
+  resolveNodeExec,
+  resolveNodeExecEnv,
 } from "./state.js";
 
 // ---- 版本单一事实源：package.json packageManager 字段（"pnpm@11.24.0" → "11.24.0"）----
@@ -298,9 +298,10 @@ async function cacheIntact(cacheDir) {
   return true;
 }
 
-// ---- runPnpm：spawn 宿主 electron node（ELECTRON_RUN_AS_NODE=1）+ pnpm 入口 ----
+// ---- runPnpm：spawn node（Electron 自带 node 或自定义 nodejsPath，每次 spawn 前解析）+ pnpm 入口 ----
 // opts：{ pnpmCli（已引导的入口，缺省内部 ensurePnpm）, cwd, env（缺省
-// ELECTRON_NODE_ENV）, timeoutMs（超时 kill）, onStdout/onStderr（逐 chunk 回调，
+// resolveNodeExecEnv(opts)——ELECTRON_RUN_AS_NODE=1 仅 Electron node 注入，自定义
+// node 不注入）, timeoutMs（超时 kill）, onStdout/onStderr（逐 chunk 回调，
 // 供 install.js 实时流式日志）}。返回 { code, stdout, stderr }；spawn/运行错误 reject。
 export async function runPnpm(args, opts = {}) {
   const pnpmCli = opts.pnpmCli || (await ensurePnpm(opts));
@@ -308,10 +309,10 @@ export async function runPnpm(args, opts = {}) {
   return new Promise((resolve, reject) => {
     let child;
     try {
-      child = spawn(ELECTRON_NODE, [pnpmCli, ...argv], {
+      child = spawn(resolveNodeExec(opts), [pnpmCli, ...argv], {
         cwd: opts.cwd,
         stdio: ["ignore", "pipe", "pipe"],
-        env: opts.env || ELECTRON_NODE_ENV,
+        env: opts.env || resolveNodeExecEnv(opts),
         windowsHide: true,
       });
     } catch (e) {

@@ -25,7 +25,8 @@ import {
   readDshDefaultModel,
   readDshDefaultPreset,
   resolveReasoningEffort,
-  resolveApprovalTimeoutMs,
+  resolveApprovalTimeoutSec,
+  resolveDefaultTimeoutSec,
   resolveDefaultCwd,
 } from "./lib/config.js";
 import {
@@ -429,7 +430,7 @@ function submitTask(
             // 调用 dsh_approve 工具应答；无人应答仍可在 dsh Web UI 人工处理。
             // 审批固定形态——挂起 → deferred 通知 Agent（附 tool/call 参数原文，
             // 见 notifyApprovalWake）→ Agent 用 dsh_approve 应答；无人应答超时自动拒绝
-            // （approvalTimeoutMs，默认 30s 应答方失联检测，0=禁用）。不再有白名单自动放行
+            // （approvalTimeoutSec，默认 30s 应答方失联检测，0=禁用）。不再有白名单自动放行
             // 或 manual/auto 模式切换：全部审批都交 Agent 处理。
             const g = getSingleton();
             const op = g.ops.get(sessionId);
@@ -473,7 +474,7 @@ function submitTask(
                 op.activeApprovals.push(approval);
                 // 统一流程：所有审批都通知 Agent 应答（不区分 manual/auto，无白名单）。
                 // 通知附带命令/路径原文（approval.args）；挂起后暂停执行超时计时（外部决策等待
-                // 不计入执行时间），并挂审批超时拒绝计时器（approvalTimeoutMs，0=禁用）。
+                // 不计入执行时间），并挂审批超时拒绝计时器（approvalTimeoutSec，0=禁用）。
                 notifyApprovalWake({
                   bus: bus ?? getSingleton().bus,
                   sessionPath,
@@ -482,8 +483,8 @@ function submitTask(
                   task: taskText,
                 });
                 pauseTimeout(); // 审批挂起：暂停执行超时计时（外部决策等待不计入执行时间）
-                const timeoutMs = resolveApprovalTimeoutMs(cfg);
-                if (timeoutMs > 0) {
+                const timeoutSec = resolveApprovalTimeoutSec(cfg); // 秒；0=禁用
+                if (timeoutSec > 0) {
                   const timerKey = `${taskRpcId}::${approval.approvalId}`;
                   const t = setTimeout(() => {
                     approvalTimers.delete(timerKey); // 计时器已触发：从表移除
@@ -511,7 +512,7 @@ function submitTask(
                           /* 拒绝失败忽略：审批保持 pending，等人工或 web UI */
                         });
                     }
-                  }, timeoutMs);
+                  }, timeoutSec * 1000); // 秒 → 毫秒（setTimeout 需要毫秒；0=禁用已在上方过滤）
                   approvalTimers.set(timerKey, t);
                 }
               }
@@ -767,7 +768,7 @@ export const parameters = {
     timeout: {
       type: "number",
       description:
-        "超时秒数，缺省用插件配置 defaultTimeoutMs。长任务建议显式调大。",
+        "超时秒数，缺省用插件配置 defaultTimeoutSec（单位：秒）。长任务建议显式调大。",
     },
     wait: {
       type: "boolean",
@@ -828,9 +829,9 @@ async function doExecute(input, ctx) {
   const g = getSingleton();
   const dataDir = ctx.dataDir || g.dataDir || join(PLUGIN_ROOT, "data");
   cfg.dataDir = dataDir;
-  // 首次工具调用即自动生成 config.json（不存在时按 manifest 默认值；幂等，失败静默）——
-  // 经统一迁移入口调度 config-schema 步骤（src/migrate.js）
-  runMigrations(cfg, { steps: ["config-schema"] });
+  // 首次工具调用即自动生成 config.json（不存在时按 manifest 默认值；幂等，失败静默）+
+  // 超时配置毫秒→秒迁移（旧键换算，幂等）——经统一迁移入口调度 config-schema / timeout-sec
+  runMigrations(cfg, { steps: ["config-schema", "timeout-sec"] });
   // 单例记数据目录（dsh_session 经 g.dataDir 定位 dsh 会话缓存等数据文件）——
   // 只在显式注入（ctx.dataDir 非空）或单例为空（冷启动兜底）时写入；ctx.dataDir
   // 为空且单例已有值时保留单例原值，绝不把 PLUGIN_ROOT/data 回退值覆盖进去。
@@ -843,10 +844,13 @@ async function doExecute(input, ctx) {
   const cwd = String(input.cwd || resolveDefaultCwd(cfg) || "").trim();
   if (!cwd && !input.sessionId)
     throw new Error("cwd 不能为空（工具参数或插件配置 defaultCwd 至少给一个）");
+  // 超时单位统一为秒（v0.25）：工具 timeout 参数与配置 defaultTimeoutSec 均为秒，
+  // 边界换算——内部计时保留毫秒（setTimeout 需要毫秒），换算只在工具参数入口/配置读取处。
+  // 显式 timeout > 0 采用（秒→毫秒）；否则用配置默认（resolveDefaultTimeoutSec 秒，
+  // 含旧键 defaultTimeoutMs 迁移兜底；0/缺失回落 600s 硬编码兜底，与旧 ||600000 语义一致）。
+  const timeoutSec = resolveDefaultTimeoutSec(cfg);
   const timeoutMs =
-    Number(input.timeout) > 0
-      ? Number(input.timeout) * 1000
-      : Number(cfg.defaultTimeoutMs || 600000);
+    Number(input.timeout) > 0 ? Number(input.timeout) * 1000 : timeoutSec * 1000;
 
   // callbackMode 收口固定 minimal（v0.21.3 后续演进）：所有回调只带定位键
   // { status, rpcId, sessionId }（sessionId 唯一定位键，不再冗余 id 字段），
@@ -856,8 +860,10 @@ async function doExecute(input, ctx) {
     dataDir: cfg.dataDir,
     reasoningEffort: cfg.reasoningEffort,
     webPort: cfg.webPort,
-    // 审批配置唯一键 approvalTimeoutMs（超时兜底，0=禁用；manifest 默认 30000）
-    approvalTimeoutMs: cfg.approvalTimeoutMs,
+    // 任务超时（内部毫秒；卡片 URL 携带供恢复态「时间」行展示超时预算 + 本地倒计时）
+    timeoutMs,
+    // 审批配置唯一键 approvalTimeoutSec（单位：秒；超时兜底，0=禁用；manifest 默认 30）
+    approvalTimeoutSec: cfg.approvalTimeoutSec,
   };
   const taskParams = {
     task: input.task,

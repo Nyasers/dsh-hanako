@@ -11,11 +11,11 @@ description: "dsh-hanako 插件（把 DeepSeek Harness 接进 Hana 的进程外 
 
 config.json 由宿主设置界面生成、**不随包分发**；defaultCwd 初始为空。按序完成：
 
-**0. 先看现状**：配置在 <宿主插件数据目录>/dsh-hanako/config.json（Windows 常见 %USERPROFILE%\.hanako\plugin-data\dsh-hanako\config.json）。**全新安装**：插件初始化自动生成默认配置（ensureConfigJson：无 config.json 时按 manifest 默认值生成 `{ schemaVersion, global, agents, sessions }`，已存在则不动，原子写 + 失败静默），无需手动保存，装完即可在设置界面看到默认值。**无需配置 API Key / 模型 / Node 路径**：凭据由 @dsh-hanako/provider 插件直读宿主 `provider-catalog.json`，模型跟随宿主 `models.json`（dsh models 页设置默认）；web host 使用宿主 electron 进程自身的 Node 运行时（`process.execPath`，`ELECTRON_RUN_AS_NODE=1`），**无需用户单独安装 Node.js**。
+**0. 先看现状**：配置在 <宿主插件数据目录>/dsh-hanako/config.json（Windows 常见 %USERPROFILE%\.hanako\plugin-data\dsh-hanako\config.json）。**全新安装**：插件初始化自动生成默认配置（ensureConfigJson：无 config.json 时按 manifest 默认值生成 `{ schemaVersion, global, agents, sessions }`，已存在则不动，原子写 + 失败静默），无需手动保存，装完即可在设置界面看到默认值。**无需配置 API Key / 模型 / Node 路径**：凭据由 @dsh-hanako/provider 插件直读宿主 `provider-catalog.json`，模型跟随宿主 `models.json`（dsh models 页设置默认）；web host 默认使用宿主 electron 进程自身的 Node 运行时（`process.execPath`，`ELECTRON_RUN_AS_NODE=1`），**无需用户单独安装 Node.js**。可选配置 `nodejsPath`：macOS 上 Electron 内嵌 node 跑 pnpm 会触发签名校验失败（Electron 的 node 二进制非标准 node 签名），此时填系统 node 绝对路径（如 /opt/homebrew/bin/node），配置后所有子进程（pnpm / web host / wrapper）改用自定义 node；路径不存在时警告并降级回退 Electron node。
 
 **1. defaultCwd（建议）**：为空且未传 cwd 时报 `cwd 不能为空`；设为项目沙箱目录。
 
-**2. 其余项默认可用**：approvalTimeoutMs（30000）/ webPort（3080）/ defaultTimeoutMs（1800000）。agentPreset / reasoningEffort 不需要配置：工具不显式传时用 dsh 默认（dsh Web UI 可调 agent 预设与思考强度）。任务模型不需要配置：默认用 dsh 默认模型（settings.yaml `agent-default-model`），可在 **dsh 设置页「DSHana 设置」分页 → 「默认模型」卡片**直接配置（Provider/模型/思考强度三级联动，选项 = dsh 全部可用 provider，保存即生效），`dsh_run` 工具参数 `provider`/`model`/`reasoningEffort` 可显式覆盖（显式时 selectModel，dsh 会把所选模型写回全局默认 settings.yaml——显式指定即成为新默认）。**DSH 版本**：同分页「DSH 版本」卡片可检查 `@deepseek-ai/dsh` 版本并一键更新（检查 dsh 侧直查远端 registry，更新走宿主能力层；Agent 用 `dsh_update` 工具 / 标签页 deps 卡片「检查更新」「更新 DSH」同结果）。
+**2. 其余项默认可用**：approvalTimeoutSec（30，秒）/ webPort（3080）/ defaultTimeoutSec（1800，秒）。agentPreset / reasoningEffort 不需要配置：工具不显式传时用 dsh 默认（dsh Web UI 可调 agent 预设与思考强度）。任务模型不需要配置：默认用 dsh 默认模型（settings.yaml `agent-default-model`），可在 **dsh 设置页「DSHana 设置」分页 → 「默认模型」卡片**直接配置（Provider/模型/思考强度三级联动，选项 = dsh 全部可用 provider，保存即生效），`dsh_run` 工具参数 `provider`/`model`/`reasoningEffort` 可显式覆盖（显式时 selectModel，dsh 会把所选模型写回全局默认 settings.yaml——显式指定即成为新默认）。**DSH 版本**：同分页「DSH 版本」卡片可检查 `@deepseek-ai/dsh` 版本并一键更新（检查 dsh 侧直查远端 registry，更新走宿主能力层；Agent 用 `dsh_update` 工具 / 标签页 deps 卡片「检查更新」「更新 DSH」同结果）。
 
 **3. 配置生效铁律（实时）**：「改完都要重启 Hana」不成立：t1 依赖/t2 进程状态直读 config.json/单例实时；t2 手动启动链路 resolveDshPkgDir → spawn，直写后无需重启；仅旧进程存活（g.web.ready=true）需先杀进程或重启。
 
@@ -108,7 +108,7 @@ $node = <本机 node.exe 绝对路径，如 C:\Program Files\nodejs\node.exe>
 
 ## 审批流程（Agent 应答）
 
-dsh 请求越界权限时任务挂起，插件经 deferred 发 dsh-approval 通知（rpcId/approvalId/reason/**args 命令路径原文**）。应答：读 args 判断 → 合理 `dsh_approve(rpcId, approvalId, "allowed-once")`，危险 `"rejected"`；无人应答超时（approvalTimeoutMs，默认 30s）自动拒绝；也可 dsh Web UI 人工处理。**决策看 args（执行了什么），不听 reason（model 自述）**。
+dsh 请求越界权限时任务挂起，插件经 deferred 发 dsh-approval 通知（rpcId/approvalId/reason/**args 命令路径原文**）。应答：读 args 判断 → 合理 `dsh_approve(rpcId, approvalId, "allowed-once")`，危险 `"rejected"`；无人应答超时（approvalTimeoutSec，默认 30s）自动拒绝；也可 dsh Web UI 人工处理。**决策看 args（执行了什么），不听 reason（model 自述）**。
 
 ## 排错表
 
