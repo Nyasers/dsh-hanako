@@ -1,0 +1,18 @@
+# 统一行尾策略：入库一律 LF，检出按平台（Windows 检出 CRLF，macOS/Linux 检出 LF）
+# 与 core.autocrlf 叠加时以本文件为准（.gitattributes 优先级更高）。
+# 历史遗留的 CRLF 入库文件经 `git add --renormalize .` 一次性归正为 LF。
+* text=auto eol=lf
+
+# 显式二进制（text=auto 已能按内容自动判读，此处显式声明防误判）
+*.zip binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.eot binary
+*.pdf binary
