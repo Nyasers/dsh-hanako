@@ -24,10 +24,14 @@
 //                         dsh-hana-* 旧名遗留 junction，重建 @dsh-hanako/* 六个包 junction，
 //                         每次启动无条件收敛）。原在 lifecycle.js ensureWebHost 内闭包；
 //                         现经 ensureWebHost 调 runMigrations(cfg, { steps: ["junction-converge"] })。
+//   4. cleanup-update-result  update-result.json 遗留文件删除（v0.24 退役）：更新链路结果
+//                         改走内存态分组 g.update（状态收敛），update-result.json 不再写
+//                         不再读——删除历史版本遗留文件（不存在幂等跳过，失败静默）。
+//                         调用点：startWebHostFromPlugin 经 runMigrations 调度
+//                         （steps 含 config-schema + cleanup-update-result；archive-old-logs
+//                         在 onload 单独调度，不得跑全量——会压缩当前会话文件）。
 //
 // 未纳入本模块的（判断取舍，保持原地）：
-//   - update-result.json（updateDsh 更新流程写入的运行期状态文件）：是运行期状态，不是
-//     版本迁移，保留在 lifecycle.js updateDsh 内。
 //   - newWebLogPath（lifecycle.js 的兜底日志会话文件创建）：冷启动边缘的会话文件兜底，
 //     不是历史遗留收敛，保留原地。
 //   - provider 路由组装 / bus 连接等：运行期能力，不是迁移。
@@ -259,6 +263,28 @@ function convergeCordisJunctions(cfg) {
     }
   }
 }
+// ---- 迁移步骤 4：update-result.json 退役清理（cleanup-update-result）----
+// v0.24 状态收敛（单例分组结构化）：更新链路结果改走内存态分组 g.update，update-result.json
+// 不再写不再读（总线事件化已打通 update.progress/result + 断线排队补发；设置页是 dsh web
+// host 页面依赖总线，Agent 工具 dsh_update 结果全走内存态且从不读该文件——文件兜底场景
+// 在现役链路中不存在）。删除历史版本遗留的 <dataDir>/update-result.json 文件。
+// 幂等：文件不存在零动作；删除失败静默（残留不影响功能，只是占位文件）。
+function cleanupUpdateResult(cfg) {
+  try {
+    const dataDir =
+      cfg.dataDir || getSingleton().dataDir || join(PLUGIN_ROOT, "data");
+    const f = join(dataDir, "update-result.json");
+    if (existsSync(f)) {
+      unlinkSync(f);
+      console.log(
+        "[dsh-hanako] 已删除遗留 update-result.json（v0.24 起退役，更新结果走内存态 g.update）",
+      );
+    }
+  } catch {
+    /* 删除失败静默：文件已无消费方，残留不影响功能 */
+  }
+}
+
 // ---- 迁移注册表（有序：执行顺序 = 数组顺序；新增迁移在此加一条）----
 // 每条：{ id（稳定标识，调用点 steps 选择用）, version（引入/最后调整版本，文档用）,
 //        run(cfg)（幂等步骤实现；失败由 runMigrations 捕获记录，不阻断后续） }
@@ -280,6 +306,12 @@ const MIGRATIONS = [
     version: "0.18.1+",
     describe: "cordis junction 旧名清理 + @dsh-hanako scope 无条件收敛",
     run: convergeCordisJunctions,
+  },
+  {
+    id: "cleanup-update-result",
+    version: "0.24+",
+    describe: "退役 update-result.json 遗留文件（v0.24 起更新结果走内存态 g.update，文件不再写不再读）",
+    run: cleanupUpdateResult,
   },
 ];
 

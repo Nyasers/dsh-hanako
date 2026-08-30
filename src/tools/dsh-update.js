@@ -10,12 +10,12 @@
 //     比较（major.minor.patch 三段数字逐个比，预发布 -rc.x 视为低于同版本正式版）。
 //   action=update：完整更新——停 web host（closeProcess，Windows 文件锁前提）→
 //     npm i @deepseek-ai/dsh（latest，installDepsFromPlugin）→ 起 web host
-//     （ensureWebHost）→ 读新版本；写 <dataDir>/update-result.json
-//     { state: done|error, version?, error?, at }（设置页/标签页轮询读）。
+//     （ensureWebHost）→ 读新版本；结果走内存态分组 g.update（v0.24 状态收敛：
+//     update-result.json 退役，见 src/migrate.js cleanup-update-result 步骤）。
 //     默认异步：立即返回 + 渲染「升级卡片」（/card/dep，数据源 = 宿主单例 g.depTasks +
-//     g.depsInstallLog + update-result.json，见 routes/card.js /ops/dep-stream），
-//     完成/失败经宿主 deferred 通道唤醒 Agent 带回结果；wait=true 同步等待直接返回。
-// 并发防护：更新执行中（g.updating）重复调用返回状态不重复执行（能力层内防护）。
+//     g.deps.log 实时日志，见 routes/card.js /ops/dep-stream），完成/失败经宿主
+//     deferred 通道唤醒 Agent 带回结果；wait=true 同步等待直接返回。
+// 并发防护：更新执行中（g.update.status === "running"）重复调用返回状态不重复执行（能力层内防护）。
 // 与 dsh-run.js 同一分发纪律：本工具不静态 import dsh-run.js（Hana 以 ?t= 时间戳加载
 // tools，静态 import 会命中 Node ESM 固定 URL 缓存读到旧模块，见 dsh-run.js 头部注释），
 // 经 globalThis 单例（g.checkDshUpdate / g.updateDsh / g.bus）调用；
@@ -116,7 +116,7 @@ async function doExecute(input, ctx) {
   }
 
   // action === "update"
-  if (g.updating) {
+  if (g.update.status === "running") {
     return {
       content: [
         {
@@ -136,14 +136,14 @@ async function doExecute(input, ctx) {
     };
   }
   // 异步模式：登记升级卡片（g.depTasks，/card/dep）+ 注册 deferred 唤醒（完成后宿主
-  // 唤醒，结果后台送达），后台执行不 await。卡片数据源 = g.depTasks + g.depsInstallLog
-  // （updateDsh 内部 npm i 输出实时写入）+ update-result.json（routes/card.js 快照合并）。
+  // 唤醒，结果后台送达），后台执行不 await。卡片数据源 = g.depTasks + g.deps.log
+  // （updateDsh 内部 npm i 输出实时写入，g.update.log 为同源投影）。
   const taskId = `dsh_update_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
   const entry = {
     taskId,
     kind: "update",
     state: "running",
-    log: null, // 终态定格日志（运行期由 /ops/dep-stream 读 g.depsInstallLog）
+    log: null, // 终态定格日志（运行期由 /ops/dep-stream 读 g.deps.log）
     at: new Date().toISOString(),
     result: null,
   };
@@ -161,7 +161,7 @@ async function doExecute(input, ctx) {
     .then((r) => {
       entry.state = r && r.ok ? "ok" : "error";
       entry.result = r || { ok: false, error: "更新无结果" };
-      entry.log = (g.depsInstallLog || "").slice(-2000); // 终态定格日志
+      entry.log = (g.deps.log || "").slice(-2000); // 终态定格日志
       if (r && r.ok) {
         resolveDeferredWake({
           bus,
@@ -185,7 +185,7 @@ async function doExecute(input, ctx) {
     .catch((e) => {
       entry.state = "error";
       entry.result = { ok: false, error: String(e?.message || e) };
-      entry.log = (g.depsInstallLog || "").slice(-2000);
+      entry.log = (g.deps.log || "").slice(-2000);
       failDeferredWake({
         bus,
         taskId,

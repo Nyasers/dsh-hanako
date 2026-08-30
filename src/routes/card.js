@@ -7,7 +7,7 @@
 //   GET /ops/status?sessionId=&rpcId=&timeoutMs=     兜底状态 JSON（EventSource 建立失败时卡片回退一次；仅 jsonl 恢复路径）
 //   GET /ops/output?sessionId=&rpcId=&timeoutMs=     兜底全量输出 JSON（兼容旧卡片懒加载；仅 jsonl 恢复路径）
 //   GET /card/dep?taskId=                            安装/升级卡片页面（dsh_install/dsh_update 异步流程，data-kind="dep"）
-//   GET /ops/dep-stream?taskId=                      安装/升级卡片 SSE 推送源（进程内 g.depTasks + g.depsInstallLog）
+//   GET /ops/dep-stream?taskId=                      安装/升级卡片 SSE 推送源（进程内 g.depTasks + g.deps.log）
 //   GET /ops/dep-status?taskId=                      安装/升级卡片兜底状态 JSON
 //
 // 架构：卡片链路从「HTTP 轮询 + op Map」改为「SSE 服务端推送 + jsonl 唯一事实源」。
@@ -460,7 +460,7 @@ export default function registerCardRoutes(app, ctx) {
     });
   });
 
-  // ── 安装/升级卡片（数据源 = 宿主单例 g.depTasks + g.depsInstallLog）──
+  // ── 安装/升级卡片（数据源 = 宿主单例 g.depTasks + g.deps.log）──
   // dsh_install / dsh_update 异步流程登记 g.depTasks（Map：taskId → { taskId, kind:
   // install|update, state: running|ok|error, log, at, result }）；本卡片非 dsh 会话、
   // 无 jsonl，状态与 npm 实时日志全在宿主进程内。三条链路与任务卡片同构：
@@ -468,8 +468,9 @@ export default function registerCardRoutes(app, ctx) {
   //   GET /ops/dep-stream?taskId= SSE 推送源（定时推快照 + log 增量；终态推送后关闭）
   //   GET /ops/dep-status?taskId= 兜底状态 JSON（EventSource 建立失败时卡片回退一次）
 
-  /** 构建安装/升级任务快照（数据源：g.depTasks 条目 + g.depsInstallLog 实时日志 +
-   * update-result.json（kind=update 时合并，version/error 权威化）。只回非敏感字段。 */
+  /** 构建安装/升级任务快照（数据源：g.depTasks 条目 + g.deps.log 实时日志 +
+   * entry.result——kind=update 时直接取 t.result（updateDsh 返回值，与旧
+   * update-result.json 文件同源；v0.24 文件退役后 result 即权威终态）。只回非敏感字段。 */
   function buildDepSnapshot(g, t) {
     const snap = {
       taskId: t.taskId,
@@ -478,25 +479,19 @@ export default function registerCardRoutes(app, ctx) {
       at: t.at,
       result: t.result,
     };
-    // 日志：终态定格（entry.log）优先；运行期读 g.depsInstallLog 实时尾部（≤2000）
-    snap.log =
-      t.log != null ? t.log : String(g?.depsInstallLog || "").slice(-2000);
+    // 日志：终态定格（entry.log）优先；运行期读 g.deps.log 实时尾部（≤2000）
+    snap.log = t.log != null ? t.log : String(g?.deps?.log || "").slice(-2000);
     if (t.kind === "update") {
-      try {
-        const uf = path.join(g?.dataDir || "", "update-result.json");
-        if (fs.existsSync(uf)) {
-          const u = JSON.parse(fs.readFileSync(uf, "utf8"));
-          if (u && typeof u === "object") {
-            snap.update = {
-              state: u.state,
-              version: u.version ?? null,
-              error: String(u.error || "").slice(0, 400) || null,
-              at: u.at || null,
-            };
-          }
-        }
-      } catch {
-        /* 读 update-result.json 失败忽略（非权威源，result 已含） */
+      // 更新终态直接透出 t.result（与旧文件同源；update-result.json 已退役不再读——
+      // 遗留文件由 migrate.js cleanup-update-result 步骤删除）
+      const u = t.result;
+      if (u && typeof u === "object") {
+        snap.update = {
+          state: u.state,
+          version: u.version ?? null,
+          error: String(u.error || "").slice(0, 400) || null,
+          at: t.at || null,
+        };
       }
     }
     return snap;

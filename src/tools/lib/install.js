@@ -4,8 +4,10 @@
 // tools/lib/install.js — dsh 依赖部署/验证共用模块（lib 提取）
 // 从 tools/dsh-run.js 剥离：resolveDshPkgDir / installDepsFromPlugin / verifyDepsSmoke
 // + semver 比较辅助（parseSemver / compareSemver）+ 本地版本直读（readDshInstalledVersion）。
-// 状态经 lib/state.js 的 getSingleton 访问（g.depsInstalling / g.depsInstallLog /
-// g.depsSmoke 等，字段语义与旧 dsh-run.js 完全一致，别丢）。
+// 状态经 lib/state.js 的 getSingleton 访问分组对象 g.deps = { status, result, error,
+// time, log }（v0.24 状态收敛：旧平铺 g.depsInstalling/g.depsInstallLog/g.depsSmoke 等
+// 全废；status 值域 idle/installing/ok/error，result = 运行级验证缓存复合对象，log =
+// 内存尾环字符串，time = 最近一次 npm i 输出时间）。
 // 消费方：dsh-run.js（updateDsh / buildDepsDiagCheck 等组合）、lib/check.js
 // （checkDshUpdate 依赖 verifyDepsSmoke 缓存 + 本地版本直读）、tools/dsh-install.js
 // （经单例 g.installDeps / g.verifyDeps 调用）。
@@ -41,8 +43,8 @@ import {
 
 // ---- 依赖安装日志通道（统一）----
 // installDepsFromPlugin 内部 emitLog(s, src)：同一份文本同时进
-//   ① 内存尾环 g.depsInstallLog（≤DEPS_LOG_CAP=8000，卡片/诊断界面实时读尾部；
-//      旧实现 pnpm 流式累积不设上限，长安装内存无界增长）
+//   ① 内存尾环 g.deps.log（≤DEPS_LOG_CAP=8000，卡片/诊断界面实时读尾部；g.update.log
+//      为 getter 投影同源，见 lib/state.js——旧实现 pnpm 流式累积不设上限，长安装内存无界增长）
 //   ② 会话日志文件（持久诊断：src=pnpm 记 pnpm i 原始输出、src=hana 记里程碑
 //      [依赖安装]…；g.appendLog 行规范化 \r\n/\r → \n 逐行加前缀，见 index.js）。
 // 旧「命令完成后一次性 g.appendLog("pnpm", out)」废弃——pnpm 输出逐 chunk 实时写。
@@ -334,30 +336,38 @@ export function readDshInstalledVersion(cfg) {
 // 而 pnpm 11 的 add 命令不支持 --omit CLI 旗标（报 Unknown option: 'omit'）；
 // 最小 package.json 无 devDeps，pnpm add 天然只装 @deepseek-ai/dsh 运行时树（peer 自动装默认开启）。
 // registry 默认官方源，失败自动重试 npmmirror。部署是长任务：本函数异步
-// 执行不 await（调用方立即返回，页面靠轮询诊断刷新）；状态记单例 g.depsInstalling /
-// g.depsInstallError / g.depsInstallAt / g.depsInstallLog（内存尾环 ≤DEPS_LOG_CAP，
-// pnpm 输出与里程碑同通道 emitLog 实时写，见文件头「依赖安装日志通道」）。
+// 执行不 await（调用方立即返回，页面靠轮询诊断刷新）；状态记单例分组 g.deps =
+// { status, result, error, time, log }（v0.24 状态收敛：status 入口置 installing、
+// 成功置 ok、catch 置 error——终态保留，下次入口才回到 installing；log 内存尾环
+// ≤DEPS_LOG_CAP，pnpm 输出与里程碑同通道 emitLog 实时写，见文件头「依赖安装日志通道」）。
 export async function installDepsFromPlugin(ctxConfig, ctxDataDir) {
   const g = getSingleton();
-  // 部署中并发调用直接返回（路由侧也会先查 g.depsInstalling，这里是直调兜底）
-  if (g.depsInstalling) return { ok: false, state: "installing" };
+  // 部署中并发调用直接返回（路由侧也会先查 g.deps.status，这里是直调兜底）。
+  // 注意同时判 "running"：install 内部的强制重验会把 status 短暂置 running（见下方
+  // verifyDepsSmoke 调用），期间并发 install 也必须拦下——原始语义 g.depsInstalling
+  // 全程为 true，分组模型下 installing+running 都是「依赖操作进行中」。
+  if (
+    g.deps.status === "installing" ||
+    g.deps.status === "running"
+  )
+    return { ok: false, state: "installing" };
   const cfg = { ...manifestDefaults };
   for (const [k, v] of Object.entries(ctxConfig || {})) {
     if (v !== undefined && v !== null && v !== "") cfg[k] = v;
   }
   const dataDir = ctxDataDir || g.dataDir || join(PLUGIN_ROOT, "data");
   cfg.dataDir = dataDir;
-  g.depsInstalling = true;
-  g.depsInstallError = null;
-  g.depsInstallAt = new Date().toISOString();
-  g.depsInstallLog = "";
+  g.deps.status = "installing";
+  g.deps.error = null;
+  g.deps.time = new Date().toISOString();
+  g.deps.log = "";
   // 统一日志通道（见文件头）：同一份文本进内存尾环（≤DEPS_LOG_CAP，实时）+ 会话日志
-  // 文件（src=pnpm 原始输出 / src=hana 里程碑）。每次写入刷新 depsInstallAt（前端
-  // installing 态显示「更新于 HH:MM:SS」、3s 轮询 health 随诊断刷新 installLog 尾部）。
+  // 文件（src=pnpm 原始输出 / src=hana 里程碑）。每次写入刷新 g.deps.time（前端
+  // installing 态显示「更新于 HH:MM:SS」、3s 轮询 health 随诊断刷新 log 尾部）。
   const emitLog = (s, src) => {
     const text = String(s);
-    g.depsInstallLog = (g.depsInstallLog + text).slice(-DEPS_LOG_CAP);
-    g.depsInstallAt = new Date().toISOString();
+    g.deps.log = (g.deps.log + text).slice(-DEPS_LOG_CAP);
+    g.deps.time = new Date().toISOString();
     if (typeof g.appendLog === "function") {
       try {
         g.appendLog(src, text);
@@ -409,7 +419,7 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir) {
     // pnpm 不再内置（zip 摘除 node_modules/pnpm）：运行时下载 pnpm-{version} 单文件
     // pnpm.mjs 到数据目录 pnpm-dist/（缓存独立于 dsh-pkg）。引导失败（网络/校验）与
     // 旧「pnpm.cjs 不存在」语义区分：抛可读错误（含两个 CDN 提示），由外层 catch 记入
-    // g.depsInstallError——不再有「pnpm 缺失」分支（pnpm 已无内置形态）。
+    // g.deps.error——不再有「pnpm 缺失」分支（pnpm 已无内置形态）。
     let pnpmCli;
     try {
       pnpmCli = await ensurePnpm({ dataDir });
@@ -519,18 +529,20 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir) {
           "）",
       );
     }
-    g.depsInstallError = null;
+    g.deps.error = null;
     milestone("[完成] " + cliBin);
-    // 部署成功后强制运行级重验（清旧缓存，await 刷新——安装流程本身就是等待场景）
-    g.depsSmoke = null;
+    // 部署成功后强制运行级重验（清旧缓存，await 刷新——安装流程本身就是等待场景）；
+    // verifyDepsSmoke 会把 g.deps.result 刷新为最新 smoke（含 status running→ok/error）
+    g.deps.result = null;
     await verifyDepsSmoke(cfg);
+    // 安装链路终态 ok（终态保留；verify 若失败其详情在 g.deps.result，不影响安装结论）
+    g.deps.status = "ok";
     return { ok: true, state: "installed", cliBin };
   } catch (e) {
-    g.depsInstallError = String(e?.message || e).slice(0, 1500);
-    milestone("[失败] " + g.depsInstallError);
-    return { ok: false, state: "error", error: g.depsInstallError };
-  } finally {
-    g.depsInstalling = false;
+    g.deps.error = String(e?.message || e).slice(0, 1500);
+    g.deps.status = "error";
+    milestone("[失败] " + g.deps.error);
+    return { ok: false, state: "error", error: g.deps.error };
   }
 }
 
@@ -541,9 +553,11 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir) {
 // 可靠检测 = 运行级验证「node <cliBin> --version」：node 沿 import 图加载整个 cordis 模块树，
 // 任何依赖缺失都会抛错且退出码非 0（技能文档「部署后验证 node lib/bin.js --version 应输出
 // 0.1.0-rc.6」同款逻辑）。能跑 = 依赖图完整。
-// 防并发/防轮询风暴：结果缓存到单例 g.depsSmoke = { ok, version, error, stderr, at, running }；
-// running=true 时直接返回当前缓存不重复 spawn（spawn 一次 --version 数百 ms，3s 轮询 ×
-// 每次 spawn 不可接受，必须缓存 + running 标志）。触发时机：进标签页自动一次 +
+// 防并发/防轮询风暴：结果缓存到单例分组 g.deps.result = { ok, version, error, stderr, at,
+// running, pnpm* }（v0.24 状态收敛：旧 g.depsSmoke 平铺字段并入 g.deps.result 复合对象）；
+// running 标志映射进 g.deps.status === "running"，进行中直接返回当前缓存不重复 spawn
+// （spawn 一次 --version 数百 ms，3s 轮询 × 每次 spawn 不可接受，必须缓存 + running 标志）。
+// 触发时机：进标签页自动一次 +
 // 手动「检测依赖」按钮（经 GET /webui/verify-deps 驱动）/ installDeps 部署成功后强制重验。
 // v0.18.2: 叠加 pnpm 引导检查（独立子项）——与 dsh 冒烟并行调 ensurePnpm（幂等：缓存
 // 完整直接返回，缺失/损坏自动重新下载自愈），结果记 pnpmReady / pnpmVersion / pnpmError。
@@ -551,8 +565,8 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir) {
 // deps 卡片「pnpm 引导：就绪/未就绪」独立展示行。
 export async function verifyDepsSmoke(cfg) {
   const g = getSingleton();
-  // 防并发：验证进行中直接返回当前缓存（不重复 spawn）
-  if (g.depsSmoke?.running) return g.depsSmoke;
+  // 防并发：验证进行中直接返回当前缓存（不重复 spawn）——running 标志映射进 g.deps.status
+  if (g.deps.status === "running") return g.deps.result;
   // 会话日志（src=hana）：开始/通过/失败 里程碑——故障诊断（依赖缺失、安装后重验
   // 失败）在会话日志里有完整上下文（触发时机 + cliBin + 退出码/错误尾）
   const slog = (s) => {
@@ -588,7 +602,9 @@ export async function verifyDepsSmoke(cfg) {
     pnpmVersion: null,
     pnpmError: "",
   };
-  g.depsSmoke = smoke;
+  // 结果缓存（g.deps.result 复合对象整体引用）+ 验证进行中状态
+  g.deps.result = smoke;
+  g.deps.status = "running";
   // pnpm 引导检查（与 dsh 运行级验证并行，互不拖累）：verifyDepsSmoke 虽是运行级
   // 只读检测，但 pnpm 检查允许自愈——ensurePnpm 幂等：缓存完整（sha256 一致）直接
   // 返回（快速路径），缺失/损坏自动重新下载（网络操作无副作用）。dataDir 显式传入
@@ -667,6 +683,9 @@ export async function verifyDepsSmoke(cfg) {
     await pnpmTask;
     smoke.at = new Date().toISOString();
     smoke.running = false;
+    // 验证链路终态（ok/error 保留；下次 verify 入口才回到 running）——注意 install 内部
+    // 调用本函数后还会把 g.deps.status 置 ok（安装结论优先，verify 详情在 g.deps.result）
+    g.deps.status = smoke.ok ? "ok" : "error";
   }
   return smoke;
 }

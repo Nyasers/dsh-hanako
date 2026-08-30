@@ -17,6 +17,17 @@
 // 逐字段兜底。函数挂载（g.closeProcess / g.installDeps / g.verifyDeps /
 // g.checkDshUpdate / g.updateDsh / g.startWebHost / g.collectDiagnostics）由各定义模块
 // 在自己文件内显式赋值（本模块是叶子，避免与 dsh-run.js 循环依赖）。
+//
+// 分组状态（v0.24 状态收敛：单例平铺字段重构为分组结构化）——旧平铺字段
+// （g.updating / g.updateError / g.depsInstalling / g.depsInstallAt / g.depsInstallError /
+// g.depsInstallLog / g.depsSmoke / g.checking / g.checkResult / g.checkAt）全部废弃，
+// 只维护三个五维分组对象（单一事实源，不做平铺+分组双份同步）：
+//   g.update = { status, result, error, time, log }   更新链路
+//   g.deps   = { status, result, error, time, log }   依赖链路（log = 内存尾环字符串）
+//   g.check  = { status, result, error, time, log }   版本检查链路（无日志流，log 恒 null）
+// status 值域统一：idle / running(installing) / ok / error，由各链路定义模块在状态
+// 变化点显式维护。g.update.log 定义为 getter 投影 g.deps.log（updateDsh 内部走
+// installDepsFromPlugin 写同一日志尾环，同源实时可见，不复制字符串）。
 
 import { readFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -68,5 +79,37 @@ export function getSingleton() {
   const g = globalThis.__dshHanako;
   if (!g.ops) g.ops = new Map();
   if (!g.depTasks) g.depTasks = new Map();
+  // ---- 分组状态兜底初始化（v0.24 状态收敛；见文件头「分组状态」）----
+  // 热更新兼容：旧 globalThis 对象缺 g.update/g.deps/g.check 或字段时逐个兜底；
+  // 已存在的分组对象保留其运行期值（不重置——终态跨热更新可见，下次入口才覆盖）。
+  if (!g.update || typeof g.update !== "object") g.update = {};
+  if (g.update.status === undefined) g.update.status = "idle";
+  if (g.update.result === undefined) g.update.result = null;
+  if (g.update.error === undefined) g.update.error = null;
+  if (g.update.time === undefined) g.update.time = null;
+  // g.update.log = getter 投影 g.deps.log（同源日志尾环；updateDsh 内部走
+  // installDepsFromPlugin 写同一尾环，只读投影不复制字符串——注释说明同源语义）
+  if (!Object.getOwnPropertyDescriptor(g.update, "log")) {
+    Object.defineProperty(g.update, "log", {
+      enumerable: true,
+      configurable: true,
+      get() {
+        const deps = g.deps;
+        return deps && typeof deps.log === "string" ? deps.log : null;
+      },
+    });
+  }
+  if (!g.deps || typeof g.deps !== "object") g.deps = {};
+  if (g.deps.status === undefined) g.deps.status = "idle";
+  if (g.deps.result === undefined) g.deps.result = null;
+  if (g.deps.error === undefined) g.deps.error = null;
+  if (g.deps.time === undefined) g.deps.time = null;
+  if (g.deps.log === undefined) g.deps.log = "";
+  if (!g.check || typeof g.check !== "object") g.check = {};
+  if (g.check.status === undefined) g.check.status = "idle";
+  if (g.check.result === undefined) g.check.result = null;
+  if (g.check.error === undefined) g.check.error = null;
+  if (g.check.time === undefined) g.check.time = null;
+  if (g.check.log === undefined) g.check.log = null; // 无日志流，恒 null
   return g;
 }

@@ -416,7 +416,8 @@
       }
       return "pnpm 引导：未就绪" + (d.pnpmError ? "（原因：" + d.pnpmError + "）" : "");
     }
-    // 更新进度/结果块（update-result.json 内容，随 3s 轮询刷新）——版本管理归设置页
+    // 更新进度/结果块（内存态 updateResult = g.update 状态组合，随 3s 轮询刷新；
+    // v0.24 update-result.json 退役）——版本管理归设置页
     // （@dsh-hanako/settings「检查与更新 DSH」卡片 + dsh_update 工具），deps 卡片已无更新
     // 按钮，仅在设置页触发更新（web host 停机期间）时被动展示进度。
     function updateProgressHtml(d) {

@@ -44,13 +44,13 @@
 // closeProcess / updateDsh 停 host）。
 //
 // 更新链路接线：本模块订阅总线 update.request → 调 g.updateDsh（现有能力层：停 web
-// host → npm i latest → 起 web host → 写 update-result.json）→ 执行期间/完成后总线
-// 回投 update.progress / update.result（v0.22.1+ 事件化：update.progress 开始即发，
-// update.result 结束回投 { state, version?, error? }——替代设置页 2s 轮询 update-status，
-// 事件缓存由 @dsh-hanako/settings 后端维护，update-result.json 读回保留作兜底）。
-// 并发防护复用 updateDsh 的 g.updating 语义（进行中重复请求返回 { ok:false,
-// state:"updating" }，不重复执行、不回投）。更新执行中 web host 停机 → 总线断开 →
-// 连接失败不阻断 dsh 启动/更新（结果以 update-result.json 为准，回投尽力而为）。
+// host → npm i latest → 起 web host；结果走内存态分组 g.update——v0.24 状态收敛，
+// update-result.json 已退役）→ 执行期间/完成后总线回投 update.progress / update.result
+// （v0.22.1+ 事件化：update.progress 开始即发，update.result 结束回投 { state, version?,
+// error? }——替代设置页 2s 轮询 update-status，事件缓存由 @dsh-hanako/settings 后端维护）。
+// 并发防护复用 updateDsh 的 g.update.status === "running" 语义（进行中重复请求返回
+// { ok:false, state:"updating" }，不重复执行、不回投）。更新执行中 web host 停机 → 总线
+// 断开 → 连接失败不阻断 dsh 启动/更新（结果在内存态 g.update，回投尽力而为）。
 //
 // 本机事件（内部 emitter，供宿主侧订阅——routes/webui.js 壳页就绪事件化等）：
 //   "bus.ready"      —— hello-ok 收到（web host 已就绪且总线已连接；宿主 push ready
@@ -298,9 +298,10 @@ function wireUpdateRequest() {
       sendFrame({ channel: "update.ack", payload: { reqId: p.reqId } });
     }
     log("收到 update.request（fromVersion=" + (p.fromVersion || "?") + "），触发更新");
-    // 复用现有 updateDsh（停 host → npm i latest → 起 host → 写 update-result.json）：
-    // 并发防护 g.updating 在 updateDsh 内部（进行中重复请求返回 { ok:false,
-    // state:"updating" }，不重复执行）。updateDsh 内部会经总线 emit
+    // 复用现有 updateDsh（停 host → npm i latest → 起 host；结果走内存态 g.update，
+    // update-result.json 已退役）：并发防护 g.update.status === "running" 在 updateDsh
+    // 内部（进行中重复请求返回 { ok:false, state:"updating" }，不重复执行）。updateDsh
+    // 内部会经总线 emit
     // update.progress/update.result（事件化，见 lifecycle.js）；这里只受理请求。
     let result;
     try {
