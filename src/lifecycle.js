@@ -663,6 +663,9 @@ export async function ensureWebHost(cfg) {
         );
       }
       try {
+        // web host 就绪探测保留 HTTP 直连（/api/host.describe，一次性启动握手）：发生在
+        // connectBus 之前——总线还没连上，总线化是鸡生蛋；Unary RPC 指令面已收敛进总线
+        // （callUnaryBus），此处只做端口就绪探测，不进总线。
         const r = await fetch(`http://127.0.0.1:${port}/api/host.describe`, {
           method: "POST",
           headers: { "content-type": "application/json" },
