@@ -15,18 +15,22 @@
 //   watch           ensureProviderPushWatch（provider 热跟随 watch）
 //   provider 路由     detectHostProviderPaths / readJsonFile / mapModel / readHostConfig / buildProviderRoutes
 //                    → pushProviderRoutes（总线 emit provider.refresh，替代 HTTP push）
-//   config 引导       ensureConfigJson（自动生成 config.json，幂等）
+//   config 引导       config.json 初始化/升级已收敛进 src/migrate.js（config-schema 步骤），
+//                    本模块经 runMigrations 统一调度（startWebHostFromPlugin 调 config-schema；
+//                    junction 收敛同样迁入 migrate.js，ensureWebHost 调 junction-converge）
 //   web host 日志     logTs / appendLog / logFileStamp / newWebLogPath（兜底实现）
 // 单例挂载（globalThis.__dshHanako，经 getSingleton()）：g.closeProcess / g.collectDiagnostics /
 // g.updateDsh / g.startWebHost / g.installDeps / g.verifyDeps / g.checkDshUpdate 均在本模块顶层完成
-// （installDeps/verifyDeps/checkDshUpdate 直接引用 lib/install.js & lib/check.js）。routes/webui.js、
-// index.js、tools/dsh-*.js 仍经 globalThis 单例调用，不受影响。
+// （installDeps/verifyDeps/checkDshUpdate 直接引用 lib/install.js & lib/check.js）；g.runMigrations
+// 由 src/migrate.js 顶层挂载（本模块 import 时即挂好）。routes/webui.js、index.js、tools/dsh-*.js
+// 仍经 globalThis 单例调用，不受影响。
 //
-// 分发形态与理由：本模块只被 tools/dsh-run.js（rspack 入口）静态 import，会被 rspack 内联进
-// dist/tools/dsh-run.js bundle（build.mjs 的 staticUrlToMeta 已递归收集 ROOT 下全部 .js 路径做
-// import.meta.url 替换；工具 ?t= 重载即刷新整包）。index.js / routes/webui.js 不做静态 import（违反
-// 缓存纪律，见 tools/dsh-run.js 文件头），仍经单例调用。本文件自身的 ../tools/lib/* 引用随 dsh-run
-// bundle 内联，无固定 URL 缓存问题。
+// 分发形态与理由：本模块被 index.js（bundle 收敛入口，单 bundle 形态）与 tools/dsh-run.js 静态
+// import，随 rspack 单 bundle 内联进 dist/index.js（build.mjs 的 staticUrlToMeta 递归收集 ROOT 下
+// 全部 .js 路径做 import.meta.url 替换）。src/migrate.js 同样经本模块静态 import 内联；index.js
+// 不静态 import migrate.js（避免 Node ESM 固定 URL 缓存读到旧模块），经 globalThis 单例
+// （g.runMigrations）调用——与 g.startWebHost / g.closeProcess 同纪律。本文件自身的 ../tools/lib/*
+// 引用随 bundle 内联，无固定 URL 缓存问题。
 //
 // 语义不变：ensureWebHost 重复调用幂等；web host 进程随插件 onload/卸载生命周期拉起/回收
 // （index.js register 回收调用 g.closeProcess）；providerPushCleanup / updateWatchCleanup 清理时机与
@@ -38,12 +42,7 @@ import {
   existsSync,
   mkdirSync,
   writeFileSync,
-  symlinkSync,
-  lstatSync,
-  unlinkSync,
-  renameSync,
   appendFileSync,
-  readdirSync,
 } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
@@ -54,8 +53,11 @@ import {
   manifestDefaults,
   ELECTRON_NODE,
   ELECTRON_NODE_ENV,
-  IS_WIN,
 } from "./tools/lib/state.js";
+// 统一版本迁移入口（注册表式调度器）：config.json schema 初始化/升级（config-schema）
+// 与 cordis junction 收敛（junction-converge）迁入本模块后由 migrate.js 统一调度——
+// 本文件经 runMigrations 调用（随 dsh-run bundle 内联，见文件头「分发形态」）
+import { runMigrations } from "./migrate.js";
 import {
   resolveDshPkgDir,
   installDepsFromPlugin,
@@ -369,41 +371,6 @@ function buildProviderRoutes() {
   g.latestProviderRoutes = result.routes;
   return result;
 }
-// ---- config.json 自动初始化（全新安装免「先保存一次」引导）----
-// config.json 不随包分发（宿主设置界面生成，路径 <插件数据目录>/config.json），
-// 全新安装时不存在。插件初始化（onload 拉起 web host / 首次工具调用）时按 manifest
-// 默认值自动生成 { schemaVersion: 1, global: { ...manifestDefaults }, agents: {}, sessions: {} }，
-// 用户装完即可在设置界面看到默认值，无需先手动保存一次。
-// 幂等：文件已存在直接返回，绝不覆盖用户配置/宿主生成内容。失败静默：resolve* 有
-// 配置快照兜底，不阻塞主流程（生成的只是初始默认值，被覆盖/缺失都不影响功能）。
-export function ensureConfigJson(cfg) {
-  try {
-    const dataDir =
-      cfg.dataDir || getSingleton().dataDir || join(PLUGIN_ROOT, "data");
-    const cf = join(dataDir, "config.json");
-    if (existsSync(cf)) return; // 已存在（宿主生成/用户修改）：幂等跳过
-    mkdirSync(dataDir, { recursive: true });
-    const tmp = join(dataDir, ".config.json.tmp");
-    // 先写临时文件再 rename 原子落位（中断不留半成品），对齐 scripts/pack.mjs 惯例
-    writeFileSync(
-      tmp,
-      JSON.stringify(
-        {
-          schemaVersion: 1,
-          global: { ...manifestDefaults },
-          agents: {},
-          sessions: {},
-        },
-        null,
-        2,
-      ),
-      "utf8",
-    );
-    renameSync(tmp, cf);
-  } catch {
-    /* 生成失败静默：resolve* 有配置快照兜底 */
-  }
-}
 // ---- web host 生命周期：spawn dsh web（DSH_HOME 锁进插件数据目录）----
 // dsh 依赖位置解析（resolveDshPkgDir）已提取到 lib/install.js——数据目录
 // dsh-pkg/ 优先（Agent npm i @deepseek-ai/dsh 部署的轻量分发形态），插件安装目录
@@ -461,103 +428,12 @@ export async function ensureWebHost(cfg) {
   // cordis 插件加载：六段均以包名注册（dsh client 模块发现按 loader entry 的 name 做
   // require.resolve('<name>/package.json')，file:// 无法解析），故启动前须在
   // $DSH_HOME/profiles/node_modules 统一建 junction（包名 → 插件安装目录
-  // dsh-plugin/<pkg>），与 dsh 自维护的 junction farm 同机制
-  // （ensureCordisJunctions 每次启动无条件重建）。
+  // dsh-plugin/<pkg>），与 dsh 自维护的 junction farm 同机制。该动作（旧名清理 +
+  // @dsh-hanako scope 无条件收敛，每次启动重建）已收敛进 src/migrate.js 的
+  // junction-converge 迁移步骤，经 runMigrations 统一调度（下方 spawn 前调用）。
   // --patch 直接指向静态文件；launcher flag（--profile/--patch）必须位于应用参数
   // （--port）之前。静态文件缺失（安装不完整）时不挂任何 patch 记 warn（内嵌插件
   // 降级不可用，dsh 启动不受影响），不阻断 dsh 启动。
-  // 正规化升级：@dsh-hanako/settings 前身 dsh-hana-default-model 先行改包名注册；
-  // 本版 theme/provider 一并正规化——dsh client 模块发现按
-  // require.resolve('<name>/package.json') 找 package.json 的 dsh.client 声明，file://
-  // 形式无法解析。包名解析锚点是 $DSH_HOME/profiles（baseUrl 父目录的 node_modules），
-  // 启动前统一建 junction：$DSH_HOME/profiles/node_modules/
-  // <@dsh-hanako/theme|@dsh-hanako/provider|@dsh-hanako/settings|@dsh-hanako/logger> → 插件安装目录
-  // dsh-plugin/<同名包>（与 dsh 自维护的 junction farm 同机制；dsh 的
-  // healProfilesModuleFallback 只管理自身依赖闭包，不碰外来 link）。
-  // 无条件重建：每次启动删旧建新（不比较 readlink）——junction 状态无条件收敛到当前
-  // 代码期望，杜绝一切残留（悬空 junction / 指向旧路径）导致的解析失败；与 patch 每次
-  // 渲染覆盖同一哲学。存在性用 lstatSync（不跟随目标）判断——existsSync 沿目标解析，
-  // 悬空 junction 会误判不存在，导致 symlinkSync EEXIST。非 junction 同名实体报错
-  // 不静默覆盖。
-  const ensureCordisJunctions = (dshHome) => {
-    // @dsh-hanako scope 收敛（v0.18.1）：六个插件包统一命名空间（v0.22.1 +bridge），
-    // junction 名与包名一致（profiles/node_modules/@dsh-hanako/<pkg> → 插件安装目录
-    // dsh-plugin/@dsh-hanako/<pkg>）。顺带清理旧名遗留 junction（dsh-hana-* 前缀，
-    // 含 v0.13.0 改名前的 dsh-hana-default-model / dsh-hana-proxy 等历史残留），
-    // 无条件收敛到当前命名，杜绝混装。
-    const packages = [
-      {
-        link: "@dsh-hanako/theme",
-        target: join(PLUGIN_ROOT, "dsh-plugin", "@dsh-hanako", "theme"),
-      },
-      {
-        link: "@dsh-hanako/provider",
-        target: join(PLUGIN_ROOT, "dsh-plugin", "@dsh-hanako", "provider"),
-      },
-      {
-        link: "@dsh-hanako/settings",
-        target: join(PLUGIN_ROOT, "dsh-plugin", "@dsh-hanako", "settings"),
-      },
-      {
-        link: "@dsh-hanako/logger",
-        target: join(PLUGIN_ROOT, "dsh-plugin", "@dsh-hanako", "logger"),
-      },
-      {
-        link: "@dsh-hanako/clipboard",
-        target: join(PLUGIN_ROOT, "dsh-plugin", "@dsh-hanako", "clipboard"),
-      },
-      {
-        link: "@dsh-hanako/bridge",
-        target: join(PLUGIN_ROOT, "dsh-plugin", "@dsh-hanako", "bridge"),
-      },
-    ];
-    const nmDir = join(dshHome, "profiles", "node_modules");
-    // 清理旧名 junction：profiles/node_modules 下 dsh-hana-*（非 @dsh-hanako scope）
-    // 的符号链接一律删（旧插件实例遗留，如 dsh-hana-default-model / dsh-hana-proxy）
-    try {
-      const legacy = readdirSync(nmDir).filter(
-        (n) => n.startsWith("dsh-hana-") && !n.startsWith("@"),
-      );
-      for (const name of legacy) {
-        const p = join(nmDir, name);
-        try {
-          if (lstatSync(p).isSymbolicLink()) {
-            unlinkSync(p);
-            console.log(`[dsh-run] 清理旧插件 junction：${name}`);
-          }
-        } catch {
-          /* 非链接或已删：忽略 */
-        }
-      }
-    } catch {
-      /* nmDir 不存在/读失败：忽略（下方 mkdir 兜底） */
-    }
-    for (const pkg of packages) {
-      const link = join(nmDir, ...pkg.link.split("/"));
-      try {
-        let existed = false;
-        let isLink = false;
-        try {
-          isLink = lstatSync(link).isSymbolicLink();
-          existed = true;
-        } catch {
-          /* 不存在（含 lstat 失败） */
-        }
-        if (existed && !isLink)
-          throw new Error(link + " 已存在且不是符号链接请移除后重试");
-        if (existed) unlinkSync(link);
-        mkdirSync(dirname(link), { recursive: true });
-        symlinkSync(pkg.target, link, IS_WIN ? "junction" : null);
-      } catch (e) {
-        // 符号链接创建失败降级：仅记 warn，不阻断 dsh 启动——对应插件会退化为
-        // 不可用（client 模块未发现），后端路由与其余插件不受影响
-        console.warn(
-          `[dsh-run] ${pkg.link} junction 创建失败（${e?.message || e}），该插件将不可用`,
-        );
-      }
-    }
-  };
-
   // 静态 patch：dsh-plugin/dsh-hanako.patch.yml（v0.22.1+ tpl 整层退役）——
   // 纯 insert 六个内嵌插件（logger/clipboard/theme/provider/settings/bridge），全部
   // 零 config：busToken 免鉴权（任务 A）、config 经总线下发（任务 B）、logPath 占位符
@@ -575,8 +451,9 @@ export async function ensureWebHost(cfg) {
     );
   }
   const patchArgs = patchFiles.flatMap((p) => ["--patch", p]);
-  // 四段 cordis 插件均以包名注册，spawn 前确保 junction 就绪（幂等）
-  ensureCordisJunctions(dshHome);
+  // 六段 cordis 插件均以包名注册，spawn 前确保 junction 就绪（幂等，无条件收敛）——
+  // 经统一迁移入口调度 junction-converge 步骤（旧名清理 + @dsh-hanako scope 重建）
+  runMigrations(cfg, { steps: ["junction-converge"] });
   // launcher flag（--profile/--patch）必须位于应用参数（--port）之前；且 --patch 是
   // 顶层 dsh 选项，必须位于 --profile 之前（dsh 0.1.x：--profile 之后的参数视为
   // web app 参数，--patch 会被 web app 拒为 unknown option）
@@ -1036,8 +913,9 @@ getSingleton().startWebHost = async function startWebHostFromPlugin(
     if (v !== undefined && v !== null && v !== "") cfg[k] = v;
   }
   cfg.dataDir = ctxDataDir || join(PLUGIN_ROOT, "data");
-  // 插件初始化（拉起 web host）即自动生成 config.json（不存在时按 manifest 默认值）
-  ensureConfigJson(cfg);
+  // 插件初始化（拉起 web host）即自动生成 config.json（不存在时按 manifest 默认值；
+  // 幂等不覆盖已有配置）——经统一迁移入口调度 config-schema 步骤（src/migrate.js）
+  runMigrations(cfg, { steps: ["config-schema"] });
   // 单例记数据目录（dsh_session 经 g.dataDir 定位 dsh 会话缓存等数据文件）
   getSingleton().dataDir = cfg.dataDir;
   if (!cfg.dshPkgDir) cfg.dshPkgDir = resolveDshPkgDir(cfg);

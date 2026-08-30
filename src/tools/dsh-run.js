@@ -40,10 +40,13 @@ import {
   textFromChunk,
   textFromMessageBlocks,
 } from "./lib/protocol.js";
-// 生命周期能力（web host 拉起 / config.json 引导）——本模块只做任务提交，这两者对单例/web host
-// 的依赖经 app/lifecycle.js 转发（lifecycle.js 顶层 mountLifecycle 已把 closeProcess / collectDiagnostics /
+// 生命周期能力（web host 拉起）——本模块只做任务提交，对单例/web host 的依赖经
+// app/lifecycle.js 转发（lifecycle.js 顶层 mountLifecycle 已把 closeProcess / collectDiagnostics /
 // updateDsh / startWebHost / installDeps / verifyDeps / checkDshUpdate 挂到 globalThis 单例）。
-import { ensureWebHost, ensureConfigJson } from "../lifecycle.js";
+// config.json 引导（config-schema 迁移）经 src/migrate.js 统一入口调度（本模块与 lifecycle.js
+// 同属 index.js 单 bundle 收敛入口的静态 import 链，runMigrations 随 bundle 内联）。
+import { ensureWebHost } from "../lifecycle.js";
+import { runMigrations } from "../migrate.js";
 
 // ---- 本地审批应答（自动放行/超时拒绝共用；信封构造同 tools/dsh-approve.js，不 import 避免模块耦合）----
 // 经总线 rpc.request method="respond" 发送（bridge 翻译器自环调 /api/respond，client-response
@@ -825,8 +828,9 @@ async function doExecute(input, ctx) {
   const g = getSingleton();
   const dataDir = ctx.dataDir || g.dataDir || join(PLUGIN_ROOT, "data");
   cfg.dataDir = dataDir;
-  // 首次工具调用即自动生成 config.json（不存在时按 manifest 默认值；幂等，失败静默）
-  ensureConfigJson(cfg);
+  // 首次工具调用即自动生成 config.json（不存在时按 manifest 默认值；幂等，失败静默）——
+  // 经统一迁移入口调度 config-schema 步骤（src/migrate.js）
+  runMigrations(cfg, { steps: ["config-schema"] });
   // 单例记数据目录（dsh_session 经 g.dataDir 定位 dsh 会话缓存等数据文件）——
   // 只在显式注入（ctx.dataDir 非空）或单例为空（冷启动兜底）时写入；ctx.dataDir
   // 为空且单例已有值时保留单例原值，绝不把 PLUGIN_ROOT/data 回退值覆盖进去。

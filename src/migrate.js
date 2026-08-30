@@ -1,0 +1,308 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Nyasers
+//
+// src/migrate.js — 源码层统一版本迁移入口（注册表式调度器）
+// 背景：插件「版本迁移 / 历史遗留收敛」逻辑散落多处（index.js onload 的旧日志归档压缩、
+// lifecycle.js 的 config.json 初始化、junction 旧名清理），各自在调用点隐式执行，未来新增
+// 迁移没有统一落点。本模块把散落动作收敛为唯一入口：有序迁移注册表 + runMigrations(cfg)
+// 调度器。新增迁移 = 注册表加一条（幂等 run + id），调用点按需选择步骤。
+//
+// 迁移清单（id → 来源动作 → 原调用点 → 现调度点）：
+//   1. archive-old-logs   旧日志归档压缩（latest.log 残留归档 + 时间戳 .log → .log.zst）
+//                         原在 index.js onload 内联；现经 index.js onload 调
+//                         runMigrations({ dataDir }, { steps: ["archive-old-logs"] }) 执行。
+//                         约束：须在建新会话文件之前执行（步骤内部先归档 latest.log 再压缩
+//                         旧日志，避免把新会话文件也压缩）——故 onload 调调度器先于
+//                         nextTimestampLogPath 建会话文件。
+//   2. config-schema      config.json 初始化/升级（不存在时按 manifest 默认值生成
+//                         { schemaVersion: 1, global: {...manifestDefaults}, agents: {},
+//                         sessions: {} }；幂等不覆盖已有配置）。原在 lifecycle.js
+//                         ensureConfigJson（startWebHostFromPlugin 与 dsh-run.js doExecute
+//                         两处调用）；现统一经 runMigrations(cfg, { steps: ["config-schema"] })。
+//                         未来 schemaVersion 升级迁移在此扩展。
+//   3. junction-converge  cordis junction 旧名清理 + @dsh-hanako scope 无条件收敛（清理
+//                         dsh-hana-* 旧名遗留 junction，重建 @dsh-hanako/* 六个包 junction，
+//                         每次启动无条件收敛）。原在 lifecycle.js ensureWebHost 内闭包；
+//                         现经 ensureWebHost 调 runMigrations(cfg, { steps: ["junction-converge"] })。
+//
+// 未纳入本模块的（判断取舍，保持原地）：
+//   - update-result.json（updateDsh 更新流程写入的运行期状态文件）：是运行期状态，不是
+//     版本迁移，保留在 lifecycle.js updateDsh 内。
+//   - newWebLogPath（lifecycle.js 的兜底日志会话文件创建）：冷启动边缘的会话文件兜底，
+//     不是历史遗留收敛，保留原地。
+//   - provider 路由组装 / bus 连接等：运行期能力，不是迁移。
+//
+// 分发形态（遵守仓库分发纪律）：本模块只被 src/lifecycle.js（与 src/tools/dsh-run.js，
+// 二者同属 index.js 单 bundle 收敛入口的静态 import 链）静态 import，会被 rspack 内联进
+// dist/index.js bundle（build.mjs 的 staticUrlToMeta 递归收集 ROOT 下全部 .js 路径做
+// import.meta.url 替换）。index.js 不静态 import 本模块（避免 Node ESM 固定 URL 缓存读到
+// 旧模块），经 globalThis 单例调用：本文件顶层把 runMigrations 挂到 getSingleton() 单例
+// （g.runMigrations），index.js onload 用 g.runMigrations?.(...) 调用（同 g.startWebHost /
+// g.closeProcess 纪律）。
+import {
+  existsSync,
+  mkdirSync,
+  writeFileSync,
+  renameSync,
+  symlinkSync,
+  lstatSync,
+  unlinkSync,
+  readdirSync,
+  readFileSync,
+} from "node:fs";
+import { zstdCompressSync } from "node:zlib";
+import { join, dirname } from "node:path";
+import {
+  getSingleton,
+  PLUGIN_ROOT,
+  manifestDefaults,
+  IS_WIN,
+} from "./tools/lib/state.js";
+
+// ---- 迁移步骤 1：旧日志归档压缩（archive-old-logs）----
+// 旧日志策略（同 dsh session 持久化：全部保留，体积靠压缩）：把上一会话及更早的时间戳
+// .log 用 Node 内置 node:zlib zstd 压缩为 .log.zst（标准 zstd 格式，magic 28b52ffd，任何
+// zstd 工具/库可解），删除原 .log——全部保留不删除。另处理历史版本遗留的 latest.log 残留：
+// 真实文件 rename 成时间戳日志名（随后走压缩），旧链接直接删（内容在真实文件里）。
+// 幂等：已压缩的 .log.zst 不匹配正则自然跳过；latest.log 不存在时零动作；单个失败保留
+// 原文件下次再试。须在建新会话文件之前执行（onload 调度本步骤先于 nextTimestampLogPath）。
+const LOG_NAME_RE = /^\d{8}-\d{6}(?:-\d+)?\.log$/;
+function logFileStamp(d) {
+  const p = (n) => String(n).padStart(2, "0");
+  const p3 = (n) => String(n).padStart(3, "0");
+  // 毫秒级精度：同一秒内多次会话（快速重启）天然不撞名，无需后缀消歧
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}-${p3(d.getMilliseconds())}`;
+}
+// 下一个时间戳日志文件路径（now 毫秒级命名；极端同毫秒冲突加 -i 后缀），用于旧 latest
+// 归档命名——文件名即应用层创建时刻，不依赖文件系统元数据
+function nextTimestampLogPath(logsDir) {
+  const stamp = logFileStamp(new Date());
+  let target = join(logsDir, stamp + ".log");
+  let i = 1;
+  while (existsSync(target)) {
+    i += 1;
+    target = join(logsDir, stamp + "-" + i + ".log");
+  }
+  return target;
+}
+// 旧日志 zstd 压缩（全部保留，不删除；同 dsh session 持久化哲学）：扫描时间戳 .log
+// （未压缩；.log.zst 不匹配正则自然跳过），zstd 压缩为 .log.zst 后删原文件；单个失败
+// 保留原文件下次再试
+function compressArchivedLogs(logsDir) {
+  let count = 0;
+  try {
+    if (!existsSync(logsDir)) return 0;
+    for (const f of readdirSync(logsDir)) {
+      if (!LOG_NAME_RE.test(f)) continue;
+      const src = join(logsDir, f);
+      try {
+        const raw = readFileSync(src);
+        writeFileSync(src + ".zst", zstdCompressSync(raw));
+        unlinkSync(src);
+        count += 1;
+      } catch {
+        /* 单个压缩失败跳过（保留原文件） */
+      }
+    }
+  } catch {
+    /* 扫描失败不阻断 */
+  }
+  return count;
+}
+// 迁移步骤 run 实现：返回 { archivedName, compressed } 供 onload 记日志（归档文件名 +
+// 压缩个数）。失败不抛出（内部逐项 try/catch，与旧实现一致——调度器兜底再包一层）。
+function archiveOldLogs(cfg) {
+  const logsDir = join(cfg.dataDir, "logs");
+  // 旧 latest.log 残留（历史版本遗留）：归档避免残留（内容保留，会被 zstd 压缩）；
+  // 旧链接直接删（内容在真实文件里）
+  const latest = join(logsDir, "latest.log");
+  let archivedName = null;
+  if (existsSync(latest)) {
+    try {
+      const st = lstatSync(latest);
+      if (st.isSymbolicLink()) unlinkSync(latest);
+      else {
+        archivedName = nextTimestampLogPath(logsDir);
+        renameSync(latest, archivedName);
+      }
+    } catch {
+      /* 旧文件处理失败不阻断 */
+    }
+  }
+  // 压缩旧日志（上一会话及更早的时间戳 .log → .log.zst，全部保留不删除）
+  const compressed = compressArchivedLogs(logsDir);
+  return { archivedName, compressed };
+}
+
+// ---- 迁移步骤 2：config.json schema 初始化/升级（config-schema）----
+// config.json 不随包分发（宿主设置界面生成，路径 <插件数据目录>/config.json），全新安装
+// 时不存在。插件初始化（拉起 web host / 首次工具调用）时按 manifest 默认值自动生成
+// { schemaVersion: 1, global: { ...manifestDefaults }, agents: {}, sessions: {} }，用户装完
+// 即可在设置界面看到默认值，无需先手动保存一次。
+// 幂等：文件已存在直接返回，绝不覆盖用户配置/宿主生成内容。失败静默：resolve* 有配置
+// 快照兜底，不阻塞主流程（生成的只是初始默认值，被覆盖/缺失都不影响功能）。
+// schemaVersion 升级：未来版本结构变更时在此读旧 schemaVersion 逐级升级（本步是唯一
+// 落点，配合注册表版本号注释说明）。
+function ensureConfigJson(cfg) {
+  try {
+    const dataDir =
+      cfg.dataDir || getSingleton().dataDir || join(PLUGIN_ROOT, "data");
+    const cf = join(dataDir, "config.json");
+    if (existsSync(cf)) return; // 已存在（宿主生成/用户修改）：幂等跳过
+    mkdirSync(dataDir, { recursive: true });
+    const tmp = join(dataDir, ".config.json.tmp");
+    // 先写临时文件再 rename 原子落位（中断不留半成品），对齐 scripts/pack.mjs 惯例
+    writeFileSync(
+      tmp,
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          global: { ...manifestDefaults },
+          agents: {},
+          sessions: {},
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    renameSync(tmp, cf);
+  } catch {
+    /* 生成失败静默：resolve* 有配置快照兜底 */
+  }
+}
+
+// ---- 迁移步骤 3：cordis junction 旧名清理 + @dsh-hanako scope 收敛（junction-converge）----
+// cordis 插件加载：六段均以包名注册（dsh client 模块发现按 loader entry 的 name 做
+// require.resolve('<name>/package.json')，file:// 无法解析），故启动前须在
+// $DSH_HOME/profiles/node_modules 统一建 junction（包名 → 插件安装目录 dsh-plugin/<pkg>），
+// 与 dsh 自维护的 junction farm 同机制。@dsh-hanako scope 收敛（v0.18.1）：六个插件包统一
+// 命名空间（v0.22.1 +bridge），junction 名与包名一致（profiles/node_modules/@dsh-hanako/<pkg>
+// → 插件安装目录 dsh-plugin/@dsh-hanako/<pkg>）。顺带清理旧名遗留 junction（dsh-hana-*
+// 前缀，含 v0.13.0 改名前的 dsh-hana-default-model / dsh-hana-proxy 等历史残留），无条件
+// 收敛到当前命名，杜绝混装。
+// 无条件重建：每次启动删旧建新（不比较 readlink）——junction 状态无条件收敛到当前代码
+// 期望，杜绝一切残留（悬空 junction / 指向旧路径）导致的解析失败；与 patch 每次渲染覆盖
+// 同一哲学。存在性用 lstatSync（不跟随目标）判断——existsSync 沿目标解析，悬空 junction
+// 会误判不存在，导致 symlinkSync EEXIST。非 junction 同名实体报错不静默覆盖。
+function convergeCordisJunctions(cfg) {
+  const dshHome = join(cfg.dataDir, "dsh-home");
+  const packages = [
+    {
+      link: "@dsh-hanako/theme",
+      target: join(PLUGIN_ROOT, "dsh-plugin", "@dsh-hanako", "theme"),
+    },
+    {
+      link: "@dsh-hanako/provider",
+      target: join(PLUGIN_ROOT, "dsh-plugin", "@dsh-hanako", "provider"),
+    },
+    {
+      link: "@dsh-hanako/settings",
+      target: join(PLUGIN_ROOT, "dsh-plugin", "@dsh-hanako", "settings"),
+    },
+    {
+      link: "@dsh-hanako/logger",
+      target: join(PLUGIN_ROOT, "dsh-plugin", "@dsh-hanako", "logger"),
+    },
+    {
+      link: "@dsh-hanako/clipboard",
+      target: join(PLUGIN_ROOT, "dsh-plugin", "@dsh-hanako", "clipboard"),
+    },
+    {
+      link: "@dsh-hanako/bridge",
+      target: join(PLUGIN_ROOT, "dsh-plugin", "@dsh-hanako", "bridge"),
+    },
+  ];
+  const nmDir = join(dshHome, "profiles", "node_modules");
+  // 清理旧名 junction：profiles/node_modules 下 dsh-hana-*（非 @dsh-hanako scope）
+  // 的符号链接一律删（旧插件实例遗留，如 dsh-hana-default-model / dsh-hana-proxy）
+  try {
+    const legacy = readdirSync(nmDir).filter(
+      (n) => n.startsWith("dsh-hana-") && !n.startsWith("@"),
+    );
+    for (const name of legacy) {
+      const p = join(nmDir, name);
+      try {
+        if (lstatSync(p).isSymbolicLink()) {
+          unlinkSync(p);
+          console.log(`[dsh-run] 清理旧插件 junction：${name}`);
+        }
+      } catch {
+        /* 非链接或已删：忽略 */
+      }
+    }
+  } catch {
+    /* nmDir 不存在/读失败：忽略（下方 mkdir 兜底） */
+  }
+  for (const pkg of packages) {
+    const link = join(nmDir, ...pkg.link.split("/"));
+    try {
+      let existed = false;
+      let isLink = false;
+      try {
+        isLink = lstatSync(link).isSymbolicLink();
+        existed = true;
+      } catch {
+        /* 不存在（含 lstat 失败） */
+      }
+      if (existed && !isLink)
+        throw new Error(link + " 已存在且不是符号链接请移除后重试");
+      if (existed) unlinkSync(link);
+      mkdirSync(dirname(link), { recursive: true });
+      symlinkSync(pkg.target, link, IS_WIN ? "junction" : null);
+    } catch (e) {
+      // 符号链接创建失败降级：仅记 warn，不阻断 dsh 启动——对应插件会退化为
+      // 不可用（client 模块未发现），后端路由与其余插件不受影响
+      console.warn(
+        `[dsh-run] ${pkg.link} junction 创建失败（${e?.message || e}），该插件将不可用`,
+      );
+    }
+  }
+}
+// ---- 迁移注册表（有序：执行顺序 = 数组顺序；新增迁移在此加一条）----
+// 每条：{ id（稳定标识，调用点 steps 选择用）, version（引入/最后调整版本，文档用）,
+//        run(cfg)（幂等步骤实现；失败由 runMigrations 捕获记录，不阻断后续） }
+const MIGRATIONS = [
+  {
+    id: "archive-old-logs",
+    version: "0.10.8+",
+    describe: "旧日志归档压缩（latest.log 残留归档 + 时间戳 .log → .log.zst，全部保留）",
+    run: archiveOldLogs,
+  },
+  {
+    id: "config-schema",
+    version: "0.1.0+",
+    describe: "config.json schema 初始化/升级（不存在时按 manifest 默认值生成，幂等不覆盖）",
+    run: ensureConfigJson,
+  },
+  {
+    id: "junction-converge",
+    version: "0.18.1+",
+    describe: "cordis junction 旧名清理 + @dsh-hanako scope 无条件收敛",
+    run: convergeCordisJunctions,
+  },
+];
+
+// ---- 统一入口：runMigrations(cfg, opts) ----
+// 按注册表顺序执行迁移步骤；每步幂等、失败不阻断后续（try/catch 记录 error 继续）。
+// opts.steps?: string[] —— 只执行指定步骤（按注册表顺序）；缺省 = 全部。
+// 返回结果数组 [{ id, ok, detail|error }]：detail = 步骤返回值（如 archive-old-logs 的
+// { archivedName, compressed }），error = 捕获的异常消息。本函数永不抛异常。
+export function runMigrations(cfg, opts = {}) {
+  const want = Array.isArray(opts.steps) ? opts.steps : MIGRATIONS.map((m) => m.id);
+  const results = [];
+  for (const m of MIGRATIONS) {
+    if (!want.includes(m.id)) continue;
+    try {
+      results.push({ id: m.id, ok: true, detail: m.run(cfg) ?? null });
+    } catch (e) {
+      results.push({ id: m.id, ok: false, error: String(e?.message || e) });
+    }
+  }
+  return results;
+}
+
+// ---- 单例挂载（globalThis.__dshHanako，与 lifecycle.js mountLifecycle 同纪律）----
+// index.js onload 不静态 import 本模块（分发纪律见文件头），经 g.runMigrations 调用。
+// 顶层执行：lifecycle.js / dsh-run.js 静态 import 本模块时即挂好（bundle 内联无缓存问题）。
+getSingleton().runMigrations = runMigrations;
