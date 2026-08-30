@@ -240,17 +240,32 @@ function convergeCordisJunctions(cfg) {
   }
   for (const pkg of packages) {
     const link = join(nmDir, ...pkg.link.split("/"));
+    // 预检碰撞：目标路径「已存在且不是符号链接」的同名实体 = 确定性冲突（junction
+    // 路径被普通目录/文件占用）。不静默覆盖、不 warn 降级——直接抛出（runMigrations
+    // 记录 error，调用方 ensureWebHost 据此拒绝启动；带病启动会导致对应插件模块
+    // 解析失败且诊断困难）。与下方 symlinkSync 环境性失败（权限/只读等）区分：
+    // 后者仍 warn 降级继续，不影响其余插件。
+    let existed = false;
+    let isLink = false;
+    try {
+      isLink = lstatSync(link).isSymbolicLink();
+      existed = true;
+    } catch {
+      /* 不存在（含 lstat 失败） */
+    }
+    if (existed && !isLink)
+      throw new Error(link + " 已存在且不是符号链接请移除后重试");
+  }
+  for (const pkg of packages) {
+    const link = join(nmDir, ...pkg.link.split("/"));
     try {
       let existed = false;
-      let isLink = false;
       try {
-        isLink = lstatSync(link).isSymbolicLink();
+        lstatSync(link);
         existed = true;
       } catch {
         /* 不存在（含 lstat 失败） */
       }
-      if (existed && !isLink)
-        throw new Error(link + " 已存在且不是符号链接请移除后重试");
       if (existed) unlinkSync(link);
       mkdirSync(dirname(link), { recursive: true });
       symlinkSync(pkg.target, link, IS_WIN ? "junction" : null);

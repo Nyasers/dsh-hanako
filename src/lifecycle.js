@@ -452,8 +452,14 @@ export async function ensureWebHost(cfg) {
   }
   const patchArgs = patchFiles.flatMap((p) => ["--patch", p]);
   // 六段 cordis 插件均以包名注册，spawn 前确保 junction 就绪（幂等，无条件收敛）——
-  // 经统一迁移入口调度 junction-converge 步骤（旧名清理 + @dsh-hanako scope 重建）
-  runMigrations(cfg, { steps: ["junction-converge"] });
+  // 经统一迁移入口调度 junction-converge 步骤（旧名清理 + @dsh-hanako scope 重建）。
+  // 非链接碰撞（确定性冲突）由迁移步骤抛出 → runMigrations 记录 error → 此处拒绝
+  // 启动（带病启动会导致插件模块解析失败）；symlink 环境性失败仍为 warn 降级不阻断。
+  const mig = runMigrations(cfg, { steps: ["junction-converge"] });
+  const jm = mig.find((m) => m.id === "junction-converge");
+  if (jm && !jm.ok && /不是符号链接/.test(jm.error || "")) {
+    throw new Error("junction 收敛失败：" + (jm.error || "非链接碰撞"));
+  }
   // launcher flag（--profile/--patch）必须位于应用参数（--port）之前；且 --patch 是
   // 顶层 dsh 选项，必须位于 --profile 之前（dsh 0.1.x：--profile 之后的参数视为
   // web app 参数，--patch 会被 web app 拒为 unknown option）
@@ -859,6 +865,9 @@ export async function updateDsh(cfg) {
     };
     // 终态对象写入 g.update.result（= updateDsh 返回值，单一事实源；不再写 update-result.json）
     g.update.result = result;
+    // 重启失败也是「本次更新的错误」：同步进 g.update.error（诊断 buildDepsDiagCheck
+    // 的 updateError 查找可见），result 与总线事件中的 error 数据均保留
+    if (restartError) g.update.error = restartError;
     g.update.status = "ok";
     g.update.time = new Date().toISOString(); // 终态时刻（卡片/诊断的完成时间）
     // 事件化：bus emit update.result（设置页事件缓存；无文件兜底——update-result.json 已退役）
