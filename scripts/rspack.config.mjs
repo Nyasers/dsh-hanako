@@ -5,8 +5,8 @@
 // 与 hana-remote-dev 的 rspack.config.mjs 对齐，按 dsh-hanako 实际适配：
 //   - 单入口 src/index.js → 单产物 dist/index.js（生命周期+7 工具+lib+路由+前端资产全部收敛）
 //   - 输出 ESM module（纯 ESM 无原生模块，不需要 CJS+loadBundle 沙箱；宿主直接 import）
-//   - library.type=module：入口具名导出（webuiRoute/cardRoute）真 emit 成 ESM export，
-//     dist/routes/*.js 壳 import bundle 转发；default 导出插件类（宿主 new + onload）
+//   - library.type=module：入口具名导出（pluginRoutes）真 emit 成 ESM export，
+//     dist/routes/index.js 壳 import bundle 转发；default 导出插件类（宿主 new + onload）
 //   - asset/source：src/assets 下前端资源（webui-shell.jinja2 / card-op|dep.jinja2 模板 + card.js /
 //     card.css），模板经 template-loader（doT）编译为自包含渲染函数，js/css 经 minify-loader 压缩内联
 //   - externalsPresets.node：node 内置模块保持外部 import（零运行时依赖）
