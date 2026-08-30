@@ -625,12 +625,14 @@ function submitTask(
           );
     });
 
+    // promptMeta 声明提升到 try 外：提交失败时 catch 从 promptMeta.rpcId 兜底
+    // taskRpcId（callUnaryBus/HTTP 兜底在 reject 路径也回传 meta.rpcId）
+    const promptMeta = {};
     try {
       // 3. 提交 prompt（queue 模式：立即 accepted，agent 异步执行）
       // promptMeta.rpcId = 会话 jsonl 的 user/message 事件 data.source.rpcId（同一 RPC id），
       // 经 ready 返回给卡片 URL：插件重启后按 sessionId+rpcId 从 jsonl 精确恢复（运行期
-      // 协调键 = sessionId，数据定位键 = sessionId+rpcId）
-      const promptMeta = {};
+      // 协调键 = sessionId，数据定位键 = sessionId+rpcId）。
       await callUnaryBus(
         "session.prompt",
         {
@@ -681,6 +683,12 @@ function submitTask(
         stderr: web.stderr ? web.stderr.slice(-2000) : null,
       };
     } catch (err) {
+      // 提交失败也保留 rpcId 关联：promptMeta.rpcId 由 callUnaryBus/HTTP 兜底在 reject 路径
+      // 提前回传（reqId 生成即写 meta）——session.prompt 已发出但响应失败/超时/中止时
+      // rpcId 仍已知（dsh 侧已以此写 jsonl data.source.rpcId），失败终态可凭 sessionId+rpcId
+      // 在 jsonl 定位该轮次；完全未发出（emit 失败且降级也失败）时 rpcId 为空，用
+      // 「submission-failed」占位（展示层，deferredTaskId 仍用独立 fallback 保持唯一）。
+      if (!taskRpcId && promptMeta?.rpcId) taskRpcId = promptMeta.rpcId;
       // 超时/取消：通知 web host 取消该会话的任务（best effort，agent 在 web 里仍可见）
       if (err?.code === "DSH_TIMEOUT" || err?.code === "DSH_ABORTED") {
         try {
@@ -722,7 +730,11 @@ function submitTask(
   })();
 
   promise.catch((err) => {
-    resolveReady?.(null); // 提交失败：loc 为 null，卡片 route 不带定位参数（错误态由 deferred fail 呈现）
+    // 提交失败也保留 rpcId 关联：taskRpcId 已在 catch 里从 promptMeta.rpcId 兜底（若有）——
+    // loc 带 { sessionId, rpcId } 时 doExecute 的 text / deferred 回调 / 卡片 route 都保留
+    // 关联；完全无 rpcId（提交未发出）时 loc 为 null（route 不带定位参数，错误态由
+    // deferred 呈现）。
+    resolveReady?.(taskRpcId ? { sessionId, rpcId: taskRpcId } : null);
   });
 
   return { promise, ready };
@@ -922,7 +934,11 @@ async function doExecute(input, ctx) {
         resolveDeferredWake({
           bus,
           taskId: deferredTaskId,
-          result: abnormalWakeResult({ err, loc, taskRpcId }),
+          result: abnormalWakeResult({
+            err,
+            loc,
+            taskRpcId: taskRpcId || "submission-failed",
+          }),
         });
       },
     );
@@ -937,7 +953,7 @@ async function doExecute(input, ctx) {
           // Agent 上下文（实机：wait 返回只有 text），Agent 凭 text 里的 sessionId 立即
           // dsh_cancel / dsh_session get，无需反查 list 或等终态回调。提交失败（loc
           // null）时 sessionId 占位「（提交失败）」，rpcId 仍可定位（deferred 回调兜底）。
-          text: `任务已提交给 DSH（rpcId: ${taskRpcId}，sessionId: ${(loc && loc.sessionId) || "（提交失败）"}），在后台执行中。进度与输出见上方卡片；完成后后台消息仅带回任务状态与定位键（rpcId/sessionId），取内容用 dsh_session get。`,
+          text: `任务已提交给 DSH（rpcId: ${taskRpcId || "submission-failed"}，sessionId: ${(loc && loc.sessionId) || "（提交失败）"}），在后台执行中。进度与输出见上方卡片；完成后后台消息仅带回任务状态与定位键（rpcId/sessionId），取内容用 dsh_session get。`,
         },
       ],
       details: {

@@ -31,6 +31,10 @@ function nextRpcId() {
 
 async function callUnary(base, method, payload, signal, meta) {
   const rpcId = nextRpcId();
+  // meta.rpcId 回传：rpcId 由宿主生成（client-request 信封），dsh 侧以此写 jsonl
+  // user/message 的 data.source.rpcId——生成即有效，提前设置使失败/拒绝路径也能拿到
+  //（成功路径同值），供调用方在提交失败时保留 rpcId 关联（sessionId+rpcId 定位轮次）。
+  if (meta && typeof meta === "object") meta.rpcId = rpcId;
   const res = await fetch(`${base}/api/${method}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -47,9 +51,6 @@ async function callUnary(base, method, payload, signal, meta) {
       `dsh ${method} 失败：${e.code || "unknown"} ${e.message || ""}`,
     );
   }
-  // meta.rpcId 回传：会话 jsonl 的 user/message 事件 data.source.rpcId 与此相同，
-  // 供 op 快照记录后用 sessionId+rpcId 从 jsonl 精确恢复（重启不丢、零映射文件）
-  if (meta && typeof meta === "object") meta.rpcId = rpcId;
   return full.result.value;
 }
 
@@ -82,8 +83,6 @@ function wireRpcResult() {
     // 清理（clearTimeout/delete/移除 abort 监听）统一在 settle 内做——
     // 不能在 resolve/reject 前先 delete，否则 settle 的 pending 校验会误判已 settle 而跳过。
     if (payload.ok) {
-      // meta.rpcId 回传与 callUnary 同语义：会话 jsonl data.source.rpcId == reqId
-      if (entry.meta && typeof entry.meta === "object") entry.meta.rpcId = payload.reqId;
       entry.resolve(payload.value);
     } else {
       const e = payload.error || {};
@@ -105,6 +104,10 @@ function rpcBusBase(g) {
 // AbortError 语义与 fetch 一致）；meta 成功时回传 rpcId（与 callUnary 同）。
 async function callUnaryBus(method, payload, signal, meta) {
   const reqId = nextRpcId();
+  // meta.rpcId 提前回传（同 callUnary 语义：reqId 宿主生成、dsh 侧写 jsonl
+  // data.source.rpcId）——总线路径成功/失败/超时/中止都保留 rpcId 关联；降级路径由
+  // callUnary 内部的 meta.rpcId 覆盖为实际 HTTP rpcId。
+  if (meta && typeof meta === "object") meta.rpcId = reqId;
   const g = getSingleton();
   const bus = g?.dshanaBus;
   // 总线优先：dshanaBus 就绪且 emit 送达（bus.js sendFrame 排队成功才 true——
