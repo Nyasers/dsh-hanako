@@ -128,6 +128,13 @@ async function callUnaryBus(method, payload, signal, meta) {
     } catch {
       /* 日志失败不阻断 */
     }
+    if (method === "respond") {
+      // respond 是 client-response 信封（rpcId 路由 web host pending 表，payload 已是
+      // { type:"client-response", rpcId, result } 原样信封）——不能用 callUnary 的
+      // client-request 信封（会再包一层，dsh /api/respond 校验失败）。总线不可用时
+      // 直发 HTTP，信封语义与总线路径（bridge 翻译器 respond 特殊处理）一致。
+      return respondDirect(rpcBusBase(g), payload, signal);
+    }
     return callUnary(rpcBusBase(g), method, payload, signal, meta);
   }
   // 总线路径：pending 配对等待 rpc.result（超时/中止清理防泄漏）
@@ -163,6 +170,19 @@ async function callUnaryBus(method, payload, signal, meta) {
     if (signal?.aborted) onAbort();
     else signal?.addEventListener("abort", onAbort, { once: true });
   });
+}
+
+// respond 审批应答直发（client-response 信封原样 POST /api/respond）：总线不可用时的
+// 降级路径。响应 rpcReceipt { accepted, reason? }，调用方校验 j.accepted 语义不变。
+async function respondDirect(base, payload, signal) {
+  const res = await fetch(`${base}/api/respond`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+    signal,
+  });
+  if (!res.ok) throw new Error(`/api/respond HTTP ${res.status}`);
+  return await res.json();
 }
 
 // ---- 事件流（/api/events.mux，WebSocket 通道）----
