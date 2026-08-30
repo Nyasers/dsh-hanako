@@ -3,8 +3,9 @@
 //
 // tools/dsh-approve.js — dsh 审批应答工具
 // dsh 会话审批挂起（approval/policy=ask 触发 approval/requested）时，dsh_run 任务的事件
-// 循环会把审批上下文存进运行期协调条目（g.ops，键 = 任务 rpcId；审批对象含 respond 路由
-// 所需的 respondRpcId——server-request 信封自己的 RPC id，区别于任务 rpcId），并通过宿主
+// 循环会把审批上下文存进运行期协调条目（g.ops，键 = sessionId——全链路唯一定位键；
+// 审批对象含 respond 路由所需的 respondRpcId——server-request 信封自己的 RPC id，
+// 区别于任务 rpcId），并通过宿主
 // deferred 通道通知 Agent。Agent 收到通知后调用本工具应答：allowed-once 放行单次 / rejected
 // 拒绝。内部经总线 rpc.request method="respond" 调 dsh web host /api/respond（callUnaryBus，
 // 总线优先/HTTP 兜底；bridge 回投 { accepted }，校验 j.accepted 语义不变）。
@@ -15,16 +16,16 @@ export const name = "dsh_approve";
 
 export const description =
   "应答 DSH 任务挂起的权限审批（approval/requested）：allowed-once=放行该次请求 / rejected=拒绝。" +
-  "rpcId 与 approvalId 来自审批通知；应答前评估通知里的 toolName 与 reason（命令原文）决定放行或拒绝。" +
+  "sessionId 与 approvalId 来自审批通知；应答前评估通知里的 toolName 与 reason（命令原文）决定放行或拒绝。" +
   "无人应答也可在 DSH Web UI 人工处理。完整调用手册见 SKILL: skills/dsh-approve/SKILL.md";
 
 export const parameters = {
   type: "object",
   properties: {
-    rpcId: {
+    sessionId: {
       type: "string",
       description:
-        "审批所属 DSH 任务的 rpcId（审批通知里带；任务级 rpcId，每次任务调用唯一）",
+        "审批所属 DSH 会话的 sessionId（审批通知里带；全链路唯一定位键，dsh_run 提交返回/卡片 URL 同键）",
     },
     approvalId: {
       type: "string",
@@ -38,7 +39,7 @@ export const parameters = {
         "allowed-once=放行单次（默认，安全默认值：仅本次操作）/ rejected=拒绝该请求",
     },
   },
-  required: ["rpcId", "approvalId"],
+  required: ["sessionId", "approvalId"],
 };
 
 export const sessionPermission = {
@@ -52,26 +53,26 @@ export const sessionPermission = {
 };
 
 async function doExecute(input, ctx) {
-  const rpcId = String(input.rpcId ?? "").trim();
+  const sessionId = String(input.sessionId ?? "").trim();
   const approvalId = String(input.approvalId ?? "").trim();
   const outcome = input.outcome === "rejected" ? "rejected" : "allowed-once";
-  if (!rpcId || !approvalId) throw new Error("rpcId 与 approvalId 必填");
+  if (!sessionId || !approvalId) throw new Error("sessionId 与 approvalId 必填");
 
   const g = globalThis.__dshHanako;
-  const op = g?.ops?.get(rpcId);
+  const op = g?.ops?.get(sessionId);
   if (!op)
     throw new Error(
-      `任务不存在或已过期（rpcId: ${rpcId}）：只可应答本会话近期提交的 DSH 任务审批`,
+      `任务不存在或已过期（sessionId: ${sessionId}）：只可应答本会话近期提交的 DSH 任务审批`,
     );
-  const approvals = Array.isArray(op.pendingApprovals)
-    ? op.pendingApprovals
+  const approvals = Array.isArray(op.activeApprovals)
+    ? op.activeApprovals
     : [];
   const ap = approvals.find((a) => a.approvalId === approvalId);
   if (!ap) {
     const known =
       approvals.map((a) => `${a.approvalId}(${a.status})`).join(", ") || "无";
     throw new Error(
-      `审批 ${approvalId} 不在任务 ${rpcId} 的待办列表（可能已被应答/超时）。已知: ${known}`,
+      `审批 ${approvalId} 不在会话 ${sessionId} 的待办列表（可能已被应答/超时）。已知: ${known}`,
     );
   }
   if (ap.status !== "pending") {
@@ -113,7 +114,7 @@ async function doExecute(input, ctx) {
       },
     ],
     details: {
-      dsh: { rpcId, approvalId, toolName: ap.toolName, outcome, accepted: true },
+      dsh: { sessionId, approvalId, toolName: ap.toolName, outcome, accepted: true },
     },
   };
 }

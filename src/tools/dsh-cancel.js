@@ -8,8 +8,8 @@
 // cancel 后 dsh 会发 turn/end（reason.kind=aborted），事件循环判 outcome.stopReason === "aborted"
 // → throw DSH_ABORTED → promise.catch 以 aborted 终态收尾（deferred fail 带「dsh_run 已取消」唤醒 Agent）。
 // 任务状态零存储（jsonl 唯一事实源），取消必传 sessionId（dsh_run 回调/卡片 URL 取）直接定位会话；
-// g.ops 运行期条目以任务 rpcId 键控，cancel 只有 sessionId 时遍历条目找 sessionId 匹配项
-// （条目极少——仅运行中任务，遍历可忽略；极早 cancel 条目未建则跳过标记）。工具侧先标记
+// g.ops 运行期条目以 sessionId 键控（协调态最小化：{ cancelledRequested, activeApprovals }），
+// cancel 凭 sessionId 直接 ops.get 取条目（极早 cancel 条目未建则跳过标记）。工具侧先标记
 // cancelledRequested = true，防 cancel 导致 mux 断流时事件循环把取消误判为完成
 // （dsh-run.js consume 末尾的取消兜底）。best-effort 止损：任务刚好自然完成时 cancel 的 accepted
 // 无副作用（事件循环已终态，cancel 幂等）。
@@ -53,15 +53,9 @@ async function doExecute(input, ctx) {
     );
 
   const g = globalThis.__dshHanako;
-  // 运行期协调条目以任务 rpcId 键控，cancel 只有 sessionId：遍历 g.ops 找该会话条目
-  // （条目极少——仅运行中任务，遍历可忽略）；极早 cancel（条目未建）时 entry 为 null，跳过标记
-  let entry = null;
-  for (const e of g?.ops?.values() ?? []) {
-    if (e.sessionId === sessionId) {
-      entry = e;
-      break;
-    }
-  }
+  // 运行期协调条目以 sessionId 键控：凭 sessionId 直接取条目（协调态最小化，无需遍历）；
+  // 极早 cancel（条目未建）时 entry 为 null，跳过标记（语义不变）
+  const entry = g?.ops?.get(sessionId) ?? null;
   const targetSessionId = sessionId;
 
   // 总线 Unary RPC（session.cancel）：rpcId 回显校验语义保留——总线路径下由 bridge 回投的
