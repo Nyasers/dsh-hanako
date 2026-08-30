@@ -31,6 +31,13 @@
 //   { "channel":"update.progress", "payload":{ state, at } }—— 宿主更新开始/进度回投
 //   { "channel":"update.result", "payload":{ state, version?, error? } }—— 宿主更新结果回投
 //   { "channel":"provider.refresh", "payload":{ routes } }  —— 宿主 provider 路由推送（替代 HTTP）
+//   { "channel":"rpc.request", "payload":{ reqId, method, payload } }—— 宿主 Unary RPC 指令面
+//                                                             收敛进总线（session.create/prompt/
+//                                                             selectModel/cancel + respond 审批
+//                                                             应答；翻译器自环调 /api/<method>，
+//                                                             见 translateRpcRequest）
+//   { "channel":"rpc.result", "payload":{ reqId, ok, value?, error? } }—— 翻译器回投（宿主按
+//                                                             reqId 配对等待；ok:false 带 error）
 //   { "channel":"bus.ping", "payload":{} } / { "channel":"bus.pong", "payload":{} } —— 心跳
 // 首帧必须是 hello（免鉴权身份宣告，仍要求首帧即 hello）：非 hello 首帧立即关闭
 // （close 1008）；5s 未发 hello 关闭（超时）。单连接语义：宿主是唯一客户端——新连接
@@ -59,6 +66,80 @@ const BUS_PATH = '/api/dshana.bus' // upgrade 路由路径（宿主连 ws://127.
 const HELLO_TIMEOUT_MS = 5000 // 握手超时（5s 未发 hello 关闭）
 const HELLO_CLOSE_CODE = 1008 // 握手失败关闭码（非 hello 首帧/超时）
 const REPLACED_CLOSE_CODE = 1001 // 旧连接被新连接顶掉
+
+// ---- 总线 RPC 翻译器（宿主 Unary RPC 指令面收敛进总线；导出供单测）----
+// 宿主经总线 rpc.request 帧投递 Unary RPC（session.create/prompt/selectModel/cancel 等 +
+// respond 审批应答），翻译器在 dsh 进程内自环调 dsh web /api/<method>（本机 127.0.0.1
+// 回环——子插件与 dsh 同进程，dsh 本体零改动），把 ServerResponse 翻译回 rpc.result 帧
+// 回投宿主。数据面（events.mux 事件流）仍由宿主直连，不经总线。
+// 安全：不设 method 白名单——与本机信任模型一致：本机进程本就可直接 POST 3080 /api/*
+// （总线与 mux、/api/session.* 同级，免鉴权），总线只是换入口，攻击面未扩大。
+// 回投纪律：所有异常路径（fetch 异常/超时/解析失败/HTTP 错误/rpcId 不匹配）都必须经
+// reply 回投 rpc.result（ok:false），否则宿主侧 pending 等待挂死。
+// req：{ reqId, method, payload }；port：dsh web 端口（取不到由调用方回退 3080）；
+// reply(frame)：回投一帧 rpc.result 载荷（{ reqId, ok, value? } 或 { reqId, ok:false, error }），
+// 不应抛出（插件侧接线已包 try/catch 隔离）。
+export async function translateRpcRequest(req, port, reply) {
+  const reqId = req && typeof req === 'object' ? req.reqId : undefined
+  const method = req && typeof req === 'object' ? req.method : undefined
+  // 校验：reqId/method 必须是非空 string，否则忽略（防垃圾帧）
+  if (typeof reqId !== 'string' || !reqId || typeof method !== 'string' || !method) {
+    return
+  }
+  const base = 'http://127.0.0.1:' + (Number(port) || 3080)
+  try {
+    if (method === 'respond') {
+      // 审批应答：/api/respond 要 client-response 信封（rpcId 路由 web host pending 表），
+      // 响应是 rpcReceipt { accepted } 而非 ServerResponse——与 Unary 响应结构不同，
+      // 单独构造信封/解析；value 原样回投 { accepted }，宿主侧校验 j.accepted 语义不变
+      // （与直连 HTTP 完全一致）。
+      const envelope = { type: 'client-response', ...(req.payload || {}) }
+      const res = await fetch(base + '/api/respond', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(envelope),
+      })
+      if (!res.ok) throw new Error('/api/respond HTTP ' + res.status)
+      const j = await res.json()
+      reply({ reqId, ok: true, value: j && typeof j === 'object' ? j : {} })
+      return
+    }
+    // Unary：client-request 信封，响应 ServerResponse（rpcId 回显 + result.ok/value
+    // 或 result.ok=false+error）
+    const res = await fetch(base + '/api/' + method, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        type: 'client-request',
+        rpcId: reqId,
+        method,
+        payload: req.payload,
+      }),
+    })
+    if (!res.ok) throw new Error('dsh /api/' + method + ' HTTP ' + res.status)
+    const full = await res.json()
+    if (!full || typeof full !== 'object' || full.rpcId !== reqId) {
+      reply({
+        reqId,
+        ok: false,
+        error: { code: 'rpc-id-mismatch', message: 'dsh /api/' + method + ' rpcId 不匹配' },
+      })
+      return
+    }
+    if (!full.result || !full.result.ok) {
+      const e = full.result.error || {}
+      reply({ reqId, ok: false, error: { code: e.code || 'unknown', message: e.message || '' } })
+      return
+    }
+    reply({ reqId, ok: true, value: full.result.value })
+  } catch (err) {
+    reply({
+      reqId,
+      ok: false,
+      error: { code: 'bridge-error', message: String((err && err.message) || err) },
+    })
+  }
+}
 
 // ---- 插件 apply：注册 upgrade 路由 + 提供 dshanaBus 服务（全程容错，降级不阻断）----
 export function apply(ctx, config) {
@@ -239,6 +320,25 @@ export function apply(ctx, config) {
           // 宿主下发的配置（未下发返回 null——settings/provider 据此报「总线配置未就绪」）
           getConfig: () => (busConfig ? { ...busConfig } : null),
         }
+        // ---- 总线 RPC 接线：订阅宿主 rpc.request → 翻译器执行 → 回投 rpc.result ----
+        // service.on 的监听器异常隔离是每回调包装（新订阅沿用该模式）；翻译器内部
+        // 全 try/catch，绝不外抛（回投失败也只记日志，不冒泡崩进程）。
+        service.on('rpc.request', (req) => {
+          translateRpcRequest(
+            req,
+            httpCtx.webServer && typeof httpCtx.webServer.port === 'number'
+              ? httpCtx.webServer.port
+              : undefined, // 取不到端口由翻译器回退 3080（与宿主默认 webPort 一致）
+            (frame) => {
+              try {
+                service.emit('rpc.result', frame)
+              } catch {
+                bridgeLog('rpc.result 回投失败（reqId=' + ((frame && frame.reqId) || '?') + '）')
+              }
+            },
+          )
+        })
+
         const provideDisposer = ctx.provide('dshanaBus', service)
 
         bridgeLog('bridge 插件已启动（dshana.bus 消息总线服务端，免鉴权）')

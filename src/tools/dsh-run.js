@@ -34,7 +34,7 @@ import {
   notifyApprovalWake,
 } from "./lib/wake.js";
 import {
-  callUnary,
+  callUnaryBus,
   openMux,
   textFromChunk,
   textFromMessageBlocks,
@@ -45,9 +45,11 @@ import {
 import { ensureWebHost, ensureConfigJson } from "../lifecycle.js";
 
 // ---- 本地审批应答（自动放行/超时拒绝共用；信封构造同 tools/dsh-approve.js，不 import 避免模块耦合）----
-// POST {base}/api/respond，client-response 信封（rpcId 路由 web host pending 表），校验 j.accepted。
+// 经总线 rpc.request method="respond" 发送（bridge 翻译器自环调 /api/respond，client-response
+// 信封 rpcId 路由 web host pending 表），校验 j.accepted 语义不变；callUnaryBus 总线优先、
+// HTTP 兜底（总线未连接时降级直连，行为与改造前一致），base 参数不再需要（端口从单例取）。
 // 成功返回 true，失败抛错由调用方决定：自动放行失败回退人工通知，超时拒绝失败静默忽略。
-async function respondApprovalLocal(base, approval, outcome) {
+async function respondApprovalLocal(approval, outcome) {
   const body = {
     type: "client-response",
     rpcId: approval.respondRpcId,
@@ -60,16 +62,10 @@ async function respondApprovalLocal(base, approval, outcome) {
       },
     },
   };
-  const res = await fetch(`${base}/api/respond`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(`/api/respond HTTP ${res.status}`);
-  const j = await res.json();
-  if (!j.accepted) {
+  const j = await callUnaryBus("respond", body);
+  if (!j || !j.accepted) {
     throw new Error(
-      `审批应答未接受（${j.reason || "unknown"}）：可能已超时或被其他方处理`,
+      `审批应答未接受（${(j && j.reason) || "unknown"}）：可能已超时或被其他方处理`,
     );
   }
   return true;
@@ -188,8 +184,9 @@ function submitTask(
   // 覆盖式只保留最后一轮、多轮任务严重偏小；按 disjoint 口径累计 = 未缓存输入/输出/缓存读取/推理之和，
   // 与 dsh 会话投影 tokenUsage.totals 对齐）。ok 终态与 promise.catch 的错误终态都能读到。
   let usageTotal = null;
-  // taskRpcId 同样提升到 submitTask 作用域：prompt 提交成功后才产生（callUnary 的 client-request
-  // 信封 rpcId，与 jsonl user/message 的 data.source.rpcId 同值）；事件循环（审批/取消/缓存键）与
+  // taskRpcId 同样提升到 submitTask 作用域：prompt 提交成功后才产生（callUnaryBus 的 rpcId，
+  // 总线路径下 bridge 回投 result 承载、HTTP 降级路径同 callUnary——client-request 信封 rpcId，
+  // 与 jsonl user/message 的 data.source.rpcId 同值）；事件循环（审批/取消/缓存键）与
   // 终态回调都读它。注意不要用 frame.rpcId（server-request 信封自己的 RPC id，仅 /api/respond 的
   // client-response 路由用，见 approval.respondRpcId）。
   let taskRpcId = null;
@@ -207,7 +204,7 @@ function submitTask(
     // agentPreset 无值不传（缺省走 web host 默认，Web UI 可调）
     let createPayload;
     if (resumeSessionId) {
-      const list = await callUnary(base, "session.list", {
+      const list = await callUnaryBus("session.list", {
         projections: ["id", "cwd"],
       });
       const items = list.items || [];
@@ -230,7 +227,7 @@ function submitTask(
     } else {
       createPayload = { cwd, ...(preset && { agentPreset: preset }) };
     }
-    const session = await callUnary(base, "session.create", createPayload);
+    const session = await callUnaryBus("session.create", createPayload);
     const sessionId = session.sessionId;
 
     // 1.5 模型选择：仅当工具显式传 provider/model/effort 时才 selectModel（显式覆盖
@@ -261,14 +258,14 @@ function submitTask(
         ...(effort ? { reasoningEffort: effort } : {}),
       };
       try {
-        await callUnary(base, "session.selectModel", selectModelPayload);
+        await callUnaryBus("session.selectModel", selectModelPayload);
       } catch (err) {
         // 显式 effort 被拒（如 reasoning:false 模型不接受 effort）：降级不带 effort 重试
         if (
           effort &&
           String(err?.message || "").includes("model-unavailable")
         ) {
-          await callUnary(base, "session.selectModel", {
+          await callUnaryBus("session.selectModel", {
             sessionId,
             provider: sp,
             model: sm,
@@ -489,7 +486,7 @@ function submitTask(
                       (a) => a.approvalId === approval.approvalId,
                     );
                     if (ap2 && ap2.status === "pending") {
-                      respondApprovalLocal(base, ap2, "rejected")
+                      respondApprovalLocal(ap2, "rejected")
                         .then(() => {
                           if (ap2.status === "pending") {
                             ap2.status = "answered";
@@ -634,8 +631,7 @@ function submitTask(
       // 经 ready 返回给卡片 URL：插件重启后按 sessionId+rpcId 从 jsonl 精确恢复（运行期协调键
       // 即任务 rpcId，数据定位键合一）
       const promptMeta = {};
-      await callUnary(
-        base,
+      await callUnaryBus(
         "session.prompt",
         {
           sessionId,
@@ -686,7 +682,7 @@ function submitTask(
       // 超时/取消：通知 web host 取消该会话的任务（best effort，agent 在 web 里仍可见）
       if (err?.code === "DSH_TIMEOUT" || err?.code === "DSH_ABORTED") {
         try {
-          await callUnary(base, "session.cancel", { sessionId });
+          await callUnaryBus("session.cancel", { sessionId });
         } catch {
           /* 忽略 */
         }

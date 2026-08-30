@@ -19,7 +19,7 @@ description: "dsh_cancel 工具手册（源码 tools/dsh-cancel.js 核对）。�
 
 1. **参数校验**：`sessionId` 为空 → 抛 `需要 sessionId（dsh_run 回调/卡片 URL 里带；取消一律显式传 sessionId）`。
 2. **定位**：`sessionId` 直接定位会话；g.ops 运行期条目以任务 rpcId 键控，cancel 遍历条目找 `entry.sessionId === sessionId` 的项（条目极少——仅运行中任务，遍历可忽略；极早 cancel 条目未建则为 null，跳过标记）。
-3. **请求**：调 web host `POST /api/session.cancel`（client-request 信封，rpcId 回显校验；`full.result.ok` 为假抛取消请求未接受）。
+3. **请求**：经总线 RPC（`callUnaryBus`，rpc.request/rpc.result 通道；bridge 在 dsh 进程内自环调 `POST /api/session.cancel`，client-request 信封，rpcId 回显校验语义保留）发送 `session.cancel`；总线未连接时降级 HTTP 直连。`result.ok` 为假抛取消请求未接受。
 4. **防误判**：先标记 `entry.cancelledRequested = true`（找到该会话的运行期条目时）——cancel 导致 mux 断流时，dsh-run.js 事件循环读取该标记把无终态收尾判为 aborted 而非 end_turn（防误报完成）。
 5. **收尾**：dsh agent 收到中断，任务以 aborted 终态收尾，宿主 deferred fail 以「dsh_run 已取消」唤醒 Agent。best-effort：任务刚好自然完成时 cancel 的 accepted 无副作用（cancel 幂等）。
 

@@ -2,8 +2,9 @@
 // Copyright (c) 2026 Nyasers
 //
 // tools/dsh-cancel.js — dsh 任务取消（止损）工具
-// dsh_run 派发任务后只能等完成或超时，本工具提供主动取消：调 dsh web host
-// POST /api/session.cancel（client-request 信封，rpcId 回显校验）中断运行中的任务会话。
+// dsh_run 派发任务后只能等完成或超时，本工具提供主动取消：经总线 rpc.request 调 dsh web host
+// session.cancel（callUnaryBus，总线优先/HTTP 兜底；rpcId 回显校验语义保留——总线路径由
+// bridge 回投的 result 承载，宿主侧校验 reqId 配对 + result.ok）中断运行中的任务会话。
 // cancel 后 dsh 会发 turn/end（reason.kind=aborted），事件循环判 outcome.stopReason === "aborted"
 // → throw DSH_ABORTED → promise.catch 以 aborted 终态收尾（deferred fail 带「dsh_run 已取消」唤醒 Agent）。
 // 任务状态零存储（jsonl 唯一事实源），取消必传 sessionId（dsh_run 回调/卡片 URL 取）直接定位会话；
@@ -13,12 +14,7 @@
 // （dsh-run.js consume 末尾的取消兜底）。best-effort 止损：任务刚好自然完成时 cancel 的 accepted
 // 无副作用（事件循环已终态，cancel 幂等）。
 
-function hostBase() {
-  const g = globalThis.__dshHanako;
-  const web = g?.web;
-  if (!web?.ready || !web.port) throw new Error("DSH web host 未就绪");
-  return `http://127.0.0.1:${web.port}`;
-}
+import { callUnaryBus } from "./lib/protocol.js";
 
 export const name = "dsh_cancel";
 
@@ -68,28 +64,9 @@ async function doExecute(input, ctx) {
   }
   const targetSessionId = sessionId;
 
-  const base = hostBase();
-  const rpcId = `r_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-  const res = await fetch(`${base}/api/session.cancel`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      type: "client-request",
-      rpcId,
-      method: "session.cancel",
-      payload: { sessionId: targetSessionId },
-    }),
-  });
-  if (!res.ok) throw new Error(`/api/session.cancel HTTP ${res.status}`);
-  const full = await res.json();
-  if (!full || full.rpcId !== rpcId)
-    throw new Error("/api/session.cancel rpcId 不匹配");
-  if (!full.result?.ok) {
-    const e = full.result?.error || {};
-    throw new Error(
-      `取消请求未接受（${e.code || "unknown"} ${e.message || ""}）`,
-    );
-  }
+  // 总线 Unary RPC（session.cancel）：rpcId 回显校验语义保留——总线路径下由 bridge 回投的
+  // result 承载（reqId 配对 + result.ok），降级走 HTTP 时与改造前直连行为一致。
+  await callUnaryBus("session.cancel", { sessionId: targetSessionId });
 
   // 标记：防 mux 断流时事件循环把取消误判为完成（dsh-run.js consume 末尾取消兜底读取该标记）
   if (entry) entry.cancelledRequested = true;

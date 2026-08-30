@@ -6,15 +6,10 @@
 // 循环会把审批上下文存进运行期协调条目（g.ops，键 = 任务 rpcId；审批对象含 respond 路由
 // 所需的 respondRpcId——server-request 信封自己的 RPC id，区别于任务 rpcId），并通过宿主
 // deferred 通道通知 Agent。Agent 收到通知后调用本工具应答：allowed-once 放行单次 / rejected
-// 拒绝。内部调 dsh web host POST /api/respond（client-response 信封，rpcId 路由 pending 表）。
+// 拒绝。内部经总线 rpc.request method="respond" 调 dsh web host /api/respond（callUnaryBus，
+// 总线优先/HTTP 兜底；bridge 回投 { accepted }，校验 j.accepted 语义不变）。
 
-function hostBase() {
-  const g = globalThis.__dshHanako;
-  const web = g?.web;
-  if (!web?.ready || !web.port)
-    throw new Error("DSH web host 未就绪（有审批挂起说明任务正在运行）");
-  return `http://127.0.0.1:${web.port}`;
-}
+import { callUnaryBus } from "./lib/protocol.js";
 
 export const name = "dsh_approve";
 
@@ -85,7 +80,6 @@ async function doExecute(input, ctx) {
     );
   }
 
-  const base = hostBase();
   const body = {
     type: "client-response",
     rpcId: ap.respondRpcId,
@@ -94,16 +88,12 @@ async function doExecute(input, ctx) {
       value: { sessionId: ap.sessionId, approvalId, outcome },
     },
   };
-  const res = await fetch(`${base}/api/respond`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(`/api/respond HTTP ${res.status}`);
-  const j = await res.json();
-  if (!j.accepted) {
+  // 经总线 rpc.request method="respond" 发送（bridge 自环 /api/respond，client-response 信封
+  // rpcId 路由 pending 表）；bridge 回投 { accepted }，校验 j.accepted 语义不变。
+  const j = await callUnaryBus("respond", body);
+  if (!j || !j.accepted) {
     throw new Error(
-      `审批应答未接受（${j.reason || "unknown"}）：可能已超时或被其他方处理，任务侧会自行感知`,
+      `审批应答未接受（${(j && j.reason) || "unknown"}）：可能已超时或被其他方处理，任务侧会自行感知`,
     );
   }
 
