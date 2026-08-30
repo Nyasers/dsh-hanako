@@ -490,7 +490,8 @@ export default function registerCardRoutes(app, ctx) {
           state: u.state,
           version: u.version ?? null,
           error: String(u.error || "").slice(0, 400) || null,
-          at: t.at || null,
+          // 完成时间优先 g.update.time（updateDsh 终态时刻）；无则回退任务发起时刻 t.at
+          at: g?.update?.time || t.at || null,
         };
       }
     }

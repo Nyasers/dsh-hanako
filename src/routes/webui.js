@@ -388,7 +388,8 @@ export default function registerWebuiRoutes(app, ctx) {
       if (!g || typeof g.verifyDeps !== "function") {
         return c.json({ ok: false, error: "插件工具模块未加载，稍后重试" });
       }
-      if (g.deps.status === "running") return c.json({ ok: true, running: true });
+      if (g.deps.status === "running" || g.deps.status === "installing")
+        return c.json({ ok: true, running: true });
       const smoke = await g.verifyDeps({
         dataDir: ctx.dataDir || g.dataDir,
         webPort: port,

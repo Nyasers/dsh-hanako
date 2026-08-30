@@ -100,7 +100,7 @@ web host 未就绪时，DSHana 标签页不再只显示「正在重试…」—�
 - **登记**：异步工具流程生成 `taskId`（`dsh_install_*` / `dsh_update_*`）→ 登记 `g.depTasks`（Map：`taskId → { taskId, kind: install|update, state: running|ok|error, log, at, result }`）→ 返回 `details.card.route = /card/dep?taskId=...`（宿主渲染 iframe 卡片，与 dsh_run 同机制）
 - **页面** `GET /card/dep?taskId=`（iframe 内容，`data-kind="dep"`）
 - **SSE** `GET /ops/dep-stream?taskId=`：首帧快照 + 每 1s 推一次（running 时 npm 日志实时滚动），终态推送后关闭；30s 心跳防代理超时；`GET /ops/dep-status?taskId=` 兜底 JSON
-- **数据源**：`g.depTasks` 条目 + `g.depsInstallLog`（installDepsFromPlugin 的 npm i 输出与里程碑同通道 `emitLog` 流式写入内存尾环 ≤8000，实时尾部卡片侧 ≤2000；同流实时写会话日志 src=npm，行规范化）+ 更新终态直接取 `g.depTasks` 条目 `result`（v0.24 起 update-result.json 退役，result 即权威终态）
+- **数据源**：`g.depTasks` 条目 + `g.deps.log`（installDepsFromPlugin 的 npm i 输出与里程碑同通道 `emitLog` 流式写入内存尾环 ≤8000，实时尾部卡片侧 ≤2000；同流实时写会话日志 src=npm，行规范化）+ 更新终态直接取 `g.depTasks` 条目 `result`（v0.24 起 update-result.json 退役，result 即权威终态）
 - **渲染**（app/card.js `initDepCard` 分支，按 `data-kind="dep"` 分流，不触碰任务卡片逻辑）：标题（DSH 安装 / DSH 升级）+ 状态徽标（安装中/升级中/完成/失败）+ npm 日志尾部预格式实时滚动（运行中隐藏滚动条 + 固定滚底）+ 完成结果行（「已安装 vX.Y.Z，web host 已自动启动」/「更新完成 vX，请重启 DSHana 使完全生效」/ 错误信息）
 
 ## 审批流程

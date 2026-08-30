@@ -322,6 +322,12 @@ const MIGRATIONS = [
 // { archivedName, compressed }），error = 捕获的异常消息。本函数永不抛异常。
 export function runMigrations(cfg, opts = {}) {
   const want = Array.isArray(opts.steps) ? opts.steps : MIGRATIONS.map((m) => m.id);
+  // 未识别 step ID 告警（拼写错误/调用点与注册表不同步的早期信号；已识别步骤行为不变）
+  const known = new Set(MIGRATIONS.map((m) => m.id));
+  for (const id of want) {
+    if (!known.has(id))
+      console.warn(`[dsh-hanako] runMigrations: 未识别的迁移步骤 "${id}"，已忽略`);
+  }
   const results = [];
   for (const m of MIGRATIONS) {
     if (!want.includes(m.id)) continue;

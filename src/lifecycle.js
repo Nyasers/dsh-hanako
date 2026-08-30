@@ -860,6 +860,7 @@ export async function updateDsh(cfg) {
     // 终态对象写入 g.update.result（= updateDsh 返回值，单一事实源；不再写 update-result.json）
     g.update.result = result;
     g.update.status = "ok";
+    g.update.time = new Date().toISOString(); // 终态时刻（卡片/诊断的完成时间）
     // 事件化：bus emit update.result（设置页事件缓存；无文件兜底——update-result.json 已退役）
     emitBus("update.result", {
       state: "done",
@@ -875,6 +876,7 @@ export async function updateDsh(cfg) {
     g.update.error = err;
     g.update.result = { ok: false, state: "error", error: err };
     g.update.status = "error";
+    g.update.time = new Date().toISOString(); // 终态时刻（失败时刻）
     // 事件化：bus emit update.result（失败态）
     emitBus("update.result", { state: "error", error: err });
     log(`更新失败：${err}`);
@@ -1062,8 +1064,12 @@ function buildDepsDiagCheck(g, cfg) {
   const updateError = String(g.update.error || "").slice(0, 300);
   // 更新结果内存态组合（v0.24：update-result.json 退役，不再读文件；状态 + 终态版本 +
   // 错误 + 时间，version 更新终态优先、依赖验证缓存兜底）
+  // 状态值域映射：g.update.status（idle/running/ok/error）→ 诊断对外契约值
+  // （done/updating/error；webui-shell.jinja2 按 state === "done" 渲染完成文案）
+  const updateState =
+    { ok: "done", running: "updating" }[g.update.status] || g.update.status;
   const updateResult = {
-    state: g.update.status,
+    state: updateState,
     version: g.update.result?.version || g.deps.result?.version || null,
     error: g.update.error || null,
     at: g.update.time || null,

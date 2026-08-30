@@ -534,7 +534,7 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir) {
     // 部署成功后强制运行级重验（清旧缓存，await 刷新——安装流程本身就是等待场景）；
     // verifyDepsSmoke 会把 g.deps.result 刷新为最新 smoke（含 status running→ok/error）
     g.deps.result = null;
-    await verifyDepsSmoke(cfg);
+    await verifyDepsSmoke(cfg, { force: true });
     // 安装链路终态 ok（终态保留；verify 若失败其详情在 g.deps.result，不影响安装结论）
     g.deps.status = "ok";
     return { ok: true, state: "installed", cliBin };
@@ -563,10 +563,21 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir) {
 // 完整直接返回，缺失/损坏自动重新下载自愈），结果记 pnpmReady / pnpmVersion / pnpmError。
 // 不进 smoke.ok 的 dsh 依赖就绪判定（web host 启动不依赖 pnpm，patch 已降级）；仅作
 // deps 卡片「pnpm 引导：就绪/未就绪」独立展示行。
-export async function verifyDepsSmoke(cfg) {
+export async function verifyDepsSmoke(cfg, opts = {}) {
   const g = getSingleton();
   // 防并发：验证进行中直接返回当前缓存（不重复 spawn）——running 标志映射进 g.deps.status
-  if (g.deps.status === "running") return g.deps.result;
+  if (!opts.force && g.deps.status === "running") return g.deps.result;
+  // 依赖安装进行中（installDepsFromPlugin 部署未完成）：不启动新验证、不覆盖
+  // g.deps.result——返回进行中响应（安装完成后的强制重验经 opts.force 绕过本守卫，
+  // 见 install.js 调用点；否则 installing 期间外部 verify 会并发 spawn 并污染结果）
+  if (!opts.force && g.deps.status === "installing")
+    return (
+      g.deps.result ?? {
+        ok: false,
+        running: true,
+        error: "依赖安装进行中，验证稍后自动执行",
+      }
+    );
   // 会话日志（src=hana）：开始/通过/失败 里程碑——故障诊断（依赖缺失、安装后重验
   // 失败）在会话日志里有完整上下文（触发时机 + cliBin + 退出码/错误尾）
   const slog = (s) => {
@@ -686,6 +697,8 @@ export async function verifyDepsSmoke(cfg) {
     // 验证链路终态（ok/error 保留；下次 verify 入口才回到 running）——注意 install 内部
     // 调用本函数后还会把 g.deps.status 置 ok（安装结论优先，verify 详情在 g.deps.result）
     g.deps.status = smoke.ok ? "ok" : "error";
+    // error 字段与验证结果同步（ok → 清空；失败 → smoke.error，供诊断展示）
+    g.deps.error = smoke.ok ? "" : smoke.error;
   }
   return smoke;
 }
