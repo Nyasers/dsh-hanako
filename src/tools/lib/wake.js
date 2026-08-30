@@ -67,6 +67,28 @@ async function failDeferredWake({ bus, taskId, error }) {
   }
 }
 
+// ---- 非正常终态的 minimal 结果构造 ----
+// 宿主对 deferred:fail 只呈现 error.message 纯文本（实测丢定位键）；deferred:resolve 的
+// result JSON 完整回传（正常完成已验证）。非正常终态（取消/超时/错误）统一走 resolve
+// 形态，带与正常结束同构的定位键 { status, rpcId, sessionId } + 简短 message，主上下文
+// 凭定位键直接 dsh_session get 对账，无需额外搜索。定位键优先级：err.sessionId（submitTask
+// 内已附加，session.prompt 失败时 loc 为 null 也保留已创建的会话）→ loc.sessionId → rpcId。
+// status 语义：DSH_ABORTED=取消 → cancelled；DSH_TIMEOUT → timeout；其他 → failed。
+// 纯函数（零宿主状态），供 dsh-run.js catch 分支调用；dsh-install / dsh-update 仍用
+// failDeferredWake（安装/更新失败无需会话定位，message 语义足够）。
+function abnormalWakeResult({ err, loc, taskRpcId }) {
+  const code = err && typeof err === "object" ? err.code : undefined;
+  const errSessionId = err && typeof err === "object" ? err.sessionId : undefined;
+  const status =
+    code === "DSH_ABORTED" ? "cancelled" : code === "DSH_TIMEOUT" ? "timeout" : "failed";
+  return {
+    status,
+    rpcId: taskRpcId || "",
+    sessionId: errSessionId || (loc && loc.sessionId) || "",
+    message: String((err && err.message) || err).slice(0, 300),
+  };
+}
+
 // ---- 审批挂起通知（宿主 deferred 通道，独立 taskId 不占用任务完成通道）----
 // dsh 会话触发 approval/requested 时任务挂起等应答；插件把审批上下文投递给宿主，
 // Agent 收到后调用 dsh_approve 工具应答（allowed-once / rejected）。
@@ -108,5 +130,6 @@ export {
   registerDeferredWake,
   resolveDeferredWake,
   failDeferredWake,
+  abnormalWakeResult,
   notifyApprovalWake,
 };
