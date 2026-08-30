@@ -4,9 +4,10 @@
 // tools/dsh-run.js — dsh_run 工具（有状态任务提交核心 + 工具契约）
 // 把任务交给 DeepSeek Harness（dsh）的 web host（--profile web）执行：
 // 经 /api 网关提交任务（session.create → events.mux 订阅 → session.prompt），
-// 实时事件流驱动卡片输出。运行期协调键统一为任务 rpcId（session.prompt 提交产生的
-// RPC id，与 jsonl user/message 的 data.source.rpcId 同值）——g.ops 条目键 /
-// toolCallCache / approvalTimers 全部以任务 rpcId 键控，运行期协调键与数据定位键合一。
+// 实时事件流驱动卡片输出。运行期协调态收敛：g.ops 条目键 = sessionId（全链路唯一定位键，
+// dsh_run 提交返回 / 卡片 URL / dsh_cancel / dsh_session 同键）；toolCallCache /
+// approvalTimers 仍以任务 rpcId 键控（session.prompt 提交产生的 RPC id，与 jsonl
+// user/message 的 data.source.rpcId 同值，不在本次收敛范围）。
 // 本文件收敛为「有状态提交核心」——与审批状态机（g.ops / approvalTimers /
 // toolCallCache）紧耦合的代码保留在此；纯协议/解析/唤醒已剥离到 lib/*.js，
 // web host 生命周期在 app/lifecycle.js。
@@ -86,23 +87,24 @@ const toolCallCache = new Map();
 // ---- 运行期协调状态（任务状态零存储，g.ops 仅存审批/取消协调字段）----
 // 任务状态（status/output/summary/usage/耗时）不再保存在插件内存：jsonl（dsh 会话日志）是
 // 唯一事实源，卡片经 /ops/stream 从 jsonl 重建基线 + 转发 DSH 实时事件，插件零任务状态。
-// g.ops 仅保留「审批/取消」运行期协调状态：任务 rpcId → { rpcId, task, sessionId,
-// approvalPending, pendingApprovals, cancelledRequested }。任务终态时在 submitTask 的 finally
-// 删除条目。用途：① approval/requested 存审批上下文（respondRpcId 路由 respond），
-// dsh_approve 工具应答；② dsh_cancel 按 sessionId 遍历 g.ops 找条目并标记 cancelledRequested
-//   （防 mux 断流时事件循环把取消误判为完成）。
+// g.ops 仅保留「审批/取消」运行期协调状态，键 = sessionId（全链路唯一定位键：dsh_run
+// 提交返回 / 卡片 URL / dsh_cancel / dsh_session 同键）：sessionId → { cancelledRequested,
+// activeApprovals }。approvalPending 派生态删除（有 pending 项即挂起，activeApprovals 数组
+// 判断即可）。任务终态时在 submitTask 的 finally 删除条目。用途：① approval/requested
+// 存审批上下文（respondRpcId 路由 respond），dsh_approve 工具应答；② dsh_cancel 凭
+// sessionId 直接 ops.get 取条目并标记 cancelledRequested（防 mux 断流时事件循环把取消
+// 误判为完成）。前提：同一 sessionId 多轮 prompt（resume 复用会话）时条目被当轮覆盖——
+// dsh 会话串行（上一轮终态 finally 已删条目），当轮条目语义正确。
 
-function createOpEntry(taskRpcId, { task, sessionId }) {
+function createOpEntry(sessionId) {
   const g = getSingleton();
-  g.ops.set(taskRpcId, {
-    rpcId: taskRpcId,
-    task: String(task ?? "").slice(0, 500),
-    sessionId: sessionId ?? null, // prompt 提交成功后建条目时已建会话，直接回填（dsh_cancel 按 sessionId 遍历反查）
-    approvalPending: false,
-    pendingApprovals: [],
+  // 协调态最小化：task/sessionId/approvalPending 均不再存（task 原文在 jsonl user/message，
+  // sessionId 即键，approvalPending 由 activeApprovals 是否有 pending 项推出）
+  g.ops.set(sessionId, {
+    activeApprovals: [],
     cancelledRequested: false,
   });
-  return taskRpcId;
+  return sessionId;
 }
 
 // 缓存 tool/call 帧的参数原文（审批决策信息源）。
@@ -128,7 +130,8 @@ function cacheToolCall(taskRpcId, payload) {
 }
 // ---- 任务提交：注册运行期协调状态 + 后台执行（不 await）----
 // 返回 { promise, ready }：任务 rpcId 由 prompt 提交产生（submitTask 作用域提升变量，事件循环
-// 与终态回调共用；运行期协调键与数据定位键合一）；卡片 route 由 ready 的 sessionId+rpcId 定位；
+// 与终态回调共用；toolCallCache / approvalTimers 以任务 rpcId 键控，g.ops 以 sessionId 键控）；
+// 卡片 route 由 ready 的 sessionId+rpcId 定位；
 // promise 在后台跑：session.create → events.mux 订阅 → session.prompt → 事件循环 → 终态。
 // 任务状态零存储——collected/blocksSeq/usageTotal 仅用于回调返回，
 // 卡片状态由 /ops/stream 从 jsonl 重建 + 实时事件转发呈现。
@@ -418,7 +421,7 @@ function submitTask(
             }
           } else if (frame.type === "approval/requested") {
             // 审批挂起（approval/policy=ask）：任务会等待应答。把审批上下文（含 respond
-            // 路由所需的 respondRpcId）存进运行期协调状态（g.ops 条目，键 = 任务 rpcId），并触发
+            // 路由所需的 respondRpcId）存进运行期协调状态（g.ops 条目，键 = sessionId），并触发
             // 宿主 deferred 通知（独立 taskId，不占用任务完成通道），Agent 收到后
             // 调用 dsh_approve 工具应答；无人应答仍可在 dsh Web UI 人工处理。
             // 审批固定形态——挂起 → deferred 通知 Agent（附 tool/call 参数原文，
@@ -426,9 +429,8 @@ function submitTask(
             // （approvalTimeoutMs，默认 30s 应答方失联检测，0=禁用）。不再有白名单自动放行
             // 或 manual/auto 模式切换：全部审批都交 Agent 处理。
             const g = getSingleton();
-            const op = g.ops.get(taskRpcId);
+            const op = g.ops.get(sessionId);
             if (op) {
-              op.approvalPending = true;
               const approval = {
                 approvalId: frame.approvalId,
                 respondRpcId: frame.rpcId,
@@ -459,13 +461,13 @@ function submitTask(
                 }
               }
               approval.args = cachedCall?.args ?? null;
-              if (!Array.isArray(op.pendingApprovals)) op.pendingApprovals = [];
+              if (!Array.isArray(op.activeApprovals)) op.activeApprovals = [];
               if (
-                !op.pendingApprovals.some(
+                !op.activeApprovals.some(
                   (a) => a.approvalId === approval.approvalId,
                 )
               ) {
-                op.pendingApprovals.push(approval);
+                op.activeApprovals.push(approval);
                 // 统一流程：所有审批都通知 Agent 应答（不区分 manual/auto，无白名单）。
                 // 通知附带命令/路径原文（approval.args）；挂起后暂停执行超时计时（外部决策等待
                 // 不计入执行时间），并挂审批超时拒绝计时器（approvalTimeoutMs，0=禁用）。
@@ -474,7 +476,7 @@ function submitTask(
                   sessionPath,
                   rpcId: taskRpcId,
                   approval,
-                  task: op.task,
+                  task: taskText,
                 });
                 pauseTimeout(); // 审批挂起：暂停执行超时计时（外部决策等待不计入执行时间）
                 const timeoutMs = resolveApprovalTimeoutMs(cfg);
@@ -482,7 +484,7 @@ function submitTask(
                   const timerKey = `${taskRpcId}::${approval.approvalId}`;
                   const t = setTimeout(() => {
                     approvalTimers.delete(timerKey); // 计时器已触发：从表移除
-                    const ap2 = op.pendingApprovals?.find(
+                    const ap2 = op.activeApprovals?.find(
                       (a) => a.approvalId === approval.approvalId,
                     );
                     if (ap2 && ap2.status === "pending") {
@@ -494,11 +496,10 @@ function submitTask(
                             ap2.answeredAt = new Date().toISOString();
                             ap2.auto = "expired";
                             if (
-                              !op.pendingApprovals.some(
+                              !op.activeApprovals.some(
                                 (a) => a.status === "pending",
                               )
                             ) {
-                              op.approvalPending = false;
                               resumeTimeout(); // 无挂起审批：恢复计时（同 approval/resolved 语义）
                             }
                           }
@@ -519,9 +520,9 @@ function submitTask(
             // "answered" 时不再覆写，但同样不参与 pending 计数。item 变为非
             // pending（resolved/answered）即清掉该审批的超时拒绝计时器（防触发重复应答）。
             const g = getSingleton();
-            const op = g.ops.get(taskRpcId);
-            if (op?.pendingApprovals) {
-              const item = op.pendingApprovals.find(
+            const op = g.ops.get(sessionId);
+            if (op?.activeApprovals) {
+              const item = op.activeApprovals.find(
                 (a) => a.approvalId === frame.approvalId,
               );
               if (item && item.status === "pending") {
@@ -535,8 +536,7 @@ function submitTask(
                 clearTimeout(t);
                 approvalTimers.delete(timerKey);
               }
-              if (!op.pendingApprovals.some((a) => a.status === "pending")) {
-                op.approvalPending = false;
+              if (!op.activeApprovals.some((a) => a.status === "pending")) {
                 resumeTimeout(); // 无挂起审批：恢复计时，剩余时间续算
               }
             }
@@ -554,7 +554,7 @@ function submitTask(
         }
         // 取消兜底：dsh_cancel 已标记 cancelledRequested 时，若 cancel 导致 mux 断流且
         // 未收到 turn/end，把无终态收尾判为 aborted 而非 end_turn（防误报完成）
-        const opNow = getSingleton().ops.get(taskRpcId);
+        const opNow = getSingleton().ops.get(sessionId);
         if (opNow?.cancelledRequested && !outcome)
           outcome = { stopReason: "aborted" };
         // 兜底增强：流正常关闭但无 turn/end 时，若期间见过 finish error（LLM 请求失败帧，
@@ -625,12 +625,14 @@ function submitTask(
           );
     });
 
+    // promptMeta 声明提升到 try 外：提交失败时 catch 从 promptMeta.rpcId 兜底
+    // taskRpcId（callUnaryBus/HTTP 兜底在 reject 路径也回传 meta.rpcId）
+    const promptMeta = {};
     try {
       // 3. 提交 prompt（queue 模式：立即 accepted，agent 异步执行）
       // promptMeta.rpcId = 会话 jsonl 的 user/message 事件 data.source.rpcId（同一 RPC id），
-      // 经 ready 返回给卡片 URL：插件重启后按 sessionId+rpcId 从 jsonl 精确恢复（运行期协调键
-      // 即任务 rpcId，数据定位键合一）
-      const promptMeta = {};
+      // 经 ready 返回给卡片 URL：插件重启后按 sessionId+rpcId 从 jsonl 精确恢复（运行期
+      // 协调键 = sessionId，数据定位键 = sessionId+rpcId）。
       await callUnaryBus(
         "session.prompt",
         {
@@ -643,9 +645,11 @@ function submitTask(
       );
       // 任务 rpcId 此刻产生（prompt 提交成功）：赋值提升变量 + 建运行期协调条目。
       // 顺序最稳：赋值 taskRpcId → createOpEntry → resolveReady——resolveReady 后事件循环
-      // 才开始流转，审批帧到达时条目必已存在（g.ops.get(taskRpcId) 必命中）。
+      // 才开始流转，审批帧到达时条目必已存在（g.ops.get(sessionId) 必命中）。
+      // 同 sessionId 多轮 prompt（resume 复用会话）时条目被当轮覆盖：dsh 会话串行
+      // （上一轮终态 finally 已删条目），当轮条目语义正确。
       taskRpcId = promptMeta.rpcId || "";
-      createOpEntry(taskRpcId, { task: taskText, sessionId });
+      createOpEntry(sessionId);
       resolveReady({ sessionId, rpcId: taskRpcId });
 
       // 4. 竞速：事件循环终态 / 超时 / 取消
@@ -679,6 +683,12 @@ function submitTask(
         stderr: web.stderr ? web.stderr.slice(-2000) : null,
       };
     } catch (err) {
+      // 提交失败也保留 rpcId 关联：promptMeta.rpcId 由 callUnaryBus/HTTP 兜底在 reject 路径
+      // 提前回传（reqId 生成即写 meta）——session.prompt 已发出但响应失败/超时/中止时
+      // rpcId 仍已知（dsh 侧已以此写 jsonl data.source.rpcId），失败终态可凭 sessionId+rpcId
+      // 在 jsonl 定位该轮次；完全未发出（emit 失败且降级也失败）时 rpcId 为空，用
+      // 「submission-failed」占位（展示层，deferredTaskId 仍用独立 fallback 保持唯一）。
+      if (!taskRpcId && promptMeta?.rpcId) taskRpcId = promptMeta.rpcId;
       // 超时/取消：通知 web host 取消该会话的任务（best effort，agent 在 web 里仍可见）
       if (err?.code === "DSH_TIMEOUT" || err?.code === "DSH_ABORTED") {
         try {
@@ -712,7 +722,7 @@ function submitTask(
       }
       // 删除运行期协调状态条目（任务状态零存储，条目仅活到终态）
       try {
-        getSingleton().ops.delete(taskRpcId);
+        getSingleton().ops.delete(sessionId);
       } catch {
         /* 忽略 */
       }
@@ -720,7 +730,11 @@ function submitTask(
   })();
 
   promise.catch((err) => {
-    resolveReady?.(null); // 提交失败：loc 为 null，卡片 route 不带定位参数（错误态由 deferred fail 呈现）
+    // 提交失败也保留 rpcId 关联：taskRpcId 已在 catch 里从 promptMeta.rpcId 兜底（若有）——
+    // loc 带 { sessionId, rpcId } 时 doExecute 的 text / deferred 回调 / 卡片 route 都保留
+    // 关联；完全无 rpcId（提交未发出）时 loc 为 null（route 不带定位参数，错误态由
+    // deferred 呈现）。
+    resolveReady?.(taskRpcId ? { sessionId, rpcId: taskRpcId } : null);
   });
 
   return { promise, ready };
@@ -858,12 +872,13 @@ async function doExecute(input, ctx) {
   const wait = input.wait === true;
   const { promise, ready } = submitTask(taskCfg, taskParams);
   // 卡片 URL 推迟到 session.create + prompt 提交后生成：携带 sessionId+rpcId，
-  // 插件重启后旧卡片按这两个键从会话 jsonl 精确恢复（运行期协调键 = 任务 rpcId，不丢数据）
+  // 插件重启后旧卡片按这两个键从会话 jsonl 精确恢复（运行期协调键 = sessionId，不丢数据）
   const loc = await ready;
   // 任务 rpcId：ready 的 loc.rpcId（prompt 提交产生的 RPC id，与 jsonl data.source.rpcId 同值）；
   // loc 为 null（提交失败）时为空串。deferred taskId 与工具契约字段都用它。
   const taskRpcId = (loc && loc.rpcId) || "";
-  // deferred taskId = 任务 rpcId（运行期协调键与数据定位键合一）；taskRpcId 为空时兜底唯一键
+  // deferred taskId = 任务 rpcId（toolCallCache / approvalTimers / deferred 同键，与 g.ops
+  // 的 sessionId 键并存）；taskRpcId 为空时兜底唯一键
   // （该路径提交必失败，deferred fail 报错即可）
   const deferredTaskId = taskRpcId || ("dsh-run::" + Date.now().toString(36));
   // 卡片 route 定位参数只带 locQuery（sessionId+rpcId+timeoutMs）；loc 为 null（提交失败）时
@@ -919,7 +934,11 @@ async function doExecute(input, ctx) {
         resolveDeferredWake({
           bus,
           taskId: deferredTaskId,
-          result: abnormalWakeResult({ err, loc, taskRpcId }),
+          result: abnormalWakeResult({
+            err,
+            loc,
+            taskRpcId: taskRpcId || "submission-failed",
+          }),
         });
       },
     );
@@ -934,7 +953,7 @@ async function doExecute(input, ctx) {
           // Agent 上下文（实机：wait 返回只有 text），Agent 凭 text 里的 sessionId 立即
           // dsh_cancel / dsh_session get，无需反查 list 或等终态回调。提交失败（loc
           // null）时 sessionId 占位「（提交失败）」，rpcId 仍可定位（deferred 回调兜底）。
-          text: `任务已提交给 DSH（rpcId: ${taskRpcId}，sessionId: ${(loc && loc.sessionId) || "（提交失败）"}），在后台执行中。进度与输出见上方卡片；完成后后台消息仅带回任务状态与定位键（rpcId/sessionId），取内容用 dsh_session get。`,
+          text: `任务已提交给 DSH（rpcId: ${taskRpcId || "submission-failed"}，sessionId: ${(loc && loc.sessionId) || "（提交失败）"}），在后台执行中。进度与输出见上方卡片；完成后后台消息仅带回任务状态与定位键（rpcId/sessionId），取内容用 dsh_session get。`,
         },
       ],
       details: {
