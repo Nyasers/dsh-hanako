@@ -30,7 +30,7 @@ import {
 import {
   registerDeferredWake,
   resolveDeferredWake,
-  failDeferredWake,
+  abnormalWakeResult,
   notifyApprovalWake,
 } from "./lib/wake.js";
 import {
@@ -687,8 +687,8 @@ function submitTask(
           /* 忽略 */
         }
       }
-      // 附加已创建的 sessionId（session.create 成功后 prompt/执行失败时）：execute 层
-      // failDeferredWake 优先用 err.sessionId——session.prompt 失败时 ready 的 loc 为 null
+      // 附加已创建的 sessionId（session.create 成功后 prompt/执行失败时）：回调层
+      // abnormalWakeResult 优先用 err.sessionId——session.prompt 失败时 ready 的 loc 为 null
       // （resolveReady 未调），不附加则已创建的会话 ID 丢失，错误只剩空 rpcId 无法对账。
       if (err && typeof err === "object" && !err.sessionId && sessionId) {
         err.sessionId = sessionId;
@@ -912,22 +912,14 @@ async function doExecute(input, ctx) {
         });
       },
       (err) => {
-        // 尽力带定位键：有 sessionId（提交成功后的执行失败）时 error 带 sessionId；
-        // 提交失败无 sessionId 的场景带 rpcId（可为空串）。主上下文凭定位键直接取会话
-        // 内容/对账，无需额外搜索（dsh_session get 直取）。
-        const error = { message: String(err?.message || err).slice(0, 300) };
-        // 定位键优先级：rejected error 自带的 sessionId（submitTask 内已附加，session.prompt
-        // 失败时 loc 为 null 也保留已创建的会话）→ loc.sessionId → taskRpcId（可为空串）。
-        // 避免 session.prompt 失败（loc null）时只剩空 rpcId、已创建会话无法对账。
-        const errSessionId =
-          err && typeof err === "object" ? err.sessionId : undefined;
-        if (errSessionId) error.sessionId = errSessionId;
-        else if (loc?.sessionId) error.sessionId = loc.sessionId;
-        else error.rpcId = taskRpcId;
-        failDeferredWake({
+        // 非正常终态（取消/超时/错误）也走 resolve 形态：宿主对 deferred:fail 只呈现
+        // error.message 纯文本（实测丢定位键），resolve 的 result JSON 完整回传——与正常
+        // 结束同构的 minimal 定位键 { status, rpcId, sessionId } + 简短 message
+        // （status：cancelled / timeout / failed）。定位键优先级见 abnormalWakeResult。
+        resolveDeferredWake({
           bus,
           taskId: deferredTaskId,
-          error,
+          result: abnormalWakeResult({ err, loc, taskRpcId }),
         });
       },
     );
