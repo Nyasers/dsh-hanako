@@ -29,14 +29,78 @@
 // 变化点显式维护。g.update.log 定义为 getter 投影 g.deps.log（updateDsh 内部走
 // installDepsFromPlugin 写同一日志尾环，同源实时可见，不复制字符串）。
 
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const IS_WIN = process.platform === "win32";
 
-export const ELECTRON_NODE = process.execPath;
-export const ELECTRON_NODE_ENV = { ...process.env, ELECTRON_RUN_AS_NODE: 1 };
+// ---- Node 运行时解析（v0.25：可选自定义 nodejs）----
+// 背景：所有子进程（pnpm / dsh web host / wrapper）原先一律用 Electron 自带 node
+// （process.execPath + ELECTRON_RUN_AS_NODE=1）。macOS 上 Electron 内嵌 node 跑 pnpm
+// 会触发签名校验失败（Electron 的 node 二进制非标准 node 签名，pnpm 校验不通过）。
+// 本次提供可选配置 nodejsPath（manifest 配置项）：配置了非空且 existsSync 校验通过的系统
+// node 绝对路径 → 子进程改用自定义 node；否则回退 process.execPath（行为与旧静态常量一致）。
+// 动态解析（取代静态常量 ELECTRON_NODE / ELECTRON_NODE_ENV）：与 resolveDefaultCwd 即时
+// 生效哲学一致——每次 spawn 前解析，运行期改 config.json 的 global.nodejsPath 立即对
+// 下一次子进程生效（设置界面改动无需重启）。
+// opts 约定（与 lib/config.js resolve* 同款）：{ dataDir?, nodejsPath? }——dataDir 用于
+// 直读 dataDir/config.json（优先，单一事实源）；nodejsPath 为配置快照兜底（manifest
+// 默认 ""，dev invoke 等场景可用）。路径不存在/不可执行：warn 降级回退 Electron node，
+// 不抛错崩流程。
+// ELECTRON_RUN_AS_NODE=1 只对 Electron node 有意义（把 Electron 主进程当纯 node 跑）；
+// 自定义系统 node 不需要该变量（系统 node 忽略它，保留无害但语义上不必要——统一只在
+// Electron 分支注入，见 resolveNodeExecEnv）。
+export function resolveNodeExec(opts) {
+  let custom = "";
+  // ① 优先直读 dataDir/config.json 的 global.nodejsPath（设置界面改动即时生效）
+  const dataDir =
+    (opts && typeof opts.dataDir === "string" && opts.dataDir) ||
+    (getSingleton().dataDir) ||
+    join(PLUGIN_ROOT, "data");
+  try {
+    const cf = join(dataDir, "config.json");
+    if (existsSync(cf)) {
+      const j = JSON.parse(readFileSync(cf, "utf8"));
+      const v = j?.global?.nodejsPath;
+      if (typeof v === "string" && v.trim()) custom = v.trim();
+    }
+  } catch {
+    /* 读配置失败忽略（走快照兜底） */
+  }
+  // ② 配置快照兜底（manifest default ""）
+  if (!custom) {
+    const v = opts && typeof opts.nodejsPath === "string" ? opts.nodejsPath : "";
+    if (v.trim()) custom = v.trim();
+  }
+  if (!custom) return process.execPath; // 未配置：Electron 自带 node
+  if (custom === process.execPath) return custom; // 配置值即 Electron node
+  // 必须是「常规可执行文件」才采用：目录 / 不可执行文件会在 spawn 时抛 EACCES/ENOEXEC
+  // 炸流程，在此直接降级回退 Electron node（warn 说明）。非 Windows 平台检查执行位
+  // （mode & 0o111）；Windows 无统一可执行位语义，isFile 即放行（.exe/.cmd/.bat 均
+  // 为普通文件）。
+  try {
+    const st = statSync(custom);
+    if (st.isFile() && (IS_WIN || (st.mode & 0o111) !== 0)) return custom;
+  } catch {
+    /* stat 失败（路径不存在等）：走降级 */
+  }
+  console.warn(
+    "[dsh-hanako] nodejsPath 配置的路径不存在或不可执行（" +
+      custom +
+      "），降级使用 Electron 自带 node",
+  );
+  return process.execPath;
+}
+
+// 子进程环境：ELECTRON_RUN_AS_NODE=1 仅对 Electron node 有意义——自定义系统 node
+// 不需要（系统 node 忽略该变量），不注入。调用点统一用 resolveNodeExec 同款 opts。
+export function resolveNodeExecEnv(opts) {
+  const exec = resolveNodeExec(opts);
+  if (exec === process.execPath)
+    return { ...process.env, ELECTRON_RUN_AS_NODE: 1 };
+  return { ...process.env };
+}
 
 const __here = dirname(fileURLToPath(import.meta.url));
 // PLUGIN_ROOT 向上查找含 manifest.json 的目录——源码形态（tools/lib/ 下）与

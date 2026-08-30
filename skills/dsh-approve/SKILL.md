@@ -1,6 +1,6 @@
 ---
 name: dsh-approve
-description: "dsh_approve 工具手册（源码 tools/dsh-approve.js 核对）。触发场景：dsh 任务挂起审批怎么应答、收到 dsh-approval 通知怎么处理（payload 结构：sessionId/approvalId/toolName/callId/reason/args 命令路径原文）、allowed-once 与 rejected 怎么选、决策看 args 不听 reason、无人应答超时自动拒绝（approvalTimeoutMs）、审批已应答/已超时/不在待办列表的报错语义、Web UI 人工处理兜底。需要应答 dsh 审批前先读本技能。"
+description: "dsh_approve 工具手册（源码 tools/dsh-approve.js 核对）。触发场景：dsh 任务挂起审批怎么应答、收到 dsh-approval 通知怎么处理（payload 结构：sessionId/approvalId/toolName/callId/reason/args 命令路径原文）、allowed-once 与 rejected 怎么选、决策看 args 不听 reason、无人应答超时自动拒绝（approvalTimeoutSec）、审批已应答/已超时/不在待办列表的报错语义、Web UI 人工处理兜底。需要应答 dsh 审批前先读本技能。"
 ---
 
 # dsh_approve 工具手册
@@ -30,7 +30,7 @@ description: "dsh_approve 工具手册（源码 tools/dsh-approve.js 核对）�
    args 来源：事件循环按 callId 从 toolCallCache 反查（tool/call 与 code-dispatch 子调用 subCallId 形如 `root:code:N` 均缓存；miss 时剥 `:code:N` 后缀回退 run_code 根调用兜底）。
 3. **决策**：**看 args（具体执行了什么），不听 reason（model 自述）**。合理 → `allowed-once`；危险 → `rejected`。
 4. **应答**：`dsh_approve(sessionId, approvalId, outcome)`，经总线 RPC（`callUnaryBus`，rpc.request/rpc.result 通道）发 `method="respond"`——bridge 在 dsh 进程内自环调 `POST /api/respond`（client-response 信封，用审批对象的 `respondRpcId` 路由 pending 表），回投 `{ accepted }` 校验 `j.accepted` 语义不变；总线未连接时降级 HTTP 直连。
-5. **超时**：`approvalTimeoutMs`（默认 30000；0 = 禁用）内无人应答自动 rejected（`auto: "expired"`）。应答方失联检测：正常应答几秒内完成。
+5. **超时**：`approvalTimeoutSec`（默认 30s；0 = 禁用）内无人应答自动 rejected（`auto: "expired"`）。应答方失联检测：正常应答几秒内完成。
 6. **恢复**：approval/resolved（allowed-once/rejected/cancelled 一律视为已解决）→ 清该审批超时计时器，无 pending 项时恢复任务执行计时。
 7. **兜底**：也可在 dsh Web UI 人工处理；通知失败不影响任务。
 
@@ -48,4 +48,4 @@ description: "dsh_approve 工具手册（源码 tools/dsh-approve.js 核对）�
 ## 关联
 
 - 通知来自 dsh_run 任务的事件循环（approval/requested 帧）；任务本身用 dsh_run 提交，详见 dsh-run 技能。
-- 审批超时配置 approvalTimeoutMs 的解析与 config.json 单一事实源规则见 dsh-run 技能「配置单一事实源」。
+- 审批超时配置 approvalTimeoutSec（单位：秒）的解析与 config.json 单一事实源规则见 dsh-run 技能「配置单一事实源」。

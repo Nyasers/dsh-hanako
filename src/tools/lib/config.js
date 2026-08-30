@@ -77,26 +77,66 @@ export function resolveReasoningEffort(explicit) {
   return v || null;
 }
 
-// approvalTimeoutMs 解析（唯一审批配置）：优先直读 dataDir/config.json 的
-// global.approvalTimeoutMs（设置界面改动即时生效）：数字 > 0 采用；0 或负数 = 用户显式禁用
-// 超时拒绝（返回 0，调用方判断不挂计时器）；非数字/缺失回退配置快照 cfg.approvalTimeoutMs
-// （manifest 默认 30000），同样 0/负数 = 禁用。
-export function resolveApprovalTimeoutMs(cfg) {
+// 毫秒 → 秒 换算（旧键兜底共用）：0=禁用语义保留（0 → 0）；正数取整到秒
+// （Math.round；极端 <500ms 的正数钳到 1s，保留「正数 = 启用」语义，避免 0 被误判禁用）。
+function msToSec(ms) {
+  if (!Number.isFinite(ms)) return null;
+  if (ms <= 0) return 0;
+  return Math.max(1, Math.round(ms / 1000));
+}
+
+// approvalTimeoutSec 解析（唯一审批配置，单位：秒）：优先直读 dataDir/config.json 的
+// global.approvalTimeoutSec（设置界面改动即时生效）：数字 > 0 采用；0 或负数 = 用户显式禁用
+// 超时拒绝（返回 0，调用方判断不挂计时器）；非数字/缺失回退配置快照 cfg.approvalTimeoutSec
+// （manifest 默认 30），同样 0/负数 = 禁用。旧键兼容：新键缺失且旧毫秒键
+// global.approvalTimeoutMs / cfg.approvalTimeoutMs 存在时按毫秒换算（迁移尚未跑时的兜底，
+// 保证升级不丢用户配置、不产生单位误解；迁移跑完后旧键已删除，此分支不再命中）。
+export function resolveApprovalTimeoutSec(cfg) {
   try {
     const cf = join(cfg.dataDir, "config.json");
     if (existsSync(cf)) {
       const j = JSON.parse(readFileSync(cf, "utf8"));
-      const v = j?.global?.approvalTimeoutMs;
+      const v = j?.global?.approvalTimeoutSec;
       if (typeof v === "number" && Number.isFinite(v)) {
         return v > 0 ? v : 0; // 数字合法即采用（0/负数=禁用，不回退快照复活超时）
       }
+      // 旧键兜底（迁移未跑）：毫秒换算为秒
+      const old = msToSec(j?.global?.approvalTimeoutMs);
+      if (old !== null) return old;
     }
   } catch {
     /* 读配置失败忽略 */
   }
-  const v = Number(cfg.approvalTimeoutMs);
+  const v = Number(cfg.approvalTimeoutSec);
   if (Number.isFinite(v) && v > 0) return v;
+  const old = msToSec(Number(cfg.approvalTimeoutMs));
+  if (old !== null && old > 0) return old;
   return 0; // 快照缺失/非数字/0/负数：禁用超时拒绝（0，调用方判断）
+}
+
+// defaultTimeoutSec 解析（单次任务默认超时，单位：秒）：优先直读 dataDir/config.json 的
+// global.defaultTimeoutSec（设置界面改动即时生效）：新键为合法数值即权威——正数采用，
+// 0/负数回落 600s 兑底（与旧 `|| 600000` 把 0 视为未设置的语义一致，不再 consult 旧键）；
+// 新键缺失/非数字回退配置快照 cfg.defaultTimeoutSec（manifest 默认 1800）。旧键兼容：
+// 新键不可用时旧毫秒键存在则按毫秒换算（迁移尚未跑时的兜底，保证升级不丢用户配置）。
+export function resolveDefaultTimeoutSec(cfg) {
+  try {
+    const cf = join(cfg.dataDir, "config.json");
+    if (existsSync(cf)) {
+      const j = JSON.parse(readFileSync(cf, "utf8"));
+      const v = j?.global?.defaultTimeoutSec;
+      if (typeof v === "number" && Number.isFinite(v)) return v > 0 ? v : 600;
+      const old = msToSec(j?.global?.defaultTimeoutMs);
+      if (old !== null && old > 0) return old;
+    }
+  } catch {
+    /* 读配置失败忽略 */
+  }
+  const v = Number(cfg.defaultTimeoutSec);
+  if (Number.isFinite(v) && v > 0) return v;
+  const old = msToSec(Number(cfg.defaultTimeoutMs));
+  if (old !== null && old > 0) return old;
+  return 600; // 快照缺失/非数字/0：600s（10 分钟，与旧 `|| 600000` 兜底语义一致）
 }
 
 // defaultCwd 解析（「配置单一事实源」哲学，补齐直读兜底）：优先直读

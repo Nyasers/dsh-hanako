@@ -29,8 +29,8 @@ import {
   getSingleton,
   manifestDefaults,
   PLUGIN_ROOT,
-  ELECTRON_NODE,
-  ELECTRON_NODE_ENV,
+  resolveNodeExec,
+  resolveNodeExecEnv,
   IS_WIN,
 } from "./state.js";
 import {
@@ -357,6 +357,12 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir) {
   }
   const dataDir = ctxDataDir || g.dataDir || join(PLUGIN_ROOT, "data");
   cfg.dataDir = dataDir;
+  // 子进程 node 解析（每次部署解析一次；wrapper 与 pnpm add 用同一解析结果——自定义
+  // nodejsPath 时 wrapper 也指向系统 node，macOS 签名校验问题一并解决）。同时传
+  // dataDir（直读 config.json 的 global.nodejsPath，单一事实源）与 cfg.nodejsPath
+  // （配置快照兑底：global.nodejsPath 缺失/dev invoke 场景时仍能解析到自定义 node）
+  const nodeExec = resolveNodeExec({ dataDir, nodejsPath: cfg.nodejsPath });
+  const nodeEnv = resolveNodeExecEnv({ dataDir, nodejsPath: cfg.nodejsPath });
   g.deps.status = "installing";
   g.deps.error = null;
   g.deps.time = new Date().toISOString();
@@ -408,11 +414,11 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir) {
     // 3. 创建 node 代理；pnpm 入口 = 运行时引导（lib/pnpm.js ensurePnpm）
     if (IS_WIN) {
       const script = join(pkgDir, "node.cmd");
-      const content = `@"${ELECTRON_NODE}" %*\n`;
+      const content = `@"${nodeExec}" %*\n`;
       writeFileSync(script, content);
     } else {
       const script = join(pkgDir, "node");
-      const content = `#!/bin/sh\nexec "${ELECTRON_NODE}" "$@"\n`;
+      const content = `#!/bin/sh\nexec "${nodeExec}" "$@"\n`;
       writeFileSync(script, content, { mode: 0o755 });
     }
     milestone("Created proxy node at " + pkgDir);
@@ -486,7 +492,7 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir) {
         pnpmCli,
         cwd: pkgDir,
         env: {
-          ...ELECTRON_NODE_ENV,
+          ...nodeEnv,
           PATH: pkgDir + delimiter + (process.env.PATH || ""),
         },
         onStdout: makePipe(buffers.out),
@@ -641,10 +647,11 @@ export async function verifyDepsSmoke(cfg, opts = {}) {
     if (!existsSync(cliBin)) throw new Error("cliBin 不存在：" + cliBin);
     slog("开始（cliBin=" + cliBin + "）");
     // spawn node cliBin --version，10s 超时兜底（child.kill）；capture stdout+stderr
-    const child = spawn(ELECTRON_NODE, [cliBin, "--version"], {
+    // node 执行体每次 spawn 前解析（自定义 nodejsPath 或默认 Electron node）
+    const child = spawn(resolveNodeExec(diagCfg), [cliBin, "--version"], {
       cwd: dirname(cliBin),
       stdio: ["ignore", "pipe", "pipe"],
-      env: ELECTRON_NODE_ENV,
+      env: resolveNodeExecEnv(diagCfg),
       windowsHide: true,
     });
     let out = "";

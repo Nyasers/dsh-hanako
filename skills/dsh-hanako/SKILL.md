@@ -11,19 +11,19 @@ description: "dsh-hanako 插件（把 DeepSeek Harness 接进 Hana 的进程外 
 
 config.json 由宿主设置界面生成、**不随包分发**；defaultCwd 初始为空。按序完成：
 
-**0. 先看现状**：配置在 <宿主插件数据目录>/dsh-hanako/config.json（Windows 常见 %USERPROFILE%\.hanako\plugin-data\dsh-hanako\config.json）。**全新安装**：插件初始化自动生成默认配置（ensureConfigJson：无 config.json 时按 manifest 默认值生成 `{ schemaVersion, global, agents, sessions }`，已存在则不动，原子写 + 失败静默），无需手动保存，装完即可在设置界面看到默认值。**无需配置 API Key / 模型 / Node 路径**：凭据由 @dsh-hanako/provider 插件直读宿主 `provider-catalog.json`，模型跟随宿主 `models.json`（dsh models 页设置默认）；web host 使用宿主 electron 进程自身的 Node 运行时（`process.execPath`，`ELECTRON_RUN_AS_NODE=1`），**无需用户单独安装 Node.js**。
+**0. 先看现状**：配置在 <宿主插件数据目录>/dsh-hanako/config.json（Windows 常见 %USERPROFILE%\.hanako\plugin-data\dsh-hanako\config.json）。**全新安装**：插件初始化自动生成默认配置（ensureConfigJson：无 config.json 时按 manifest 默认值生成 `{ schemaVersion, global, agents, sessions }`，已存在则不动，原子写 + 失败静默），无需手动保存，装完即可在设置界面看到默认值。**无需配置 API Key / 模型 / Node 路径**：凭据由 @dsh-hanako/provider 插件直读宿主 `provider-catalog.json`，模型跟随宿主 `models.json`（dsh models 页设置默认）；web host 默认使用宿主 electron 进程自身的 Node 运行时（`process.execPath`，`ELECTRON_RUN_AS_NODE=1`），**无需用户单独安装 Node.js**。可选配置 `nodejsPath`：macOS 上 Electron 内嵌 node 跑 pnpm 会触发签名校验失败（Electron 的 node 二进制非标准 node 签名），此时填系统 node 绝对路径（如 /opt/homebrew/bin/node），配置后 pnpm / web host 子进程改用自定义 node（下一次 spawn 生效）；已生成的 node 代理脚本（wrapper）在下次依赖安装时更新为新的 node 执行体；路径不存在、指向目录或不可执行时均发出警告并回退 Electron node。
 
 **1. defaultCwd（建议）**：为空且未传 cwd 时报 `cwd 不能为空`；设为项目沙箱目录。
 
-**2. 其余项默认可用**：approvalTimeoutMs（30000）/ webPort（3080）/ defaultTimeoutMs（1800000）。agentPreset / reasoningEffort 不需要配置：工具不显式传时用 dsh 默认（dsh Web UI 可调 agent 预设与思考强度）。任务模型不需要配置：默认用 dsh 默认模型（settings.yaml `agent-default-model`），可在 **dsh 设置页「DSHana 设置」分页 → 「默认模型」卡片**直接配置（Provider/模型/思考强度三级联动，选项 = dsh 全部可用 provider，保存即生效），`dsh_run` 工具参数 `provider`/`model`/`reasoningEffort` 可显式覆盖（显式时 selectModel，dsh 会把所选模型写回全局默认 settings.yaml——显式指定即成为新默认）。**DSH 版本**：同分页「DSH 版本」卡片可检查 `@deepseek-ai/dsh` 版本并一键更新（检查 dsh 侧直查远端 registry，更新走宿主能力层；Agent 用 `dsh_update` 工具 / 标签页 deps 卡片「检查更新」「更新 DSH」同结果）。
+**2. 其余项默认可用**：approvalTimeoutSec（30，秒）/ webPort（3080）/ defaultTimeoutSec（1800，秒）。agentPreset / reasoningEffort 不需要配置：工具不显式传时用 dsh 默认（dsh Web UI 可调 agent 预设与思考强度）。任务模型不需要配置：默认用 dsh 默认模型（settings.yaml `agent-default-model`），可在 **dsh 设置页「DSHana 设置」分页 → 「默认模型」卡片**直接配置（Provider/模型/思考强度三级联动，选项 = dsh 全部可用 provider，保存即生效），`dsh_run` 工具参数 `provider`/`model`/`reasoningEffort` 可显式覆盖（显式时 selectModel，dsh 会把所选模型写回全局默认 settings.yaml——显式指定即成为新默认）。**DSH 版本**：同分页「DSH 版本」卡片可检查 `@deepseek-ai/dsh` 版本并一键更新（检查 dsh 侧直查远端 registry，更新走宿主能力层；Agent 用 `dsh_update` 工具 / 标签页 deps 卡片「检查更新」「更新 DSH」同结果）。
 
 **3. 配置生效铁律（实时）**：「改完都要重启 Hana」不成立：t1 依赖/t2 进程状态直读 config.json/单例实时；t2 手动启动链路 resolveDshPkgDir → spawn，直写后无需重启；仅旧进程存活（g.web.ready=true）需先杀进程或重启。
 
 ## 依赖自主部署（页面自装首选，Agent pnpm add 兜底）
 
-dsh 依赖（@deepseek-ai/dsh + node-pty/koffi）位置：**数据目录 dsh-pkg/**（优先，升级不丢依赖）→ 插件目录 node_modules（zip 自带，兑底）。部署 = 在 pkgDir 写入**最小 package.json**（无 devDeps，插件根的 devDeps 是 rspack 构建树，不复制进部署目录）+ 复制插件根 `pnpm-workspace.yaml`（`allowBuilds` 白名单放行 dsh 树 build scripts）→ 在 pkgDir 下创建指向宿主 electron node 的代理脚本（node.cmd/node）→ 清理旧依赖残留（`package-lock.json` / `pnpm-lock.yaml` / 扁平 node_modules，npm 体系升级兼容）→ `node <pnpm 入口> add @deepseek-ai/dsh --reporter=ndjson`。pnpm 入口 = **运行时引导**（插件 `tools/lib/pnpm.js` `ensurePnpm`：下载 `pnpm-{version}` 的 `pnpm.mjs`（入口 CLI）+ `worker.js`（导入 worker，pnpm add 必需）到数据目录 `pnpm-dist/`，缓存独立于 dsh-pkg，zip 不再内置 node_modules/pnpm）。pnpm 11 的 `add` 命令不支持 `--omit` 旗标，最小 package.json 无 devDeps 即天然只装 dsh 运行时树。
+dsh 依赖（@deepseek-ai/dsh + node-pty/koffi）位置：**数据目录 dsh-pkg/**（优先，升级不丢依赖）→ 插件目录 node_modules（zip 自带，兑底）。部署 = 在 pkgDir 写入**最小 package.json**（无 devDeps，插件根的 devDeps 是 rspack 构建树，不复制进部署目录）+ 复制插件根 `pnpm-workspace.yaml`（`allowBuilds` 白名单放行 dsh 树 build scripts）→ 在 pkgDir 下创建指向解析后 node 执行体的代理脚本（node.cmd/node，优先有效 nodejsPath 配置，缺省 Electron 自带 node）→ 清理旧依赖残留（`package-lock.json` / `pnpm-lock.yaml` / 扁平 node_modules，npm 体系升级兼容）→ `node <pnpm 入口> add @deepseek-ai/dsh --reporter=ndjson`。pnpm 入口 = **运行时引导**（插件 `tools/lib/pnpm.js` `ensurePnpm`：下载 `pnpm-{version}` 的 `pnpm.mjs`（入口 CLI）+ `worker.js`（导入 worker，pnpm add 必需）到数据目录 `pnpm-dist/`，缓存独立于 dsh-pkg，zip 不再内置 node_modules/pnpm）。pnpm 11 的 `add` 命令不支持 `--omit` 旗标，最小 package.json 无 devDeps 即天然只装 dsh 运行时树。
 
-**页面自装（首选，v0.8.6+，无需 Agent）**：打开 DSHana 标签页（未就绪显示 t1/t2）→ deps 卡片点「安装依赖」→ 插件自动完成（停 web host → 写最小 package.json + 复制 pnpm-workspace.yaml 到 dsh-pkg → 创建 node 代理脚本（pkgDir/node.cmd → 宿主 electron node）→ 清旧 npm 残留 → `pnpm add @deepseek-ai/dsh --reporter=ndjson`（pnpm 入口为运行时引导产物，见上），PATH 首部指向 pkgDir 让 install script 找到宿主 node，官方源失败自动重试 npmmirror → 校验 cliBin → 自动运行级重验 `node cliBin --version`）。安装中显示实时进度（--reporter=ndjson 结构化事件流解析为可读进度行 + 更新时间，3s 轮询刷新）；完成后无需重启，去 t2 点「手动启动」。验证失败（「存在但依赖不完整」）→ 点「重新安装依赖」；可随时点「检测依赖」重验。**t1→t2 门禁**：t1 未过（缺失/验证失败/安装中/检测中）时 t2 按钮禁用（msg「依赖未就绪，请先安装/重新安装依赖」）。
+**页面自装（首选，v0.8.6+，无需 Agent）**：打开 DSHana 标签页（未就绪显示 t1/t2）→ deps 卡片点「安装依赖」→ 插件自动完成（停 web host → 写最小 package.json + 复制 pnpm-workspace.yaml 到 dsh-pkg → 创建 node 代理脚本（pkgDir/node.cmd → 解析后的 node 执行体：优先 nodejsPath，缺省 Electron node）→ 清旧 npm 残留 → `pnpm add @deepseek-ai/dsh --reporter=ndjson`（pnpm 入口为运行时引导产物，见上），PATH 首部指向 pkgDir 让 install script 找到宿主 node，官方源失败自动重试 npmmirror → 校验 cliBin → 自动运行级重验 `node cliBin --version`）。安装中显示实时进度（--reporter=ndjson 结构化事件流解析为可读进度行 + 更新时间，3s 轮询刷新）；完成后无需重启，去 t2 点「手动启动」。验证失败（「存在但依赖不完整」）→ 点「重新安装依赖」；可随时点「检测依赖」重验。**t1→t2 门禁**：t1 未过（缺失/验证失败/安装中/检测中）时 t2 按钮禁用（msg「依赖未就绪，请先安装/重新安装依赖」）。
 
 **手动兜底仅用于标签页不可访问的情况**。手动命令详见下方。
 
@@ -36,14 +36,14 @@ $pkgDir = <数据目录>/dsh-pkg
 # 首次会联网下载 pnpm.mjs + worker.js 到数据目录 pnpm-dist/）
 $pnpmCli = <数据目录>/pnpm-dist/pnpm-11.24.0/pnpm.mjs
 
-# 优先用本机已安装的 Node；无则需先创建 node 代理脚本指向宿主 electron node
+# 优先用本机已安装的 Node；无则需先创建 node 代理脚本指向解析后的 node 执行体（优先 nodejsPath，缺省 Electron 自带 node）
 $node = <本机 node.exe 绝对路径，如 C:\Program Files\nodejs\node.exe>
 & $node $pnpmCli add @deepseek-ai/dsh --reporter=ndjson
 ```
 
 > **注意**：koffi/node-pty 的 install script 会起子进程调用 `node`。本机 Node 已在 PATH 中时直接可用；若 PATH 缺 node，报 `'node' is not recognized` 时需要创建代理脚本。手动兜底前先停 web host（部署要删旧 node_modules，Windows 上被运行中进程加载的原生模块会锁文件）。
 
-- **无 --omit 旗标**：pnpm 11 的 add 命令不支持 `--omit`（报 Unknown option: 'omit'）；部署目录用最小 package.json（无 devDeps），pnpm add 天然只装 dsh 运行时树，不装 rspack 构建树（~40MB）。**不可用 --omit=peer**（跳过 dsh 的 peer → ERR_MODULE_NOT_FOUND）。allowBuilds 放行由 pnpm-workspace.yaml 提供（package.json 的 allowScripts 在 pnpm 11 不再读取）。pnpm 入口定位：运行时引导（`tools/lib/pnpm.js` `ensurePnpm` 下载 pnpm.mjs + worker.js 到数据目录 pnpm-dist/，zip 不再内置 pnpm；首次引导需联网，unpkg/jsdelivr 双源 + sha256 校验）。PATH 处理：代理脚本（pkgDir/node.cmd）将子进程 node 请求转发到宿主 electron node，PATH 首部指向 pkgDir 即可。
+- **无 --omit 旗标**：pnpm 11 的 add 命令不支持 `--omit`（报 Unknown option: 'omit'）；部署目录用最小 package.json（无 devDeps），pnpm add 天然只装 dsh 运行时树，不装 rspack 构建树（~40MB）。**不可用 --omit=peer**（跳过 dsh 的 peer → ERR_MODULE_NOT_FOUND）。allowBuilds 放行由 pnpm-workspace.yaml 提供（package.json 的 allowScripts 在 pnpm 11 不再读取）。pnpm 入口定位：运行时引导（`tools/lib/pnpm.js` `ensurePnpm` 下载 pnpm.mjs + worker.js 到数据目录 pnpm-dist/，zip 不再内置 pnpm；首次引导需联网，unpkg/jsdelivr 双源 + sha256 校验）。PATH 处理：代理脚本（pkgDir/node.cmd）将子进程 node 请求转发到解析后的 node 执行体（优先有效 nodejsPath 配置，缺省 Electron 自带 node），PATH 首部指向 pkgDir 即可。
 - **registry 镜像**：默认源失败切 `--registry=https://registry.npmmirror.com`（或持久化 `pnpm config set registry https://registry.npmmirror.com`）；镜像只影响 registry 层，koffi/node-pty 产物同源。重跑前残留不完整先 `Remove-Item node_modules -Recurse -Force`（会连带清 package-lock.json / pnpm-lock.yaml，全新构建）。
 - **部署后**：Agent 手动路径依赖就位后重启 Hana（tools 缓存）；页面自装无需重启。装完调一次 dsh_run 触发拉起。
 
@@ -108,7 +108,7 @@ $node = <本机 node.exe 绝对路径，如 C:\Program Files\nodejs\node.exe>
 
 ## 审批流程（Agent 应答）
 
-dsh 请求越界权限时任务挂起，插件经 deferred 发 dsh-approval 通知（rpcId/approvalId/reason/**args 命令路径原文**）。应答：读 args 判断 → 合理 `dsh_approve(rpcId, approvalId, "allowed-once")`，危险 `"rejected"`；无人应答超时（approvalTimeoutMs，默认 30s）自动拒绝；也可 dsh Web UI 人工处理。**决策看 args（执行了什么），不听 reason（model 自述）**。
+dsh 请求越界权限时任务挂起，插件经 deferred 发 dsh-approval 通知（rpcId/approvalId/reason/**args 命令路径原文**）。应答：读 args 判断 → 合理 `dsh_approve(rpcId, approvalId, "allowed-once")`，危险 `"rejected"`；无人应答超时（approvalTimeoutSec，默认 30 秒；设 0 禁用自动拒绝，任务挂起后不会因超时被自动 rejected）自动拒绝；也可 dsh Web UI 人工处理。**决策看 args（执行了什么），不听 reason（model 自述）**。
 
 ## 排错表
 

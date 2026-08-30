@@ -30,6 +30,12 @@
 //                         调用点：startWebHostFromPlugin 经 runMigrations 调度
 //                         （steps 含 config-schema + cleanup-update-result；archive-old-logs
 //                         在 onload 单独调度，不得跑全量——会压缩当前会话文件）。
+//   5. timeout-sec        超时配置毫秒 → 秒（v0.25 超时单位统一）：config.json global 里
+//                         旧键 defaultTimeoutMs/approvalTimeoutMs 存在且新键缺失时换算
+//                         （毫秒/1000，0=禁用保留，正数取整钳 ≥1s）写新键并删除旧键；
+//                         新键已存在/旧键不存在 = 零动作（幂等）。调用点：
+//                         startWebHostFromPlugin 与 dsh-run.js doExecute 的 runMigrations
+//                         steps 追加 "timeout-sec"（config.json 初始化后即可换算旧键）。
 //
 // 未纳入本模块的（判断取舍，保持原地）：
 //   - newWebLogPath（lifecycle.js 的兜底日志会话文件创建）：冷启动边缘的会话文件兜底，
@@ -300,6 +306,68 @@ function cleanupUpdateResult(cfg) {
   }
 }
 
+// ---- 迁移步骤 5：超时配置毫秒 → 秒（timeout-sec）----
+// v0.25 超时单位统一为秒：用户可见配置键 approvalTimeoutMs/defaultTimeoutMs 改名为
+// approvalTimeoutSec/defaultTimeoutSec（manifest 默认 30000ms→30s / 1800000ms→1800s）。
+// 历史 config.json（宿主设置界面生成）global 里可能残留旧毫秒键——本次迁移：若旧键存在
+// 且对应新键缺失 → 毫秒/1000 换算（0=禁用语义保留：0 → 0；正数取整到秒，<500ms 钳到
+// 1s 保留「正数 = 启用」）写新键、删除旧键；新键已存在/旧键不存在 = 零动作（幂等）。
+// 换算策略与 lib/config.js 的 msToSec 保持一致（同源同规则，避免迁移后读取语义漂移）。
+// 调用点：startWebHostFromPlugin 与 dsh-run.js doExecute 的 runMigrations steps 追加
+// "timeout-sec"（与 config-schema 同批调度；config.json 初始化后即可换算旧键）。
+function migrateTimeoutSec(cfg) {
+  try {
+    const dataDir =
+      cfg.dataDir || getSingleton().dataDir || join(PLUGIN_ROOT, "data");
+    const cf = join(dataDir, "config.json");
+    if (!existsSync(cf)) return null; // 无 config.json：零动作
+    const j = JSON.parse(readFileSync(cf, "utf8"));
+    const g = j && typeof j.global === "object" && j.global ? j.global : null;
+    if (!g) return null;
+    // 毫秒 → 秒（与 config.js msToSec 同规则：0=禁用保留，正数取整钳 ≥1）
+    const msToSec = (ms) => {
+      if (!Number.isFinite(ms)) return null;
+      if (ms <= 0) return 0;
+      return Math.max(1, Math.round(ms / 1000));
+    };
+    const converted = [];
+    // 单键换算：旧键存在时——新键已存在且为合法数值 → 新键权威，删除残留旧键（清理
+    // 避免单位歧义；新键为 number 类型，宿主写入必为 number）；新键缺失/非数值 → 换算
+    // 写新键删旧键（旧值非数字则不动，读取侧快照兑底）；旧键不存在 → 零动作
+    const convert = (oldKey, newKey) => {
+      if (!(oldKey in g)) return; // 旧键不存在：零动作
+      const nv = g[newKey];
+      if (typeof nv === "number" && Number.isFinite(nv)) {
+        // 新键已存在且为合法数值：权威新键，删残留旧键（读取侧新键优先，旧键不再 consult）
+        delete g[oldKey];
+        converted.push({ oldKey, newKey, removed: true, value: nv });
+        return;
+      }
+      const s = msToSec(Number(g[oldKey]));
+      if (s === null) return; // 旧值非数字：不动（读取侧快照兜底）
+      g[newKey] = s;
+      delete g[oldKey];
+      converted.push({ oldKey, newKey, value: s });
+    };
+    convert("defaultTimeoutMs", "defaultTimeoutSec");
+    convert("approvalTimeoutMs", "approvalTimeoutSec");
+    if (converted.length === 0) return null; // 零动作
+    // 原子写回（tmp + rename，对齐 ensureConfigJson 惯例）；失败静默——读取侧有旧键
+    // 兜底（resolveApprovalTimeoutSec / resolveDefaultTimeoutSec 优先新键、旧键换算），
+    // 迁移未落盘不影响功能，下次调用重试。
+    const tmp = cf + ".timeout-sec.tmp";
+    writeFileSync(tmp, JSON.stringify(j, null, 2), "utf8");
+    renameSync(tmp, cf);
+    console.log(
+      "[dsh-hanako] 超时配置迁移（毫秒→秒）：" +
+        converted.map((c) => c.oldKey + "→" + c.newKey + "=" + c.value).join("，"),
+    );
+    return converted;
+  } catch {
+    return null; // 读/写失败静默：读取侧有旧键兜底
+  }
+}
+
 // ---- 迁移注册表（有序：执行顺序 = 数组顺序；新增迁移在此加一条）----
 // 每条：{ id（稳定标识，调用点 steps 选择用）, version（引入/最后调整版本，文档用）,
 //        run(cfg)（幂等步骤实现；失败由 runMigrations 捕获记录，不阻断后续） }
@@ -327,6 +395,12 @@ const MIGRATIONS = [
     version: "0.24+",
     describe: "退役 update-result.json 遗留文件（v0.24 起更新结果走内存态 g.update，文件不再写不再读）",
     run: cleanupUpdateResult,
+  },
+  {
+    id: "timeout-sec",
+    version: "0.25+",
+    describe: "超时配置毫秒 → 秒（approvalTimeoutMs/defaultTimeoutMs → approvalTimeoutSec/defaultTimeoutSec，0=禁用保留，新键已存在零动作）",
+    run: migrateTimeoutSec,
   },
 ];
 

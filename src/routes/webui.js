@@ -24,13 +24,14 @@
 // 浏览器 3s 轮询 /webui/health 挂载」链路）。脚本首行 postMessage ready 是宿主原始握手
 // （参照 PLUGINS.md；插件 bundle 不含 @hana/plugin-sdk，不依赖它）。
 //
-// 连接失败自检：web host 未就绪时逐项检查 ① nodejs 配置 ② dsh 依赖
-// ③ DSH 进程状态，明确指出哪一项坏了、为什么、怎么修。诊断由服务端收集（Node 侧
-// 才能读 config.json、进程单例与 fs 状态；浏览器 iframe 读不到插件进程）——收集函数
-// 挂在 globalThis 单例（tools/dsh-run.js 的 collectDiagnostics），这里经单例调用而
-// 非静态 import：Hana 以 ?t= 时间戳加载 tools 模块，静态 import 会命中 Node ESM 固定
-// URL 缓存读到旧模块（见 tools/dsh-run.js 头部注释），与 index.js 经单例取 closeProcess
-// 同一套纪律。工具模块未加载（冷启动窗口）时单例函数缺失，返回 null 由壳页诊断渲染兜底。
+// 连接失败自检：web host 未就绪时逐项检查 ① dsh 依赖（存在性 + 运行级验证）
+// ② DSH 进程状态（t1/t2，见 lifecycle.js collectWebDiagnostics），明确指出哪一项坏了、
+// 为什么、怎么修。诊断由服务端收集（Node 侧才能读 config.json、进程单例与 fs 状态；
+// 浏览器 iframe 读不到插件进程）——收集函数挂在 globalThis 单例（tools/dsh-run.js 的
+// collectDiagnostics，lifecycle.js 实现），这里经单例调用而非静态 import：Hana 以 ?t=
+// 时间戳加载 tools 模块，静态 import 会命中 Node ESM 固定 URL 缓存读到旧模块（见
+// tools/dsh-run.js 头部注释），与 index.js 经单例取 closeProcess 同一套纪律。工具模块
+// 未加载（冷启动窗口）时单例函数缺失，返回 null 由壳页诊断渲染兜底。
 
 // 插件页 HTML 壳（构建期 template-loader 经 doT 编译为自包含渲染函数，运行时零依赖）
 import { render as webuiShellHtml } from "../assets/webui-shell.jinja2";
