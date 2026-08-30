@@ -3,7 +3,7 @@
 //
 // scripts/build.mjs — dsh-hanako 单 bundle 构建（收敛架构；构建脚本不随源码编译）
 // 产物：dist/index.js（单 bundle：生命周期+7 工具+lib+lifecycle+内联前端资源）
-//     + dist/routes/*.js 壳（宿主 routes/ 目录扫描，import bundle 导出转发）
+//     + dist/routes/index.js 壳（宿主 routes/ 目录扫描，import bundle 导出转发）
 //     + dist/manifest.json（宿主 entry 指向 index.js）。插件本体零依赖打包。
 // 用法：
 //   node scripts/build.mjs                    # 本地已装 @rspack/core 时
@@ -101,18 +101,11 @@ function walk(dir) {
 }
 walk(join(ROOT, "dist"));
 
-// 2) 写 dist/routes/*.js 壳（宿主扫描 routes/ 目录 → import bundle 具名导出转发）
-for (const [relPath, name] of Object.entries({
-  "routes/webui.js": "webuiRoute",
-  "routes/card.js": "cardRoute",
-})) {
-  const p = join(ROOT, "dist", relPath);
-  const shell =
-    'import { ' + name + ' } from "../index.js";\n' +
-    'export default ' + name + ';\n';
-  fs.outputFileSync(p, shell, "utf8");
-  console.log("route shell -> " + relPath);
-}
+// 2) 写 dist/routes/index.js 壳（宿主扫描 routes/ 目录 → import bundle 具名导出转发）
+const p = join(ROOT, "dist", "routes", "index.js");
+const shell = 'import { pluginRoutes } from "../index.js";\nexport default pluginRoutes;\n';
+fs.outputFileSync(p, shell, "utf8");
+console.log("route shell -> routes/index.js");
 
 // 3) 拷贝 manifest.json（dist 根：state.js PLUGIN_ROOT 向上找 manifest.json 即达 dist 根）
 fs.copySync(join(ROOT, "manifest.json"), join(ROOT, "dist", "manifest.json"));

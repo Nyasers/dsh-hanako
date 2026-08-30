@@ -134,9 +134,11 @@ function compressArchivedLogs(logsDir) {
 }
 
 
-// routes 具名导出：dist/routes/*.js 壳 import { webuiRoute } from "../index.js" 转发
-export const webuiRoute = registerWebuiRoutes;
-export const cardRoute = registerCardRoutes;
+// routes 具名导出：dist/routes/index.js 壳 import { pluginRoutes } 转发（组合工厂，一次挂全部路由）
+export const pluginRoutes = (app, ctx) => {
+  registerWebuiRoutes(app, ctx);
+  registerCardRoutes(app, ctx);
+};
 
 export default class DshHanakoPlugin {
   async onload() {
