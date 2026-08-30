@@ -1,0 +1,21 @@
+{
+  "name": "dsh-hanako",
+  "version": "0.25.0",
+  "private": true,
+  "packageManager": "pnpm@11.24.0",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "pack": "node scripts/pack.mjs",
+    "version": "node scripts/version.mjs"
+  },
+  "devDependencies": {
+    "@rspack/core": "^2.1.10",
+    "archiver": "^8.0.0",
+    "clean-css": "^5.3.3",
+    "dot": "^1.1.3",
+    "fs-extra": "^11.4.0",
+    "html-minifier-terser": "^7.2.0",
+    "terser": "^5.50.0"
+  }
+}

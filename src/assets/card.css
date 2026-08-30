@@ -1,0 +1,429 @@
+/* SPDX-License-Identifier: MPL-2.0
+   Copyright (c) 2026 Nyasers */
+/* dsh-runner 任务反馈卡片样式（host 主题变量，跨主题可用） */
+/* iframe body 整体背景（--tool-bg 宿主注入时生效，未定义回退透明）
+   flex column + max-height 600（border-box 含 padding）：内容短时 body 贴合、长时顶满 600，
+   摘要区 flex 收缩到剩余空间内部滚动（纯 CSS 按需拉长，body 总高锁 600） */
+/* body：保留默认 margin 8px（视觉呼吸感），max-height 584 + margin 16 = html 600（宿主上限） */
+body {
+  background: var(--tool-bg, transparent);
+  margin: 8px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  max-height: 584px;
+}
+#dsh-root {
+  flex: 0 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.dsh {
+  flex: 0 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  font-family: var(--font-ui, system-ui, sans-serif);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text, inherit);
+  padding: 2px 0;
+}
+.dsh-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+.dsh-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--accent-light, rgba(127, 127, 127, 0.15));
+  color: var(--accent, inherit);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.dsh-icon svg {
+  width: 16px;
+  height: 16px;
+}
+.dsh-title {
+  font-weight: 500;
+  color: var(--text, inherit);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+.dsh-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+.dsh-badge.run {
+  background: rgba(255, 170, 60, 0.16);
+  color: #b8860b;
+}
+.dsh-badge.ok {
+  background: rgba(76, 175, 80, 0.16);
+  color: #2e7d32;
+}
+.dsh-badge.fail {
+  background: rgba(229, 57, 53, 0.16);
+  color: #c62828;
+}
+.dsh-dur {
+  font-size: 12px;
+  color: var(--text-muted, #888);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+.dsh-task {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-muted, #888);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-all;
+}
+.dsh-detail {
+  margin: 8px 8px 0;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.dsh-d-row {
+  display: flex;
+  gap: 8px;
+  padding: 2px 0;
+}
+.dsh-d-label {
+  color: var(--text-muted, #888);
+  width: auto;
+  flex-shrink: 0;
+}
+.dsh-d-value {
+  color: var(--text, inherit);
+  word-break: break-all;
+}
+/* 任务值默认单行截断，点击展开全文（line-clamp 截断 + open 恢复；
+   折叠 nowrap 防换行符干扰单行，展开 pre-line 保留任务描述中的换行） */
+.dsh-task-expand {
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.dsh-task-expand:hover {
+  color: var(--accent, inherit);
+}
+.dsh-task-expand.open {
+  display: block;
+  -webkit-line-clamp: unset;
+  -webkit-box-orient: unset;
+  white-space: pre-line;
+}
+.dsh-output-toggle {
+  display: block;
+  margin: 0 0 6px auto;
+  font-size: 11px;
+  color: var(--text-muted, #888);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+.dsh-output-toggle:hover {
+  background: var(--bg-card-hover, rgba(127, 127, 127, 0.1));
+}
+/* 摘要/输出盒子：纸面分层（--bg 深于卡片底）+ 细边框 + 4px 圆角（纸张风） */
+.dsh-output {
+  display: none;
+  margin: 6px 0 0;
+  padding: 10px 12px;
+  background: var(--bg, var(--bg-card-hover, rgba(127, 127, 127, 0.06)));
+  border: 0.5px solid var(--border, rgba(127, 127, 127, 0.12));
+  border-radius: var(--radius-chat-card, 4px);
+  font-family: var(--font-ui, system-ui, sans-serif);
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--text, inherit);
+  max-height: 320px;
+  overflow-y: auto;
+  word-break: break-word;
+}
+.dsh-output.open {
+  display: block;
+}
+/* 摘要/输出共用容器：flex 收缩项（min-height:0 + overflow 滚动，纯 CSS 按需拉长，body 锁 600）；运行中（.live）隐藏滚动条并固定滚底跟随最新输出，终态与完整输出恢复正常滚动 */
+.dsh-summary {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: block;
+  margin: 6px 0 0;
+  padding: 10px 12px;
+  background: var(--bg, var(--bg-card-hover, rgba(127, 127, 127, 0.06)));
+  border: 0.5px solid var(--border, rgba(127, 127, 127, 0.12));
+  border-radius: var(--radius-chat-card, 4px);
+  font-family: var(--font-ui, system-ui, sans-serif);
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--text, inherit);
+  word-break: break-word;
+}
+.dsh-summary.live {
+  scrollbar-width: none;
+}
+.dsh-summary.live::-webkit-scrollbar {
+  display: none;
+}
+.dsh-summary-meta {
+  font-size: 11px;
+  color: var(--text-muted, #888);
+  margin-top: 6px;
+  flex-shrink: 0;
+}
+/* 恢复快照的结构化输出：reasoning 折叠块 + 工具调用小字 */
+.dsh-reasoning {
+  margin: 8px 0;
+  padding: 4px 10px;
+  border-left: 2px solid var(--border, rgba(127, 127, 127, 0.25));
+  border-radius: 0;
+  background: var(--bg, rgba(127, 127, 127, 0.05));
+}
+.dsh-reasoning summary {
+  cursor: pointer;
+  font-size: 11.5px;
+  color: var(--text-muted, #888);
+  user-select: none;
+}
+.dsh-reasoning[open] summary {
+  margin-bottom: 4px;
+}
+.dsh-toolcall {
+  font-size: 11px;
+  color: var(--text-muted, #888);
+  margin: 4px 0;
+}
+/* Markdown 渲染样式（.dsh-output 与 .dsh-summary 共用） */
+.dsh-output p,
+.dsh-summary p {
+  margin: 0 0 8px;
+}
+.dsh-output p:last-child,
+.dsh-summary p:last-child {
+  margin-bottom: 0;
+}
+.dsh-output h1,
+.dsh-output h2,
+.dsh-output h3,
+.dsh-output h4,
+.dsh-summary h1,
+.dsh-summary h2,
+.dsh-summary h3,
+.dsh-summary h4 {
+  margin: 12px 0 6px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+.dsh-output h1:first-child,
+.dsh-output h2:first-child,
+.dsh-output h3:first-child,
+.dsh-output h4:first-child,
+.dsh-summary h1:first-child,
+.dsh-summary h2:first-child,
+.dsh-summary h3:first-child,
+.dsh-summary h4:first-child {
+  margin-top: 0;
+}
+.dsh-output h1,
+.dsh-summary h1 {
+  font-size: 16px;
+}
+.dsh-output h2,
+.dsh-summary h2 {
+  font-size: 14.5px;
+  border-left: 2px solid var(--accent, #888);
+  padding-left: 8px;
+  border-radius: 0;
+}
+.dsh-output h3,
+.dsh-summary h3 {
+  font-size: 13.5px;
+}
+.dsh-output h4,
+.dsh-summary h4 {
+  font-size: 12.5px;
+}
+.dsh-output ul,
+.dsh-summary ul {
+  margin: 0 0 8px;
+  padding-left: 18px;
+}
+.dsh-output ol,
+.dsh-summary ol {
+  margin: 0 0 8px;
+  padding-left: 18px;
+}
+.dsh-output li,
+.dsh-summary li {
+  margin: 2px 0;
+  line-height: 1.6;
+}
+.dsh-output li::marker,
+.dsh-summary li::marker {
+  color: var(--accent, #888);
+}
+.dsh-output blockquote,
+.dsh-summary blockquote {
+  margin: 8px 0;
+  padding: 6px 12px;
+  border-left: 2px solid var(--accent, #888);
+  border-radius: 0;
+  background: rgba(var(--accent-rgb, 127, 127, 127), 0.06);
+  color: var(--text-muted, #888);
+  font-style: italic;
+}
+.dsh-output blockquote p,
+.dsh-summary blockquote p {
+  margin: 0 0 4px;
+}
+.dsh-output blockquote p:last-child,
+.dsh-summary blockquote p:last-child {
+  margin-bottom: 0;
+}
+.dsh-output hr,
+.dsh-summary hr {
+  border: none;
+  border-top: 0.5px solid var(--border, rgba(127, 127, 127, 0.2));
+  margin: 10px 0;
+}
+.dsh-output code,
+.dsh-summary code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  background: var(--bg, var(--bg-card, rgba(127, 127, 127, 0.12)));
+  border: 0.5px solid var(--border, rgba(127, 127, 127, 0.15));
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+.dsh-output pre,
+.dsh-summary pre {
+  margin: 8px 0;
+  padding: 10px 12px;
+  background: var(--bg-card, var(--bg, rgba(127, 127, 127, 0.1)));
+  border: 0.5px solid var(--border, rgba(127, 127, 127, 0.2));
+  border-radius: var(--radius-chat-card, 4px);
+  overflow-x: auto;
+}
+.dsh-output pre code,
+.dsh-summary pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre;
+  color: var(--text, inherit);
+}
+.dsh-output table,
+.dsh-summary table {
+  border-collapse: collapse;
+  margin: 8px 0;
+  font-size: 12px;
+  max-width: 100%;
+  display: block;
+  overflow-x: auto;
+  font-variant-numeric: tabular-nums;
+}
+.dsh-output th,
+.dsh-output td,
+.dsh-summary th,
+.dsh-summary td {
+  padding: 5px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+.dsh-output th,
+.dsh-summary th {
+  font-weight: 500;
+  color: var(--text-light, var(--text, #444));
+  border-bottom: 1px solid var(--border, rgba(127, 127, 127, 0.25));
+}
+.dsh-output td,
+.dsh-summary td {
+  border-bottom: 0.5px solid rgba(var(--accent-rgb, 127, 127, 127), 0.12);
+  color: var(--text, inherit);
+}
+.dsh-output tr:last-child td,
+.dsh-summary tr:last-child td {
+  border-bottom: none;
+}
+.dsh-output a,
+.dsh-summary a {
+  color: var(--accent, inherit);
+}
+.dsh-output strong,
+.dsh-summary strong {
+  font-weight: 500;
+  color: var(--accent, inherit);
+}
+.dsh-error {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #c62828;
+  word-break: break-all;
+  white-space: pre-wrap;
+  flex-shrink: 0;
+}
+.dsh-empty {
+  color: var(--text-muted, #888);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+/* v0.13.0: 安装/升级卡片（/card/dep）——npm 日志尾部实时滚动 + 完成结果行 */
+.dsh-dep-log {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 220px;
+  overflow-y: auto;
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  background: var(--bg, var(--bg-card-hover, rgba(127, 127, 127, 0.06)));
+  border: 0.5px solid var(--border, rgba(127, 127, 127, 0.12));
+  border-radius: var(--radius-chat-card, 4px);
+  font-family: var(--font-mono, ui-monospace, Consolas, monospace);
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text, inherit);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.dsh-dep-log.live {
+  scrollbar-width: none;
+}
+.dsh-dep-log.live::-webkit-scrollbar {
+  display: none;
+}
+.dsh-dep-result {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text, inherit);
+  word-break: break-all;
+  white-space: pre-wrap;
+  flex-shrink: 0;
+}

@@ -1,0 +1,9 @@
+# pnpm 11 构建脚本白名单（allowBuilds 取代 package.json 的 allowScripts / onlyBuiltDependencies）
+# dsh 运行时树依赖的 install scripts：部署（pnpm add 到数据目录 dsh-pkg）时需放行。
+# 本地开发（pnpm install 装构建树）与 CI（--frozen-lockfile）同样读取本文件，白名单不参与 lockfile 解析。
+allowBuilds:
+  "@deepseek-ai/dsh-subprocess-local": true
+  "@google/genai": true
+  koffi: true
+  node-pty: true
+  protobufjs: true
