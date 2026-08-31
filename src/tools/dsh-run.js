@@ -19,6 +19,7 @@
 //
 // 权限：external_side_effect（调用 dsh 编码 agent 执行任务，消耗 Hana 宿主 provider 额度，Auto 模式送审）。
 import { join } from "node:path";
+import { readFileSync, existsSync } from "node:fs";
 import { getSingleton, PLUGIN_ROOT, manifestDefaults } from "./lib/state.js";
 import { resolveDshPkgDir } from "./lib/install.js";
 import {
@@ -47,6 +48,27 @@ import {
 // config.json 引导已退役（vX，migrate 体系删除）：配置读取侧 resolve* 缺省回退兜底。
 // 与 lifecycle.js 同属 index.js 单 bundle 收敛入口的静态 import 链。
 import { ensureWebHost } from "../lifecycle.js";
+
+// 0.1.2 终态结果：读会话投影缓存（projcache json——明文）。
+// 0.1.2 无 session/get 命令、$events 无内容事件（api-session/* 只有
+// added/removed/status/error/activity）——投影是任务结果的快速通道
+// （title/tokenUsage/sessionStats）；完整 assistant 消息可经 dsh_session get 深读。
+function readSessionProjection(dataDir, sessionId) {
+  try {
+    const p = join(
+      dataDir,
+      "dsh-home",
+      "storages",
+      "session_projcache",
+      "sessions",
+      `${sessionId}.json`,
+    );
+    if (!existsSync(p)) return null;
+    return JSON.parse(readFileSync(p, "utf8"));
+  } catch {
+    return null;
+  }
+}
 
 // ---- 本地审批应答（自动放行/超时拒绝共用；信封构造同 tools/dsh-approve.js，不 import 避免模块耦合）----
 // 经总线 rpc.request method="respond" 发送（bridge 翻译器自环调 /api/respond，client-response
@@ -303,272 +325,63 @@ function submitTask(
     const consume = (async () => {
       try {
         for await (const frame of openMux(base, ac.signal)) {
-          if (frame.sessionId && frame.sessionId !== sessionId) continue;
-          if (frame.type === "session/event") {
+          // ---- dsh 0.1.2 事件帧适配（openMux 产出 emit/waterfall）----
+          // 0.1.2 的 $events 只广播 api-session/*（added/removed/status/error/activity），
+          // 无 assistant/chunk/turn 内容事件——内容经会话投影（projcache）读取。
+          if (frame.type === "emit") {
             const ev = frame.event;
-            const d = ev?.data;
-            if (!d) continue;
-            if (ev.type === "assistant/chunk") {
-              sawChunk = true;
-              // finish error 帧不是失败信号：DSH 侧 LLM 请求失败（如 429 限流）会进入
-              // agent/request-error waterfall → dsh-llm-retry recover（指数退避 + jitter，
-              // append llm/retry 后 cancellableDelay 等待），返回 {kind:"retry"} 时 step()
-              // continue 重试、不抛错——任务实际还在跑。只把 failure 记进 pendingFailure
-              // （流异常关闭无 turn/end 时兜底判失败），继续消费后续帧；终态判定以 turn/end
-              // 为准（官方 UI 客户端同语义：event.type !== "turn/end" || reason.kind !== "error"）。
-              const c = d?.chunk;
-              if (c?.type === "finish" && c.reason?.kind === "error") {
-                const f = c.reason.failure || c.reason.error || {};
-                pendingFailure = {
-                  message:
-                    f.message || c.reason.message || "模型调用失败（无详情）",
-                  ...(f.code ? { code: f.code } : {}),
-                };
-              } else {
-                const t = textFromChunk(d);
-                if (t) collected += t; // 仅本地收集（回调输出用）；不再写 op Map
-              }
-            } else if (ev.type === "assistant/message") {
-              const msg = d.message;
-              if (msg?.id && typeof msg.id === "string" && !seen.has(msg.id)) {
-                seen.add(msg.id);
-                const t = textFromMessageBlocks(msg.content);
-                if (!sawChunk && t) {
-                  // chunk 流已提供文本时跳过拼接，避免重复
-                  collected += t;
+            const args = Array.isArray(frame.args) ? frame.args : [];
+            if (ev === "api-session/status") {
+              const [sid, running] = args;
+              if (sid !== sessionId) continue;
+              if (running !== false) continue; // 运行中：等待终态
+              // 终态：agent 回合结束（status false）。结果从会话投影读取。
+              const proj = readSessionProjection(cfg.dataDir, sessionId);
+              if (proj) {
+                const pv = proj.record?.rows;
+                const title = pv?.title?.val ?? null;
+                if (typeof title === "string" && title && !collected) {
+                  collected = title;
+                  blocksSeq.push({ type: "text", text: title });
                 }
-                // 收集结构化 blocks（text/reasoning/tool-call）：终态 op.output 供卡片完整输出折叠渲染
-                const blocks = Array.isArray(msg.content) ? msg.content : [];
-                for (const b of blocks) {
-                  if (
-                    b?.type === "text" &&
-                    typeof b.text === "string" &&
-                    b.text
-                  )
-                    blocksSeq.push({ type: "text", text: b.text });
-                  else if (
-                    b?.type === "reasoning" &&
-                    typeof b.text === "string" &&
-                    b.text
-                  )
-                    blocksSeq.push({ type: "reasoning", text: b.text });
-                  else if (b?.type === "tool-call" && b.name)
-                    blocksSeq.push({ type: "tool-call", name: b.name });
+                const tu = pv?.tokenUsage?.val;
+                if (tu) {
+                  usageTotal = usageTotal || {};
+                  const totals = tu.totals || {};
+                  if (totals.uncachedInputTokens != null)
+                    usageTotal.inputTokens = totals.uncachedInputTokens;
+                  if (totals.outputTokens != null)
+                    usageTotal.outputTokens = totals.outputTokens;
+                  if (totals.cacheReadTokens != null)
+                    usageTotal.cacheReadTokens = totals.cacheReadTokens;
                 }
               }
-              if (d.usage) {
-                // 累计：inputTokens 已是 disjoint（不含 cacheRead），各字段求和即任务维度总量；
-                // 缺失字段不初始化（API 未返回时卡片不显示，避免 0 误报）
-                const u = d.usage;
-                usageTotal = usageTotal || {};
-                usageTotal.inputTokens =
-                  (usageTotal.inputTokens || 0) + (u.inputTokens ?? 0);
-                usageTotal.outputTokens =
-                  (usageTotal.outputTokens || 0) + (u.outputTokens ?? 0);
-                if (u.cacheReadTokens != null)
-                  usageTotal.cacheReadTokens =
-                    (usageTotal.cacheReadTokens || 0) + u.cacheReadTokens;
-                if (u.reasoningTokens != null)
-                  usageTotal.reasoningTokens =
-                    (usageTotal.reasoningTokens || 0) + u.reasoningTokens;
+              outcome = pendingFailure
+                ? { stopReason: "error", failure: pendingFailure }
+                : { stopReason: "end_turn" };
+              return; // 0.1.2：status false 即终态
+            } else if (ev === "api-session/error") {
+              const [sid, message] = args;
+              if (sid === sessionId && typeof message === "string") {
+                pendingFailure = { message };
+                getSingleton().appendLog?.(
+                  "hana",
+                  `[dsh] 任务失败：${message}`,
+                );
               }
-            } else if (ev.type === "tool/call") {
-              // 缓存工具调用参数原文（session/event 包裹的 tool/call 事件，
-              // d = { name, arguments, callId }），审批到达时按 callId 反查做内容级匹配。
-              cacheToolCall(taskRpcId, d);
-            } else if (ev.type === "tool/code-dispatch-start") {
-              // code preset 子调用分发事件（d = { rootCallId, parentCallId,
-              // subCallId, name, arguments }）：run_code 内联的工具调用（如 write）以子调用
-              // 形式派发，参数不产生独立 tool/call 帧；按 subCallId 缓存（形如 `root:code:N`），
-              // 审批帧 callId 即该 subCallId，可精确反查到命令/路径原文。
-              cacheToolCall(taskRpcId, {
-                callId: d.subCallId,
-                name: d.name,
-                arguments: d.arguments,
-              });
-            } else if (ev.type === "turn/end") {
-              const reason = d.reason;
-              const kind = reason?.kind;
-              if (kind === "completed") outcome = { stopReason: "end_turn" };
-              else if (kind === "max-tokens")
-                outcome = { stopReason: "max_tokens" };
-              else if (kind === "aborted") outcome = { stopReason: "aborted" };
-              else if (reason?.failure)
-                outcome = { stopReason: "error", failure: reason.failure };
-              else if (reason?.error)
-                outcome = {
-                  stopReason: "error",
-                  failure: {
-                    message: reason.error.message || "模型调用失败（无详情）",
-                  },
-                };
-              else if (kind === "error")
-                outcome = {
-                  stopReason: "error",
-                  failure: { message: "DSH 任务失败（无错误详情）" },
-                };
-              else outcome = { stopReason: kind || "end_turn" };
-              return; // 一次 prompt = 一个 turn，turn/end 即终态
-            } else if (ev.type === "llm/retry") {
-              // LLM 请求失败退避重试事件（dsh-llm-retry 的 recover 挂 agent/request-error
-              // waterfall，session.append 后 cancellableDelay 等待再返回 {kind:"retry"}）。
-              // 只经会话日志通道记一条（不阻断事件循环、不改卡片渲染），终态仍以 turn/end 为准。
-              // data 含 retryId/turn/step/provider/mode/policyKey/retry（第 N 次）/delayMs/failure。
-              const rd = d || {};
-              const retryN = Number(rd.retry) || 1;
-              const extra = [];
-              if (rd.provider) extra.push(`provider=${rd.provider}`);
-              if (rd.failure?.code) extra.push(`code=${rd.failure.code}`);
-              const extraTxt = extra.length ? `，${extra.join("，")}` : "";
-              getSingleton().appendLog?.(
-                "hana",
-                `[LLM 重试] LLM 请求失败，退避重试中（第 ${retryN} 次，延迟 ${rd.delayMs}ms${extraTxt}）`,
-              );
+            } else if (ev === "api-session/activity") {
+              // 活动心跳：任务仍在执行（进度信号），忽略
             }
-          } else if (frame.type === "approval/requested") {
-            // 审批挂起（approval/policy=ask）：任务会等待应答。把审批上下文（含 respond
-            // 路由所需的 respondRpcId）存进运行期协调状态（g.ops 条目，键 = sessionId），并触发
-            // 宿主 deferred 通知（独立 taskId，不占用任务完成通道），Agent 收到后
-            // 调用 dsh_approve 工具应答；无人应答仍可在 dsh Web UI 人工处理。
-            // 审批固定形态——挂起 → deferred 通知 Agent（附 tool/call 参数原文，
-            // 见 notifyApprovalWake）→ Agent 用 dsh_approve 应答；无人应答超时自动拒绝
-            // （approvalTimeoutSec，默认 30s 应答方失联检测，0=禁用）。不再有白名单自动放行
-            // 或 manual/auto 模式切换：全部审批都交 Agent 处理。
-            const g = getSingleton();
-            const op = g.ops.get(sessionId);
-            if (op) {
-              const approval = {
-                approvalId: frame.approvalId,
-                respondRpcId: frame.rpcId,
-                sessionId,
-                toolName: frame.toolName,
-                callId: frame.callId,
-                reason: frame.reason,
-                at: new Date().toISOString(),
-                status: "pending",
-              };
-              // 审批通知附带 tool/call 参数原文（命令/路径，按 callId 从
-              // toolCallCache 反查）——Agent 决策看「具体执行了什么」，而不是只听 model 自述
-              // reason。code preset 下子调用（subCallId 形如 `root:code:N`）的参数在
-              // tool/code-dispatch-start 事件里，已按 subCallId 精确缓存；若仍 miss（子调用
-              // 事件未到/直发帧形态），剥 `:code:N` 后缀回退到 run_code 根调用（args 为整段
-              // 代码原文，兜底呈现）。
-              let cachedCall = toolCallCache.get(`${taskRpcId}::${frame.callId}`);
-              if (!cachedCall && typeof frame.callId === "string") {
-                const stripped = frame.callId.replace(/:\w+:\d+$/, "");
-                if (stripped !== frame.callId) {
-                  const root = toolCallCache.get(`${taskRpcId}::${stripped}`);
-                  if (root && root.name === "run_code") {
-                    cachedCall = {
-                      name: "run_code(code-dispatch)",
-                      args: root.args,
-                    };
-                  }
-                }
-              }
-              approval.args = cachedCall?.args ?? null;
-              if (!Array.isArray(op.activeApprovals)) op.activeApprovals = [];
-              if (
-                !op.activeApprovals.some(
-                  (a) => a.approvalId === approval.approvalId,
-                )
-              ) {
-                op.activeApprovals.push(approval);
-                // 统一流程：所有审批都通知 Agent 应答（不区分 manual/auto，无白名单）。
-                // 通知附带命令/路径原文（approval.args）；挂起后暂停执行超时计时（外部决策等待
-                // 不计入执行时间），并挂审批超时拒绝计时器（approvalTimeoutSec，0=禁用）。
-                notifyApprovalWake({
-                  bus: bus ?? getSingleton().bus,
-                  sessionPath,
-                  rpcId: taskRpcId,
-                  approval,
-                  task: taskText,
-                });
-                pauseTimeout(); // 审批挂起：暂停执行超时计时（外部决策等待不计入执行时间）
-                const timeoutSec = resolveApprovalTimeoutSec(cfg); // 秒；0=禁用
-                if (timeoutSec > 0) {
-                  const timerKey = `${taskRpcId}::${approval.approvalId}`;
-                  const t = setTimeout(() => {
-                    approvalTimers.delete(timerKey); // 计时器已触发：从表移除
-                    const ap2 = op.activeApprovals?.find(
-                      (a) => a.approvalId === approval.approvalId,
-                    );
-                    if (ap2 && ap2.status === "pending") {
-                      respondApprovalLocal(ap2, "rejected")
-                        .then(() => {
-                          if (ap2.status === "pending") {
-                            ap2.status = "answered";
-                            ap2.outcome = "rejected";
-                            ap2.answeredAt = new Date().toISOString();
-                            ap2.auto = "expired";
-                            if (
-                              !op.activeApprovals.some(
-                                (a) => a.status === "pending",
-                              )
-                            ) {
-                              resumeTimeout(); // 无挂起审批：恢复计时（同 approval/resolved 语义）
-                            }
-                          }
-                        })
-                        .catch(() => {
-                          /* 拒绝失败忽略：审批保持 pending，等人工或 web UI */
-                        });
-                    }
-                  }, timeoutSec * 1000); // 秒 → 毫秒（setTimeout 需要毫秒；0=禁用已在上方过滤）
-                  approvalTimers.set(timerKey, t);
-                }
-              }
-            }
-          } else if (frame.type === "approval/resolved") {
-            // 审批解决（allowed-once / rejected / cancelled 一律视为已解决）：仅当
-            // 无任何 status==="pending" 的审批时才恢复计时（pending 计数语义——多审批
-            // 交错时 A 解决但 B 仍挂起则不恢复）。dsh_approve 工具应答已把项标为
-            // "answered" 时不再覆写，但同样不参与 pending 计数。item 变为非
-            // pending（resolved/answered）即清掉该审批的超时拒绝计时器（防触发重复应答）。
-            const g = getSingleton();
-            const op = g.ops.get(sessionId);
-            if (op?.activeApprovals) {
-              const item = op.activeApprovals.find(
-                (a) => a.approvalId === frame.approvalId,
-              );
-              if (item && item.status === "pending") {
-                item.status = "resolved";
-                item.outcome = frame.outcome ?? "resolved";
-                item.resolvedAt = new Date().toISOString();
-              }
-              const timerKey = `${taskRpcId}::${frame.approvalId}`;
-              const t = approvalTimers.get(timerKey);
-              if (t) {
-                clearTimeout(t);
-                approvalTimers.delete(timerKey);
-              }
-              if (!op.activeApprovals.some((a) => a.status === "pending")) {
-                resumeTimeout(); // 无挂起审批：恢复计时，剩余时间续算
-              }
-            }
-          } else if (frame.type === "tool/call") {
-            // 直发 tool/call 帧（frame.data = { name, arguments, callId }，
-            // 宿主 backscanArgs 同款字段结构）：同样缓存参数原文（frame.data 缺失时回退帧字段）。
-            cacheToolCall(taskRpcId, frame.data ?? frame);
-          } else if (frame.type === "stream/error") {
-            outcome = {
-              stopReason: "error",
-              failure: { message: frame.error?.message || "事件流错误" },
-            };
-            return;
+            // api-session/added / removed：会话清单事件，忽略
+          } else if (frame.type === "waterfall") {
+            // 0.1.2 瀑布事件（审批等）：openMux 已默认回投 next；
+            // 宿主审批应答适配后续接入。
+            getSingleton().appendLog?.(
+              "hana",
+              `[dsh] 收到瀑布事件 ${frame.event}（宿主审批适配待接入）`,
+            );
           }
         }
-        // 取消兜底：dsh_cancel 已标记 cancelledRequested 时，若 cancel 导致 mux 断流且
-        // 未收到 turn/end，把无终态收尾判为 aborted 而非 end_turn（防误报完成）
-        const opNow = getSingleton().ops.get(sessionId);
-        if (opNow?.cancelledRequested && !outcome)
-          outcome = { stopReason: "aborted" };
-        // 兜底增强：流正常关闭但无 turn/end 时，若期间见过 finish error（LLM 请求失败帧，
-        // DSH 退避重试中/断流/崩溃），按失败收尾——避免 finish error 后 DSH 断流被误判为成功。
-        // 取消优先（上面已判 aborted），这里只处理非取消的异常收尾；pendingFailure 为空时
-        // 保持原「视为完成」语义（end_turn 可能已发但流先关）。
-        if (!outcome && pendingFailure)
-          outcome = { stopReason: "error", failure: pendingFailure };
         if (!outcome) outcome = { stopReason: "end_turn" };
       } catch (err) {
         if (err?.name === "AbortError")

@@ -56,6 +56,7 @@
 // 空操作，不阻断 dsh 启动。注释风格同 @dsh-hanako/provider（中文/单引号/无分号）。
 
 import { EventEmitter } from 'node:events'
+import { randomUUID } from 'node:crypto'
 import { handleUpgrade } from './ws-lib.js'
 
 export const name = '@dsh-hanako/bridge'
@@ -139,6 +140,13 @@ export async function translateRpcRequest(req, port, reply) {
     ...(cookie ? { cookie } : {}),
   }
   try {
+    if (method === 'authCookie') {
+      // 返回当前自环 cookie（launchToken 换发，缓存 6h；旧版无 connection 服务
+      // 返回空串 → 宿主免鉴权回退）。宿主侧无 launchToken 源（token 在 dsh 进程
+      // 内 BrowserAuth），remote.mux 等 WS 端点需 Cookie 头——经总线代取。
+      reply({ reqId, ok: true, value: await ensureAuthCookie(port) })
+      return
+    }
     if (method === 'respond') {
       // 审批应答：/api/respond 要 client-response 信封（rpcId 路由 web host pending 表），
       // 响应是 rpcReceipt { accepted } 而非 ServerResponse——与 Unary 响应结构不同，
@@ -411,12 +419,151 @@ export function apply(ctx, config) {
           )
         })
 
+        // ---- 事件流订阅（remote.mux + $events）：bridge 在 dsh 进程内代宿主订阅，
+        // 经总线 events 频道转发——宿主无需 WS 连接/鉴权（launchToken 在进程内
+        // BrowserAuth，ensureAuthCookie 换发无竞态）。0.1.2 的 $events 只广播
+        // api-session/*（added/removed/status/error/activity）；waterfall 帧（审批等）
+        // bridge 回投 next 后照转（宿主审批应答适配后续接入）。 ----
+        const evtPort = httpCtx.webServer?.port ?? 3080
+        let evtWs = null
+        let evtClientId = ''
+        let evtRetry = 0
+        let evtRetryTimer = null
+        let evtDisposed = false
+
+        const evtEmit = (frame) => {
+          try {
+            service.emit('events', frame)
+          } catch {
+            /* 转发失败不阻断（宿主退订/未连接 no-op） */
+          }
+        }
+
+        const evtConnect = async () => {
+          if (evtDisposed) return
+          try {
+            const cookie = await ensureAuthCookie(evtPort)
+            evtWs = new WebSocket(
+              'ws://127.0.0.1:' + evtPort + '/api/remote.mux',
+              cookie ? { headers: { Cookie: cookie } } : {},
+            )
+            evtWs.addEventListener('open', () => {
+              evtRetry = 0
+              bridgeLog('事件流 remote.mux 已连接（$events 订阅）')
+              try {
+                evtWs.send(
+                  JSON.stringify({
+                    type: 'open',
+                    streamId: randomUUID(),
+                    endpoint: '$events',
+                    payload: { args: {} },
+                  }),
+                )
+              } catch (e) {
+                bridgeLog('事件流 open 帧发送失败：' + ((e && e.message) || e))
+              }
+            })
+            evtWs.addEventListener('message', (e) => {
+              let item = null
+              try {
+                item = JSON.parse(e.data)
+              } catch {
+                return
+              }
+              const value = item && typeof item === 'object' ? item.value : null
+              if (!value || typeof value.type !== 'string') return
+              if (value.type === 'ready') {
+                evtClientId =
+                  typeof value.clientId === 'string' ? value.clientId : ''
+                evtEmit({ type: 'ready' }) // 宿主就绪信号
+                return
+              }
+              if (value.type === 'waterfall') {
+                // 回投 next（宿主只读不处理，否则服务端挂起；fire-and-forget）
+                if (evtClientId && typeof value.eventId === 'string') {
+                  try {
+                    fetch('http://127.0.0.1:' + evtPort + '/api/$events/result', {
+                      method: 'POST',
+                      headers: {
+                        'content-type': 'application/json',
+                        ...(cookie ? { cookie } : {}),
+                      },
+                      body: JSON.stringify({
+                        type: 'client-request',
+                        rpcId: 'ev_' + Date.now().toString(36),
+                        method: '$events/result',
+                        payload: {
+                          args: {
+                            clientId: evtClientId,
+                            eventId: value.eventId,
+                            outcome: { kind: 'next' },
+                          },
+                        },
+                      }),
+                    }).catch(() => {})
+                  } catch {
+                    /* 回投失败忽略（服务端超时自愈） */
+                  }
+                }
+                evtEmit({
+                  type: 'waterfall',
+                  event: value.event,
+                  eventId: value.eventId,
+                  agentId: value.agentId,
+                  request: value.request,
+                })
+                return
+              }
+              if (value.type === 'emit') {
+                evtEmit({ type: 'emit', event: value.event, args: value.args })
+              }
+              // cancel 帧：忽略（宿主无取消订阅语义，重连自愈）
+            })
+            evtWs.addEventListener('close', () => {
+              evtWs = null
+              if (evtDisposed) return
+              evtRetry = Math.min(evtRetry + 1, 8)
+              const delay = Math.min(1000 * 2 ** evtRetry, 30000)
+              bridgeLog(
+                '事件流断开，' + delay + 'ms 后重连（第 ' + evtRetry + ' 次）',
+              )
+              evtRetryTimer = setTimeout(() => evtConnect(), delay)
+              evtRetryTimer.unref?.()
+            })
+            evtWs.addEventListener('error', () => {
+              /* 错误由 close 兜底 */
+            })
+          } catch (e) {
+            bridgeLog('事件流连接失败：' + ((e && e.message) || e))
+            evtRetry = Math.min(evtRetry + 1, 8)
+            evtRetryTimer = setTimeout(
+              () => evtConnect(),
+              Math.min(1000 * 2 ** evtRetry, 30000),
+            )
+            evtRetryTimer.unref?.()
+          }
+        }
+        evtConnect()
+
         const provideDisposer = ctx.provide('dshanaBus', service)
 
         bridgeLog('bridge 插件已启动（dshana.bus 消息总线服务端，免鉴权）')
 
         return () => {
-          // 卸载：注销 provide + upgrade 路由 + 关闭当前连接
+          // 卸载：注销 provide + upgrade 路由 + 关闭当前连接 + 事件流订阅
+          evtDisposed = true
+          if (evtRetryTimer) {
+            clearTimeout(evtRetryTimer)
+            evtRetryTimer = null
+          }
+          if (evtWs) {
+            try {
+              evtWs.close()
+            } catch {
+              /* 忽略 */
+            }
+            evtWs = null
+          }
           if (provideDisposer && typeof provideDisposer === 'function') {
             try {
               provideDisposer()

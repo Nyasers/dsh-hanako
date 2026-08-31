@@ -20,7 +20,6 @@
 // routes/card.js 另有一份独立 openMux 事件流实现，但它不 import 本模块（是独立实现，
 // 见 dsh-run.js 头注释），不在此归并。
 
-import { randomUUID } from "node:crypto";
 import { getSingleton } from "./state.js";
 
 // ---- HTTP RPC 客户端（dsh web /api 网关，fetch 载波）----
@@ -189,161 +188,64 @@ async function respondDirect(base, payload, signal) {
   return await res.json();
 }
 
-// ---- 事件流（/api/remote.mux，WebSocket 通道；vX 适配 dsh 0.1.2）----
-// 0.1.2 事件流：remote.mux WS（cookie 鉴权——launchToken 换发，本机 Node 侧带 Cookie
-// 头不涉 SameSite）+ $events 订阅（open 帧：UUID streamId + endpoint "$events" +
-// payload {args:{}}）。服务端推 item 帧（value = RemoteEventDownlinkFrame：
-// ready / emit / waterfall / cancel）。waterfall 帧需回投 $events/result
-//（outcome next——宿主只读不处理，否则服务端挂起）；emit 帧是广播（session 事件），
-// 不回投。Node 全局 WebSocket 支持 headers（Cookie）。
-let muxCookie = "";
-let muxCookieAt = 0;
-
-/** remote.mux 鉴权 cookie（launchToken → GET /?token= → dsh-auth-*，缓存 6h）。 */
-async function ensureMuxCookie(base) {
-  if (muxCookie && Date.now() - muxCookieAt < 6 * 3600 * 1000) return muxCookie;
-  const g = getSingleton();
-  const tok = g?.web?.token || "";
-  if (!tok) return "";
-  try {
-    const res = await fetch(base + "/?token=" + encodeURIComponent(tok), {
-      redirect: "manual",
-    });
-    const setCookies =
-      typeof res.headers.getSetCookie === "function"
-        ? res.headers.getSetCookie()
-        : res.headers.get("set-cookie")
-          ? [res.headers.get("set-cookie")]
-          : [];
-    muxCookie = setCookies
-      .map((s) => String(s).split(";")[0])
-      .filter(Boolean)
-      .join("; ");
-    muxCookieAt = Date.now();
-    return muxCookie;
-  } catch {
-    return muxCookie || "";
-  }
-}
-
-/** 回投 $events/result（waterfall 帧默认 next——宿主只读不处理，fire-and-forget）。 */
-async function ackRemoteEvent(base, clientId, eventId, outcome) {
-  try {
-    const cookie = await ensureMuxCookie(base);
-    await fetch(base + "/api/$events/result", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...(cookie ? { cookie } : {}),
-      },
-      body: JSON.stringify({
-        type: "client-request",
-        rpcId: "ev_" + Date.now().toString(36),
-        method: "$events/result",
-        payload: { args: { clientId, eventId, outcome } },
-      }),
-    });
-  } catch {
-    /* 回投失败不阻断（服务端超时自愈） */
-  }
-}
+// ---- 事件流（dsh 0.1.2：宿主不直连 remote.mux，经 dshana.bus 消费）----
+// bridge 在 dsh 进程内订阅 remote.mux + $events（launchToken 在 BrowserAuth，
+// ensureAuthCookie 换发无竞态），经总线 events 频道转发帧：ready（就绪信号）/ emit
+// （api-session/* 广播）/ waterfall（审批等，bridge 已回投 next）。宿主 openMux 纯
+// 总线订阅——无 WS 连接、无 cookie 管理（直连 remote.mux 的 cookie 换发有启动竞态
+// 且宿主侧无 launchToken 源，已废弃）。
 
 async function* openMux(base, signal) {
-  if (typeof WebSocket !== "function") {
-    throw new Error("宿主环境无全局 WebSocket，无法订阅 DSH 事件流");
+  // dsh 0.1.2：宿主不直连 remote.mux——bridge 在 dsh 进程内订阅 $events 并经
+  // dshana.bus events 频道转发（ready/emit/waterfall），这里纯总线消费。
+  const g = getSingleton();
+  const bus = g?.dshanaBus;
+  if (!bus || typeof bus.on !== "function") {
+    throw new Error("dshana.bus 不可用，无法订阅 DSH 事件流");
   }
-  const url = base.replace(/^http/, "ws") + "/api/remote.mux";
-  const cookie = await ensureMuxCookie(base);
-  const ws = new WebSocket(url, cookie ? { headers: { Cookie: cookie } } : {});
   const queue = [];
   const waiters = [];
-  let wsError = null;
-  let wsClosed = false;
-  let readyClientId = "";
-  ws.onmessage = (ev) => {
-    let item = null;
-    try {
-      item = JSON.parse(ev.data);
-    } catch {
+  let off = null;
+  let ready = false;
+  const onFrame = (payload) => {
+    if (!payload || typeof payload.type !== "string") return;
+    if (payload.type === "ready") {
+      ready = true; // bridge 事件流就绪信号，不投上层
       return;
     }
-    // remote.mux item 帧：{ type:"item", streamId, value: <事件帧> }——
-    // value 即 RemoteEventDownlinkFrame（ready/emit/waterfall/cancel）。
-    const value = item?.value;
-    if (!value || typeof value.type !== "string") return;
-    if (value.type === "ready") {
-      // 事件流就绪：记录 clientId（waterfall 回投用），不投给上层
-      readyClientId = typeof value.clientId === "string" ? value.clientId : "";
-      return;
-    }
-    if (value.type === "waterfall") {
-      // 瀑布事件（审批等）：默认回投 next（宿主只读），同时投上层（审批应答适配后续）
-      if (readyClientId && typeof value.eventId === "string") {
-        ackRemoteEvent(base, readyClientId, value.eventId, { kind: "next" });
-      }
-    }
-    const frame = value;
-    if (waiters.length) waiters.shift()(frame);
-    else queue.push(frame);
+    if (waiters.length) waiters.shift()(payload);
+    else queue.push(payload);
   };
-  ws.onerror = () => {
-    wsError = new Error("dsh remote.mux WebSocket 错误");
-  };
-  ws.onclose = () => {
-    wsClosed = true;
-    while (waiters.length) waiters.shift()(null);
-  };
+  off = bus.on("events", onFrame);
   if (signal?.aborted) {
-    try {
-      ws.close();
-    } catch {}
+    off();
     throw Object.assign(new Error("dsh_run 已取消"), { code: "DSH_ABORTED" });
   }
   const onAbort = () => {
-    try {
-      ws.close();
-    } catch {}
+    while (waiters.length) waiters.shift()(null); // 唤醒循环使其退出
   };
   signal?.addEventListener("abort", onAbort, { once: true });
-  await new Promise((resolve, reject) => {
-    ws.onopen = () => {
-      try {
-        // 订阅事件流：open 帧（UUID streamId + $events 端点 + 空 args）
-        ws.send(
-          JSON.stringify({
-            type: "open",
-            streamId: crypto.randomUUID(),
-            endpoint: "$events",
-            payload: { args: {} },
-          }),
-        );
-      } catch (e) {
-        reject(wsError || e);
-        return;
-      }
-      resolve();
-    };
-    ws.onerror = () => reject(wsError || new Error("dsh remote.mux 连接失败"));
-  });
   try {
+    // 等 bridge 事件流就绪（bridge 连 remote.mux 后转发 ready 帧；最多 5s，
+    // 超时不阻塞——帧到达自然流转，bridge 重连期间事件可能晚到）
+    const readyDeadline = Date.now() + 5000;
+    while (!ready) {
+      if (queue.length) break;
+      if (Date.now() > readyDeadline) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
     while (true) {
       if (queue.length) {
         yield queue.shift();
         continue;
       }
-      if (wsError) throw wsError;
-      if (wsClosed) return;
       const frame = await new Promise((resolve) => waiters.push(resolve));
       if (frame === null) return;
       yield frame;
     }
   } finally {
     signal?.removeEventListener("abort", onAbort);
-    try {
-      ws.close();
-    } catch {
-      /* 已关闭 */
-    }
+    if (typeof off === "function") off();
   }
 }
 
