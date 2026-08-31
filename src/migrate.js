@@ -21,7 +21,7 @@
 //                         两处调用）；现统一经 runMigrations(cfg, { steps: ["config-schema"] })。
 //                         未来 schemaVersion 升级迁移在此扩展。
 //   3. junction-converge  cordis junction 旧名清理 + @dsh-hanako scope 无条件收敛（清理
-//                         dsh-hana-* 旧名遗留 junction，重建 @dsh-hanako/* 六个包 junction，
+//                         dsh-hana-* 旧名遗留 junction，重建 @dsh-hanako/* 七个包 junction，
 //                         每次启动无条件收敛）。原在 lifecycle.js ensureWebHost 内闭包；
 //                         现经 ensureWebHost 调 runMigrations(cfg, { steps: ["junction-converge"] })。
 //   4. cleanup-update-result  update-result.json 遗留文件删除（v0.24 退役）：更新链路结果
@@ -183,10 +183,10 @@ function ensureConfigJson(cfg) {
 }
 
 // ---- 迁移步骤 3：cordis junction 旧名清理 + @dsh-hanako scope 收敛（junction-converge）----
-// cordis 插件加载：六段均以包名注册（dsh client 模块发现按 loader entry 的 name 做
+// cordis 插件加载：七段均以包名注册（dsh client 模块发现按 loader entry 的 name 做
 // require.resolve('<name>/package.json')，file:// 无法解析），故启动前须在
 // $DSH_HOME/profiles/node_modules 统一建 junction（包名 → 插件安装目录 dsh-plugin/<pkg>），
-// 与 dsh 自维护的 junction farm 同机制。@dsh-hanako scope 收敛（v0.18.1）：六个插件包统一
+// 与 dsh 自维护的 junction farm 同机制。@dsh-hanako scope 收敛（v0.18.1）：七个插件包统一
 // 命名空间（v0.22.1 +bridge），junction 名与包名一致（profiles/node_modules/@dsh-hanako/<pkg>
 // → 插件安装目录 dsh-plugin/@dsh-hanako/<pkg>）。顺带清理旧名遗留 junction（dsh-hana-*
 // 前缀，含 v0.13.0 改名前的 dsh-hana-default-model / dsh-hana-proxy 等历史残留），无条件
@@ -221,6 +221,10 @@ function convergeCordisJunctions(cfg) {
     {
       link: "@dsh-hanako/bridge",
       target: join(PLUGIN_ROOT, "dsh-plugin", "@dsh-hanako", "bridge"),
+    },
+    {
+      link: "@dsh-hanako/sidebar",
+      target: join(PLUGIN_ROOT, "dsh-plugin", "@dsh-hanako", "sidebar"),
     },
   ];
   const nmDir = join(dshHome, "profiles", "node_modules");

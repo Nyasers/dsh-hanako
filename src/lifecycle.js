@@ -421,11 +421,11 @@ export async function ensureWebHost(cfg) {
   // session-query-sqlite 注入已移除（权限收敛）：dsh 默认 openAt: never 禁用
   // 全文搜索，插件不再 --patch 覆盖启用——不再有全局全文搜索入口；会话管理以
   // dsh-home 为唯一事实源（sessionId 即访问凭证，见 tools/dsh-session.js）。
-  // 主题注入 overlay + 宿主 provider 跟随 overlay——六内嵌插件合并为静态 patch
+  // 主题注入 overlay + 宿主 provider 跟随 overlay——七内嵌插件合并为静态 patch
   // dsh-plugin/dsh-hanako.patch.yml（v0.22.1+ tpl 整层退役）：纯 insert
-  // logger/clipboard/theme/provider/settings/bridge 六段，全部零 config（busToken
+  // logger/clipboard/theme/provider/settings/bridge/sidebar 七段，全部零 config（busToken
   // 免鉴权、config 经总线下发、logPath 占位符删除——见下方 patchStatic 注释）。
-  // cordis 插件加载：六段均以包名注册（dsh client 模块发现按 loader entry 的 name 做
+  // cordis 插件加载：七段均以包名注册（dsh client 模块发现按 loader entry 的 name 做
   // require.resolve('<name>/package.json')，file:// 无法解析），故启动前须在
   // $DSH_HOME/profiles/node_modules 统一建 junction（包名 → 插件安装目录
   // dsh-plugin/<pkg>），与 dsh 自维护的 junction farm 同机制。该动作（旧名清理 +
@@ -435,7 +435,7 @@ export async function ensureWebHost(cfg) {
   // （--port）之前。静态文件缺失（安装不完整）时不挂任何 patch 记 warn（内嵌插件
   // 降级不可用，dsh 启动不受影响），不阻断 dsh 启动。
   // 静态 patch：dsh-plugin/dsh-hanako.patch.yml（v0.22.1+ tpl 整层退役）——
-  // 纯 insert 六个内嵌插件（logger/clipboard/theme/provider/settings/bridge），全部
+  // 纯 insert 七个内嵌插件（logger/clipboard/theme/provider/settings/bridge/sidebar），全部
   // 零 config：busToken 免鉴权（任务 A）、config 经总线下发（任务 B）、logPath 占位符
   // 删除（任务 C，日志改总线 log 帧转发）。不再渲染 dsh-hanako.patch.generated.yml、
   // 不再做任何占位符替换（{{DSH_PKG_DIR}}/{{LOG_PATH}}/{{DATA_DIR}}/{{BUS_TOKEN}}
@@ -451,7 +451,7 @@ export async function ensureWebHost(cfg) {
     );
   }
   const patchArgs = patchFiles.flatMap((p) => ["--patch", p]);
-  // 六段 cordis 插件均以包名注册，spawn 前确保 junction 就绪（幂等，无条件收敛）——
+  // 七段 cordis 插件均以包名注册，spawn 前确保 junction 就绪（幂等，无条件收敛）——
   // 经统一迁移入口调度 junction-converge 步骤（旧名清理 + @dsh-hanako scope 重建）。
   // 非链接碰撞（确定性冲突）由迁移步骤抛出 → runMigrations 记录 error → 此处拒绝
   // 启动（带病启动会导致插件模块解析失败）；symlink 环境性失败仍为 warn 降级不阻断。

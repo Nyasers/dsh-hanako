@@ -417,12 +417,12 @@
       clearReadyTimers();
       var wasPending = document.body.getAttribute("data-pending") === "1";
       document.body.setAttribute("data-pending", "0");
-      var base = "http://127.0.0.1:{{= it.port }}/";
+      var base = "http://127.0.0.1:{{= it.port }}/?dshana=main";
       // 首次挂载（src 空）或从加载/诊断态切回（更新/停机后）：强制加载当前 web host
       // （带时间戳 bust，避免相同 src 不触发重新加载，保证更新后拿到新版本 UI）；
       // 已挂载且非 pending（重复 ready）不重复 reload，不打断 dsh UI
       if (wasPending || !frame.getAttribute("src")) {
-        frame.src = base + "?dshReload=" + Date.now();
+        frame.src = base + "&dshReload=" + Date.now();
       }
       startThemePush();
       pushPanel(); // 就绪挂载后同步面板状态（运行中）
