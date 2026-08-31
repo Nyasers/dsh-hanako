@@ -16,3 +16,6 @@
 - insert:
     - id: '@dsh-hanako/bridge'
       name: '@dsh-hanako/bridge'
+- insert:
+    - id: '@dsh-hanako/sidebar'
+      name: '@dsh-hanako/sidebar'

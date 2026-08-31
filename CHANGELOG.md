@@ -1,3 +1,16 @@
+- **v1.0.1-alpha.1**（unreleased）：DSH WebUI sidebar 进宿主侧栏桥——主页面隐藏 sidebar + embedUrl 转发到 Hana functionPanel（feat/sidebar-fp）。
+① **新 cordis 插件 @dsh-hanako/sidebar**（dsh-plugin/@dsh-hanako/sidebar/，经 dsh-host-webserver `tapIndex` 注入自包含脚本；幂等：检测已有标记跳过）：按 `location.search` 的 `dshana` 参数分支——
+   · **?dshana=sidebar**（宿主功能面板 iframe，宽 180-400px 必窄屏 → dsh sidebar 折叠成 56px rail）：等待 AppFrame 挂载（轮询 ≤30s 静默上限）→ 定位 sidebar 列（任务契约 `div[data-slot="sidebar"]` 优先，兜底 frame 语义属性 `data-sidebar-collapsed`/`data-details-collapsed` 与结构扫描 inline grid 三列）→ 折叠态时模拟点击展开 toggle（aria-label toggle.open/collapse 语义，class 含 toggle / logoRow 结构兜底；narrow 下 toggleSidebar 翻转 narrowExpanded，宿主侧栏宽度固定 → narrow 恒定 → 展开状态钉住）→ CSS !important 覆盖 frame `grid-template-columns` 为单轨道（minmax(0,1fr) 0 0）+ display:none 隐藏 center/details 等非 sidebar 元素（保留 [data-shell-overlay] 浮层宿主）→ sidebar 占满 iframe；MutationObserver（attributeFilter style）在 React 重渲染后重放覆盖，details 宽度变化保持响应式。
+   · **?dshana=main**（主页面卡片 iframe）：隐藏 sidebar 列（display:none + grid 首轨道 0 !important），center 占满；details 保留并跟随 React 宽度。
+   · **无参数**：零动作，正常 dsh UI 行为不变（顶层浏览器直开 3080 不受影响）。
+   注入脚本自包含/幂等/容错（AppFrame 未渲染或找不到元素静默重试有上限，不报错不阻断）；样式不硬编码颜色（沿用 dsh 主题 class/变量），宽度覆盖用元素级 style.setProperty(..., "important") 压过 React inline。
+② **manifest.json**：functionPanel 加 `embedUrl: "http://127.0.0.1:3080/?dshana=sidebar"`（v2 卡片 functionPanel.embedUrl 字段，loopback 校验合法；保留现有 id/label）。
+③ **主页面 iframe src 带 ?dshana=main**：webui-shell.jinja2 attach() 的 base（`http://127.0.0.1:<port>/?dshana=main`，dshReload bust 改 `&dshReload=`）+ webui.js buildShell 首帧 iframe src（`/?dshana=main`）；其余行为不变（就绪事件化 / 主题桥 / 剪贴板桥 / hana 面板桥全保留）。
+④ **注册链路**：dsh-plugin/dsh-hanako.patch.yml 加 insert（@dsh-hanako/sidebar）；src/migrate.js junction-converge 包列表加 sidebar（profiles/node_modules junction，六→七）。
+验证：build（rspack + doT + terser + assert）通过；注入脚本逻辑按 dsh client-ui-layout AppFrame 0.1.1-rc.2 源码静态核对（三列 grid + data-sidebar-collapsed/data-details-collapsed + SIDEBAR_AUTO_COLLAPSE=1024 + narrowExpanded 钉住语义 + toggle 按钮结构）；无法实测宿主 UI 渲染——待实装验证项见下。
+待实装验证（apps/dsh-hanako/ 部署 + 重启宿主）：宿主侧栏显示 dsh sidebar 完整内容（展开后 180-400px 宽度溢出属可接受边界，记录即可）；主页面 center 全宽无空白轨道；展开后状态跨宿主重启不回归；窄宽下 sidebar 内容可读性。
+升级注意：无工具契约变化（dsh_run / dsh_update / dsh_session 等参数与回调不变）；新增 cordis 插件由 patch insert + junction 收敛自动挂载，web host 重启即生效。
+
 - **v1.0.0-alpha.1**（2026-08-31）：DSHana v2 应用化——声明迁移 v2 + fpFullPanel 全占页（feat/fp-fullpanel，含 v0.26.0 的 cards 迁移基础）。
 ⑥ **manifestVersion 1 → 2（v2 应用体系）**：contributes.configuration → contributes.settings（properties 包进 schema，v2 settings 结构）；cards 删 type/icon（v2 卡片白名单 Kae 无此二字段，声明会 throw）+ 新增 siteNavEntry: true + fpFullPanel: true；network 字段全在 v2 白名单（Dae）；v2 顶层强制 manifestVersion===2、id 必须等于部署目录名（apps/<id>/）；v1 的 C3t builtin-only 拒绝不适用于 v2 白名单（siteNavEntry/fpFullPanel 社区应用可声明，liliMozi 官方探针 fp-full-probe 验证）。
 ⑦ **全占页样式 + 版本**：cardForm framed→flush / titlebar solid→translucent（fpFullPanel 全占风格，探针同款）；version 0.25.0 → 1.0.0-alpha.1（v2 时代）；.nvmrc Node 24 → 26。

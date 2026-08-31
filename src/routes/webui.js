@@ -131,7 +131,7 @@ function buildShell({
   // 剪贴板问题的正规解法是 @dsh-hanako/clipboard 插件（tapIndex 注入桥 → 宿主 capability）
   // + 下方壳页面桥（hostRequest + __dshCopy 监听）。
   const iframe = ready
-    ? `<iframe id="dsh-frame" src="http://127.0.0.1:${port}/"></iframe>`
+    ? `<iframe id="dsh-frame" src="http://127.0.0.1:${port}/?dshana=main"></iframe>`
     : `<iframe id="dsh-frame"></iframe>`;
   // 嵌入首帧自检 JSON：把 </ 转义成 <\/，防诊断文本（路径/stderr）里的 </script> 提前闭合脚本
   const initDiag = diagnostics
