@@ -6,7 +6,7 @@
 //   GET /ops/stream?sessionId=&rpcId=&timeoutMs=     SSE 推送源（卡片主链路：基线快照 + DSH 实时事件转发）
 //   GET /ops/status?sessionId=&rpcId=&timeoutMs=     兜底状态 JSON（EventSource 建立失败时卡片回退一次；仅 jsonl 恢复路径）
 //   GET /ops/output?sessionId=&rpcId=&timeoutMs=     兜底全量输出 JSON（兼容旧卡片懒加载；仅 jsonl 恢复路径）
-//   GET /card/dep?taskId=                            安装/升级卡片页面（dsh_install/dsh_update 异步流程，data-kind="dep"）
+//   GET /card/dep?taskId=                            安装/升级卡片页面（dsh_install 异步流程 action=install/update，data-kind="dep"）
 //   GET /ops/dep-stream?taskId=                      安装/升级卡片 SSE 推送源（进程内 g.depTasks + g.deps.log）
 //   GET /ops/dep-status?taskId=                      安装/升级卡片兜底状态 JSON
 //
@@ -461,9 +461,9 @@ export default function registerCardRoutes(app, ctx) {
   });
 
   // ── 安装/升级卡片（数据源 = 宿主单例 g.depTasks + g.deps.log）──
-  // dsh_install / dsh_update 异步流程登记 g.depTasks（Map：taskId → { taskId, kind:
-  // install|update, state: running|ok|error, log, at, result }）；本卡片非 dsh 会话、
-  // 无 jsonl，状态与 npm 实时日志全在宿主进程内。三条链路与任务卡片同构：
+  // dsh_install 异步流程（action=install/update）登记 g.depTasks（Map：taskId → {
+  // taskId, kind: install|update, state: running|ok|error, log, at, result }）；本卡片
+  // 非 dsh 会话、无 jsonl，状态与 npm 实时日志全在宿主进程内。三条链路与任务卡片同构：
   //   GET /card/dep?taskId=      卡片页面（iframe 内容，data-kind="dep"）
   //   GET /ops/dep-stream?taskId= SSE 推送源（定时推快照 + log 增量；终态推送后关闭）
   //   GET /ops/dep-status?taskId= 兜底状态 JSON（EventSource 建立失败时卡片回退一次）

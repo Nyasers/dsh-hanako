@@ -21,9 +21,11 @@
 // 导出：PNPM_VERSION（版本常量）/ ensurePnpm（幂等引导，返回 pnpm 入口绝对路径）
 // / tryHostChannel（宿主通道探测占位）/ runPnpm（spawn 宿主 node + pnpm 入口封装）
 // / DSH_PACKAGE + buildPnpmAddArgs（pnpm add 参数构造收敛入口：v0.20.x 起
-// lib/install.js 唯一 pnpm add 调用点只传 registry 兜底意图，包名/旗标同源本模块）。
+// lib/install.js 唯一 pnpm add 调用点只传 registry 兜底意图，包名/旗标同源本模块）
+// / isValidPkgSpec（spec 注入面校验：仅接受严格 SemVer 或合法 dist-tag；校验职责在
+// 调用方——installDepsFromPlugin 计算 effectiveSpec 后、传 buildPnpmAddArgs 前负责）。
 // 消费方（v0.18.2 收敛）：lib/install.js（installDepsFromPlugin 部署 dsh 依赖树 +
-// verifyDepsSmoke 的 pnpm 引导检查）。lib/check.js（npmViewLatest）与 src/lifecycle.js
+// verifyDepsSmoke 的 pnpm 引导检查）。lib/check.js（npmViewDistTags）与 src/lifecycle.js
 // （patch 模板 {{NPM_CLI_PATH}} 占位符）v0.18.2 起退出——版本检查改 HTTP 直查 npm
 // registry（pnpm view 语义等价），patch 模板不再注入 pnpm 入口（settings 侧检查链路同改）。
 //
@@ -353,18 +355,78 @@ export async function runPnpm(args, opts = {}) {
 
 // ---- pnpm add 参数构造（lib/install.js 唯一 pnpm add 调用点的收敛入口）----
 // v0.20.x 起：install.js 不再手拼 pnpm add 参数，改调 buildPnpmAddArgs——只传意图
-// （registry 兜底 URL），包名/旗标同源本模块：DSH_PACKAGE（依赖包名）+ 本函数静态旗标。
-// 后续若需锁版本，在 DSH_PACKAGE 旁同源加版本常量（如 DSH_PACKAGE_VERSION）并拼进 args。
+// （registry 兜底 URL + spec），包名/旗标同源本模块：DSH_PACKAGE（依赖包名）+ 本函数静态旗标。
+// spec 支持（vX 起）：可传具体版本号或 dist-tag（如 "1.0.0-alpha.1" / "next"），拼成
+// @deepseek-ai/dsh@<spec>（npm/pnpm 原生支持 tag spec）；缺省（undefined/空串）装默认
+// 最新（buildPnpmAddArgs 不拼 @ 后缀）。registry 兜底与 spec 相互独立、互不影响。
+// ⚠️ 本函数保持纯拼接不做校验——spec 合法性（严格 SemVer 或合法 dist-tag，见
+// isValidPkgSpec）由调用方负责：installDepsFromPlugin 计算 effectiveSpec 后、传入
+// 前校验（注入面收口，防 "npm:evil@1.0.0" / "github:user/repo" / "file:../x" /
+// "/abs/path" 等安装非预期包）。
 // --reporter=ndjson 取代旧 --loglevel=http：pnpm 11.24.0 的 ndjson reporter 每行一个
 // JSON 对象（bole 序列化到 stdout，level 为 debug/info/warn/error 字符串，name 标识
 // 事件类型），输出结构化安装进度事件流（pnpm:fetching-progress / pnpm:stage /
 // pnpm:root / pnpm:stats / pnpm:lifecycle …），供 install.js 逐行解析转可读进度行。
 export const DSH_PACKAGE = "@deepseek-ai/dsh";
 
-export function buildPnpmAddArgs({ registry } = {}) {
-  const args = ["add", DSH_PACKAGE, "--reporter=ndjson"];
+export function buildPnpmAddArgs({ registry, spec } = {}) {
+  const target =
+    DSH_PACKAGE + (typeof spec === "string" && spec.trim() ? "@" + spec.trim() : "");
+  const args = ["add", target, "--reporter=ndjson"];
   if (typeof registry === "string" && registry) {
     args.push("--registry=" + registry);
   }
   return args;
+}
+
+// ---- spec 注入面校验（vX：installDepsFromPlugin 调用前收口）----
+// effectiveSpec 会拼成 DSH_PACKAGE + "@" + spec 传给 pnpm add；spec 来自工具参数
+// （version/tag）或配置基线 dshTag。不校验时 "npm:evil@1.0.0"（npm alias）、
+// "github:user/repo"、"file:../x"、"/abs/path" 等会让 pnpm add 安装非预期包。
+// 只接受两类：
+//   ① 合法 SemVer（严格：核心组件与数字 prerelease 标识符必须 0|[1-9]\d*，无前导零；
+//      prerelease/build 允许；build 标识符不受前导零限制——SemVer §10 无此约束）
+//   ② 合法 dist-tag：/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/ 且不是合法 SemVer，且不是
+//      「版本形状」字符串（宽松 \d+.\d+.\d+ 形状——01.0.0 / 1.0.0-alpha.01 之类
+//      严格校验不过的版本号不应被 dist-tag 规则放行）；tag 正则本身已排除
+//      @ / : / 空格等协议与 alias 字符（规则冗余防御）。
+// 校验失败返回 false，由调用方按容错纪律提前返回 { ok:false, error }（不 throw）。
+// 校验职责在调用方（lib/install.js installDepsFromPlugin 计算 effectiveSpec 后、
+// 传给 buildPnpmAddArgs 前调用）；buildPnpmAddArgs 保持纯拼接（目标恒为已校验 spec）。
+export function isValidPkgSpec(spec) {
+  const s = String(spec || "").trim();
+  if (!s) return false;
+  if (isValidSemverSpec(s)) return true;
+  // dist-tag 须含字母：排除纯数字/数字点串（123 / 1.0.0.1 / 1.0.0- 等形似版本但非
+  // 严格 semver 的输入——这类输入作为安装目标只会得到 pnpm 的模糊解析失败，应在此
+  // 清晰拒绝）；npm 现实 dist-tag（latest/next/alpha/beta/rc…）全部含字母，不受影响
+  if (!/[a-zA-Z]/.test(s)) return false;
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(s)) return false;
+  return !SEMVER_LOOSE_SHAPE_RE.test(s);
+}
+
+// 宽松版本形状（核心组件 \d+，前导零不限；prerelease/build 可选）——用于排除
+// 「版本形状」的非法输入：01.0.0 / 1.0.0-alpha.01 不是合法 SemVer（严格），
+// 但也不能被 dist-tag 规则放行（会装到非预期包）。
+const SEMVER_LOOSE_SHAPE_RE =
+  /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+
+// 严格 SemVer 判定（与 scripts/version.mjs 同款规则：核心组件与数字 prerelease
+// 标识符必须 0|[1-9]\d*，无前导零；非数字标识符须含至少一个字母或连字符）
+const SEMVER_STRICT_RE =
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+
+function isValidSemverSpec(s) {
+  const m = String(s).match(SEMVER_STRICT_RE);
+  if (!m) return false;
+  const pre = m[4];
+  if (!pre) return true;
+  for (const id of pre.split(".")) {
+    if (/^\d+$/.test(id)) {
+      if (id.length > 1 && id[0] === "0") return false; // 数字标识符前导零非法
+    } else if (!/[A-Za-z-]/.test(id)) {
+      return false; // 非数字标识符须含字母或连字符
+    }
+  }
+  return true;
 }

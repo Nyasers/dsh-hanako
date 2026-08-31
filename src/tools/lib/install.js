@@ -39,7 +39,9 @@ import {
   PNPM_VERSION,
   DSH_PACKAGE,
   buildPnpmAddArgs,
+  isValidPkgSpec,
 } from "./pnpm.js";
+import { resolveDshTag } from "./config.js";
 
 // ---- 依赖安装日志通道（统一）----
 // installDepsFromPlugin 内部 emitLog(s, src)：同一份文本同时进
@@ -262,28 +264,41 @@ export function resolveDshPkgDir(cfg) {
   return PLUGIN_ROOT;
 }
 
-// ---- 零依赖 semver 比较（major.minor.patch 三段数字逐个比；预发布 -rc.x 视为低于同版本正式版）----
-// pre 字段：null 表示正式版（无预发布后缀）；对象 { kind, num } 表示预发布。
-//   kind="rc" 且 num 为 rc 序号（如 "0.1.0-rc.6" → { kind:"rc", num:6 }）；
-//   其余非数字预发布后缀（如 "-beta"、"-alpha"）kind="pre"、num=0（视为更旧），
-//   避免误分析成 rc 或崩溃。compareSemver 三段相同时：正式版 > 任一预发布；
-//   同为预发布则先比 rc 序号，能区分 0.1.0-rc.6 < 0.1.0-rc.7。
+// ---- 零依赖 semver 比较（major.minor.patch 三段数字逐个比；预发布按 SemVer §11.4 比较）----
+// pre 字段：null 表示正式版（无预发布后缀）；数组表示 prerelease 标识符列表
+// （如 "1.0.0-alpha.1" → ["alpha","1"]、"0.1.0-rc.6" → ["rc","6"]；"1.0.0" → null）。
+// compareSemver 三段相同时：无 pre 的正式版 > 任一预发布；同为预发布逐标识符按
+// SemVer §11.4 比较——数字标识符数值比较、非数字标识符 ASCII 字典序、数字 < 非数字；
+// 前段全等时长数组 > 短数组（alpha < alpha.1）。保持「正式版 > 任一预发布」「本地 <
+// 基线 → updateAvailable」语义不变，只修正 pre 之间的相对序（旧实现把非 rc 预发布
+// 简化为 { kind:"pre", num:0 }，alpha.1 与 beta.1 被判相等、rc 与 beta 无法正确比较）。
 export function parseSemver(v) {
   const s = String(v || "").trim();
-  const m = s.match(/^(\d+)\.(\d+)\.(\d+)([\s\S]*)$/);
+  const m = s.match(
+    /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/,
+  );
   if (!m) return null;
-  const tail = m[4];
-  let pre = null;
-  if (tail) {
-    const rc = tail.match(/^-rc\.(\d+)/i);
-    pre = rc ? { kind: "rc", num: Number(rc[1]) } : { kind: "pre", num: 0 };
-  }
   return {
     major: Number(m[1]),
     minor: Number(m[2]),
     patch: Number(m[3]),
-    pre,
+    pre: m[4] ? m[4].split(".") : null,
   };
+}
+
+// prerelease 标识符比较（SemVer §11.4）：数字标识符按数值比；非数字按 ASCII 字典序；
+// 数字 < 非数字。
+function comparePreIdentifiers(a, b) {
+  const an = /^\d+$/.test(a);
+  const bn = /^\d+$/.test(b);
+  if (an && bn) {
+    const na = Number(a);
+    const nb = Number(b);
+    return na === nb ? 0 : na < nb ? -1 : 1;
+  }
+  if (an) return -1; // 数字 < 非数字
+  if (bn) return 1; // 非数字 > 数字
+  return a < b ? -1 : a > b ? 1 : 0; // 非数字 ASCII 字典序
 }
 
 export function compareSemver(a, b) {
@@ -293,12 +308,18 @@ export function compareSemver(a, b) {
   if (pa.major !== pb.major) return pa.major < pb.major ? -1 : 1;
   if (pa.minor !== pb.minor) return pa.minor < pb.minor ? -1 : 1;
   if (pa.patch !== pb.patch) return pa.patch < pb.patch ? -1 : 1;
-  // 三段相同
+  // 三段相同 → 按 SemVer §11.4 比较 prerelease
   if (!pa.pre && !pb.pre) return 0; // 都无预发布后缀 → 相等
   if (!pa.pre) return 1; // a 正式版 > b 预发布
   if (!pb.pre) return -1; // a 预发布 < b 正式版
-  // 都是预发布：先比序号（含 rc 序号；非 rc 按 num=0 更旧）
-  if (pa.pre.num !== pb.pre.num) return pa.pre.num < pb.pre.num ? -1 : 1;
+  const len = Math.min(pa.pre.length, pb.pre.length);
+  for (let i = 0; i < len; i++) {
+    const c = comparePreIdentifiers(pa.pre[i], pb.pre[i]);
+    if (c !== 0) return c;
+  }
+  // 前段全等：长数组 > 短数组（alpha < alpha.1）
+  if (pa.pre.length !== pb.pre.length)
+    return pa.pre.length < pb.pre.length ? -1 : 1;
   return 0;
 }
 
@@ -340,7 +361,11 @@ export function readDshInstalledVersion(cfg) {
 // { status, result, error, time, log }（v0.24 状态收敛：status 入口置 installing、
 // 成功置 ok、catch 置 error——终态保留，下次入口才回到 installing；log 内存尾环
 // ≤DEPS_LOG_CAP，pnpm 输出与里程碑同通道 emitLog 实时写，见文件头「依赖安装日志通道」）。
-export async function installDepsFromPlugin(ctxConfig, ctxDataDir) {
+// spec 参数（vX 起，opts.spec）：可指定安装版本/tag（如 "1.0.0-alpha.1" / "next"），
+// 传入后 pnpm add @deepseek-ai/dsh@<spec>；缺省回退配置基线（resolveDshTag：
+// config.json global.dshTag，默认 "latest"）——version 参数优先于 tag 的解析在
+// 工具层（tools/dsh-install.js），能力层只认最终 spec。
+export async function installDepsFromPlugin(ctxConfig, ctxDataDir, opts = {}) {
   const g = getSingleton();
   // 部署中并发调用直接返回（路由侧也会先查 g.deps.status，这里是直调兜底）。
   // 注意同时判 "running"：install 内部的强制重验会把 status 短暂置 running（见下方
@@ -357,6 +382,24 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir) {
   }
   const dataDir = ctxDataDir || g.dataDir || join(PLUGIN_ROOT, "data");
   cfg.dataDir = dataDir;
+  // 安装目标解析（vX 起）：opts.spec（工具层已做 version||tag 解析）优先；缺省回退
+  // 配置基线（resolveDshTag：config.json global.dshTag → 快照 → "latest"）——webui
+  // 路由/设置页总线等不带 spec 的调用方同样遵循配置基线，单一事实源。
+  const effectiveSpec =
+    (typeof opts?.spec === "string" && opts.spec.trim() ? opts.spec.trim() : null) ||
+    resolveDshTag(cfg);
+  // 注入面校验（vX）：effectiveSpec 会拼成 DSH_PACKAGE + "@" + spec 传给 pnpm add，
+  // spec 可能来自工具参数（version/tag）或配置基线 dshTag；未校验时 "npm:evil@1.0.0"
+  // （npm alias）、"github:user/repo"、"file:../x"、"/abs/path" 等会让 pnpm add 安装
+  // 非预期包。校验失败按容错纪律提前返回（不 throw）。
+  if (!isValidPkgSpec(effectiveSpec)) {
+    return {
+      ok: false,
+      state: "error",
+      error: "非法安装目标: " + effectiveSpec + "（仅允许 SemVer 版本号或 dist-tag）",
+    };
+  }
+  const pkgTarget = DSH_PACKAGE + "@" + effectiveSpec;
   // 子进程 node 解析（每次部署解析一次；wrapper 与 pnpm add 用同一解析结果——自定义
   // nodejsPath 时 wrapper 也指向系统 node，macOS 签名校验问题一并解决）。同时传
   // dataDir（直读 config.json 的 global.nodejsPath，单一事实源）与 cfg.nodejsPath
@@ -390,8 +433,9 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir) {
     milestone("部署目录就绪：" + pkgDir);
     // 1.5 部署前停 web host：后续要删旧 node_modules，Windows 上被运行中进程加载的原生
     //    模块（koffi/node-pty 的 .node）会锁文件，rmSync 直接失败（EBUSY/EPERM）。
-    //    经单例调用 closeProcess（lifecycle.js 挂载，幂等；dsh-update 同款「停 host → 装
-    //    依赖 → 起 host」编排），异常不阻断部署（撞锁时会以 error 返回，信息留在日志）；
+    //    经单例调用 closeProcess（lifecycle.js 挂载，幂等；dsh-install 工具 update
+    //    action 同款「停 host → 装依赖 → 起 host」编排），异常不阻断部署（撞锁时会以
+    //    error 返回，信息留在日志）；
     //    部署完成后由调用方 autoStart 重新拉起。
     try {
       if (typeof g.closeProcess === "function") await g.closeProcess();
@@ -456,10 +500,12 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir) {
     } else {
       milestone("[兼容] 无旧依赖残留，跳过清理");
     }
-    // 5. pnpm add @deepseek-ai/dsh：参数构造收敛 lib/pnpm.js buildPnpmAddArgs（含
-    //    --reporter=ndjson；registry 兜底由调用方只传 URL 意图）；最小 package.json 无
-    //    devDeps 无需 omit；allowBuilds 放行 build scripts；PATH 首部指向 pkgDir（代理脚本
-    //    node.cmd/node 让 install script 找到宿主 electron node）
+    // 5. pnpm add 安装目标（参数构造收敛 lib/pnpm.js buildPnpmAddArgs：spec = 显式
+    //    version/tag 或配置基线 dshTag，合法性已在上方 isValidPkgSpec 校验；registry
+    //    兜底由调用方只传 URL 意图）；最小
+    //    package.json 无 devDeps 无需 omit；allowBuilds 放行 build scripts；PATH 首部
+    //    指向 pkgDir（代理脚本 node.cmd/node 让 install script 找到宿主 electron node）
+    milestone("安装目标：" + pkgTarget);
     const run = async (registry) => {
       // stdout/stderr 各持独立跨 chunk 行缓冲（pending 行重组 + tail 错误提取）：两条
       // 管道的 chunk 边界互不相关，共用一个缓冲会把不同流的片段拼成一行，破坏 ndjson
@@ -487,8 +533,9 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir) {
           if (readable !== "") emitLog(readable + "\n", "pnpm");
         }
       };
-      // 参数构造收敛 lib/pnpm.js buildPnpmAddArgs（含 --reporter=ndjson；registry 兜底意图）
-      const r = await runPnpm(buildPnpmAddArgs({ registry }), {
+      // 参数构造收敛 lib/pnpm.js buildPnpmAddArgs（含 --reporter=ndjson；spec = 显式
+      // version/tag 或配置基线；registry 兜底意图由调用方只传 URL）
+      const r = await runPnpm(buildPnpmAddArgs({ registry, spec: effectiveSpec }), {
         pnpmCli,
         cwd: pkgDir,
         env: {

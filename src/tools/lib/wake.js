@@ -4,12 +4,13 @@
 // tools/lib/wake.js — 宿主 deferred 唤醒协议共用模块（lib 提取）
 // 从 tools/dsh-run.js 剥离：registerDeferredWake / resolveDeferredWake / failDeferredWake /
 // notifyApprovalWake。原三份内联副本（tools/dsh-run.js / tools/dsh-install.js /
-// tools/dsh-update.js 各自内联一份，头注释明言"同 dsh-run.js 内联实现，不跨模块
-// import"）统一归口到本模块，三入口共同 import，消除三重复。
+// 已并入 dsh-install 的 tools/dsh-update.js 各自内联一份，头注释明言"同 dsh-run.js
+// 内联实现，不跨模块 import"）统一归口到本模块，dsh-run / dsh-install 两入口共同
+// import，消除三重复。
 //
 // 为什么能跨模块 import（分发约束见 lib/state.js 头注释）：本模块是纯协议/纯函数/零
 // 宿主状态（不碰 globalThis 单例，只发 bus.request 通道），rspack 入口（dsh-run /
-// dsh-install / dsh-update）静态 import 本模块、内联进各自 bundle，?t= 重载整体刷新，
+// dsh-install）静态 import 本模块、内联进各自 bundle，?t= 重载整体刷新，
 // 无"静态 import 固定 URL 缓存"问题；非 bundle 侧（routes/webui.js、index.js）不
 // import 本模块（它们经 globalThis 单例调用，不在这里建依赖）。
 //
@@ -18,9 +19,10 @@
 // 结果结构化直达）。容错纪律：唤醒是终态的旁路通知，任何失败都不抛回调用方（终局
 // 落盘/安装/更新结果上报不受影响）。
 //
-// type 归属：registerDeferredWake 的 meta.type 由调用方传入（不要再写死）——三入口
-// 需保留各自标识：dsh-run（默认）/ dsh-install / dsh-update。notifyApprovalWake 是
-// dsh-run 审批挂起专用（meta.type = "dsh-approval"，独立 taskId 不占用任务完成通道）。
+// type 归属：registerDeferredWake 的 meta.type 由调用方传入（不要再写死）——dsh-run
+// （默认）/ dsh-install（install/update 动作统一用 "dsh-install"；原 dsh-update 标识
+// 已废弃，工具并入 dsh_install）。notifyApprovalWake 是 dsh-run 审批挂起专用
+// （meta.type = "dsh-approval"，独立 taskId 不占用任务完成通道）。
 
 async function registerDeferredWake({
   bus,
@@ -74,7 +76,7 @@ async function failDeferredWake({ bus, taskId, error }) {
 // 凭定位键直接 dsh_session get 对账，无需额外搜索。定位键优先级：err.sessionId（submitTask
 // 内已附加，session.prompt 失败时 loc 为 null 也保留已创建的会话）→ loc.sessionId → rpcId。
 // status 语义：DSH_ABORTED=取消 → cancelled；DSH_TIMEOUT → timeout；其他 → failed。
-// 纯函数（零宿主状态），供 dsh-run.js catch 分支调用；dsh-install / dsh-update 仍用
+// 纯函数（零宿主状态），供 dsh-run.js catch 分支调用；dsh-install 仍用
 // failDeferredWake（安装/更新失败无需会话定位，message 语义足够）。
 function abnormalWakeResult({ err, loc, taskRpcId }) {
   const code = err && typeof err === "object" ? err.code : undefined;

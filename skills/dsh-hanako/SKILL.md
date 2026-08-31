@@ -1,6 +1,6 @@
 ---
 name: dsh-hanako
-description: "dsh-hanako 插件（把 DeepSeek Harness 接进 Hana 的进程外 subagent 执行器）的配置辅助与使用指南。触发场景：dsh-hanako 刚装好需要配置 defaultCwd、依赖缺失需要安装（DSHana 标签页自装 / Agent 用 dsh_install 工具 / 手动 pnpm add）、标签页自检/自愈（安装依赖/手动启动/检测依赖/检查更新/更新 DSH）、web host 起不来（先看标签页自检 t1/t2）、dsh 任务失败排查、审批怎么应答、dsh_run/dsh_install/dsh_approve/dsh_cancel/dsh_session/dsh_update 怎么用、默认模型怎么配（dsh 设置页「DSHana 设置」分页，provider/model/思考三级联动）、DSH 版本检查与更新（dsh_update 工具 / 设置页 DSH 版本块 / 标签页 deps 卡片）、安装/升级卡片（dsh_install / dsh_update 异步渲染 /card/dep 实时日志）、DeepSeek Harness 相关。遇到 dsh-hanako 相关需求优先读本技能再动手。"
+description: "dsh-hanako 插件（把 DeepSeek Harness 接进 Hana 的进程外 subagent 执行器）的配置辅助与使用指南。触发场景：dsh-hanako 刚装好需要配置 defaultCwd、依赖缺失需要安装（DSHana 标签页自装 / Agent 用 dsh_install 工具 / 手动 pnpm add）、标签页自检/自愈（安装依赖/手动启动/检测依赖/检查更新/更新 DSH）、web host 起不来（先看标签页自检 t1/t2）、dsh 任务失败排查、审批怎么应答、dsh_run/dsh_install/dsh_approve/dsh_cancel/dsh_session 怎么用（dsh_install 为 install/verify/check/update 四合一，vX 起合并原 dsh_update）、默认模型怎么配（dsh 设置页「DSHana 设置」分页，provider/model/思考三级联动）、DSH 版本检查与更新（dsh_install 工具 action=check/update / 设置页 DSH 版本块 / 标签页 deps 卡片）、安装/升级卡片（dsh_install 异步渲染 /card/dep 实时日志）、DeepSeek Harness 相关。遇到 dsh-hanako 相关需求优先读本技能再动手。"
 ---
 
 # dsh-hanako 配置辅助与使用指南
@@ -15,7 +15,7 @@ config.json 由宿主设置界面生成、**不随包分发**；defaultCwd 初�
 
 **1. defaultCwd（建议）**：为空且未传 cwd 时报 `cwd 不能为空`；设为项目沙箱目录。
 
-**2. 其余项默认可用**：approvalTimeoutSec（30，秒）/ webPort（3080）/ defaultTimeoutSec（1800，秒）。agentPreset / reasoningEffort 不需要配置：工具不显式传时用 dsh 默认（dsh Web UI 可调 agent 预设与思考强度）。任务模型不需要配置：默认用 dsh 默认模型（settings.yaml `agent-default-model`），可在 **dsh 设置页「DSHana 设置」分页 → 「默认模型」卡片**直接配置（Provider/模型/思考强度三级联动，选项 = dsh 全部可用 provider，保存即生效），`dsh_run` 工具参数 `provider`/`model`/`reasoningEffort` 可显式覆盖（显式时 selectModel，dsh 会把所选模型写回全局默认 settings.yaml——显式指定即成为新默认）。**DSH 版本**：同分页「DSH 版本」卡片可检查 `@deepseek-ai/dsh` 版本并一键更新（检查 dsh 侧直查远端 registry，更新走宿主能力层；Agent 用 `dsh_update` 工具 / 标签页 deps 卡片「检查更新」「更新 DSH」同结果）。
+**2. 其余项默认可用**：approvalTimeoutSec（30，秒）/ webPort（3080）/ defaultTimeoutSec（1800，秒）。agentPreset / reasoningEffort 不需要配置：工具不显式传时用 dsh 默认（dsh Web UI 可调 agent 预设与思考强度）。任务模型不需要配置：默认用 dsh 默认模型（settings.yaml `agent-default-model`），可在 **dsh 设置页「DSHana 设置」分页 → 「默认模型」卡片**直接配置（Provider/模型/思考强度三级联动，选项 = dsh 全部可用 provider，保存即生效），`dsh_run` 工具参数 `provider`/`model`/`reasoningEffort` 可显式覆盖（显式时 selectModel，dsh 会把所选模型写回全局默认 settings.yaml——显式指定即成为新默认）。**DSH 版本**：同分页「DSH 版本」卡片可检查 `@deepseek-ai/dsh` 版本并一键更新（卡片检查直查远端 latest，更新走宿主能力层；Agent 用 `dsh_install` 工具 action=check/update，未显式传 version/tag 时按配置基线 dshTag（默认 latest）执行）。
 
 **3. 配置生效铁律（实时）**：「改完都要重启 Hana」不成立：t1 依赖/t2 进程状态直读 config.json/单例实时；t2 手动启动链路 resolveDshPkgDir → spawn，直写后无需重启；仅旧进程存活（g.web.ready=true）需先杀进程或重启。
 
@@ -61,8 +61,7 @@ $node = <本机 node.exe 绝对路径，如 C:\Program Files\nodejs\node.exe>
 | 工具 | 用途 | 关键点 | 详情 |
 |---|---|---|---|
 | `dsh_run(task, cwd?, timeout?, wait?, agentPreset?, reasoningEffort?, provider?, model?, sessionId?)` | 提交任务 | 默认异步（后台送达）；wait=true 同步；provider/model 显式覆盖模型（显式时 selectModel，写回 dsh 全局默认）；sessionId resume | [dsh-run 技能](dsh-run) |
-| `dsh_install(action?, wait?, autoStart?)` | 安装/验证 dsh 依赖 | action=install 安装（默认，registry 兜底 + 自动运行级重验 + autoStart 自动拉起 web host，渲染安装卡片）；action=verify 只检测完整性；异步默认 + 完成回调，wait=true 同步；安装中重复调用返回状态 | [dsh-install 技能](dsh-install) |
-| `dsh_update(action?, wait?)` | 检查/更新 DSH | action=check 查版本（默认）；action=update 完整更新（停 web host → pnpm add latest → 起 web host，**正在执行的任务会中断**，渲染升级卡片）；update 默认异步后台执行 + 完成回调，wait=true 同步；更新中重复调用返回状态不重复执行 | [dsh-update 技能](dsh-update) |
+| `dsh_install(action?, wait?, autoStart?, version?, tag?)` | 安装/验证依赖 + 检查/更新版本四合一 | action=install 安装（默认，可指定 version/tag，registry 兜底 + 自动运行级重验 + autoStart 自动拉起 web host，渲染安装卡片）；action=verify 只检测完整性；action=check 版本检查（本地 + 远端 dist-tags + 基线 tag，只读）；action=update 完整更新（停 web host → pnpm add → 起 web host，**正在执行的任务会中断**，渲染升级卡片）；version 优先于 tag，都不传用配置基线（config.json global.dshTag，默认 latest）；异步默认 + 完成回调，wait=true 同步；安装/更新进行中重复调用返回状态 | [dsh-install 技能](dsh-install) |
 | `dsh_approve(rpcId, approvalId, outcome?)` | 应答审批 | allowed-once 放行 / rejected 拒绝；通知带 args 命令原文 | [dsh-approve 技能](dsh-approve) |
 | `dsh_cancel(sessionId)` | 取消任务 | 误派/卡死止损；幂等 | [dsh-cancel 技能](dsh-cancel) |
 | `dsh_session(action, limit?, sessionId?)` | 统一会话查询 | list=清单与摘要（dsh-home 唯一事实源 projcache，limit 默认 10）；get=凭 sessionId 直取内容（summary，sessionId 即访问凭证）；search 模式已移除 | [dsh-session 技能](dsh-session) |
@@ -79,21 +78,21 @@ $node = <本机 node.exe 绝对路径，如 C:\Program Files\nodejs\node.exe>
 | `POST /webui/start` | 手动启动 web host（t3 按钮） |
 | `POST /webui/install-deps` | 安装依赖（pnpm add @deepseek-ai/dsh 到 dsh-pkg，停 host + 清旧残留 + 创建 node 代理脚本，npmmirror 兜底；t1 按钮） |
 | `GET /webui/verify-deps` | 运行级依赖检测（node cliBin --version；进页自动一次 + 手动） |
-| `GET /webui/check-update` | 版本检查（deps 卡片「检查更新」；HTTP 直查 npm registry，官方源失败重试 npmmirror） |
-| `POST /webui/update-dsh` | 更新 DSH（deps 卡片「更新 DSH」；停 web host → pnpm add latest → 起 web host，**正在执行的任务中断**） |
+| `GET /webui/check-update` | 版本检查（**兼容端点**：deps 卡片「检查更新」按钮已移除，用户入口 = 设置页 DSH 版本卡片 / dsh_install 工具 action=check；HTTP 直查 npm registry，官方源失败重试 npmmirror） |
+| `POST /webui/update-dsh` | 更新 DSH（**兼容端点**：deps 卡片「更新 DSH」按钮已移除，用户入口 = 设置页 DSH 版本卡片 / dsh_install 工具 action=update；停 web host → pnpm add → 起 web host，**正在执行的任务中断**） |
 
 ## DSH 检查与更新（v0.13.0；v0.18.1 设置页检查改 dsh 侧直查）
 
-`@deepseek-ai/dsh` 版本检查与更新收敛为**宿主能力层单一事实源**（tools/lib/ `checkDshUpdate` / `updateDsh` / `installDepsFromPlugin` / `verifyDepsSmoke`，经单例挂载），Agent 工具与标签页共用同一套逻辑，结果一致；dsh 设置页「DSH 版本」卡片 v0.18.1 起**检查改 dsh 侧直查**（v0.18.2 起 HTTP 直查 npm registry，pnpm view 语义等价），更新仍走宿主能力层：
+`@deepseek-ai/dsh` 版本检查与更新收敛为**宿主能力层单一事实源**（tools/lib/ `checkDshUpdate` / `updateDsh` / `installDepsFromPlugin` / `verifyDepsSmoke`，经单例挂载），Agent 工具与标签页共用同一套逻辑；dsh 设置页「DSH 版本」卡片 v0.18.1 起**检查改 dsh 侧直查**（v0.18.2 起 HTTP 直查 npm registry，pnpm view 语义等价），更新仍走宿主能力层。**基线差异**：设置页卡片检查恒直查 `latest`；Agent 工具 / 标签页路由未显式传 version/tag 时按配置基线 dshTag（默认 latest）执行，基线非 latest 时两者结果可能不同：
 
-1. **Agent 工具 `dsh_update`**：`action=check`（默认）查 `{ localVersion, latestVersion, updateAvailable, error? }`，只读不改；`action=update` 执行完整更新（停 web host → pnpm add @deepseek-ai/dsh latest → 起 web host），默认异步（后台执行 + **升级卡片**实时日志，完成后宿主唤醒带回结果），`wait=true` 同步等待；更新会重启 web host、正在执行的任务会中断，`update` 前确认无运行中任务；更新执行中重复调用返回状态不重复执行
-2. **DSHana 标签页 deps 卡片**（web host 未就绪时可见）：版本行显示「当前版本 / 最新版本 / 可更新状态」+「检查更新」「更新 DSH」按钮（更新前两段式确认）；更新中显示进度（内存态 g.update 状态），完成显示「更新完成 vX，请重启 DSHana 使完全生效」；更新/安装期间页面自动退到诊断页显示进度，完成后自动切回并刷新
+1. **Agent 工具 `dsh_install`**（vX 起四合一，合并原 dsh_update）：`action=check` 查 `{ localVersion, distTags, baselineTag, baselineVersion, updateAvailable, error? }`（基线 tag = 显式 tag / 配置 dshTag / latest，可传 version 对比指定版本），只读不改；`action=update` 执行完整更新（停 web host → pnpm add（可指定 version/tag）→ 起 web host），默认异步（后台执行 + **升级卡片**实时日志，完成后宿主唤醒带回结果），`wait=true` 同步等待；更新会重启 web host、正在执行的任务会中断，`update` 前确认无运行中任务；更新执行中重复调用返回状态不重复执行
+2. **DSHana 标签页 deps 卡片**（web host 未就绪时可见）：版本行显示「当前版本 / 最新版本 / 可更新状态」（版本管理入口已迁移到设置页「DSH 版本」卡片与 dsh_install 工具，「检查更新」「更新 DSH」按钮已移除；`/webui/check-update`、`/webui/update-dsh` 路由保留为兼容端点）；更新中显示进度（内存态 g.update 状态），完成显示「更新完成 vX，请重启 DSHana 使完全生效」；更新/安装期间页面自动退到诊断页显示进度，完成后自动切回并刷新
 3. **dsh 设置页「DSHana 设置」分页 → 「DSH 版本」卡片**：本地版本直读 dsh-pkg package.json（挂载即显示），远端版本 **dsh 侧直查**（v0.18.2 起 HTTP 直查 npm registry——fetch `https://registry.npmjs.org/@deepseek-ai/dsh/latest` 的 JSON `version` 字段（pnpm view 语义等价），官方源失败重试 npmmirror，15s 超时，不再 spawn pnpm；v0.18.1 起不再经宿主桥接——修复了宿主 resources.watch 桥接不可靠导致检查永不完成的问题）；「更新到最新」→ 两段式确认 → 经 **dshana.bus 消息总线**（@dsh-hanako/bridge 提供的 dshanaBus 服务）发 update.request 直投宿主（v0.22.1 起替代 update-request.json 文件桥与 POST /child/post 反向信道，均已退役；bus 未就绪时 request-update 返回「消息总线未连接」）→ 宿主执行更新 → **v0.22.1+ 事件化**：订阅 update-stream 事件流（update.progress/result 驱动）直到 done/error；事件缺失手动刷新（update-status 一次性查询兜底）
-4. **Agent 工具 `dsh_install`**（依赖缺失/安装场景）：`action=install`（默认）pnpm add @deepseek-ai/dsh 到 dsh-pkg（registry 兜底 + 自动运行级重验 + autoStart 自动拉起 web host），默认异步 + **安装卡片**实时日志 + 完成回调，`wait=true` 同步；`action=verify` 只检测依赖完整性（运行级冒烟）；安装中（`g.deps.status === "installing"`）重复调用返回状态不重复执行
+4. **Agent 工具 `dsh_install`**（依赖缺失/安装场景，同工具 install/verify 动作）：`action=install`（默认）pnpm add @deepseek-ai/dsh 到 dsh-pkg（可指定 version/tag，registry 兜底 + 自动运行级重验 + autoStart 自动拉起 web host），默认异步 + **安装卡片**实时日志 + 完成回调，`wait=true` 同步；`action=verify` 只检测依赖完整性（运行级冒烟）；安装中（`g.deps.status === "installing"`）重复调用返回状态不重复执行
 
 **并发与一致性**：检查 `g.check.status` / 更新 `g.update.status` / 安装 `g.deps.status` 进行中重复请求跳过（请求触发层 + 能力层双重防护）；检查结果缓存 `g.check.result`（内存，5s 时间窗防远端查询重复跑；不再写 check-result.json 桥接文件）；更新结果走内存态 `g.update`（v0.24 起 update-result.json 退役，设置页事件缓存优先 + update-status 一次性查询读）。
 
-**安装/升级卡片（v0.13.0）**：dsh_install / dsh_update 异步流程渲染 iframe 卡片（`/card/dep`，与任务卡片同构）——登记宿主单例 `g.depTasks`（taskId → kind/state/log/at/result），SSE `/ops/dep-stream`（首帧快照 + 每 1s npm 日志实时滚动，终态关闭）+ 兜底 `/ops/dep-status`；显示标题（DSH 安装 / DSH 升级）+ 状态徽标 + 日志实时滚动 + 完成结果（「已安装 vX，web host 已自动启动」/「更新完成 vX，请重启 DSHana 使完全生效」/ 错误信息）。
+**安装/升级卡片（v0.13.0）**：dsh_install 异步流程（action=install/update）渲染 iframe 卡片（`/card/dep`，与任务卡片同构）——登记宿主单例 `g.depTasks`（taskId → kind: install|update/state/log/at/result），SSE `/ops/dep-stream`（首帧快照 + 每 1s npm 日志实时滚动，终态关闭）+ 兜底 `/ops/dep-status`；显示标题（DSH 安装 / DSH 升级，按 kind 区分）+ 状态徽标 + 日志实时滚动 + 完成结果（「已安装 vX，web host 已自动启动」/「更新完成 vX，请重启 DSHana 使完全生效」/ 错误信息）。
 
 ## 进程间消息总线（dshana.bus，v0.22.1+ 收敛）
 

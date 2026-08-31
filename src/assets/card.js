@@ -932,7 +932,7 @@
   }
 
   // ── 安装/升级卡片（data-kind="dep"，/card/dep）──
-  // 数据源 = 宿主单例 g.depTasks（tools/dsh-install.js / tools/dsh-update.js 异步流程
+  // 数据源 = 宿主单例 g.depTasks（tools/dsh-install.js 异步流程 action=install/update
   // 登记）+ g.depsInstallLog（npm 实时日志尾部）。链路：SSE /ops/dep-stream（首帧 +
   // 每 1s 快照，终态推送后关闭）；EventSource 建立失败回退一次 /ops/dep-status。
   // 渲染：标题（DSH 安装 / DSH 升级）+ 状态徽标（安装中/升级中/完成/失败）+ npm 日志
