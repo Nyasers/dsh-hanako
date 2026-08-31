@@ -20,6 +20,7 @@
 // routes/card.js 另有一份独立 openMux 事件流实现，但它不 import 本模块（是独立实现，
 // 见 dsh-run.js 头注释），不在此归并。
 
+import { randomUUID } from "node:crypto";
 import { getSingleton } from "./state.js";
 
 // ---- HTTP RPC 客户端（dsh web /api 网关，fetch 载波）----
@@ -188,45 +189,105 @@ async function respondDirect(base, payload, signal) {
   return await res.json();
 }
 
-// ---- 事件流（/api/events.mux，WebSocket 通道）----
-// dsh 的事件流要求 WebSocket 升级（GET 返回 426 Upgrade Required，浏览器 UI 即走 WS）。
-// Node 24 内置全局 WebSocket；帧为 JSON，payload 即 MuxFrame。
+// ---- 事件流（/api/remote.mux，WebSocket 通道；vX 适配 dsh 0.1.2）----
+// 0.1.2 事件流：remote.mux WS（cookie 鉴权——launchToken 换发，本机 Node 侧带 Cookie
+// 头不涉 SameSite）+ $events 订阅（open 帧：UUID streamId + endpoint "$events" +
+// payload {args:{}}）。服务端推 item 帧（value = RemoteEventDownlinkFrame：
+// ready / emit / waterfall / cancel）。waterfall 帧需回投 $events/result
+//（outcome next——宿主只读不处理，否则服务端挂起）；emit 帧是广播（session 事件），
+// 不回投。Node 全局 WebSocket 支持 headers（Cookie）。
+let muxCookie = "";
+let muxCookieAt = 0;
+
+/** remote.mux 鉴权 cookie（launchToken → GET /?token= → dsh-auth-*，缓存 6h）。 */
+async function ensureMuxCookie(base) {
+  if (muxCookie && Date.now() - muxCookieAt < 6 * 3600 * 1000) return muxCookie;
+  const g = getSingleton();
+  const tok = g?.web?.token || "";
+  if (!tok) return "";
+  try {
+    const res = await fetch(base + "/?token=" + encodeURIComponent(tok), {
+      redirect: "manual",
+    });
+    const setCookies =
+      typeof res.headers.getSetCookie === "function"
+        ? res.headers.getSetCookie()
+        : res.headers.get("set-cookie")
+          ? [res.headers.get("set-cookie")]
+          : [];
+    muxCookie = setCookies
+      .map((s) => String(s).split(";")[0])
+      .filter(Boolean)
+      .join("; ");
+    muxCookieAt = Date.now();
+    return muxCookie;
+  } catch {
+    return muxCookie || "";
+  }
+}
+
+/** 回投 $events/result（waterfall 帧默认 next——宿主只读不处理，fire-and-forget）。 */
+async function ackRemoteEvent(base, clientId, eventId, outcome) {
+  try {
+    const cookie = await ensureMuxCookie(base);
+    await fetch(base + "/api/$events/result", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(cookie ? { cookie } : {}),
+      },
+      body: JSON.stringify({
+        type: "client-request",
+        rpcId: "ev_" + Date.now().toString(36),
+        method: "$events/result",
+        payload: { args: { clientId, eventId, outcome } },
+      }),
+    });
+  } catch {
+    /* 回投失败不阻断（服务端超时自愈） */
+  }
+}
+
 async function* openMux(base, signal) {
   if (typeof WebSocket !== "function") {
     throw new Error("宿主环境无全局 WebSocket，无法订阅 DSH 事件流");
   }
-  const url = base.replace(/^http/, "ws") + "/api/events.mux";
-  const ws = new WebSocket(url);
+  const url = base.replace(/^http/, "ws") + "/api/remote.mux";
+  const cookie = await ensureMuxCookie(base);
+  const ws = new WebSocket(url, cookie ? { headers: { Cookie: cookie } } : {});
   const queue = [];
   const waiters = [];
   let wsError = null;
   let wsClosed = false;
+  let readyClientId = "";
   ws.onmessage = (ev) => {
-    let frame = {};
-    let envelope = null;
+    let item = null;
     try {
-      envelope = JSON.parse(ev.data);
-      frame = envelope?.payload || envelope || {};
+      item = JSON.parse(ev.data);
     } catch {
       return;
     }
-    // server-request 信封（approval/requested 等应答类帧）：外层 rpcId 补进 frame——
-    // dsh web host 的 /api/respond 靠 client-response 信封的 rpcId 路由 pending 表，
-    // 审批帧的 rpcId 只在外层，只取 payload 会丢（审批应答就断链）。
-    if (
-      envelope &&
-      typeof envelope === "object" &&
-      typeof envelope.rpcId === "string" &&
-      typeof frame.rpcId !== "string"
-    ) {
-      frame.rpcId = envelope.rpcId;
+    // remote.mux item 帧：{ type:"item", streamId, value: <事件帧> }——
+    // value 即 RemoteEventDownlinkFrame（ready/emit/waterfall/cancel）。
+    const value = item?.value;
+    if (!value || typeof value.type !== "string") return;
+    if (value.type === "ready") {
+      // 事件流就绪：记录 clientId（waterfall 回投用），不投给上层
+      readyClientId = typeof value.clientId === "string" ? value.clientId : "";
+      return;
     }
-    if (!frame || typeof frame.type !== "string") return;
+    if (value.type === "waterfall") {
+      // 瀑布事件（审批等）：默认回投 next（宿主只读），同时投上层（审批应答适配后续）
+      if (readyClientId && typeof value.eventId === "string") {
+        ackRemoteEvent(base, readyClientId, value.eventId, { kind: "next" });
+      }
+    }
+    const frame = value;
     if (waiters.length) waiters.shift()(frame);
     else queue.push(frame);
   };
   ws.onerror = () => {
-    wsError = new Error("dsh events.mux WebSocket 错误");
+    wsError = new Error("dsh remote.mux WebSocket 错误");
   };
   ws.onclose = () => {
     wsClosed = true;
@@ -245,8 +306,24 @@ async function* openMux(base, signal) {
   };
   signal?.addEventListener("abort", onAbort, { once: true });
   await new Promise((resolve, reject) => {
-    ws.onopen = resolve;
-    ws.onerror = () => reject(wsError || new Error("dsh events.mux 连接失败"));
+    ws.onopen = () => {
+      try {
+        // 订阅事件流：open 帧（UUID streamId + $events 端点 + 空 args）
+        ws.send(
+          JSON.stringify({
+            type: "open",
+            streamId: crypto.randomUUID(),
+            endpoint: "$events",
+            payload: { args: {} },
+          }),
+        );
+      } catch (e) {
+        reject(wsError || e);
+        return;
+      }
+      resolve();
+    };
+    ws.onerror = () => reject(wsError || new Error("dsh remote.mux 连接失败"));
   });
   try {
     while (true) {
