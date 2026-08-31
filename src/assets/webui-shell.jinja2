@@ -197,7 +197,7 @@
   </style>
 </head>
 
-<body data-hana-theme="{{= it.esc(it.theme) }}" data-pending="{{= it.ready ? " 0" : "1" }}">
+<body data-hana-theme="{{= it.esc(it.theme) }}" data-surface="card" data-pending="{{= it.ready ? " 0" : "1" }}">
   <div id="dsh-pending">
     <div class="diag-box" id="loading-box">
       <div class="diag-title">正在启动 DSH web host…</div>
@@ -217,6 +217,7 @@
     (function () {
       var api = {{= JSON.stringify(it.api)
     }};
+    var panelPort = {{= JSON.stringify(it.port) }};
     var initDiag = {{= it.initDiag }};
     var frame = document.getElementById("dsh-frame");
     // dsh WebUI 剪贴板桥——dsh 前端复制被宿主插件 iframe 权限链拦截时
@@ -247,6 +248,150 @@
           { protocol: "hana.plugin.ui", version: 1, id: id, kind: "request", type: type, payload: payload },
           HOST_ORIGIN
         );
+      });
+    }
+    // ---- hana 桥（卡片表面宿主协议；与 @hana/plugin-sdk 同构：hana.plugin.ui v1）----
+    // 壳页为自包含单文件（构建期 doT 编译、零运行时依赖），不引入 SDK 包；这里按
+    // 协议手写最小实现：api.url/api.fetch（自动带 pluginSurfaceSession 头，替代旧
+    // surfaceHeaders 手动拼接）+ panel.set/onEvent/onRefresh（功能面板内容推送与
+    // 交互回传）。宿主未注入 window.hana 时用本实现；面板不可用时优雅降级不影响页面。
+    var hana = window.hana || (function () {
+      var hseq = 1000;
+      function hanaRequest(type, payload, timeoutMs) {
+        var id = "hana-" + (++hseq);
+        return new Promise(function (resolve, reject) {
+          var timer = setTimeout(function () { cleanup(); reject(new Error("hana 请求超时: " + type)); }, timeoutMs || 8000);
+          function onMsg(e) {
+            if (e.source !== window.parent) return;
+            var m = e.data;
+            if (!m || m.id !== id || m.type !== type) return;
+            cleanup();
+            if (m.kind === "response") resolve(m.payload);
+            else if (m.kind === "error") reject(new Error((m.error && m.error.message) || "hana error"));
+          }
+          function cleanup() {
+            window.removeEventListener("message", onMsg);
+            clearTimeout(timer);
+          }
+          window.addEventListener("message", onMsg);
+          window.parent.postMessage(
+            { protocol: "hana.plugin.ui", version: 1, id: id, kind: "request", type: type, payload: payload },
+            HOST_ORIGIN
+          );
+        });
+      }
+      var panelListeners = { event: [], refresh: [] };
+      window.addEventListener("message", function (e) {
+        if (e.source !== window.parent) return;
+        var m = e.data;
+        if (!m || m.protocol !== "hana.plugin.ui" || m.kind !== "event") return;
+        if (m.type === "hana.panel.event" && m.payload && typeof m.payload === "object") {
+          var ev = m.payload;
+          if (typeof ev.sectionId === "string" && (ev.kind === "select" || ev.kind === "action" || ev.kind === "toggle")) {
+            for (var i = 0; i < panelListeners.event.length; i++) { try { panelListeners.event[i](ev); } catch (err) { /* 面板回调异常忽略 */ } }
+          }
+        } else if (m.type === "hana.panel.refresh") {
+          for (var j = 0; j < panelListeners.refresh.length; j++) { try { panelListeners.refresh[j](); } catch (err) { /* 刷新回调异常忽略 */ } }
+        }
+      });
+      function hanaApiUrl(path) {
+        var base = String(api || "").replace(/\/+$/, "");
+        var p = String(path || "").replace(/^\/+/, "");
+        return location.origin + base + "/" + p;
+      }
+      return {
+        api: {
+          url: hanaApiUrl,
+          fetch: function (path, init) {
+            var params = new URLSearchParams(location.search);
+            var sess = params.get("pluginSurfaceSession");
+            var headers = new Headers((init && init.headers) || {});
+            if (sess) headers.set("X-Hana-Plugin-Surface-Session", sess);
+            return fetch(hanaApiUrl(path), Object.assign({}, init || {}, { headers: headers }));
+          },
+        },
+        panel: {
+          set: function (props) {
+            // 面板不可用（宿主无 functionPanel / 未响应）时静默降级：返回空结果不抛错
+            return hanaRequest("hana.panel.set", props, 4000).catch(function () { return { accepted: 0, dropped: [] }; });
+          },
+          onEvent: function (cb) { panelListeners.event.push(cb); return function () { }; },
+          onRefresh: function (cb) { panelListeners.refresh.push(cb); return function () { }; },
+        },
+      };
+    })();
+    // ---- 功能面板（functionPanel：左侧功能面板常驻状态 + 操作）----
+    // 面板内容由壳页运行时推送（hana.panel.set），宿主用内置原语渲染；页面主体仍承载
+    // 完整诊断详情（未就绪自检），面板承载常驻状态与快捷操作。宿主未注入/不支持面板时
+    // 全部静默降级（pushPanel 内部吞错），页面功能回退现状不受影响。
+    var panelDiag = initDiag || null;
+    var panelLogPath = null;
+    var panelInstalling = false;
+    var panelVerifyRunning = false;
+    var diagRefreshing = false;
+    function syncPanelFromDiag(diag) {
+      if (diag) {
+        var deps = checkByKey(diag, "deps");
+        var proc = checkByKey(diag, "process");
+        panelDiag = diag;
+        panelInstalling = !!(deps && deps.installing === true);
+        panelVerifyRunning = !!(deps && deps.verifyRunning === true);
+        panelLogPath = (proc && proc.logPath) || null;
+      }
+      pushPanel();
+    }
+    // 状态派生：就绪 running / 安装依赖中 installing / 启动中 starting / 未就绪 stopped
+    function panelStatus() {
+      var st = { word: "未就绪", tone: "danger" };
+      if (readyReceived) { st.word = "运行中"; st.tone = "success"; }
+      else if (panelInstalling || depsRequested) { st.word = "安装依赖中"; st.tone = "warning"; }
+      else if (startRequested) { st.word = "启动中"; st.tone = "warning"; }
+      else {
+        var proc = checkByKey(panelDiag, "process");
+        if (proc && proc.alive && !proc.ready) { st.word = "启动中"; st.tone = "warning"; }
+      }
+      return st;
+    }
+    function fpFullPanel() {
+      var st = panelStatus();
+      var busy = st.word === "安装依赖中" || st.word === "启动中";
+      var sections = [
+        { kind: "status", id: "dshana-status", label: "DSH web host", value: st.word, delta: "端口 " + panelPort, deltaTone: st.tone },
+        { kind: "actions", id: "dshana-actions", items: [
+          { id: "start", label: "手动启动 web host", tone: "info", activation: { kind: "emit" }, disabled: busy || readyReceived },
+          { id: "install-deps", label: "安装依赖", tone: "warning", activation: { kind: "emit" }, disabled: st.word === "安装依赖中" },
+          { id: "verify-deps", label: "检测依赖", activation: { kind: "emit" }, disabled: st.word === "安装依赖中" || panelVerifyRunning },
+          { id: "copyLog", label: "复制日志路径", activation: { kind: "emit" }, disabled: !panelLogPath },
+        ] },
+      ];
+      if (panelLogPath) sections.push({ kind: "meta", id: "dshana-meta", text: "日志会话路径：" + panelLogPath });
+      return sections;
+    }
+    function pushPanel() {
+      try {
+        if (!hana || !hana.panel || !hana.panel.set) return;
+        hana.panel.set({ sections: fpFullPanel(), refresh: { intervalMs: 5000 } }).catch(function () { /* 面板不可用静默降级 */ });
+      } catch (err) { /* 面板不可用静默降级 */ }
+    }
+    function copyLogPath() {
+      if (!panelLogPath) return;
+      hostRequest("clipboard.writeText", { text: panelLogPath })
+        .then(function () { /* 复制成功 */ })
+        .catch(function () { /* 复制失败 */ });
+    }
+    function panelOnEvent(ev) {
+      if (!ev || ev.sectionId !== "dshana-actions" || ev.kind !== "action") return;
+      if (ev.itemId === "start") startWebHost();
+      else if (ev.itemId === "install-deps") installDeps();
+      else if (ev.itemId === "verify-deps") verifyDeps();
+      else if (ev.itemId === "copyLog") copyLogPath();
+    }
+    if (hana && hana.panel && hana.panel.onEvent) {
+      hana.panel.onEvent(panelOnEvent);
+      hana.panel.onRefresh(function () {
+        // 宿主刷新 tick：轻量重读诊断并同步面板（diagRefreshing 防并发）
+        refreshDiag();
+        pushPanel();
       });
     }
     // 监听 dsh iframe（跨源）发来的复制请求（dsh-hana-clipboard 桥 __dshCopyBridge）→
@@ -280,11 +425,7 @@
         frame.src = base + "?dshReload=" + Date.now();
       }
       startThemePush();
-    }
-    function surfaceHeaders() {
-      var params = new URLSearchParams(location.search);
-      var sess = params.get("pluginSurfaceSession");
-      return sess ? { "X-Hana-Plugin-Surface-Session": sess } : {};
+      pushPanel(); // 就绪挂载后同步面板状态（运行中）
     }
     // 连接失败自检渲染——服务端收集的 checks 列表（每项：状态图标/检查项名/
     // 详情/修复指引）；escHtml 兜底转义（诊断文本含路径与 stderr，需防注入）
@@ -505,60 +646,52 @@
       // dsh_update 工具），无对应按钮状态同步
     }
     function startWebHost() {
-      var btn = listBtn("process");
-      if (!btn || btn.disabled) return; // 幂等：已在启动中
+      if (startRequested || readyReceived) return; // 幂等：已在启动中/已就绪
       startRequested = true;
-      btn.disabled = true;
-      btn.textContent = "正在启动…";
-      setBtnMsg("process", "");
-      fetch(api + "/webui/start", {
+      var btn = listBtn("process");
+      if (btn) { btn.disabled = true; btn.textContent = "正在启动…"; setBtnMsg("process", ""); }
+      pushPanel();
+      hana.api.fetch("webui/start", {
         method: "POST",
-        headers: surfaceHeaders(),
         signal: AbortSignal.timeout(5000),
       })
         .then(function (r) { return r.json(); })
         .then(function (d) {
           if (d && d.ok && d.state === "ready") { mountReady(); return; } // 已就绪：mountReady（置 readyReceived + attach），与其他 ready 路径一致
-          if (d && d.ok) { return; } // starting：保持禁用，轮询检测就绪
+          if (d && d.ok) { pushPanel(); return; } // starting：保持禁用，面板/诊断刷新检测就绪
           // 失败：恢复按钮并提示错误
           startRequested = false;
-          btn.disabled = false;
-          btn.textContent = "手动启动 web host";
-          setBtnMsg("process", d && d.error ? d.error : "启动请求失败，请稍后重试");
+          if (btn) { btn.disabled = false; btn.textContent = "手动启动 web host"; setBtnMsg("process", d && d.error ? d.error : "启动请求失败，请稍后重试"); }
+          pushPanel();
         })
         .catch(function () {
           startRequested = false;
-          btn.disabled = false;
-          btn.textContent = "手动启动 web host";
-          setBtnMsg("process", "启动请求超时或网络错误，请重试");
+          if (btn) { btn.disabled = false; btn.textContent = "手动启动 web host"; setBtnMsg("process", "启动请求超时或网络错误，请重试"); }
+          pushPanel();
         });
     }
     function installDeps() {
-      var btn = listBtn("deps");
-      if (!btn || btn.disabled) return; // 幂等：已在安装中
+      if (depsRequested) return; // 幂等：已在安装中
       depsRequested = true;
-      btn.disabled = true;
-      btn.textContent = "正在安装…";
-      setBtnMsg("deps", "");
-      fetch(api + "/webui/install-deps", {
+      var btn = listBtn("deps");
+      if (btn) { btn.disabled = true; btn.textContent = "正在安装…"; setBtnMsg("deps", ""); }
+      pushPanel();
+      hana.api.fetch("webui/install-deps", {
         method: "POST",
-        headers: surfaceHeaders(),
         signal: AbortSignal.timeout(5000),
       })
         .then(function (r) { return r.json(); })
         .then(function (d) {
-          if (d && d.ok) { return; } // installing：保持禁用，轮询诊断刷新（安装中/完成）
+          if (d && d.ok) { pushPanel(); return; } // installing：保持禁用，诊断刷新（安装中/完成）
           // 失败：恢复按钮并提示错误
           depsRequested = false;
-          btn.disabled = false;
-          btn.textContent = "安装依赖";
-          setBtnMsg("deps", d && d.error ? d.error : "安装请求失败，请稍后重试");
+          if (btn) { btn.disabled = false; btn.textContent = "安装依赖"; setBtnMsg("deps", d && d.error ? d.error : "安装请求失败，请稍后重试"); }
+          pushPanel();
         })
         .catch(function () {
           depsRequested = false;
-          btn.disabled = false;
-          btn.textContent = "安装依赖";
-          setBtnMsg("deps", "安装请求超时或网络错误，请重试");
+          if (btn) { btn.disabled = false; btn.textContent = "安装依赖"; setBtnMsg("deps", "安装请求超时或网络错误，请重试"); }
+          pushPanel();
         });
     }
     // 运行级依赖检测（GET /webui/verify-deps，只读）——进标签页自动一次 + 手动
@@ -566,23 +699,28 @@
     // 触发一次 health 读取诊断刷新 deps 卡片（检测中显示「正在检测依赖完整性…」，结果
     // 回来显示通过/失败）。不随 3s 轮询重复触发。
     function refreshDiag() {
-      // 诊断数据源（一次性 health 查询；不轮询、不自动挂载——挂载只由 ready 事件驱动）
-      fetch(api + "/webui/health", { headers: surfaceHeaders(), signal: AbortSignal.timeout(3000) })
+      // 诊断数据源（一次性 health 查询；不轮询、不自动挂载——挂载只由 ready 事件驱动）。
+      // diagRefreshing 防并发（功能面板宿主刷新 tick 复用此函数）。
+      if (diagRefreshing) return;
+      diagRefreshing = true;
+      hana.api.fetch("webui/health", { signal: AbortSignal.timeout(3000) })
         .then(function (r) { return r.json(); })
         .then(function (d) {
           if (d && d.ok && !readyReceived) { mountReady(); return; }
-          if (d && d.diagnostics) renderDiagList(d.diagnostics);
+          if (d && d.diagnostics) {
+            renderDiagList(d.diagnostics);
+            syncPanelFromDiag(d.diagnostics);
+          }
         })
-        .catch(function () { });
+        .catch(function () { })
+        .finally(function () { diagRefreshing = false; pushPanel(); });
     }
     function runVerifyDeps(btn) {
-      if (!btn || btn.disabled) return; // 幂等：已在检测中
+      if (verifyRequested) return; // 幂等：已在检测中
       verifyRequested = true;
-      btn.disabled = true;
-      btn.textContent = "正在检测…";
-      setBtnMsg("deps", "");
-      fetch(api + "/webui/verify-deps", {
-        headers: surfaceHeaders(),
+      if (btn) { btn.disabled = true; btn.textContent = "正在检测…"; setBtnMsg("deps", ""); }
+      pushPanel();
+      hana.api.fetch("webui/verify-deps", {
         signal: AbortSignal.timeout(15000), // 服务端 await 检测 ≤10s，留足余量
       })
         .then(function (r) { return r.json(); })
@@ -596,12 +734,14 @@
           var b = listBtn("deps", "verify-deps");
           if (b) { b.disabled = false; b.textContent = "检测依赖"; }
           setBtnMsg("deps", d && d.error ? d.error : "检测请求失败，请稍后重试");
+          pushPanel();
         })
         .catch(function () {
           verifyRequested = false;
           var b = listBtn("deps", "verify-deps");
           if (b) { b.disabled = false; b.textContent = "检测依赖"; }
           setBtnMsg("deps", "检测请求超时或网络错误，请重试");
+          pushPanel();
         });
     }
     function verifyDeps() {
@@ -660,6 +800,7 @@
       if (db) db.style.display = "";
       document.body.setAttribute("data-pending", "1");
       renderDiagList(diag || null);
+      syncPanelFromDiag(diag || null);
       var rt = document.getElementById("diag-retry");
       if (rt) {
         rt.textContent = "web host 长时间未就绪：可刷新页面重试，或按上方自检修复后重试";
@@ -678,8 +819,7 @@
       var ac = new AbortController();
       streamAbort = ac;
       var retryTimer = null;
-      fetch(api + "/webui/events", {
-        headers: surfaceHeaders(),
+      hana.api.fetch("webui/events", {
         signal: ac.signal,
       })
         .then(function (r) {
@@ -711,7 +851,7 @@
                 try { ev = JSON.parse(dataLine); } catch (e2) { continue; }
                 if (!ev || typeof ev.type !== "string") continue;
                 if (ev.type === "ready") { mountReady(); return; }
-                else if (ev.type === "pending") { if (!readyReceived) showLoading(); }
+                else if (ev.type === "pending") { if (!readyReceived) showLoading(); pushPanel(); }
                 else if (ev.type === "diagnostics") { if (!readyReceived) showDiagnostics(ev.diagnostics); }
               }
               // 递归 read 同样附加 rejection 处理：仅 readyReceived false 时重开流
@@ -753,7 +893,7 @@
     function loadDiagnosticsNow() {
       // 一次性 health 查询（诊断数据源；不轮询）——30s 超时兜底/手动「查看诊断」用。
       // 就绪（web host 已起但 ready 信号丢失）时直接挂载；未就绪渲染自检
-      fetch(api + "/webui/health", { headers: surfaceHeaders(), signal: AbortSignal.timeout(3000) })
+      hana.api.fetch("webui/health", { signal: AbortSignal.timeout(3000) })
         .then(function (r) { return r.json(); })
         .then(function (d) {
           if (d && d.ok) { mountReady(); return; }
@@ -889,6 +1029,7 @@
       readyReceived = true;
       startThemePush();
     }
+    syncPanelFromDiag(initDiag); // 初始面板状态（readyReceived 已就位，避免初始错推「未就绪」）
 }) ();
   </script>
 </body>

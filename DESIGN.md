@@ -15,9 +15,10 @@
 
 配置 `webPort`（默认 3080）时，**插件加载即拉起** `dsh --profile web`（dsh 官方浏览器 UI：观察任务会话、模型配置——Hana 宿主 provider），卸载/重载时一并回收。设 `webPort: 0` 可关闭。
 
-插件顶部 tab 注册页面（manifest `contributes.page`，route `/webui`），iframe 内嵌 `http://127.0.0.1:<webPort>/`：
+DSHana 以**整页卡片**注册（manifest `contributes.cards[]`，id `dshana`，type `webview`，route `/webui`，realization `page`，含 `functionPanel` 左侧功能面板贡献），卡片 iframe 内嵌 `http://127.0.0.1:<webPort>/`：
 
-- **就绪加载（v0.22.1+ 就绪事件化）**：按总线连接状态（`g.dshanaBus.status().connected`）判定就绪——已连接直接渲染 iframe；未连接渲染**加载态**（「正在启动 DSH web host…」）并订阅 `GET /webui/events` 就绪事件流（SSE 式 chunked）：宿主 bus ready（hello-ok）后推 `ready` 事件 → 壳页动态挂载 iframe；web host 启动失败推 `diagnostics` 事件（readDiagnostics 自检）→ 壳页直接显示自检；web host 停机推 `pending` 事件 → 退回加载态。**30s 超时兜底**：未收到 ready 引导用户刷新页面/查看诊断（一次性 `/webui/health` 查询渲染自检，不轮询）。页面桥（父窗口 postMessage `{ type:"ready" }` 或 `hana.plugin.ui` 事件 `dsh.ready`）也可直接触发挂载。旧「服务端 probeHost + 浏览器 3s 轮询 `/webui/health` 挂载」链路退役；`/webui/health` 保留为**纯诊断端点**（返回 readDiagnostics 自检 + web host 状态，probeHost 仅诊断路径使用）。health 请求回传 `X-Hana-Plugin-Surface-Session` 凭证
+- **功能面板（functionPanel）**：manifest 声明 `functionPanel: { id: "dshana-panel", label: "DSHana" }`，面板内容由壳页运行时推送（`hana.panel.set`，宿主内置原语渲染，面板宽度 180–400px 可拖）：**status 段**（web host 状态运行中/未就绪/启动中/安装依赖中 + 端口，deltaTone 按状态 success/danger/warning）、**actions 段**（手动启动 / 安装依赖 / 检测依赖 / 复制日志路径四个常驻操作，`activation: { kind: "emit" }` 回传壳页执行现有 fetch 逻辑）、**meta 段**（日志会话路径只读展示，有值才推）。面板事件经 `hana.panel.onEvent` 分发到 startWebHost/installDeps/verifyDeps/copyLogPath；宿主刷新 tick（`refresh: { intervalMs: 5000 }`）经 `hana.panel.onRefresh` 触发轻量 health 重读并同步面板。**降级**：宿主未注入/不支持面板时 pushPanel 内部吞错，页面功能回退现状不受影响。壳页内置最小 hana 桥（与 @hana/plugin-sdk 同协议 hana.plugin.ui v1，插件 bundle 不引入 SDK 包），浏览器侧 fetch 一律走 `hana.api.fetch`（自动带 `X-Hana-Plugin-Surface-Session` 头，替代旧 surfaceHeaders 手动拼接）。
+- **就绪加载（v0.22.1+ 就绪事件化）**：按总线连接状态（`g.dshanaBus.status().connected`）判定就绪——已连接直接渲染 iframe；未连接渲染**加载态**（「正在启动 DSH web host…」）并订阅 `GET /webui/events` 就绪事件流（SSE 式 chunked）：宿主 bus ready（hello-ok）后推 `ready` 事件 → 壳页动态挂载 iframe；web host 启动失败推 `diagnostics` 事件（readDiagnostics 自检）→ 壳页直接显示自检；web host 停机推 `pending` 事件 → 退回加载态。**30s 超时兜底**：未收到 ready 引导用户刷新页面/查看诊断（一次性 `/webui/health` 查询渲染自检，不轮询）。页面桥（父窗口 postMessage `{ type:"ready" }` 或 `hana.plugin.ui` 事件 `dsh.ready`）也可直接触发挂载。旧「服务端 probeHost + 浏览器 3s 轮询 `/webui/health` 挂载」链路退役；`/webui/health` 保留为**纯诊断端点**（返回 readDiagnostics 自检 + web host 状态，probeHost 仅诊断路径使用）。
 - **主题跟随**：见下节
 
 ### 主题跟随
@@ -58,7 +59,7 @@ dsh 设置页左下角齿轮打开设置面板，导航栏出现**原生**「DSH
 
 ## 连接失败自检与自愈
 
-web host 未就绪时，DSHana 标签页不再只显示「正在重试…」——未就绪诊断区展示**自检诊断列表**（配色跟随宿主主题的 CSS 变量），逐项检查并给出修复指引，同时保留 3s 轮询（就绪后自动挂载 iframe、诊断区消失）。**两项检查**（每项 ✓/✗ + 详情 + 修复指引）：
+web host 未就绪时，DSHana 标签页不再只显示「正在重试…」——未就绪诊断区展示**自检诊断列表**（配色跟随宿主主题的 CSS 变量），逐项检查并给出修复指引；同四项操作（手动启动/安装依赖/检测依赖/复制日志路径）常驻左侧**功能面板**（functionPanel actions 段），页面主体与面板按钮共享同一套 fetch 逻辑。**两项检查**（每项 ✓/✗ + 详情 + 修复指引）：
 
 | 检查项 | 判定 | 操作 |
 | --- | --- | --- |
@@ -73,7 +74,7 @@ web host 未就绪时，DSHana 标签页不再只显示「正在重试…」—�
 
 | 路由 | 用途 |
 | --- | --- |
-| `GET /webui` | 页面壳（就绪探测 + 主题注入 + 首帧自检诊断） |
+| `GET /webui` | 页面壳（就绪探测 + 主题注入 + 首帧自检诊断 + functionPanel 面板推送；contributes.cards 整页卡 route） |
 | `GET /webui/health` | 纯诊断端点（readDiagnostics 自检结果 + web host 状态；30s 超时兜底/手动刷新数据源，不再做就绪轮询） |
 | `GET /webui/events` | 就绪事件流（SSE 式 chunked：ready/pending/diagnostics 事件；壳页就绪事件化的宿主推送通道） |
 | `POST /webui/start` | 手动启动 web host（`ready` / `starting` / 触发启动三态） |
