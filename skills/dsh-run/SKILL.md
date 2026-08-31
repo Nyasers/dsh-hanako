@@ -1,6 +1,6 @@
 ---
 name: dsh-run
-description: "dsh_run 工具调用手册（源码 tools/dsh-run.js 核对）。触发场景：dsh_run 怎么传参（task/cwd/timeout/wait/agentPreset/reasoningEffort/provider/model/sessionId 的语义与副作用）、异步/同步模式区别与返回结构、后台回调 payload 结构（固定 minimal 定位键）、超时语义（审批挂起暂停计时）、错误码 DSH_ERROR/DSH_TIMEOUT/DSH_ABORTED、provider/model 显式指定的写回副作用（显式即成为 dsh 新默认）、resume 复用会话、agentPreset 选型（standard/code/cordis/minimal）、config.json 单一事实源实时生效。需要提交 dsh 任务前先读本技能。"
+description: "dsh_run 工具调用手册（源码 tools/dsh-run.js 核对）。触发场景：dsh_run 怎么传参（task/cwd/timeout/agentPreset/reasoningEffort/provider/model/sessionId 的语义与副作用）、异步/同步模式区别与返回结构、后台回调 payload 结构（固定 minimal 定位键）、超时语义（审批挂起暂停计时）、错误码 DSH_ERROR/DSH_TIMEOUT/DSH_ABORTED、provider/model 显式指定的写回副作用（显式即成为 dsh 新默认）、resume 复用会话、agentPreset 选型（standard/code/cordis/minimal）、config.json 单一事实源实时生效。需要提交 dsh 任务前先读本技能。"
 ---
 
 # dsh_run 工具手册
@@ -16,7 +16,6 @@ description: "dsh_run 工具调用手册（源码 tools/dsh-run.js 核对）。�
 | `task` | string | 必填。作为用户消息发给 dsh agent；先 trim，空串抛 `task 不能为空`。应含完整上下文与明确交付物 |
 | `cwd` | string | 沙箱工作目录。缺省用 config.json `global.defaultCwd`。校验：`cwd 为空且未传 sessionId` 抛 `cwd 不能为空`；**resume（传 sessionId）时 cwd 可空，以会话已有 cwd 为准，传入值被忽略** |
 | `timeout` | number（秒） | `> 0` 才采用（×1000），否则 `defaultTimeoutSec`（manifest 默认 1800=30min，可被 config.json 覆盖）。审批挂起时间不计入（见下） |
-| `wait` | boolean | false（默认）异步：立即返回 + 运行卡片 + 完成后台送达；true 同步：阻塞当前回合等最终结果直接返回 |
 | `agentPreset` | enum: standard/code/cordis/minimal | 显式传优先；缺省 config.json `global.agentPreset`（回退 standard）。code=工具呈现批量调用（适合读改文件 + node --check 编码序列）；standard=完整编码 agent；cordis=可读写运行时；minimal=精简 |
 | `reasoningEffort` | enum: off/high/max | v0.9.5 起无全局配置，只接受显式参数；不传为 null（dsh 默认处理，通常 high） |
 | `provider` / `model` | string | 显式传 → selectModel 覆盖默认；只传一侧时另一侧从 settings.yaml `agent-default-model` 补齐；都不传不 selectModel，用 dsh 默认。**副作用：selectModel 会写回全局 settings.yaml——显式指定即成为新默认** |
@@ -33,13 +32,13 @@ ensureWebHost（resolveDshPkgDir 定位依赖 → spawn dsh web，DSH_HOME=数�
 → events.mux 事件循环 → 终态
 ```
 
-事件处理要点：`assistant/chunk` 文本流累积（finish 帧 `reason.kind==="error"` **不是终态信号**——只记 pendingFailure 兜底后继续消费：DSH 侧 LLM 请求失败如 429/400 会进入 agent/request-error waterfall → dsh-llm-retry 指数退避重试，任务实际还在跑，可能继续出 chunk / assistant/message，终态判定以 `turn/end` 为准——官方 UI 客户端同语义）；`llm/retry` 事件经会话日志通道记「LLM 请求失败，退避重试中（第 N 次，延迟 Xms）」（不阻断、不改卡片渲染）；`assistant/message` 收集 usage；`tool/call` 与 `tool/code-dispatch-start` 缓存工具参数原文（审批决策数据源）；`turn/end` 终态判定；`approval/requested`/`approval/resolved` 审批；`stream/error` 事件流错误。
+事件处理要点（dsh 0.1.2）：事件流**不直连 remote.mux**——bridge 在 dsh 进程内订阅 $events 并经总线转发（ready/emit/waterfall）。`api-session/status false` 即任务终态（结果从会话投影 projcache 读 title/tokenUsage）；`api-session/error` 记 pendingFailure（失败兜底）；`api-session/activity` 心跳忽略；waterfall 帧 bridge 已回投 next（宿主审批应答适配待接入，现记日志）。
 
-**终态映射**：`completed → end_turn` / `max-tokens → max_tokens` / `aborted → aborted` / `error → error`（failure.message 透传）。流结束无终态帧时：已请求取消（cancelledRequested）且 mux 断流判 aborted（防误报完成）；期间见过 finish error（LLM 请求失败帧）按 error 收尾（pendingFailure 兜底，防 DSH 退避重试中断流/崩溃被误判成功）；否则兜底 end_turn。
+**终态映射**：`api-session/status [sid, false]` → `end_turn`（无 error 事件时）；出现过 `api-session/error` → `error`（failure.message 透传）；流结束无终态帧兜底 `end_turn`。
 
 ## 返回与回调
 
-**异步模式（默认）**：立即返回 `{ content: "任务已提交给 dsh（rpcId: xxx）…", details: { dsh: { rpcId, status: "running", cwd, wait: false }, card: { route: "/card/op?sessionId=…&rpcId=…&timeoutMs=…", … } } }`。deferred 注册 taskId=任务 rpcId（type=dsh-run，trigger_parent_turn，失败也唤醒），完成后宿主投递 `<hana-background-result>`。
+**固定异步（唯一模式，wait 参数已退役）**：立即返回 `{ content: "任务已提交给 dsh（rpcId: xxx）…", details: { dsh: { rpcId, status: "running", cwd }, card: { route: "/card/op?sessionId=…&rpcId=…&timeoutMs=…", … } } }`。deferred 注册 taskId=任务 rpcId（type=dsh-run，trigger_parent_turn，失败也唤醒），完成后宿主投递 `<hana-background-result>`。
 
 **后台回调 payload（固定 minimal，v0.21.3 后续演进收口）**：
 ```
@@ -47,7 +46,7 @@ ensureWebHost（resolveDshPkgDir 定位依赖 → spawn dsh web，DSH_HOME=数�
 ```
 只带定位键，不含 output/outputMeta/summary/usage/stderr 等大字段、不生成摘要、不占 Agent 上下文。**sessionId 唯一定位键**（v0.21.x 起不再冗余 id 字段——id 与 sessionId 同值重复，收敛到只留 sessionId；与 dsh_session / dsh_run resume 的定位键一致）：主上下文收到回调后**凭 sessionId 直接取会话内容**——`dsh_session(action="get", sessionId=<id>)` 直取最终结论 summary（读会话 jsonl），或 dsh_run resume 续接。失败回调（failDeferredWake）error 尽力带定位键：有 sessionId（提交成功后的执行失败）时 `error.sessionId`；提交失败无 sessionId 时 `error.rpcId`（可为空串）。**完整输出永远在卡片（会话 jsonl 恢复）+ dsh Web UI（sessionId 定位）可查**。
 
-**同步模式（wait=true）**：content = `res.output` +（非 end_turn 附 `[stopReason: …]`）；details.dsh = `{ sessionId, stopReason, usage, cwd, rpcId, wait: true }`（`sessionId` 唯一定位键，同异步回调；不再冗余 id 字段），stderr 附 `dshStderr`（截 2000）。阻塞当前回合、无卡片进度；长任务建议异步。
+（wait=true 同步模式已随 wait 参数一并退役：长任务阻塞当前回合无收益，取结果走 dsh_session get。）
 
 ## 超时语义
 

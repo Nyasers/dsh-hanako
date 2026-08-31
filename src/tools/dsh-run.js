@@ -564,7 +564,7 @@ export const name = "dsh_run";
 export const description =
   "把任务交给 DeepSeek Harness（DSH）的常驻 web host 执行（完整编码 agent：沙箱 shell 与文件系统、上下文压缩、subagent 级联）。" +
   "适合需要独立 agent 上下文深度执行的代码任务（实现/重构/调试/测试）或与当前对话隔离的长任务。" +
-  "默认异步：提交即渲染实时卡片、完成后宿主唤醒结果后台送达；wait=true 同步直接返回。任务会话在 DSH Web UI（webPort，默认 3080）可见可继续。" +
+  "固定异步：提交即渲染实时卡片、完成后宿主唤醒结果后台送达（任务会话在 DSH Web UI（webPort，默认 3080）可见可继续）。" +
   "完整调用手册（agentPreset/reasoningEffort/provider/model/sessionId resume/审批/固定 minimal 回调）见 SKILL: skills/dsh-run/SKILL.md";
 
 export const parameters = {
@@ -584,11 +584,6 @@ export const parameters = {
       type: "number",
       description:
         "超时秒数，缺省用插件配置 defaultTimeoutSec（单位：秒）。长任务建议显式调大。",
-    },
-    wait: {
-      type: "boolean",
-      description:
-        "false（默认）= 异步：立即返回，进度见卡片，完成后宿主唤醒、结果后台送达；true = 同步：等任务跑完直接返回最终结果（注意：长任务会阻塞当前回合）",
     },
     agentPreset: {
       type: "string",
@@ -692,7 +687,6 @@ async function doExecute(input, ctx) {
     model: input.model,
   };
 
-  const wait = input.wait === true;
   const { promise, ready } = submitTask(taskCfg, taskParams);
   // 卡片 URL 推迟到 session.create + prompt 提交后生成：携带 sessionId+rpcId，
   // 插件重启后旧卡片按这两个键从会话 jsonl 精确恢复（运行期协调键 = sessionId，不丢数据）
@@ -716,13 +710,14 @@ async function doExecute(input, ctx) {
       : "");
   const cardBase = {
     route: `/card/op${locQuery}`,
-    title: `DSH ${wait ? "任务" : "运行中"}`,
+    title: "DSH 运行中",
     description: String(input.task ?? "").slice(0, 80),
     aspectRatio: "16:1",
   };
 
-  // 异步模式：注册 deferred（完成后宿主唤醒，结果后台送达）
-  if (!wait) {
+  // 固定异步：注册 deferred（完成后宿主唤醒，结果后台送达）——wait 参数已退役，
+  // 同步等待不再提供（长任务阻塞当前回合无收益，取内容走 dsh_session get）
+  {
     const bus = ctx.bus ?? getSingleton().bus;
     const sessionPath = ctx.sessionPath;
     await registerDeferredWake({
@@ -785,37 +780,11 @@ async function doExecute(input, ctx) {
           rpcId: taskRpcId,
           status: "running",
           cwd,
-          wait: false,
         },
         card: cardBase,
       },
     };
   }
-
-  // 同步模式：等结果直接返回
-  const res = await promise;
-  const note =
-    res.stopReason === "end_turn" ? "" : `\n\n[stopReason: ${res.stopReason}]`;
-  const text = `${res.output || "（DSH 未返回文本）"}${note}`;
-  return {
-    content: [{ type: "text", text }],
-    details: {
-      dsh: {
-        // 定位键统一为 sessionId（不再冗余 id 字段——id 与 sessionId 同值重复，收敛唯一定位键）
-        sessionId: res.sessionId,
-        stopReason: res.stopReason,
-        usage: res.usage,
-        cwd,
-        rpcId: res.rpcId,
-        wait: true,
-      },
-      card: {
-        ...cardBase,
-        title: `DSH ${res.stopReason === "end_turn" ? "完成" : "结束"}`,
-      },
-      ...(res.stderr ? { dshStderr: res.stderr.slice(-2000) } : {}),
-    },
-  };
 }
 
 export async function execute(input, ctx) {
