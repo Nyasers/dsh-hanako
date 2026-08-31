@@ -13,3 +13,6 @@ _tmp/
 # SDD 本地 spec（不进 git，仅本地规划产物）
 SPECS.md
 specs/
+
+data/
+
