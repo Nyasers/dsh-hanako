@@ -27,9 +27,9 @@ description: "dsh_install 工具手册（源码 tools/dsh-install.js + tools/lib
 
 **verify**：`g.verifyDeps(cfg)`（node cliBin --version 冒烟，10s 超时，结果缓存 `g.deps.result`）→ `{ verified, version, error? }`。
 
-**check**：`g.checkDshUpdate(cfg, { version, tag })`——本地版本（运行级验证 verifyDepsSmoke 缓存优先，无则直读 dsh-pkg package.json）+ 远端版本（HTTP 直查 npm registry **根包 JSON 的 dist-tags 字段**——fetch `https://registry.npmjs.org/@deepseek-ai/dsh` 的 `dist-tags`（tag → version 全量映射，实测现值为 `{"latest":"0.1.1-rc.2","next":"0.1.1-rc.2","alpha":"0.1.2-alpha.2"}`）+ `versions`（全部发布版本键）；官方源失败自动重试 npmmirror，15s 超时）+ zero-dep semver 比较 → `{ localVersion, distTags, baselineTag, baselineVersion, updateAvailable, error? }`（`baselineTag` = 显式 tag / 配置基线 dshTag；显式 version 对比时 `baselineTag` 为 null、`baselineVersion` 为指定版本；`updateAvailable` = 本地版本 < 基线版本；`latestVersion` 保留为 `baselineVersion` 别名）。结果缓存 `g.check.result`（内存）。
+**check**：`g.checkDshUpdate(cfg, { version, tag })`——本地版本（运行级验证 verifyDepsSmoke 缓存优先，无则直读 dsh-pkg package.json）+ 远端版本（HTTP 直查 npm registry **根包 JSON 的 dist-tags 字段**——fetch `https://registry.npmjs.org/@deepseek-ai/dsh` 的 `dist-tags`（tag → version 全量映射，由 registry 响应动态返回，如 latest/next/alpha 等，示例值标注「实测现值」）+ `versions`（全部发布版本键）；官方源失败自动重试 npmmirror，15s 超时）+ zero-dep semver 比较（预发布按 SemVer §11.4 规则） → `{ localVersion, distTags, baselineTag, baselineVersion, updateAvailable, error? }`（`baselineTag` = 显式 tag / 配置基线 dshTag；显式 version 对比时 `baselineTag` 为 null、`baselineVersion` 为指定版本；`updateAvailable` = 本地版本 < 基线版本；`latestVersion` 保留为 `baselineVersion` 别名）。结果缓存 `g.check.result`（内存）。
 
-**update**：① 并发防护——更新执行中（`g.update.status === "running"`）重复调用返回 `{ ok:false, state:'updating' }` 不重复执行；② `g.updateDsh(cfg, spec)`：置内存态 `g.update.status='running'`（v0.24 起 update-result.json 退役）→ 停 web host（closeProcess，Windows 文件锁前提）→ `installDepsFromPlugin`（pnpm add @deepseek-ai/dsh[@<spec>]，官方源失败重试 npmmirror）→ 起 web host（ensureWebHost，失败不阻断结果上报，记 error 字段）→ 读新版本 → `g.update.result` 存终态（{ ok, state:'done', version }）→ `status='ok'`；任一步失败 → result 存 `{ ok:false, state:'error', error }`（截断 ≤1500）→ `status='error'`（终态保留，下次更新入口回 running）。**触发信道**：设置页经 **dshana.bus 消息总线**发 `update.request` 直投（宿主 bus 订阅 → 调 `updateDsh` → 开始/完成经总线回投 `update.progress { state, at }` / `update.result { state, version?, error? }`）；Agent 工具直接调 `g.updateDsh`（结果走内存态 `g.update`）。**并发隔离**：update 的 `g.update.status` 与 install 的 `g.deps.status` 互不干扰（两种操作可分别执行，各自有进行中守卫）。
+**update**：① 并发防护——更新执行中（`g.update.status === "running"`）重复调用返回 `{ ok:false, state:'updating' }` 不重复执行；② `g.updateDsh(cfg, spec)`：置内存态 `g.update.status='running'`（v0.24 起 update-result.json 退役）→ 停 web host（closeProcess，Windows 文件锁前提）→ `installDepsFromPlugin`（pnpm add @deepseek-ai/dsh[@<spec>]，官方源失败重试 npmmirror）→ 起 web host（ensureWebHost，失败不阻断结果上报，记 error 字段）→ 读新版本 → `g.update.result` 存终态（{ ok, state:'done', version }）→ `status='ok'`；任一步失败 → result 存 `{ ok:false, state:'error', error }`（截断 ≤1500）→ `status='error'`（终态保留，下次更新入口回 running）。**触发信道**：设置页经 **dshana.bus 消息总线**发 `update.request` 直投（宿主 bus 订阅 → 调 `updateDsh` → 开始/完成经总线回投 `update.progress { state, at }` / `update.result { state, version?, error? }`）；Agent 工具直接调 `g.updateDsh`（结果走内存态 `g.update`）。**并发隔离（vX 共享依赖操作互斥）**：install/update 任一进行中另一动作拒绝——工具层经共享预留状态 `g.depBusy`（null | { kind:'install'|'update' }）在同步段检查：install 撞 update 返回更新中文案、update 撞 install 返回安装中文案，操作完成/失败后释放；能力层守卫（`g.deps.status` / `g.update.status`）保留，覆盖 webui 路由等其他调用路径（双保险）。verify/check 不占用互斥。
 
 **异步模式**：`install`/`update` 默认异步——立即返回 + 渲染**安装/升级卡片**（`/card/dep`，见下节），经宿主 deferred 通道注册唤醒（taskId 统一 `dsh_install_*` 前缀；meta.type 统一 `"dsh-install"`，原 dsh-update 标识废弃），后台完成/失败后宿主唤醒带回结果。
 
@@ -63,7 +63,7 @@ description: "dsh_install 工具手册（源码 tools/dsh-install.js + tools/lib
 
 ## 示例
 
-```
+```text
 dsh_install()                              # 安装依赖（默认，异步 + 安装卡片）
 dsh_install(action="install", wait=true)   # 同步等待安装完成
 dsh_install(action="install", autoStart=false)  # 安装但不自动启动 web host

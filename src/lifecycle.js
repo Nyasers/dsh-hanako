@@ -818,7 +818,7 @@ function ensureProviderPushWatch(cfg) {
     `[dsh-run] provider 热跟随 watch 已建立（${paths.length} 文件），宿主配置变化将总线推送 DSH 刷新`,
   );
 }
-// ---- DSH 检查能力（checkDshUpdate / npmViewLatest / semver 比较 / 本地版本
+// ---- DSH 检查能力（checkDshUpdate / npmViewDistTags / semver 比较 / 本地版本
 // 直读已提取到 lib/check.js + lib/install.js，经 getSingleton 挂 g.checkDshUpdate 供
 // Agent 工具 dsh_install / DSHana 标签页 webui 路由两面共用，单一事实源；
 // 设置页「DSH 版本」卡片 v0.18.1 起由 dsh 侧 @dsh-hanako/settings 直查远端，不经此通道）----
@@ -858,9 +858,11 @@ export async function updateDsh(cfg, spec) {
     // ② 停 web host（Windows 文件锁前提）
     log("停止 web host…");
     await closeProcess();
-    // ③ 装依赖（installDepsFromPlugin 内部有 g.deps.status === "installing" 防并发；
-    // spec 可指定版本/tag，缺省配置基线 dshTag（默认 latest）；成功后会自动运行级重验
-    // 刷新 g.deps.result）
+    // ③ 装依赖（installDepsFromPlugin 内部有 g.deps.status === "installing" 防并发——
+    // vX 起与 update 共享互斥：Agent 工具层 g.depBusy 预留状态下 install/update 任一
+    // 进行中另一动作拒绝，能力层守卫覆盖 webui 路由等其他调用路径，双保险。spec 可
+    // 指定版本/tag，缺省配置基线 dshTag（默认 latest）；成功后会自动运行级重验刷新
+    // g.deps.result）
     log("执行 pnpm add @deepseek-ai/dsh" + (spec ? "@" + spec : "") + "…");
     const install = await installDepsFromPlugin(cfg, dataDir, { spec });
     if (!install || !install.ok)

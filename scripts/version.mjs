@@ -16,21 +16,30 @@
 // 不碰 CHANGELOG：条目描述是发版内容，由发版人在 bump 前写好并提交（本脚本只在
 // 版本号层面保证契约一致，CHANGELOG 是否齐全由人负责）。
 //
-// semver 语义（对齐 npm version）：
+// semver 语义（对齐 npm version / node-semver inc）：
 //   patch      有 prerelease → 去 prerelease 毕业（1.0.0-alpha.1 → 1.0.0，patch 不递增）；
 //              无 → x.y.(z+1)（1.0.0 → 1.0.1）
-//   minor      → x.(y+1).0（清 prerelease；1.0.0-alpha.1 → 1.1.0）
-//   major      → (x+1).0.0（清 prerelease）
+//   minor      node-semver inc：patch !== 0 或无 prerelease 时 minor+1，否则 minor
+//              不递增（毕业）；随后 patch=0、清 prerelease——1.0.0-alpha.1 → 1.0.0、
+//              1.0.1-alpha.1 → 1.1.0、1.0.0 → 1.1.0
+//   major      node-semver inc：minor !== 0 或 patch !== 0 或无 prerelease 时 major+1，
+//              否则 major 不递增（毕业）；随后 minor=0、patch=0、清 prerelease——
+//              1.0.0-alpha.1 → 1.0.0、1.1.0-alpha.1 → 2.0.0、1.0.0 → 1.0.0（无变化报错）
 //   prerelease（别名 pre）有 prerelease → 递增末段序号（1.0.0-alpha.1 → 1.0.0-alpha.2，
 //              保留原 preid；末段非数字时追加 .0，1.0.0-alpha → 1.0.0-alpha.0）；
 //              无 → x.y.(z+1)-0（npm 默认行为）
 //   <完整 semver> 显式版本号（含 prerelease / build metadata；build 剥离不保留）
+// 严格 SemVer（node-semver 校验同款）：核心组件与数字 prerelease 标识符必须
+// 0|[1-9]\d*（无前导零——01.0.0 / 1.0.0-alpha.01 非法）；非数字标识符须含至少一个
+// 字母或连字符（alpha/beta/rc 等）；build metadata 标识符不受前导零限制（SemVer §10）。
 //
 // 用法：
 //   node scripts/version.mjs patch                 # 1.0.0-alpha.1 -> 1.0.0（毕业）
-//   node scripts/version.mjs minor                 # -> 1.1.0
-//   node scripts/version.mjs major                 # -> 2.0.0
-//   node scripts/version.mjs prerelease            # -> 1.0.0-alpha.2（无 pre 时 x.y.(z+1)-0）
+//   node scripts/version.mjs minor                 # 1.0.0-alpha.1 -> 1.0.0（毕业，minor 不递增）；
+//                                                 # 1.0.1-alpha.1 -> 1.1.0
+//   node scripts/version.mjs major                 # 1.0.0-alpha.1 -> 1.0.0（毕业，major 不递增）；
+//                                                 # 1.1.0-alpha.1 -> 2.0.0
+//   node scripts/version.mjs prerelease            # 1.0.0-alpha.1 -> 1.0.0-alpha.2（无 pre 时 x.y.(z+1)-0）
 //   node scripts/version.mjs pre                   # 同 prerelease
 //   node scripts/version.mjs 1.0.0-beta.0          # 显式版本号（完整 semver）
 //   node scripts/version.mjs patch --dry-run       # 预览，不落盘不改 git
@@ -58,19 +67,32 @@ const write = (p, data) => {
 
 // ---- npm semver 解析/格式化（零依赖；build metadata 解析但剥离不保留）----
 // 完整格式：major.minor.patch[-prerelease][+build]；prerelease 标识由
-// [0-9A-Za-z-]+ 组成、点分隔；build 同构、点分隔。
+// [0-9A-Za-z-]+ 组成、点分隔；build 同构、点分隔。严格化（node-semver 校验同款）：
+// 核心组件 0|[1-9]\d*（无前导零）；数字 prerelease 标识符同样禁止前导零（parseSemver
+// 内校验）；非数字标识符须含字母或连字符；build 标识符不受前导零限制（SemVer §10）。
 const SEMVER_RE =
-  /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 
 function parseSemver(v) {
   const s = String(v || "").trim();
   const m = s.match(SEMVER_RE);
   if (!m) return null;
+  const pre = m[4] ? m[4].split(".") : null;
+  // 数字 prerelease 标识符禁止前导零（1.0.0-alpha.01 非法）；非数字标识符须含字母或连字符
+  if (pre) {
+    for (const id of pre) {
+      if (/^\d+$/.test(id)) {
+        if (id.length > 1 && id[0] === "0") return null;
+      } else if (!/[A-Za-z-]/.test(id)) {
+        return null;
+      }
+    }
+  }
   return {
     major: Number(m[1]),
     minor: Number(m[2]),
     patch: Number(m[3]),
-    pre: m[4] ? m[4].split(".") : null,
+    pre,
   };
 }
 
@@ -93,13 +115,19 @@ function calcNewVersion(current, arg) {
       return formatSemver(v);
     }
     if (arg === "minor") {
-      v.minor += 1;
+      // node-semver inc minor：patch !== 0 或无 prerelease 时 minor+1，否则 minor 不
+      // 递增（毕业——1.0.0-alpha.1 → 1.0.0；1.0.1-alpha.1 → 1.1.0）；随后 patch=0、
+      // 清 prerelease
+      if (v.patch !== 0 || !(v.pre && v.pre.length)) v.minor += 1;
       v.patch = 0;
       v.pre = null;
       return formatSemver(v);
     }
     if (arg === "major") {
-      v.major += 1;
+      // node-semver inc major：minor !== 0 或 patch !== 0 或无 prerelease 时 major+1，
+      // 否则 major 不递增（毕业——1.0.0-alpha.1 → 1.0.0；1.1.0-alpha.1 → 2.0.0）；
+      // 随后 minor=0、patch=0、清 prerelease
+      if (v.minor !== 0 || v.patch !== 0 || !(v.pre && v.pre.length)) v.major += 1;
       v.minor = 0;
       v.patch = 0;
       v.pre = null;

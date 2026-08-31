@@ -23,7 +23,11 @@
 // 通道唤醒 Agent 带回结果；wait=true 同步等待直接返回。
 // 并发防护：依赖安装中（g.deps.status === "installing"/"running"）重复 install 返回
 // { ok:false, state:'installing' }；更新执行中（g.update.status === "running"）重复
-// update 返回 { ok:false, state:'updating' }；两种状态互不干扰。
+// update 返回 { ok:false, state:'updating' }。install/update 另共享预留状态
+// g.depBusy（null | { kind: "install"|"update" }，getSingleton 初始化兜底）：任一进行中
+// 另一动作在同步段即拒绝（install 撞 update 返回更新中文案、update 撞 install 返回安装
+// 中文案），操作完成/失败后释放——能力层守卫（g.deps.status / g.update.status）保留，
+// 覆盖 webui 路由等其他调用路径（双保险）。verify/check 不占用互斥。
 // 与 dsh-run.js 同一分发纪律：本工具经 globalThis 单例调用能力层；deferred 唤醒协议
 // （register/resolve/fail）不再各自内联，统一 import 共享的 ./lib/wake.js（dsh-run /
 // dsh-install 两入口共用一份；meta.type 统一用 "dsh-install"——原 dsh-update 标识废弃）。
@@ -234,12 +238,33 @@ async function doExecute(input, ctx) {
         details: { dsh: { action: "update", status: "updating" } },
       };
     }
-    if (wait) {
-      const r = await g.updateDsh(cfg, spec);
+    // 共享依赖操作互斥（vX）：install/update 任一进行中另一动作拒绝。能力层守卫
+    // （g.update.status / g.deps.status）覆盖 webui 路由等其他调用路径，这里是工具
+    // 自身跨动作竞态的同步段检查（第一个 await 之前）。update 撞 install：返回安装
+    // 中文案；同 kind（竞态窗口内 status 尚未置位）返回更新中文案。
+    if (g.depBusy) {
+      const busyText =
+        g.depBusy.kind === "install"
+          ? "DSH 依赖安装已在执行中（" + pkgTargetText(spec) + "），请稍候查看安装卡片或 DSHana 标签页"
+          : "DSH 更新已在执行中（将重启 web host，正在执行的任务会中断），请稍候查看 update-status 或 DSHana 标签页";
       return {
-        content: [{ type: "text", text: buildUpdateText(r) }],
-        details: { dsh: { action: "update", ...r } },
+        content: [{ type: "text", text: busyText }],
+        details: {
+          dsh: { action: "update", status: "updating", blockedBy: g.depBusy.kind },
+        },
       };
+    }
+    g.depBusy = { kind: "update" };
+    if (wait) {
+      try {
+        const r = await g.updateDsh(cfg, spec);
+        return {
+          content: [{ type: "text", text: buildUpdateText(r) }],
+          details: { dsh: { action: "update", ...r } },
+        };
+      } finally {
+        g.depBusy = null; // 释放互斥（wait 同步路径：await 后，含失败）
+      }
     }
     // 异步模式：登记升级卡片（g.depTasks，/card/dep）+ 注册 deferred 唤醒
     // （meta.type 统一 "dsh-install"——原 dsh-update 标识废弃；卡片 kind=update
@@ -257,6 +282,7 @@ async function doExecute(input, ctx) {
     });
     g.updateDsh(cfg, spec)
       .then((r) => {
+        g.depBusy = null; // 释放互斥（异步路径 then 内，操作完成）
         entry.state = r && r.ok ? "ok" : "error";
         entry.result = r || { ok: false, error: "更新无结果" };
         entry.log = (g.deps.log || "").slice(-2000); // 终态定格日志
@@ -281,6 +307,7 @@ async function doExecute(input, ctx) {
         }
       })
       .catch((e) => {
+        g.depBusy = null; // 释放互斥（异步路径 catch 内，操作失败）
         entry.state = "error";
         entry.result = { ok: false, error: String(e?.message || e) };
         entry.log = (g.deps.log || "").slice(-2000);
@@ -326,6 +353,22 @@ async function doExecute(input, ctx) {
       details: { dsh: { action: "install", state: "installing" } },
     };
   }
+  // 共享依赖操作互斥（vX）：install 撞 update 返回更新中文案（能力层守卫见上，
+  // g.depBusy 是跨动作竞态的同步段检查——第一个 await 之前；同 kind 竞态窗口内
+  // status 尚未置位时返回安装中文案）
+  if (g.depBusy) {
+    const busyText =
+      g.depBusy.kind === "update"
+        ? "DSH 更新已在执行中（将重启 web host，正在执行的任务会中断），请稍候查看 update-status 或 DSHana 标签页"
+        : "DSH 依赖安装已在执行中（" + pkgTargetText(spec) + "），请稍候查看安装卡片或 DSHana 标签页";
+    return {
+      content: [{ type: "text", text: busyText }],
+      details: {
+        dsh: { action: "install", state: "installing", blockedBy: g.depBusy.kind },
+      },
+    };
+  }
+  g.depBusy = { kind: "install" };
   const autoStart = input.autoStart !== false; // 默认 true
 
   const doInstall = async () => {
@@ -337,11 +380,15 @@ async function doExecute(input, ctx) {
   };
 
   if (wait) {
-    const r = await doInstall();
-    return {
-      content: [{ type: "text", text: buildInstallText(r, spec) }],
-      details: { dsh: { action: "install", ...r } },
-    };
+    try {
+      const r = await doInstall();
+      return {
+        content: [{ type: "text", text: buildInstallText(r, spec) }],
+        details: { dsh: { action: "install", ...r } },
+      };
+    } finally {
+      g.depBusy = null; // 释放互斥（wait 同步路径：await 后，含失败）
+    }
   }
 
   // 异步模式：登记安装卡片（g.depTasks）+ 注册 deferred 唤醒，后台执行不 await
@@ -358,6 +405,7 @@ async function doExecute(input, ctx) {
   });
   doInstall()
     .then((r) => {
+      g.depBusy = null; // 释放互斥（异步路径 then 内，操作完成）
       entry.state = r && r.ok ? "ok" : "error";
       entry.result = r || { ok: false, error: "安装无结果" };
       entry.log = (g.deps.log || "").slice(-2000); // 终态定格日志
@@ -383,6 +431,7 @@ async function doExecute(input, ctx) {
       }
     })
     .catch((e) => {
+      g.depBusy = null; // 释放互斥（异步路径 catch 内，操作失败）
       entry.state = "error";
       entry.result = { ok: false, error: String(e?.message || e) };
       entry.log = (g.deps.log || "").slice(-2000);

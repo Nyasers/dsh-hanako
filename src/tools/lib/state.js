@@ -25,6 +25,10 @@
 //   g.update = { status, result, error, time, log }   更新链路
 //   g.deps   = { status, result, error, time, log }   依赖链路（log = 内存尾环字符串）
 //   g.check  = { status, result, error, time, log }   版本检查链路（无日志流，log 恒 null）
+//   g.depBusy = null | { kind: "install"|"update" }   共享依赖操作互斥（vX：install/
+//     update 任一进行中另一动作拒绝；tools/dsh-install.js 同步段检查/置位、操作完成
+//     释放；能力层守卫 g.deps.status / g.update.status 保留为 webui 路由等其他调用
+//     路径双保险；verify/check 不占用）
 // status 值域统一：idle / running(installing) / ok / error，由各链路定义模块在状态
 // 变化点显式维护。g.update.log 定义为 getter 投影 g.deps.log（updateDsh 内部走
 // installDepsFromPlugin 写同一日志尾环，同源实时可见，不复制字符串）。
@@ -169,6 +173,10 @@ export function getSingleton() {
   if (g.deps.error === undefined) g.deps.error = null;
   if (g.deps.time === undefined) g.deps.time = null;
   if (g.deps.log === undefined) g.deps.log = "";
+  // 共享依赖操作互斥（vX）：tools/dsh-install.js 的 install/update 动作共用——任一
+  // 进行中另一动作拒绝（install ↔ update 互斥）；null = 无进行中依赖操作。热更新
+  // 兼容：旧 globalThis 对象可能缺该字段，逐字段兜底为 null。
+  if (g.depBusy === undefined) g.depBusy = null;
   if (!g.check || typeof g.check !== "object") g.check = {};
   if (g.check.status === undefined) g.check.status = "idle";
   if (g.check.result === undefined) g.check.result = null;
