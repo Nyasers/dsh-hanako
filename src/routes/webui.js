@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// routes/webui.js — dsh-hanako 插件页：Hana 顶部 tab 内嵌 dsh Web UI
-//   GET /webui            插件页（iframe 嵌 http://127.0.0.1:<port>/，含就绪事件化/主题注入/失败自检）
+// routes/webui.js — dsh-hanako 插件页：contributes.cards（realization:page）内嵌 dsh Web UI
+//   GET /webui            插件页（iframe 嵌 http://127.0.0.1:<port>/，含就绪事件化/主题注入/失败自检；
+//                         壳页另接入功能面板 functionPanel（hana.panel 推送状态/操作，见 webui-shell））
 //   GET /webui/events     就绪事件流（SSE 式 chunked）：bus ready → 推 ready 事件；web host
 //                         启动失败 → 推 diagnostics 事件；web host 停机 → 推 pending 事件。
 //                         壳页订阅此流实现「就绪事件化挂载」（替代旧 3s health 轮询）。
@@ -22,7 +23,9 @@
 // 直接渲染 iframe；未连接渲染加载态（壳页订阅 /webui/events 就绪事件流，bus ready 后宿主
 // 推 ready 事件 → 壳页动态挂载 iframe——v0.22.1+ 就绪事件化，替代旧「服务端 probeHost +
 // 浏览器 3s 轮询 /webui/health 挂载」链路）。脚本首行 postMessage ready 是宿主原始握手
-// （参照 PLUGINS.md；插件 bundle 不含 @hana/plugin-sdk，不依赖它）。
+// （参照 PLUGINS.md；插件 bundle 不含 @hana/plugin-sdk，不依赖它——壳页内置最小 hana 桥
+// （hana.api.fetch / hana.panel.*，与 SDK 同协议 hana.plugin.ui v1），浏览器侧 fetch 一律
+// 走 hana.api.fetch（自动带 pluginSurfaceSession 头），面板内容经 hana.panel.set 推送）。
 //
 // 连接失败自检：web host 未就绪时逐项检查 ① dsh 依赖（存在性 + 运行级验证）
 // ② DSH 进程状态（t1/t2，见 lifecycle.js collectWebDiagnostics），明确指出哪一项坏了、
