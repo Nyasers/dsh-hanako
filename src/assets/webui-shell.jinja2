@@ -329,6 +329,31 @@
     var panelInstalling = false;
     var panelVerifyRunning = false;
     var diagRefreshing = false;
+    // 面板会话列表（方案 A「sections 重建」：list section 数据源 = GET /webui/sessions）
+    var panelSessions = [];   // [{ id, title, current, dupIndex, absIndex }]
+    var panelCurrent = null;  // 主区 iframe 回传的当前会话（{ title, dupIndex, absIndex } | null），覆盖服务端近似
+    var sessionsRefreshing = false;
+    // 拉取会话清单并重推面板（幂等防并发；web host 未就绪/端点异常静默保留旧列表）
+    function refreshSessions() {
+      if (!readyReceived) return;
+      if (sessionsRefreshing) return;
+      sessionsRefreshing = true;
+      hana.api.fetch("webui/sessions", { signal: AbortSignal.timeout(3000) })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (d && Array.isArray(d.sessions)) {
+            panelSessions = d.sessions;
+            pushPanel();
+          }
+        })
+        .catch(function () { /* 会话数据不可用：保留旧列表，静默降级 */ })
+        .finally(function () { sessionsRefreshing = false; });
+    }
+    // 当前会话判定：主区回传（dshana.current）优先，其次服务端「最近活跃」近似
+    function isCurrentSession(s) {
+      if (panelCurrent && s.title === panelCurrent.title && s.dupIndex === panelCurrent.dupIndex) return true;
+      return !!s.current;
+    }
     function syncPanelFromDiag(diag) {
       if (diag) {
         var deps = checkByKey(diag, "deps");
@@ -358,12 +383,33 @@
       var sections = [
         { kind: "status", id: "dshana-status", label: "DSH web host", value: st.word, delta: "端口 " + panelPort, deltaTone: st.tone },
         { kind: "actions", id: "dshana-actions", items: [
+          // dsh UI 操作（方案 A 交互链路：面板事件 → 壳页 → postMessage 主区 iframe 模拟点击；
+          // 仅 web host 就绪（主区 iframe 存在）时可用，未就绪禁用）
+          { id: "new-session", label: "新建会话", tone: "info", activation: { kind: "emit" }, disabled: !readyReceived },
+          { id: "open-settings", label: "打开设置", activation: { kind: "emit" }, disabled: !readyReceived },
           { id: "start", label: "手动启动 web host", tone: "info", activation: { kind: "emit" }, disabled: busy || readyReceived },
           { id: "install-deps", label: "安装依赖", tone: "warning", activation: { kind: "emit" }, disabled: st.word === "安装依赖中" },
           { id: "verify-deps", label: "检测依赖", activation: { kind: "emit" }, disabled: st.word === "安装依赖中" || panelVerifyRunning },
           { id: "copyLog", label: "复制日志路径", activation: { kind: "emit" }, disabled: !panelLogPath },
         ] },
       ];
+      // 会话列表（list section；web host 就绪且有数据才推）。items 字段与宿主渲染器
+      // 兼容：title/subtitle/meta/badge/selected/activation——本处用 title（会话标题，
+      // 空白会话兜底本地化标题）+ selected（当前会话标记）+ activation {kind:"emit"}
+      // （点击回传定位信息，壳页经 onEvent 收 select 事件后转发主区 iframe）。
+      if (readyReceived && panelSessions.length) {
+        var items = [];
+        for (var i = 0; i < panelSessions.length; i++) {
+          var s = panelSessions[i];
+          items.push({
+            id: s.id,
+            title: s.title || "新会话",
+            selected: isCurrentSession(s),
+            activation: { kind: "emit" },
+          });
+        }
+        sections.unshift({ kind: "list", id: "dshana-sessions", label: "会话", items: items });
+      }
       if (panelLogPath) sections.push({ kind: "meta", id: "dshana-meta", text: "日志会话路径：" + panelLogPath });
       return sections;
     }
@@ -379,18 +425,57 @@
         .then(function () { /* 复制成功 */ })
         .catch(function () { /* 复制失败 */ });
     }
+    // 方案 A 交互链路：面板事件 → 壳页 postMessage 主区 dsh iframe（?dshana=main）→
+    // @dsh-hanako/sidebar 注入脚本在隐藏 sidebar DOM 里模拟点击 → dsh 前端落实。
+    // 协议（壳页 → 主区）：{ type: "dshana.act", action: "open-session"|"new-session"|"open-settings",
+    //   sessionId?, title?, dupIndex?, absIndex? }——open-session 的定位信息来自面板
+    // 会话列表项（/webui/sessions 返回的 dupIndex/absIndex，主区按「标题→dupIndex→absIndex」匹配）。
+    function actDsh(cmd) {
+      var cw = frame && frame.contentWindow;
+      if (!cw) return;
+      try {
+        cmd.type = "dshana.act";
+        cw.postMessage(cmd, "*");
+      } catch (err) { /* 主区不可达静默降级 */ }
+    }
+    // 面板会话列表项点击（list section select）→ 定位信息 → 主区打开会话
+    function openSessionFromPanel(itemId) {
+      if (!readyReceived || !frame || !frame.contentWindow) return;
+      for (var i = 0; i < panelSessions.length; i++) {
+        var s = panelSessions[i];
+        if (s.id === itemId) {
+          actDsh({
+            action: "open-session",
+            sessionId: s.id,
+            title: s.title,
+            dupIndex: s.dupIndex,
+            absIndex: s.absIndex,
+          });
+          return;
+        }
+      }
+    }
     function panelOnEvent(ev) {
-      if (!ev || ev.sectionId !== "dshana-actions" || ev.kind !== "action") return;
+      if (!ev) return;
+      // 会话列表项点击（list section；宿主事件 kind 为 select，itemId = 会话 id）
+      if (ev.sectionId === "dshana-sessions" && ev.kind === "select") {
+        openSessionFromPanel(ev.itemId);
+        return;
+      }
+      if (ev.sectionId !== "dshana-actions" || ev.kind !== "action") return;
       if (ev.itemId === "start") startWebHost();
       else if (ev.itemId === "install-deps") installDeps();
       else if (ev.itemId === "verify-deps") verifyDeps();
       else if (ev.itemId === "copyLog") copyLogPath();
+      else if (ev.itemId === "new-session") actDsh({ action: "new-session" });
+      else if (ev.itemId === "open-settings") actDsh({ action: "open-settings" });
     }
     if (hana && hana.panel && hana.panel.onEvent) {
       hana.panel.onEvent(panelOnEvent);
       hana.panel.onRefresh(function () {
-        // 宿主刷新 tick：轻量重读诊断并同步面板（diagRefreshing 防并发）
+        // 宿主刷新 tick：轻量重读诊断 + 会话清单并同步面板（diagRefreshing/sessionsRefreshing 防并发）
         refreshDiag();
+        refreshSessions();
         pushPanel();
       });
     }
@@ -412,6 +497,16 @@
         .then(function () { ack(true); })
         .catch(function () { ack(false); });
     });
+    // 主区 dsh iframe 回传当前会话（@dsh-hanako/sidebar 注入脚本观察 aria-selected 变化）：
+    // { type: "dshana.current", title, dupIndex, absIndex } → 面板 list section 标记 selected
+    // （服务端无权威 current，主区回传为准；来源限定主区 iframe 防止他源伪造）。
+    window.addEventListener("message", function (e) {
+      var m = e.data;
+      if (!m || typeof m !== "object" || m.type !== "dshana.current") return;
+      if (!frame || e.source !== frame.contentWindow) return;
+      panelCurrent = (m.title != null) ? { title: m.title, dupIndex: m.dupIndex, absIndex: m.absIndex } : null;
+      pushPanel();
+    });
     function attach() {
       // 就绪（宿主 push ready 事件 / postMessage ready）：挂载/刷新 iframe，切回主视图
       clearReadyTimers();
@@ -426,6 +521,7 @@
       }
       startThemePush();
       pushPanel(); // 就绪挂载后同步面板状态（运行中）
+      refreshSessions(); // 拉取会话清单（面板 list section；主区回传 dshana.current 后重推）
     }
     // 连接失败自检渲染——服务端收集的 checks 列表（每项：状态图标/检查项名/
     // 详情/修复指引）；escHtml 兜底转义（诊断文本含路径与 stderr，需防注入）
@@ -1030,6 +1126,7 @@
       startThemePush();
     }
     syncPanelFromDiag(initDiag); // 初始面板状态（readyReceived 已就位，避免初始错推「未就绪」）
+    if (readyReceived) refreshSessions(); // 就绪态首帧拉取会话清单（面板 list section）
 }) ();
   </script>
 </body>

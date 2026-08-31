@@ -39,6 +39,11 @@
 // 插件页 HTML 壳（构建期 template-loader 经 doT 编译为自包含渲染函数，运行时零依赖）
 import { render as webuiShellHtml } from "../assets/webui-shell.jinja2";
 
+// 会话清单数据源（/webui/sessions）：读 dsh 官方会话持久化缓存 session_projcache.json
+// （dsh-home 唯一事实源，与 tools/dsh-session.js 同款读法；纯本地文件读，不调 web host）
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 // ---- 就绪事件流订阅者（web host 启动失败通知；lifecycle.js 调 g.notifyWebStartFailed）----
 // 多个壳页 tab 可同时订阅；Set 保存，流关闭时移除。notifyWebStartFailed 每次模块加载
 // 都重新赋值（闭包指向当前模块的 Set，见下方挂钩处），不设一次性守卫。
@@ -94,6 +99,69 @@ function readDiagnostics(ctx, cfg, port) {
     }
   }
   return null;
+}
+
+/** 读 dsh 会话清单（面板 list section 数据源）。
+ * 读 <dataDir>/dsh-home/storages/session_projcache.json 的 tables.sessions（对象 map），
+ * 按最近活跃（lastPromptAt 降序，缺失兜底 createdAt）排序，返回扁平数组：
+ *   { id, title, current, dupIndex, absIndex }
+ * 字段语义：
+ *   - id/title：会话标识与标题（title 可为空串 = 空白会话，壳页渲染时兜底本地化标题）。
+ *   - current：服务端无权威 current（dsh 前端 current 是前端 selection 状态，不落盘）——
+ *     用「最近活跃」近似（lastPromptAt 最大者），壳页另以主区 iframe 回传的
+ *     dshana.current（实际选中行）覆盖为准。
+ *   - dupIndex：同标题在该列表中的出现次序（0 起）；absIndex：列表绝对位置。
+ *     两者供主区注入脚本按「标题 → dupIndex → absIndex」匹配隐藏 sidebar DOM 会话行
+ *     （复用 @dsh-hanako/sidebar 已验证匹配逻辑；absIndex 仅兜底，面板 recency 序与
+ *     DOM workspace 分组序不一致时可能失配，静默降级）。
+ * 任何异常（文件缺失/JSON 损坏/结构不符）返回空数组，不抛错。
+ */
+function readPanelSessions(ctx, limit = 30) {
+  const g = globalThis.__dshHanako;
+  const dataDir =
+    (ctx && ctx.dataDir) || (g && g.dataDir) || null;
+  if (!dataDir) return [];
+  let tbl = null;
+  try {
+    const j = JSON.parse(
+      readFileSync(join(dataDir, "dsh-home", "storages", "session_projcache.json"), "utf8"),
+    );
+    tbl = j?.tables?.sessions;
+  } catch {
+    return [];
+  }
+  if (!tbl || typeof tbl !== "object" || Array.isArray(tbl)) return [];
+  const items = [];
+  for (const [id, s] of Object.entries(tbl)) {
+    if (!s || typeof s !== "object") continue;
+    const identity = s.identity || {};
+    const rows = s.rows || {};
+    const createdAt = identity.createdAt;
+    const lastPromptAt = rows.sessionListMetadata?.val?.lastPromptAt ?? createdAt;
+    items.push({
+      id,
+      title: String(rows.title?.val ?? ""),
+      createdAt,
+      lastPromptAt,
+    });
+  }
+  items.sort(
+    (a, b) =>
+      (b.lastPromptAt ?? b.createdAt ?? -Infinity) -
+      (a.lastPromptAt ?? a.createdAt ?? -Infinity),
+  );
+  const titleCounts = new Map();
+  return items.slice(0, limit).map((it, absIndex) => {
+    const dup = titleCounts.get(it.title) ?? 0;
+    titleCounts.set(it.title, dup + 1);
+    return {
+      id: it.id,
+      title: it.title,
+      current: absIndex === 0, // 最近活跃近似为「当前」（无权威服务端 current，主区回传覆盖）
+      dupIndex: dup,
+      absIndex,
+    };
+  });
 }
 
 /** 总线连接状态（就绪事件化的 ready 判定）：bus 已连接（hello 完成）= web host 就绪。 */
@@ -300,6 +368,24 @@ export default function registerWebuiRoutes(app, ctx) {
       connection: "keep-alive",
       "x-accel-buffering": "no",
     });
+  });
+
+  // 会话清单 GET 端点（面板 list section 数据源；方案 A「sections 重建」核心）。
+  // 读 dsh 会话持久化缓存（session_projcache.json，dsh-home 唯一事实源；与 dsh_session
+  // 工具同款读法，纯本地文件读，不调 dsh web host）。返回
+  //   { ok: true, sessions: [{ id, title, current, dupIndex, absIndex }] }
+  // current 为「最近活跃」近似（服务端无权威 current，主区 iframe 回传 dshana.current
+  // 后由壳页覆盖为准）。任何异常返回空 sessions 不抛错（面板该段静默缺省）。
+  app.get("/webui/sessions", (c) => {
+    try {
+      return c.json({ ok: true, sessions: readPanelSessions(ctx) });
+    } catch (e) {
+      ctx.log?.warn?.(
+        "[dsh-hanako] 读会话清单失败:",
+        e?.message || String(e),
+      );
+      return c.json({ ok: true, sessions: [] });
+    }
   });
 
   // 纯诊断 GET 端点（v0.22.1+ 收缩）：返回 readDiagnostics 自检结果 + web host 状态

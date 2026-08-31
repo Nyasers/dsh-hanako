@@ -1,32 +1,29 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// @dsh-hanako/sidebar — DSH WebUI sidebar 进宿主侧栏桥 + 分离后同步桥（v1.0.1-alpha.1）。
+// @dsh-hanako/sidebar — DSH WebUI 主页面 sidebar 隐藏 + 外部指令驱动（方案 A，v1.0.1-alpha.1）。
 //
-// 语义：DSHana v2 整页卡（fpFullPanel）场景下，「宿主左侧栏 = Full FP 功能面板」。
-// 目标布局：宿主侧栏显示 dsh Web UI 完整 sidebar（functionPanel.embedUrl loopback
-// iframe，?dshana=sidebar），主页面隐藏自身 sidebar（?dshana=main）→ 拼成
-// 「宿主侧栏 = dsh sidebar，主区 = dsh center/details」的三列布局。
+// 语义：DSHana v2 整页卡（fpFullPanel）场景下，「宿主左侧栏 = Full FP 功能面板」由壳页
+// （webui-shell）经 hana.panel.set 运行时推送 sections 重建（会话列表 / 状态 / 操作），
+// 不再 embedUrl iframe 嵌 dsh Web UI（embedUrl 静态 loopback 硬编端口，宿主 0.810.0 静态
+// 透传无端口改写，webPort 配置变更即失效——方案 A 退役 embedUrl）。主页面（?dshana=main）
+// 内嵌 dsh Web UI 并隐藏自身 sidebar → 拼成「宿主侧栏 = hana 面板，主区 = dsh center/details」。
 //
 // 机制：与 @dsh-hanako/theme 同姿势——经 dsh-host-webserver 的 tapIndex 扩展点，
 // 向每个 index 响应注入一个自包含脚本（幂等：检测已有标记则跳过）。脚本按
 // location.search 的 dshana 参数分支：
 //   · 无参数：零动作，正常 dsh UI 行为不变（顶层浏览器直开 3080 不受影响）。
-//   · ?dshana=sidebar（宿主侧栏 iframe，宽 180-400px 必窄屏 → sidebar 折叠成 rail）：
-//     等待 AppFrame 挂载 → 定位 sidebar 列（div[data-slot="sidebar"] 或其祖先 frame）
-//     → 若折叠态：模拟点击 rail 展开 toggle（aria-label toggle.open/collapse 语义，
-//     class 含 toggle / logoRow 结构兜底）触发 narrowExpanded=true → CSS !important
-//     覆盖 frame grid-template-columns 为单轨道（minmax(0,1fr) 0 0）+ display:none
-//     隐藏 center/details 等非 sidebar 元素 → sidebar 占满 iframe。
-//     另：capture 阶段捕获侧栏交互（点会话行 / New Session / 设置入口）→ 写
-//     localStorage["dshana.sync"] 指令（new-session / open-settings 以 stopPropagation
-//     阻断侧栏自身执行，转主区执行；open-session 不阻断——侧栏自身切高亮无害）。
 //   · ?dshana=main（主页面 iframe）：隐藏 sidebar 列（display:none + grid 首轨道 0）
 //     → center 占满；details 保留并跟随 React 宽度变化（MutationObserver 重放覆盖）；
 //     折叠态先展开保证隐藏 sidebar 内会话列表 mounted（窄屏/侧栏被关时 rail 无列表）。
-//     另：监听 window storage 事件（key dshana.sync）→ 解析指令 → 在主区隐藏但 mounted
-//     的 sidebar DOM 里模拟点击（.click() 对 display:none 元素仍冒泡到 React root 事件
-//     委托 → React onClick 正常触发）→ dsh 前端切换 current session → 主区 center 落实。
+//     另：监听 window postMessage 外部指令（{ type:"dshana.act", action, sessionId?,
+//     title?, dupIndex?, absIndex? }，协议见 webui-shell 壳页与本文档注释）→ 在主区隐藏
+//     但 mounted 的 sidebar DOM 里定位对应元素并模拟点击（.click() 对 display:none 元素
+//     仍冒泡到 React root 事件委托 → React onClick 正常触发）→ dsh 前端切换 current
+//     session / 新建会话 / 打开设置 → 主区 center 落实。
+//     另：回传当前会话——MutationObserver 观察 aria-selected 变化，把当前选中会话行
+//     （标题 + 重复索引 + 绝对索引）postMessage 给壳页（{ type:"dshana.current", ... }），
+//     壳页据此在面板 list section 标记 selected（服务端无权威 current，主区回传为准）。
 //
 // 依据（dsh client-ui-layout/workspace/sidebar/settings-general 0.1.1-rc.2 已核实）：
 // 三列 grid frame inline gridTemplateColumns + data-sidebar-collapsed / data-details-collapsed
@@ -40,43 +37,33 @@
 //
 // 样式纪律：脚本内不硬编码颜色（不涉及配色）；宽度覆盖用 CSS 变量/继承原 class
 // 不引入新主题。错误处理：AppFrame 未渲染/找不到元素时静默轮询（上限 ~30s）；
-// 同步链路 localStorage 不可用/结构变化时静默降级（侧栏交互回退原生行为），
-// 均不报错不阻断 dsh 正常功能。
+// 外部指令目标缺失/结构变化时静默降级（有上限重试后放弃，不报错不阻断 dsh 正常功能）。
 
 export const name = "@dsh-hanako/sidebar";
 
 const BRIDGE = `<script id="@dsh-hanako/sidebar">
 (function () {
-  // dshana 侧栏桥（v1.0.1-alpha.1 + 分离后同步桥）——「宿主侧栏 = dsh sidebar，主区 = dsh center/details」。
-  // 两个 dsh Web UI 实例以 URL 参数区分模式（无参数 = 原生行为，本脚本零动作）：
-  //   ?dshana=sidebar  → 宿主功能面板 iframe（180-400px 窄宽）：强制展开 sidebar 并占满 iframe
-  //   ?dshana=main     → 主页面卡片 iframe：隐藏 sidebar 列，center/details 占满主区
-  //
-  // 分离后同步桥（本版新增）：两个 iframe 是兄弟（宿主 DOM 内）、同源（127.0.0.1:3080），
-  // 但前端 store 无跨实例同步（dsh-client-store persist 机械写 localStorage，无 storage 事件/
-  // BroadcastChannel；current session 是前端 selection 状态）→ 自建 localStorage + storage
-  // 事件通道：
-  //   · 侧栏 iframe：document capture 阶段监听 click，识别三类交互（点会话行 / New Session /
-  //     设置入口）→ 写 localStorage["dshana.sync"] = { action, title?, dupIndex?, absIndex?, ts }。
-  //     new-session / open-settings 用 stopPropagation 阻断侧栏自身执行（避免双创建/双面板），
-  //     转由主区执行；open-session 不阻断（侧栏自身切高亮，两 store 指向同一 session 无害）。
-  //   · 主区 iframe：window storage 事件（同源其他文档触发，自身不触发 → 天然无自环）→ 解析
-  //     指令 → 在主区隐藏但 mounted 的 sidebar DOM 里模拟点击（.click() 对 display:none 元素
-  //     仍冒泡到 React root 事件委托 → React onClick 正常触发）→ dsh 前端切换 current session
-  //     → 主区 center 落实显示。找不到目标（列表未加载/结构变化）→ 有上限重试（500ms×10）后
-  //     静默放弃。
-  //   会话行匹配：会话行无稳定 id 属性（sessionId 只在 React 闭包）→ 用「标题 + 重复索引」主
-  //   匹配（标题从行内菜单按钮 aria-label 解析：zh 会话“{title}”的操作 / en Session actions
-  //   for {title}；空白会话行无菜单按钮 → 本地化 blank 标题“新会话”/“New Session”），绝对索引
-  //   兜底（两 iframe 同后端同列表序）。
+  // dshana 主页面桥（方案 A，v1.0.1-alpha.1）——「宿主侧栏 = hana 面板（sections 重建），
+  // 主区 = dsh center/details」。宿主侧栏不再 iframe 嵌 dsh Web UI（embedUrl 退役），
+  // 本脚本只服务主页面（?dshana=main）：
+  //   · 隐藏 sidebar 列（display:none + grid 首轨道 0 !important），center 占满；
+  //   · 折叠态先展开——保证隐藏 sidebar 内会话列表 mounted（窄屏/侧栏被关时 rail 无列表，
+  //     展开后才有 [role="treeitem"] 行可被模拟点击）
+  //   · 监听 window postMessage 外部指令（壳页投递 hana 面板事件后转发）：
+  //       { type:"dshana.act", action:"open-session"|"new-session"|"open-settings",
+  //         sessionId?, title?, dupIndex?, absIndex? }
+  //     → 在主区隐藏但 mounted 的 sidebar DOM 里定位对应元素并模拟点击 → dsh 前端落实
+  //   · 回传当前会话：MutationObserver 观察 aria-selected 变化 → postMessage
+  //     { type:"dshana.current", title, dupIndex, absIndex } 给壳页 → 壳页标记面板 list
+  //     section 的 selected 项（服务端无权威 current，主区回传为准）
   //
   // 依据（dsh client-ui-* 0.1.1-rc.2 已核实）：
   //   - 三列 grid frame：inline gridTemplateColumns = "<s>px minmax(0, 1fr) <d>px"，
   //     子列依次为 sidebarCol | centerCol | detailsCol | overlayLayer([data-shell-overlay])，
   //     frame 带 data-sidebar-collapsed / data-details-collapsed 语义属性（稳定）。
   //   - 窄屏折叠：SIDEBAR_AUTO_COLLAPSE=1024，viewport<1024 → narrow → rail（56px 图标轨）；
-  //     展开控件 = sidebar root 内的 toggle 按钮（class 含 toggle，aria-label 为 toggle.open/
-  //     toggle.collapse 译文，onClick → toggleSidebar()）。
+  //     展开控件 = sidebar root 内的 toggle 按钮（aria-label 为 toggle.open/toggle.collapse
+  //     译文，onClick → toggleSidebar()）。
   //   - narrowExpanded 仅在 setNarrow 触发（narrow 值变化）时重置；宿主侧栏宽度固定 →
   //     narrow 恒定 → 展开后状态钉住，不会自愈回折叠。
   //   - 会话列表：div[role="tree"][aria-label="会话"/"Sessions"] 内，会话行 = div[role="treeitem"]
@@ -89,45 +76,27 @@ const BRIDGE = `<script id="@dsh-hanako/sidebar">
   // 样式策略：React 每次重渲染会重写 frame inline gridTemplateColumns —— 用
   // style.setProperty(..., "important") 压过 React inline（非 important），
   // 并挂 MutationObserver（attributeFilter:["style"]）在 React 更新后重放覆盖，保持响应式。
-  // 容错：AppFrame 未挂载/元素缺失时静默轮询（上限 ~30s）；同步链路 localStorage 不可用/
-  // 结构变化时静默降级（侧栏交互回退原生行为，不阻断 dsh 正常功能）。
+  // 容错：AppFrame 未挂载/元素缺失时静默轮询（上限 ~30s）；外部指令目标找不到 →
+  // 500ms×10 有上限重试后静默放弃；回传/监听异常静默。均不报错不阻断 dsh 正常功能。
 
   var MODE = (function () {
     try {
       return new URLSearchParams(window.location.search).get("dshana");
     } catch (e) { return null; }
   })();
-  if (MODE !== "main" && MODE !== "sidebar") return;
+  if (MODE !== "main") return;
 
   var CSS_ID = "@dsh-hanako/sidebar-css";
-  var SYNC_KEY = "dshana.sync";
-  var SYNC_TTL = 15000;       // 指令过期阈值（ms）
   var MAX_ATTEMPTS = 60;      // frame 定位轮询上限（500ms × 60 = 30s）
   var RETRY_MS = 500;
-  var SYNC_RETRIES = 10;      // 同步指令执行重试上限（500ms × 10 = 5s）
+  var ACT_RETRIES = 10;       // 外部指令执行重试上限（500ms × 10 = 5s）
   var attempts = 0;
   var started = false;
   var observer = null;
   var watchdog = null;
+  var currentObserver = null;
 
-  // ---- 同步通道（localStorage + storage 事件）----
-  function syncWrite(cmd) {
-    try {
-      cmd = cmd || {};
-      cmd.ts = Date.now();
-      window.localStorage.setItem(SYNC_KEY, JSON.stringify(cmd));
-    } catch (e) { /* localStorage 不可用（沙箱/配额）→ 静默降级 */ }
-  }
-  function syncRead(raw) {
-    try {
-      if (!raw) return null;
-      var cmd = JSON.parse(raw);
-      if (!cmd || typeof cmd.action !== "string") return null;
-      if (!cmd.ts || Date.now() - cmd.ts > SYNC_TTL) return null; // 过期指令丢弃
-      return cmd;
-    } catch (e) { return null; }
-  }
-  // 会话行集合（限定 rootEl 内；侧栏模式用 document，主区模式用 sidebar 列）
+  // 会话行集合（限定 rootEl 内；主区模式用 sidebar 列）
   function sessionRows(rootEl) {
     var rows = [];
     try {
@@ -158,11 +127,11 @@ const BRIDGE = `<script id="@dsh-hanako/sidebar">
     } catch (e) { /* 忽略 */ }
     return "";
   }
-  // 捕获侧行信息：title + 同标题重复索引 + 全部会话行绝对索引
-  function rowInfo(row) {
+  // 捕获行信息：title + 同标题重复索引 + 全部会话行绝对索引
+  function rowInfo(row, rootEl) {
     var title = rowTitle(row);
     if (!title) return null;
-    var rows = sessionRows();
+    var rows = sessionRows(rootEl);
     var absIndex = -1, dupIndex = -1, seen = 0;
     for (var i = 0; i < rows.length; i++) {
       if (rows[i] === row) absIndex = i;
@@ -173,7 +142,7 @@ const BRIDGE = `<script id="@dsh-hanako/sidebar">
     }
     return { title: title, dupIndex: dupIndex, absIndex: absIndex };
   }
-  // 主区侧按指令定位会话行：标题唯一直取；重复按 dupIndex；找不到回落 absIndex
+  // 按指令定位会话行：标题唯一直取；重复按 dupIndex；找不到回落 absIndex
   function findSessionRowByCmd(cmd, rootEl) {
     var rows = sessionRows(rootEl);
     if (!rows.length) return null;
@@ -224,74 +193,57 @@ const BRIDGE = `<script id="@dsh-hanako/sidebar">
         return;
       }
       tries += 1;
-      if (tries >= SYNC_RETRIES) { if (done) done(false); return; }
+      if (tries >= ACT_RETRIES) { if (done) done(false); return; }
       setTimeout(attempt, RETRY_MS);
     })();
   }
 
-  // ---- 侧栏模式：capture 阶段捕获交互 → 写指令 ----
-  function installSidebarCapture() {
-    document.addEventListener("click", function (e) {
+  // ---- 外部指令：壳页 postMessage → 主区隐藏 sidebar DOM 模拟点击 ----
+  function installActListener() {
+    window.addEventListener("message", function (e) {
       try {
-        if (e.button !== undefined && e.button !== 0) return;
-        var t = e.target;
-        if (!t || typeof t.closest !== "function") return;
-        var label = "";
-        try {
-          var mb = t.closest('button[aria-label]');
-          if (mb) label = (mb.getAttribute("aria-label") || "").trim();
-        } catch (err) { /* 忽略 */ }
-        // 行内菜单按钮（会话/工作区操作）→ 菜单切换，不同步
-        if (/^会话[\u201C"]/.test(label) || /^工作区[\u201C"]/.test(label) ||
-            /^Session actions for /.test(label) || /^Workspace actions for /.test(label) ||
-            /^New session in /.test(label) || /^在[\u201C"].*[\u201D"]中新建会话$/.test(label)) return;
-        // 设置入口（footer trigger；无 aria-label，仅 aria-haspopup="dialog"）
-        if (label !== "新建会话" && label !== "New session") {
-          try {
-            var st = t.closest('button[aria-haspopup="dialog"]');
-            if (st) {
-              e.stopPropagation(); // 阻断侧栏自身开面板，转主区执行
-              syncWrite({ action: "open-settings" });
-              return;
-            }
-          } catch (err) { /* 忽略 */ }
-        }
-        // New Session（shell 级按钮 + brand 按钮，均 startSession）
-        if (label === "新建会话" || label === "New session") {
-          e.stopPropagation(); // 阻断侧栏自身创建（避免双会话），转主区执行
-          syncWrite({ action: "new-session" });
-          return;
-        }
-        // 会话行 → open-session（不 stopPropagation：侧栏自身切高亮，两 store 指向同一 session 无害）
-        try {
-          var row = t.closest('[role="treeitem"][aria-selected]');
-          if (row) {
-            var info = rowInfo(row);
-            if (info && info.title) {
-              syncWrite({ action: "open-session", title: info.title, dupIndex: info.dupIndex, absIndex: info.absIndex });
-            }
+        if (e.source !== window.parent) return; // 只接受壳页（父窗口）指令
+        var m = e.data;
+        if (!m || typeof m !== "object" || m.type !== "dshana.act") return;
+        if (m.action === "open-session") {
+          if (m.title || typeof m.absIndex === "number") {
+            retryClick(function () { return findSessionRowByCmd(m, sidebarEl()); });
           }
-        } catch (err) { /* 忽略 */ }
-      } catch (err) { /* 静默：不阻断 dsh 正常功能 */ }
-    }, true);
-  }
-
-  // ---- 主区模式：storage 事件 → 隐藏 sidebar DOM 模拟点击 ----
-  function installMainSyncListener() {
-    window.addEventListener("storage", function (e) {
-      try {
-        if (e.key !== SYNC_KEY) return;
-        var cmd = syncRead(e.newValue);
-        if (!cmd) return;
-        if (cmd.action === "open-session") {
-          retryClick(function () { return findSessionRowByCmd(cmd, sidebarEl()); });
-        } else if (cmd.action === "new-session") {
+        } else if (m.action === "new-session") {
           retryClick(function () { return newSessionButton(sidebarEl()); });
-        } else if (cmd.action === "open-settings") {
+        } else if (m.action === "open-settings") {
           retryClick(function () { return settingsButton(sidebarEl()); });
         }
       } catch (err) { /* 静默：不阻断 dsh 正常功能 */ }
     });
+  }
+
+  // ---- 当前会话回传：aria-selected 变化 → postMessage 壳页 ----
+  function reportCurrent() {
+    try {
+      var sb = sidebarEl();
+      if (!sb) return;
+      var rows = sessionRows(sb);
+      for (var i = 0; i < rows.length; i++) {
+        if (rows[i].getAttribute("aria-selected") === "true") {
+          var info = rowInfo(rows[i], sb);
+          if (info && info.title) {
+            window.parent.postMessage(
+              { type: "dshana.current", title: info.title, dupIndex: info.dupIndex, absIndex: info.absIndex },
+              "*"
+            );
+            return;
+          }
+        }
+      }
+    } catch (e) { /* 静默 */ }
+  }
+  function installCurrentReporter() {
+    setTimeout(reportCurrent, 200); // 初始回传一次（iframe 挂载后 sidebar 可能尚未展开）
+    try {
+      currentObserver = new MutationObserver(function () { reportCurrent(); });
+      currentObserver.observe(document.body, { subtree: true, attributes: true, attributeFilter: ["aria-selected"] });
+    } catch (e) { /* 无 MutationObserver 时退化为仅初始回传 */ }
   }
 
   // 注入/复用样式节点（幂等；多次执行/页面重载不会重复叠加）。
@@ -304,15 +256,8 @@ const BRIDGE = `<script id="@dsh-hanako/sidebar">
       st.setAttribute("data-dshana-sidebar", "1");
       if (document.head) document.head.appendChild(st);
     }
-    var css = "";
-    if (MODE === "sidebar") {
-      css = "[data-side=\"sidebar\"],[data-side=\"details\"]{display:none!important}" +
-            "[data-slot=\"sidebar\"]{width:100%!important}" +
-            "[data-slot=\"sidebar\"]>*{width:100%!important}";
-    } else {
-      css = "[data-side=\"sidebar\"]{display:none!important}" +
-            "[data-slot=\"sidebar\"]{display:none!important}";
-    }
+    var css = "[data-side=\"sidebar\"]{display:none!important}" +
+              "[data-slot=\"sidebar\"]{display:none!important}";
     if (st.textContent !== css) st.textContent = css;
     return st;
   }
@@ -383,7 +328,8 @@ const BRIDGE = `<script id="@dsh-hanako/sidebar">
       for (var i = 0; i < btns.length; i++) {
         var label = String(btns[i].getAttribute("aria-label") || "").toLowerCase();
         if (label.indexOf("open") !== -1 || label.indexOf("collapse") !== -1 ||
-            label.indexOf("sidebar") !== -1 || label.indexOf("侧栏") !== -1 || label.indexOf("展开") !== -1) {
+            label.indexOf("sidebar") !== -1 || label.indexOf("侧栏") !== -1 ||
+            label.indexOf("边栏") !== -1 || label.indexOf("展开") !== -1) {
           toggle = btns[i];
           break;
         }
@@ -405,38 +351,6 @@ const BRIDGE = `<script id="@dsh-hanako/sidebar">
     var m = /^\s*(\S+)\s+minmax\(\s*0\s*,\s*1fr\s*\)\s*(\S*)\s*$/.exec(st);
     if (m) return [m[1] || "0px", "minmax(0, 1fr)", m[2] || "0px"];
     return ["0px", "minmax(0, 1fr)", "0px"];
-  }
-
-  // sidebar 模式：sidebar 占满 iframe（单轨道），隐藏 center/details 列与拖拽柄
-  function applySidebar(found) {
-    var frame = found.frame;
-    if (!frame) return;
-    var want = "minmax(0, 1fr) 0px 0px";
-    if (!(frame.style.getPropertyPriority("grid-template-columns") === "important" &&
-          frame.style.getPropertyValue("grid-template-columns") === want)) {
-      frame.style.setProperty("grid-template-columns", want, "important");
-    }
-    var sb = found.sidebar;
-    if (sb && sb.style) {
-      if (sb.style.getPropertyPriority("width") !== "important" || sb.style.getPropertyValue("width") !== "100%") {
-        sb.style.setProperty("width", "100%", "important");
-      }
-      if (sb.firstElementChild && sb.firstElementChild.style) {
-        var inner = sb.firstElementChild;
-        if (inner.style.getPropertyPriority("width") !== "important" || inner.style.getPropertyValue("width") !== "100%") {
-          inner.style.setProperty("width", "100%", "important");
-        }
-      }
-    }
-    var kids = frame.children;
-    for (var i = 0; i < kids.length; i++) {
-      var k = kids[i];
-      if (k === sb) continue;
-      if (k.hasAttribute && k.hasAttribute("data-shell-overlay")) continue;
-      if (k.style && (k.style.getPropertyPriority("display") !== "important" || k.style.getPropertyValue("display") !== "none")) {
-        k.style.setProperty("display", "none", "important");
-      }
-    }
   }
 
   // main 模式：隐藏 sidebar 列，center 占满；details 保留（响应 React 的 details 宽度变化）
@@ -462,8 +376,7 @@ const BRIDGE = `<script id="@dsh-hanako/sidebar">
   }
 
   function applyMode(found) {
-    if (MODE === "main") applyMain(found);
-    else applySidebar(found);
+    applyMain(found);
   }
 
   // 展开后重放覆盖：React 重渲染会重写 frame inline style，MutationObserver 保持响应式
@@ -514,8 +427,8 @@ const BRIDGE = `<script id="@dsh-hanako/sidebar">
     }
     started = true;
     styleEl();
-    // 两种模式统一：折叠态先展开——sidebar 模式本来就要展开占满；
-    // main 模式保证隐藏的 sidebar 列内会话列表 mounted（窄屏/侧栏被关时 rail 无列表，展开后才有）
+    // main 模式折叠态先展开：保证隐藏 sidebar 列内会话列表 mounted
+    // （窄屏/侧栏被关时 rail 无列表，展开后才有 [role="treeitem"] 行可被模拟点击）
     if (isCollapsed(found)) {
       clickExpand(found);
       pollExpanded(found);
@@ -525,9 +438,10 @@ const BRIDGE = `<script id="@dsh-hanako/sidebar">
     }
   }
 
-  // 同步桥装配：侧栏装捕获监听，主区装 storage 监听（独立于 frame 装配，DOM 按需查询）
-  if (MODE === "sidebar") installSidebarCapture();
-  else installMainSyncListener();
+  // 指令监听 + 当前会话回传：独立于 frame 装配（DOM 按需查询，目标未就绪由
+  // retryClick 有上限重试兜底）——即使 frame 定位失败/未挂载，面板点击也不会丢
+  installActListener();
+  installCurrentReporter();
 
   // 页面加载早期脚本即执行：等 DOM 就绪后启动装配
   if (document.readyState === "loading") {
