@@ -1,5 +1,5 @@
 {
-  "manifestVersion": 1,
+  "manifestVersion": 2,
   "id": "dsh-hanako",
   "name": "DSHana",
   "version": "0.25.0",
@@ -32,9 +32,10 @@
   ],
   "entry": "index.js",
   "contributes": {
-    "configuration": {
+    "settings": {
       "title": "DSHana 设置",
-      "properties": {
+      "schema": {
+        "properties": {
         "webPort": {
           "type": "number",
           "default": 3080,
@@ -66,17 +67,18 @@
           "description": "可选：指定系统安装的 node 可执行文件绝对路径（如 /opt/homebrew/bin/node）。留空（默认）用 Electron 自带 node。macOS 上 Electron 内嵌 node 跑 pnpm 会触发签名校验失败（Electron 的 node 二进制非标准 node 签名），此时填系统 node 绝对路径解决。路径不存在、指向目录或不可执行时均发出警告并回退 Electron node。改后对下一次子进程（pnpm / web host）立即生效；已生成的 node 代理脚本（wrapper）在下次依赖安装时更新为新的 node 执行体。"
         }
       }
+      }
     },
     "cards": [
       {
         "id": "dshana",
-        "type": "webview",
         "title": "DSHana",
         "route": "/webui",
-        "icon": "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\"><rect x=\"3\" y=\"4\" width=\"18\" height=\"16\" rx=\"1\"/><path d=\"M3 9h18\"/><path d=\"M7 13h4\"/></svg>",
         "cardForm": "framed",
         "titlebar": "solid",
         "realization": "page",
+        "siteNavEntry": true,
+        "fpFullPanel": true,
         "functionPanel": {
           "id": "dshana-panel",
           "label": "DSHana"
