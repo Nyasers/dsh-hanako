@@ -1,3 +1,8 @@
+- **v1.0.0-alpha.3**（2026-08-31）：configuration 键名修复 + 撤回 dshTag 设置项（fix/configuration-key，PR #37）。
+① **contributes.settings → configuration**：宿主 0.810.0 插件运行时读取的是 `contributes.configuration`（properties 平铺），`contributes.settings`（v2 包裹层）声明不生效——manifest 设置项（webPort/defaultCwd/approvalTimeoutSec/defaultTimeoutSec/nodejsPath）一直没被宿主加载，设置页改配置存不进去。改回 `configuration` 后 5 项设置真正生效（对齐宿主运行时契约）。
+② **撤回 dshTag 设置项**：dist-tag 由 registry 动态返回（`pnpm view dist-tags`），静态字符串手输不合理；撤回 configuration 声明，改由 @dsh-hanako/settings 页 DSH 版本卡片动态拉取列表做选择器（后续落地）。运行时支持保留：`config.json global.dshTag` + `resolveDshTag` 三阶回退（默认 latest），check/install 基线照常工作。
+验证：configuration 键名实测生效（设置项加载 + 写入 config.json）；dshTag 不在宿主设置 UI 出现（等 settings 动态选择器）；commit GPG 签名。
+升级注意：`dshTag` 不再出现在宿主设置 UI（config.json 手写仍有效，默认 latest）；manifest 设置项（webPort 等 5 项）自本版起真正生效。
 - **v1.0.0-alpha.2**（2026-08-31）：dsh_install/dsh_update 合并四合一 + 版本/tag 指定 + dist-tag 更新基线 + version.mjs semver（feat/merge-install-update，含 CodeRabbit review 修复）。
 ① **工具合并**：`dsh_install` 扩展为 install/verify/check/update 四合一（`dsh_update` 移除，无兼容别名，skills/文档全量同步）；deferred wake meta.type 统一 "dsh-install"，卡片 kind 保留 install|update 区分标题；并发防护双独立 → 共享互斥（见 ④）。
 ② **指定版本 + dist-tag 基线**：`version`（具体版本号）优先于 `tag`（dist-tag），缺省回退配置基线 `dshTag`（config.json global + manifest settings，默认 latest）；`lib/check.js` 升级为 HTTP 直查 registry 根包 JSON 的 dist-tags 全量映射（官方源→npmmirror 兜底，15s 超时），check 返回 `{ localVersion, distTags, baselineTag, baselineVersion, updateAvailable, error? }`（latestVersion 保留兼容别名）；能力层 `installDepsFromPlugin` 缺省 spec 回退配置基线（webui 路由/设置页总线调用同遵循，单一事实源）。设置页「DSH 版本」卡片检查仍直查 latest，与宿主 dshTag 基线非 latest 时结果可能不同（文案/文档已澄清）。
