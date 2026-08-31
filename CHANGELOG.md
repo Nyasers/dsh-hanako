@@ -1,4 +1,4 @@
-- **v1.0.1-alpha.1**（unreleased）：DSH WebUI sidebar 进宿主侧栏桥——主页面隐藏 sidebar + embedUrl 转发到 Hana functionPanel（feat/sidebar-fp）。
+- **v1.0.0-alpha.2**（unreleased）：DSH WebUI sidebar 进宿主侧栏桥——主页面隐藏 sidebar + embedUrl 转发到 Hana functionPanel（feat/sidebar-fp）。
 ① **新 cordis 插件 @dsh-hanako/sidebar**（dsh-plugin/@dsh-hanako/sidebar/，经 dsh-host-webserver `tapIndex` 注入自包含脚本；幂等：检测已有标记跳过）：按 `location.search` 的 `dshana` 参数分支——
    · **?dshana=sidebar**（宿主功能面板 iframe，宽 180-400px 必窄屏 → dsh sidebar 折叠成 56px rail）：等待 AppFrame 挂载（轮询 ≤30s 静默上限）→ 定位 sidebar 列（任务契约 `div[data-slot="sidebar"]` 优先，兜底 frame 语义属性 `data-sidebar-collapsed`/`data-details-collapsed` 与结构扫描 inline grid 三列）→ 折叠态时模拟点击展开 toggle（aria-label toggle.open/collapse 语义，class 含 toggle / logoRow 结构兜底；narrow 下 toggleSidebar 翻转 narrowExpanded，宿主侧栏宽度固定 → narrow 恒定 → 展开状态钉住）→ CSS !important 覆盖 frame `grid-template-columns` 为单轨道（minmax(0,1fr) 0 0）+ display:none 隐藏 center/details 等非 sidebar 元素（保留 [data-shell-overlay] 浮层宿主）→ sidebar 占满 iframe；MutationObserver（attributeFilter style）在 React 重渲染后重放覆盖，details 宽度变化保持响应式。
    · **?dshana=main**（主页面卡片 iframe）：隐藏 sidebar 列（display:none + grid 首轨道 0 !important），center 占满；details 保留并跟随 React 宽度。
