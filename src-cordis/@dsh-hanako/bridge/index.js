@@ -147,6 +147,13 @@ export async function translateRpcRequest(req, port, reply) {
       reply({ reqId, ok: true, value: await ensureAuthCookie(port) })
       return
     }
+    if (method === 'launchToken') {
+      // 返回进程内 launchToken（BrowserAuth，重启换新）：宿主渲染插件页拼
+      // iframe URL（/?token= 免 cookie 换发，SPA 随后经 cookie 正常访问）——
+      // 跨域宿主（LAN 虚拟域名）下 Set-Cookie 落不到 dsh 域，必须走 token 换发。
+      reply({ reqId, ok: true, value: launchToken })
+      return
+    }
     if (method === 'respond') {
       // 审批应答：/api/respond 要 client-response 信封（rpcId 路由 web host pending 表），
       // 响应是 rpcReceipt { accepted } 而非 ServerResponse——与 Unary 响应结构不同，
