@@ -356,14 +356,18 @@ const BRIDGE = `<script id="@dsh-hanako/sidebar">
 
   function isCollapsed(found) {
     try {
+      // 优先语义属性（宿主契约，跨构建稳定）：data-sidebar-collapsed 显式标记折叠
       if (found.frame.hasAttribute && found.frame.hasAttribute("data-sidebar-collapsed")) return true;
       var sb = found.sidebar;
-      if (sb && sb.classList && sb.classList.contains("hHd-Xa_collapsed")) return true;
-      if (sb && sb.querySelector && sb.querySelector(".hHd-Xa_collapsed")) return true;
+      // 宽度启发：rail 宽度显著小于完整侧栏（<120px）即折叠态
       if (sb && sb.getBoundingClientRect) {
         var w = sb.getBoundingClientRect().width;
         if (w > 0 && w < 120) return true;
       }
+      // 最后兜底：hashed class（hHd-Xa_* 为构建产物哈希，跨 dsh 构建/版本不稳定，
+      // 仅当语义属性/宽度不可用时作末位参考，不可作为主判断）
+      if (sb && sb.classList && sb.classList.contains("hHd-Xa_collapsed")) return true;
+      if (sb && sb.querySelector && sb.querySelector(".hHd-Xa_collapsed")) return true;
     } catch (e) { /* 忽略 */ }
     return false;
   }
@@ -473,6 +477,9 @@ const BRIDGE = `<script id="@dsh-hanako/sidebar">
     watchdog = setInterval(function () {
       try {
         if (!document.contains(found.frame)) {
+          // frame 已脱离文档：先断掉 observer（防 detached frame 残留回调），
+          // 再清看门狗并重新调度 run（下次挂载时重建观察）。
+          if (observer) { try { observer.disconnect(); } catch (e) { /* 忽略 */ } observer = null; }
           clearInterval(watchdog); watchdog = null;
           started = false;
           attempts = 0;

@@ -4,7 +4,7 @@
    · **?dshana=main**（主页面卡片 iframe）：隐藏 sidebar 列（display:none + grid 首轨道 0 !important），center 占满；details 保留并跟随 React 宽度。
    · **无参数**：零动作，正常 dsh UI 行为不变（顶层浏览器直开 3080 不受影响）。
    注入脚本自包含/幂等/容错（AppFrame 未渲染或找不到元素静默重试有上限，不报错不阻断）；样式不硬编码颜色（沿用 dsh 主题 class/变量），宽度覆盖用元素级 style.setProperty(..., "important") 压过 React inline。
-② **manifest.json**：functionPanel 加 `embedUrl: "http://127.0.0.1:3080/?dshana=sidebar"`（v2 卡片 functionPanel.embedUrl 字段，loopback 校验合法；保留现有 id/label）。
+② **manifest.json**：functionPanel 加 `embedUrl: "http://127.0.0.1:3080/?dshana=sidebar"`（v2 卡片 functionPanel.embedUrl 字段，loopback 校验合法；保留现有 id/label）。**限制**：宿主 0.810.0 对 embedUrl 为静态 loopback URL 原样使用（wae 校验后无端口改写/动态机制），与默认 webPort 3080 绑定——修改配置 `webPort` 后须同步更新 manifest 的 embedUrl，否则宿主侧栏 iframe 指向失效端口（待实装验证确认宿主是否后续提供动态机制）。
 ③ **主页面 iframe src 带 ?dshana=main**：webui-shell.jinja2 attach() 的 base（`http://127.0.0.1:<port>/?dshana=main`，dshReload bust 改 `&dshReload=`）+ webui.js buildShell 首帧 iframe src（`/?dshana=main`）；其余行为不变（就绪事件化 / 主题桥 / 剪贴板桥 / hana 面板桥全保留）。
 ④ **注册链路**：dsh-plugin/dsh-hanako.patch.yml 加 insert（@dsh-hanako/sidebar）；src/migrate.js junction-converge 包列表加 sidebar（profiles/node_modules junction，六→七）。
 ⑤ **分离后同步桥**（同一注入脚本内扩展）：两个 dsh UI iframe（?dshana=sidebar 宿主侧栏 / ?dshana=main 主页面）是兄弟 iframe、同源（127.0.0.1:3080）但前端 store 无跨实例同步（dsh-client-store persist 机械写 localStorage，无 storage 事件/BroadcastChannel；current session 是前端 selection 状态）→ 自建 **localStorage + storage 事件**通道（key `dshana.sync`，value JSON `{ action, title?, dupIndex?, absIndex?, ts }`，ts 过期过滤）：
