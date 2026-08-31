@@ -3,7 +3,7 @@
 //
 // scripts/rspack.config.mjs — dsh-hanako 单 bundle 构建配置（独立配置文件，不随源码编译）
 // 与 hana-remote-dev 的 rspack.config.mjs 对齐，按 dsh-hanako 实际适配：
-//   - 单入口 src/index.js → 单产物 dist/index.js（生命周期+7 工具+lib+路由+前端资产全部收敛）
+//   - 单入口 src/index.js → 单产物 dist/index.js（生命周期+5 工具+lib+路由+前端资产全部收敛）
 //   - 输出 ESM module（纯 ESM 无原生模块，不需要 CJS+loadBundle 沙箱；宿主直接 import）
 //   - library.type=module：入口具名导出（pluginRoutes）真 emit 成 ESM export，
 //     dist/routes/index.js 壳 import bundle 转发；default 导出插件类（宿主 new + onload）

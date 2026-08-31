@@ -145,7 +145,7 @@ window.__ModuleLoader__.load({
       // ---- DSH 版本卡片 ----
       versionTitle: "DSH 版本",
       versionSub:
-        "@deepseek-ai/dsh 版本检查与更新（检查 DSH 侧直查远端 registry，结果与 dsh_update 工具 / DSHana 标签页一致）",
+        "@deepseek-ai/dsh 版本检查与更新（检查 DSH 侧直查远端 registry，结果与 dsh_install 工具 / DSHana 标签页一致）",
       versionLocal: "本地版本",
       versionLatest: "最新版本",
       versionNone: "未安装",
@@ -186,7 +186,7 @@ window.__ModuleLoader__.load({
       // ---- DSH version card ----
       versionTitle: "DSH Version",
       versionSub:
-        "@deepseek-ai/dsh version check & update (check queries the registry directly from DSH, same result as dsh_update tool / DSHana tab)",
+        "@deepseek-ai/dsh version check & update (check queries the registry directly from DSH, same result as dsh_install tool / DSHana tab)",
       versionLocal: "Local version",
       versionLatest: "Latest version",
       versionNone: "not installed",

@@ -507,7 +507,7 @@
               + (d.verifyRunning ? " disabled" : "") + '>' + (d.verifyRunning ? "检测中…" : "检测依赖") + '</button>';
           }
           // 版本管理（检查更新/更新 DSH）归设置页「检查与更新 DSH」卡片（@dsh-hanako/settings
-          // 版本卡片 + dsh_update 工具）；deps 卡片只保留依赖管理（安装/检测），不再渲染版本按钮。
+          // 版本卡片 + dsh_install 工具 action=check/update）；deps 卡片只保留依赖管理（安装/检测），不再渲染版本按钮。
         }
         return html ? html + '<span class="diag-btn-msg"></span>' : "";
       }
@@ -559,7 +559,7 @@
     }
     // 更新进度/结果块（内存态 updateResult = g.update 状态组合，随 3s 轮询刷新；
     // v0.24 update-result.json 退役）——版本管理归设置页
-    // （@dsh-hanako/settings「检查与更新 DSH」卡片 + dsh_update 工具），deps 卡片已无更新
+    // （@dsh-hanako/settings「检查与更新 DSH」卡片 + dsh_install 工具），deps 卡片已无更新
     // 按钮，仅在设置页触发更新（web host 停机期间）时被动展示进度。
     function updateProgressHtml(d) {
       var r = d.updateResult || null;
@@ -643,7 +643,7 @@
         }
       }
       // 「检查更新」/「更新 DSH」按钮已移除（版本管理归设置页「检查与更新 DSH」卡片 +
-      // dsh_update 工具），无对应按钮状态同步
+      // dsh_install 工具），无对应按钮状态同步
     }
     function startWebHost() {
       if (startRequested || readyReceived) return; // 幂等：已在启动中/已就绪
@@ -748,9 +748,9 @@
       runVerifyDeps(listBtn("deps", "verify-deps"));
     }
     // 版本管理（检查更新/更新 DSH）归设置页「检查与更新 DSH」卡片（@dsh-hanako/settings
-    // 版本卡片 + dsh_update 工具），deps 卡片不再做版本检查/更新，前端 checkUpdate/
+    // 版本卡片 + dsh_install 工具），deps 卡片不再做版本检查/更新，前端 checkUpdate/
     // updateDsh 按钮与脚本已移除；/webui/check-update、/webui/update-dsh 路由保留
-    // （dsh_update 工具等仍经后端能力层调用）。
+    // （dsh_install 工具等仍经后端能力层调用）。
     // 进标签页自动检测一次（仅依赖已装时；不随轮询重复——只在这里调一次）
     function autoVerifyDeps() {
       var deps = checkByKey(initDiag, "deps");

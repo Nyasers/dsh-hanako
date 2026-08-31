@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Nyasers
 //
 // scripts/build.mjs — dsh-hanako 单 bundle 构建（收敛架构；构建脚本不随源码编译）
-// 产物：dist/index.js（单 bundle：生命周期+7 工具+lib+lifecycle+内联前端资源）
+// 产物：dist/index.js（单 bundle：生命周期+5 工具+lib+lifecycle+内联前端资源）
 //     + dist/routes/index.js 壳（宿主 routes/ 目录扫描，import bundle 导出转发）
 //     + dist/manifest.json（宿主 entry 指向 index.js）。插件本体零依赖打包。
 // 用法：

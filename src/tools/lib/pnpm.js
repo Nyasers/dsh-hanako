@@ -353,16 +353,20 @@ export async function runPnpm(args, opts = {}) {
 
 // ---- pnpm add 参数构造（lib/install.js 唯一 pnpm add 调用点的收敛入口）----
 // v0.20.x 起：install.js 不再手拼 pnpm add 参数，改调 buildPnpmAddArgs——只传意图
-// （registry 兜底 URL），包名/旗标同源本模块：DSH_PACKAGE（依赖包名）+ 本函数静态旗标。
-// 后续若需锁版本，在 DSH_PACKAGE 旁同源加版本常量（如 DSH_PACKAGE_VERSION）并拼进 args。
+// （registry 兜底 URL + spec），包名/旗标同源本模块：DSH_PACKAGE（依赖包名）+ 本函数静态旗标。
+// spec 支持（vX 起）：可传具体版本号或 dist-tag（如 "1.0.0-alpha.1" / "next"），拼成
+// @deepseek-ai/dsh@<spec>（npm/pnpm 原生支持 tag spec）；缺省（undefined/空串）装默认
+// 最新（buildPnpmAddArgs 不拼 @ 后缀）。registry 兜底与 spec 相互独立、互不影响。
 // --reporter=ndjson 取代旧 --loglevel=http：pnpm 11.24.0 的 ndjson reporter 每行一个
 // JSON 对象（bole 序列化到 stdout，level 为 debug/info/warn/error 字符串，name 标识
 // 事件类型），输出结构化安装进度事件流（pnpm:fetching-progress / pnpm:stage /
 // pnpm:root / pnpm:stats / pnpm:lifecycle …），供 install.js 逐行解析转可读进度行。
 export const DSH_PACKAGE = "@deepseek-ai/dsh";
 
-export function buildPnpmAddArgs({ registry } = {}) {
-  const args = ["add", DSH_PACKAGE, "--reporter=ndjson"];
+export function buildPnpmAddArgs({ registry, spec } = {}) {
+  const target =
+    DSH_PACKAGE + (typeof spec === "string" && spec.trim() ? "@" + spec.trim() : "");
+  const args = ["add", target, "--reporter=ndjson"];
   if (typeof registry === "string" && registry) {
     args.push("--registry=" + registry);
   }

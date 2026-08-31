@@ -133,8 +133,8 @@ export const manifestDefaults = (() => {
 // ---- 常驻 web host 单例（globalThis 跨模块共享，index.js 卸载清理时读取）----
 // g.ops 不再是任务状态注册表（jsonl 唯一事实源），仅存审批/取消运行期协调状态。
 // g.depTasks = 安装/升级卡片任务登记表（Map：taskId → { taskId, kind:
-// install|update, state: running|ok|error, log, at, result }），tools/dsh-install.js 与
-// tools/dsh-update.js 异步流程登记，routes/card.js /ops/dep-stream 读取。
+// install|update, state: running|ok|error, log, at, result }），tools/dsh-install.js
+// 异步流程（action=install/update）登记，routes/card.js /ops/dep-stream 读取。
 // 函数挂载由各定义模块负责（见文件头注释），本函数只做初始化 + 字段兜底。
 export function getSingleton() {
   if (!globalThis.__dshHanako || typeof globalThis.__dshHanako !== "object") {

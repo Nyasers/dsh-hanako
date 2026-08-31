@@ -13,10 +13,10 @@
 //   POST /webui/install-deps 自动安装 dsh 依赖（deps 卡片「安装依赖」按钮；installing/触发安装）
 //   GET  /webui/verify-deps  运行级依赖检测（node cliBin --version；进标签页自动一次 + 手动「检测依赖」按钮）
 //   GET  /webui/check-update 版本检查（经宿主能力层 g.checkDshUpdate；deps 卡片「检查更新」
-//                            按钮已移除——版本管理归设置页「检查与更新 DSH」卡片 + dsh_update 工具，路由保留）
+//                            按钮已移除——版本管理归设置页「检查与更新 DSH」卡片 + dsh_install 工具，路由保留）
 //   POST /webui/update-dsh   更新 DSH（经宿主能力层 g.updateDsh，异步触发，更新会重启
 //                            web host、正在执行的任务中断；deps 卡片「更新 DSH」按钮已移除，
-//                            入口归设置页 dsh_update 工具，路由保留）
+//                            入口归设置页 dsh_install 工具，路由保留）
 //
 // 机制：与 routes/card.js 同构——宿主把 app 挂在 /api/plugins/<pluginId> 命名空间下，
 // 这里注册相对路径。渲染前按总线连接状态（g.dshanaBus.status().connected）判定 ready：已连接
@@ -417,12 +417,14 @@ export default function registerWebuiRoutes(app, ctx) {
     }
   });
 
-  // 版本检查（deps 卡片「检查更新」按钮 + Agent 工具 dsh_update 共用能力层；
+  // 版本检查（deps 卡片「检查更新」按钮 + Agent 工具 dsh_install 共用能力层；
   // GET 只读）：检查中（g.check.status === "running"）→ {ok:true,running:true}；否则
-  // await g.checkDshUpdate(cfg)（HTTP 直查 npm registry ≤~15s，官方源失败重试
-  // npmmirror）→ {ok:true, localVersion, latestVersion, updateAvailable, error?}。结果
-  // 缓存进 g.check.result（内存，不再写 check-result.json——v0.18.1 起设置页检查改
-  // dsh 侧直查），前端随后经 health 读取诊断刷新 deps 卡片。
+  // await g.checkDshUpdate(cfg)（HTTP 直查 npm registry 根包 JSON dist-tags ≤~15s，
+  // 官方源失败重试 npmmirror）→ {ok:true, localVersion, distTags, baselineTag,
+  // baselineVersion, updateAvailable, error?}（latestVersion 保留为 baselineVersion
+  // 别名）。基线 tag = 显式 tag / 配置 dshTag（config.json global.dshTag，默认
+  // "latest"）。结果缓存进 g.check.result（内存，不再写 check-result.json——v0.18.1
+  // 起设置页检查改 dsh 侧直查），前端随后经 health 读取诊断刷新 deps 卡片。
   // 单例缺失/无函数/异常一律容错回 {ok:false}，本路由不抛异常。
   app.get("/webui/check-update", async (c) => {
     const g = globalThis.__dshHanako;
@@ -439,7 +441,10 @@ export default function registerWebuiRoutes(app, ctx) {
         ok: true,
         running: false,
         localVersion: r.localVersion,
-        latestVersion: r.latestVersion,
+        distTags: r.distTags || null,
+        baselineTag: r.baselineTag || null,
+        baselineVersion: r.baselineVersion,
+        latestVersion: r.latestVersion ?? r.baselineVersion,
         updateAvailable: r.updateAvailable,
         error: r.error || null,
       });
@@ -449,10 +454,11 @@ export default function registerWebuiRoutes(app, ctx) {
     }
   });
 
-  // 更新 DSH（deps 卡片「更新 DSH」按钮 + Agent 工具 dsh_update 共用能力层）：
+  // 更新 DSH（deps 卡片「更新 DSH」按钮 + Agent 工具 dsh_install 共用能力层）：
   // 更新中（g.update.status === "running"）→ {ok:true,state:"updating"}；否则异步触发
-  // g.updateDsh(cfg)（不 await 其完成——npm i 可能耗时数分钟，前端经诊断/设置页
-  // update 事件看进度）→ {ok:true,state:"updating"}。更新会重启 web host，正在执行的
+  // g.updateDsh(cfg)（不 await 其完成——pnpm add 可能耗时数分钟，前端经诊断/设置页
+  // update 事件看进度）→ {ok:true,state:"updating"}。未传版本/tag 时按配置基线
+  // （config.json global.dshTag，默认 latest）安装。更新会重启 web host，正在执行的
   // dsh 任务会中断（前端按钮已有确认文案）。单例缺失/无函数/异常一律容错回
   // {ok:false}，本路由不抛异常。
   app.post("/webui/update-dsh", (c) => {

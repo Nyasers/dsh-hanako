@@ -820,22 +820,23 @@ function ensureProviderPushWatch(cfg) {
 }
 // ---- DSH 检查能力（checkDshUpdate / npmViewLatest / semver 比较 / 本地版本
 // 直读已提取到 lib/check.js + lib/install.js，经 getSingleton 挂 g.checkDshUpdate 供
-// Agent 工具 dsh_update / DSHana 标签页 webui 路由两面共用，单一事实源；
+// Agent 工具 dsh_install / DSHana 标签页 webui 路由两面共用，单一事实源；
 // 设置页「DSH 版本」卡片 v0.18.1 起由 dsh 侧 @dsh-hanako/settings 直查远端，不经此通道）----
 
 // ---- 更新 DSH（能力层）：停 web host（closeProcess——回收子进程，Windows 文件锁前提：
-// npm i 要替换被 web host 占用的 dsh 包文件）→ installDepsFromPlugin（npm i
-// @deepseek-ai/dsh = 装 latest，成功即新版本）→ 起 web host（ensureWebHost，失败不阻断
-// 结果上报，记 error 字段）→ 读新版本。结果走内存态分组 g.update = { status, result,
-// error, time, log }（v0.24 状态收敛：update-result.json 退役——总线事件化已打通
-// update.progress/result + 断线排队补发，设置页依赖总线、Agent 工具结果全走内存态，
-// 文件兜底场景不存在；遗留文件由 migrate.js cleanup-update-result 步骤删除）。
+// pnpm add 要替换被 web host 占用的 dsh 包文件）→ installDepsFromPlugin（pnpm add
+// @deepseek-ai/dsh，spec 可指定版本/tag，缺省配置基线 dshTag（默认 latest）；成功即
+// 新版本）→ 起 web host（ensureWebHost，失败不阻断结果上报，记 error 字段）→ 读新版本。
+// 结果走内存态分组 g.update = { status, result, error, time, log }（v0.24 状态收敛：
+// update-result.json 退役——总线事件化已打通 update.progress/result + 断线排队补发，
+// 设置页依赖总线、Agent 工具结果全走内存态，文件兜底场景不存在；遗留文件由
+// migrate.js cleanup-update-result 步骤删除）。
 // v0.22.1+ 事件化：开始/完成经总线 emit update.progress/update.result，设置页事件缓存。
 // 并发防护：g.update.status === "running" 进行中重复调用返回 { ok:false, state:"updating" }
 // 不重复执行；与 installDepsFromPlugin 内部 g.deps.status 独立（本状态管整条更新流程）。
 // status 状态机：入口置 running、成功置 ok、catch 置 error——finally 不重置（终态保留，
 // 下次更新入口才回到 running）；g.update.result = updateDsh 返回值终态对象。----
-export async function updateDsh(cfg) {
+export async function updateDsh(cfg, spec) {
   const g = getSingleton();
   if (g.update.status === "running") return { ok: false, state: "updating" };
   g.update.status = "running";
@@ -857,10 +858,11 @@ export async function updateDsh(cfg) {
     // ② 停 web host（Windows 文件锁前提）
     log("停止 web host…");
     await closeProcess();
-    // ③ 装 latest（installDepsFromPlugin 内部有 g.deps.status === "installing" 防并发；
-    // 成功后会自动运行级重验刷新 g.deps.result）
-    log("执行 pnpm add @deepseek-ai/dsh（latest）…");
-    const install = await installDepsFromPlugin(cfg, dataDir);
+    // ③ 装依赖（installDepsFromPlugin 内部有 g.deps.status === "installing" 防并发；
+    // spec 可指定版本/tag，缺省配置基线 dshTag（默认 latest）；成功后会自动运行级重验
+    // 刷新 g.deps.result）
+    log("执行 pnpm add @deepseek-ai/dsh" + (spec ? "@" + spec : "") + "…");
+    const install = await installDepsFromPlugin(cfg, dataDir, { spec });
     if (!install || !install.ok)
       throw new Error(install?.error || "依赖安装失败");
     // ④ 起新进程（失败不阻断结果上报，记 error 字段）

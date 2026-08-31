@@ -287,7 +287,7 @@ function convergeCordisJunctions(cfg) {
 // ---- 迁移步骤 4：update-result.json 退役清理（cleanup-update-result）----
 // v0.24 状态收敛（单例分组结构化）：更新链路结果改走内存态分组 g.update，update-result.json
 // 不再写不再读（总线事件化已打通 update.progress/result + 断线排队补发；设置页是 dsh web
-// host 页面依赖总线，Agent 工具 dsh_update 结果全走内存态且从不读该文件——文件兜底场景
+// host 页面依赖总线，Agent 工具 dsh_install 结果全走内存态且从不读该文件——文件兜底场景
 // 在现役链路中不存在）。删除历史版本遗留的 <dataDir>/update-result.json 文件。
 // 幂等：文件不存在零动作；删除失败静默（残留不影响功能，只是占位文件）。
 function cleanupUpdateResult(cfg) {

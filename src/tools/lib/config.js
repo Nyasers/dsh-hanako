@@ -156,3 +156,23 @@ export function resolveDefaultCwd(cfg) {
   return String(cfg.defaultCwd || "");
 }
 
+// dshTag 解析（DSH 更新基线 dist-tag，vX 起）：优先直读 dataDir/config.json 的
+// global.dshTag（设置界面改动即时生效；Agent 直改文件同样生效），缺失/非字符串回退
+// 配置快照 cfg.dshTag（manifest 默认 "latest"），再缺失回退 "latest"。返回恒为 tag
+// 字符串（npm dist-tag，如 latest/next/alpha；version 参数优先于 tag，见 dsh-install 工具）。
+export function resolveDshTag(cfg) {
+  try {
+    const cf = join(cfg.dataDir, "config.json");
+    if (existsSync(cf)) {
+      const j = JSON.parse(readFileSync(cf, "utf8"));
+      const t = j?.global?.dshTag;
+      if (typeof t === "string" && t.trim()) return t.trim();
+    }
+  } catch {
+    /* 读配置失败忽略 */
+  }
+  const t = cfg?.dshTag;
+  if (typeof t === "string" && t.trim()) return t.trim();
+  return "latest";
+}
+

@@ -822,7 +822,7 @@ async function doExecute(input, ctx) {
     if (v !== undefined && v !== null && v !== "") cfg[k] = v;
   }
   // 插件数据目录（宿主注入）：DSH_HOME 数据根落在这里（账本随插件生命周期）。
-  // 回退链对齐 dsh-update/dsh-install 的 ctx.dataDir || g.dataDir：宿主只对 onload
+  // 回退链对齐 dsh-install 的 ctx.dataDir || g.dataDir：宿主只对 onload
   // 生命周期 ctx 注入 dataDir，工具调用 ctx 通常没有（缺 g.dataDir 兜底会回退到
   // PLUGIN_ROOT/data 并把错误值写进单例，污染 g.dataDir → 卡片 readOp / dsh_session
   // 全落到不存在的 dsh-home → 404「任务记录不存在」）。
