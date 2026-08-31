@@ -37,6 +37,8 @@
 // 拆分前一致；updateDsh 流程（停 host→装依赖→起 host→读版本）保持完整；collectWebDiagnostics 输出的
 // checks 结构（t1 依赖 / t2 进程）令 routes/webui.js 渲染不变。
 import { spawn } from "node:child_process";
+// dsh profile 名解析（vX：dshana profile 路线，spawn --profile 用配置；config.js 内联进 bundle）
+import { resolveProfileName } from "./tools/lib/config.js";
 import {
   readFileSync,
   existsSync,
@@ -54,10 +56,7 @@ import {
   resolveNodeExec,
   resolveNodeExecEnv,
 } from "./tools/lib/state.js";
-// 统一版本迁移入口（注册表式调度器）：config.json schema 初始化/升级（config-schema）
-// 与 cordis junction 收敛（junction-converge）迁入本模块后由 migrate.js 统一调度——
-// 本文件经 runMigrations 调用（随 dsh-run bundle 内联，见文件头「分发形态」）
-import { runMigrations } from "./migrate.js";
+// vX（migrate 体系退役）：不再有版本迁移入口（junction-converge / config-schema 等全丢）
 import {
   resolveDshPkgDir,
   installDepsFromPlugin,
@@ -435,34 +434,11 @@ export async function ensureWebHost(cfg) {
   // （--port）之前。静态文件缺失（安装不完整）时不挂任何 patch 记 warn（内嵌插件
   // 降级不可用，dsh 启动不受影响），不阻断 dsh 启动。
   // 静态 patch：dsh-plugin/dsh-hanako.patch.yml（v0.22.1+ tpl 整层退役）——
-  // 纯 insert 六个内嵌插件（logger/clipboard/theme/provider/settings/bridge），全部
-  // 零 config：busToken 免鉴权（任务 A）、config 经总线下发（任务 B）、logPath 占位符
-  // 删除（任务 C，日志改总线 log 帧转发）。不再渲染 dsh-hanako.patch.generated.yml、
-  // 不再做任何占位符替换（{{DSH_PKG_DIR}}/{{LOG_PATH}}/{{DATA_DIR}}/{{BUS_TOKEN}}
-  // 全部退役）。--patch 直接指向静态文件；文件缺失（安装不完整）时降级：不挂任何
-  // patch 记 warn（内嵌插件不可用，dsh 启动不受影响）。
-  const patchFiles = [];
-  const patchStatic = join(PLUGIN_ROOT, "dsh-plugin", "dsh-hanako.patch.yml");
-  if (existsSync(patchStatic)) {
-    patchFiles.push(patchStatic);
-  } else {
-    console.warn(
-      "[dsh-run] dsh-plugin/dsh-hanako.patch.yml 缺失：不挂任何 patch（DSH 启动不受影响，内嵌插件降级不可用）",
-    );
-  }
-  const patchArgs = patchFiles.flatMap((p) => ["--patch", p]);
-  // 六段 cordis 插件均以包名注册，spawn 前确保 junction 就绪（幂等，无条件收敛）——
-  // 经统一迁移入口调度 junction-converge 步骤（旧名清理 + @dsh-hanako scope 重建）。
-  // 非链接碰撞（确定性冲突）由迁移步骤抛出 → runMigrations 记录 error → 此处拒绝
-  // 启动（带病启动会导致插件模块解析失败）；symlink 环境性失败仍为 warn 降级不阻断。
-  const mig = runMigrations(cfg, { steps: ["junction-converge"] });
-  const jm = mig.find((m) => m.id === "junction-converge");
-  if (jm && !jm.ok && /不是符号链接/.test(jm.error || "")) {
-    throw new Error("junction 收敛失败：" + (jm.error || "非链接碰撞"));
-  }
-  // launcher flag（--profile/--patch）必须位于应用参数（--port）之前；且 --patch 是
-  // 顶层 dsh 选项，必须位于 --profile 之前（dsh 0.1.x：--profile 之后的参数视为
-  // web app 参数，--patch 会被 web app 拒为 unknown option）
+  // vX（dshana profile 路线）：不再对官方 web profile 做 --patch 注入——子插件与服务层
+  // 全部收敛进 dshana profile（cordis.patch.yml + node_modules 自包含），spawn 只带
+  // --profile（resolveProfileName，默认 dshana）。旧 junction farm / 静态 patch 退役。
+  // launcher flag（--profile）必须位于应用参数（--port）之前（dsh 0.1.x：--profile 之后
+  // 的参数视为 web app 参数）。
   // --expose-internals 是 node 运行时 flag，必须置于 cliBin 之前（node --expose-internals <cliBin> …）。
   // HMR 服务需要 Node 内部 ESM loader：上游 drop 该 flag 后改走原生 addon 兜底
   // （require('node-addon-require-builtin')），但该 addon 在 macOS arm64 上加载失败
@@ -478,9 +454,8 @@ export async function ensureWebHost(cfg) {
     [
       "--expose-internals",
       cliBin,
-      ...patchArgs,
       "--profile",
-      "web",
+      resolveProfileName(cfg),
       "--port",
       String(port),
       // 不自动打开默认浏览器（dsh web app 默认会 open；插件以 iframe 内嵌，
@@ -558,6 +533,61 @@ export async function ensureWebHost(cfg) {
     if (g.web === web) g.web = null;
   });
 
+  // ---- 总线免鉴权握手探测（vX：适配 dsh 0.1.2+ token 鉴权）----
+  // dsh 0.1.2-alpha.2 起对 HTTP API（/api/host.describe 等）加 token 鉴权，无 token
+  // 请求返回 401/403；但 /api/dshana.bus 总线 hello 仍免鉴权（本机信任通道，patch
+  // bridge 注册）——HTTP 探测收到 401/403 时用 WS 握手（hello → hello-ok）判定就绪。
+  // 临时连接用完即关（与 connectBus 常驻连接互不影响；bridge 支持多 WS 连接）。
+  // hello 携带 launch token（bridge 校验时用；旧 bridge 免鉴权忽略 payload）。
+  // 失败 resolve(false)（不抛），由调用方按容错纪律继续等待/超时。
+  function probeBusReady(port, timeoutMs = 3000) {
+    return new Promise((resolve) => {
+      let sock;
+      let done = false;
+      let timer = null;
+      const finish = (ok) => {
+        if (done) return;
+        done = true;
+        if (timer) clearTimeout(timer);
+        try {
+          sock?.close();
+        } catch {
+          /* 已关闭 */
+        }
+        resolve(ok);
+      };
+      try {
+        sock = new WebSocket("ws://127.0.0.1:" + port + "/api/dshana.bus");
+      } catch {
+        finish(false);
+        return;
+      }
+      timer = setTimeout(() => finish(false), timeoutMs);
+      sock.addEventListener("open", () => {
+        try {
+          const g = getSingleton();
+          const tok = g?.web?.token || "";
+          sock.send(
+            JSON.stringify({ channel: "hello", payload: tok ? { token: tok } : {} }),
+          );
+        } catch {
+          /* send 失败由 close/error 兜底 */
+        }
+      });
+      sock.addEventListener("message", (ev) => {
+        if (typeof ev.data !== "string") return;
+        try {
+          const f = JSON.parse(ev.data);
+          if (f && f.channel === "hello-ok") finish(true);
+        } catch {
+          /* 非 JSON 帧忽略 */
+        }
+      });
+      sock.addEventListener("close", () => finish(false));
+      sock.addEventListener("error", () => finish(false));
+    });
+  }
+
   // 等端口就绪（stdout 出现 "dsh web: http://" 或端口可连）
   const readyPromise = (async () => {
     const deadline = Date.now() + PORT_READY_TIMEOUT_MS;
@@ -588,11 +618,13 @@ export async function ensureWebHost(cfg) {
           }),
           signal: AbortSignal.timeout(2000),
         });
-        if (r.ok) {
+        // 就绪标记（HTTP 直连或总线握手任一通过即调用）：connectBus / config 下发 /
+        // provider push 收敛在同一就绪点（connectBus 幂等 + 内部退避重连，失败不阻断）。
+        const markReady = () => {
           web.ready = true;
           // 新进程就绪：清掉上次退出记录（持久字段只反映最近一次退出）
           g.webLastExit = null;
-          // dshana.bus 消息总线：同一就绪点连接（bridge 段随静态 patch 挂载，子插件注册了
+          // dshana.bus 消息总线：同一就绪点连接（bridge 段随 patch 挂载，子插件注册了
           // /api/dshana.bus upgrade 路由）。connectBus 幂等 + 内部退避重连（连接失败不阻断
           // dsh 启动——更新请求信道降级：settings 报「消息总线未连接」，check-version 走 dsh 侧
           // 直查不受影响）。不 await，页面/任务不阻塞。
@@ -613,6 +645,13 @@ export async function ensureWebHost(cfg) {
           // bus 未连接（hello-ok 未到）时记待补推，bus.ready 后自动补推——覆盖连接窗口期。
           pushProviderRoutes();
           return web;
+        };
+        if (r.ok) return markReady();
+        // 端口已有响应（401/403/404/500 等）= web 进程已活：0.1.2+ HTTP API 加
+        // token 鉴权（无 cookie 401）且端点路径有变（host.describe 404），无 token
+        // 探测无法再靠 HTTP 判定就绪；总线 hello 免鉴权（本机信任通道），握手判定。
+        if (await probeBusReady(port)) {
+          return markReady();
         }
       } catch {
         /* 未就绪，继续等 */
@@ -947,13 +986,8 @@ getSingleton().startWebHost = async function startWebHostFromPlugin(
     if (v !== undefined && v !== null && v !== "") cfg[k] = v;
   }
   cfg.dataDir = ctxDataDir || join(PLUGIN_ROOT, "data");
-  // 插件初始化（拉起 web host）即自动生成 config.json（不存在时按 manifest 默认值；
-  // 幂等不覆盖已有配置）+ 清理退役的 update-result.json 遗留文件 + 超时配置毫秒→秒
-  // 迁移——经统一迁移入口调度 config-schema / cleanup-update-result / timeout-sec 步骤
-  // （src/migrate.js；不得跑全量——archive-old-logs 须在建会话文件前单独调度，见 index.js onload）
-  runMigrations(cfg, {
-    steps: ["config-schema", "cleanup-update-result", "timeout-sec"],
-  });
+  // vX（migrate 体系退役）：不再自动生成 config.json / 清理 update-result / 超时键迁移——
+  // 配置读取侧（resolve*）缺省回退兜底，旧配置照常读取；新装无 config.json 时用默认值。
   // 单例记数据目录（dsh_session 经 g.dataDir 定位 dsh 会话缓存等数据文件）
   getSingleton().dataDir = cfg.dataDir;
   if (!cfg.dshPkgDir) cfg.dshPkgDir = resolveDshPkgDir(cfg);

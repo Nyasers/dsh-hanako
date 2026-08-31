@@ -159,6 +159,25 @@ export function resolveDefaultCwd(cfg) {
 // dshTag 解析（DSH 更新基线 dist-tag，vX 起）：优先直读 dataDir/config.json 的
 // global.dshTag（设置界面改动即时生效；Agent 直改文件同样生效），缺失/非字符串回退
 // 配置快照 cfg.dshTag（manifest 默认 "latest"），再缺失回退 "latest"。返回恒为 tag
+// 返回 dsh profile 名（spawn --profile 用）。vX：dshana profile 路线——插件以自己的
+// profile（dsh-home/profiles/dshana，无官方 web-app）启动 dsh；web profile 保留作回退。
+// 优先读 config.json global.profileName，缺省 "dshana"。
+export function resolveProfileName(cfg) {
+  try {
+    const cf = join(cfg.dataDir, "config.json");
+    if (existsSync(cf)) {
+      const j = JSON.parse(readFileSync(cf, "utf8"));
+      const p = j?.global?.profileName;
+      if (typeof p === "string" && p.trim()) return p.trim();
+    }
+  } catch {
+    /* 读配置失败忽略 */
+  }
+  const p = cfg?.profileName;
+  if (typeof p === "string" && p.trim()) return p.trim();
+  return "dshana";
+}
+
 // 字符串（npm dist-tag，如 latest/next/alpha；version 参数优先于 tag，见 dsh-install 工具）。
 export function resolveDshTag(cfg) {
   try {

@@ -59,7 +59,11 @@ import { EventEmitter } from 'node:events'
 import { handleUpgrade } from './ws-lib.js'
 
 export const name = '@dsh-hanako/bridge'
-export const inject = ['webServer']
+// connection（dsh-client-connection 注册的 HostConnectionService 服务名，见其
+// super(ctx, "connection")）：读 BrowserAuth.launchToken（dsh 0.1.2+ 浏览器鉴权
+// 进程令牌）——自环 RPC 换发 cookie（vX；旧版 dsh 无此服务时保持免鉴权兼容）。
+// 注意：插件名是 client-connection，服务名是 connection，inject 用服务名。
+export const inject = ['webServer', 'connection']
 
 // ---- 常量 ----
 const BUS_PATH = '/api/dshana.bus' // upgrade 路由路径（宿主连 ws://127.0.0.1:<port> 该路径）
@@ -79,6 +83,46 @@ const REPLACED_CLOSE_CODE = 1001 // 旧连接被新连接顶掉
 // req：{ reqId, method, payload }；port：dsh web 端口（取不到由调用方回退 3080）；
 // reply(frame)：回投一帧 rpc.result 载荷（{ reqId, ok, value? } 或 { reqId, ok:false, error }），
 // 不应抛出（插件侧接线已包 try/catch 隔离）。
+// ---- 模块级鉴权状态（apply 经 connection 服务初始化；translateRpcRequest 消费）----
+// launchToken：dsh 进程浏览器鉴权令牌（BrowserAuth.launchToken，dsh web 打印 URL 的
+// token）。自环 RPC 用它换 cookie（0.1.2+ /api/* 需浏览器 cookie）。
+// 旧版 dsh（无 connection 服务）为空 → 自环免鉴权（改造前行为）。
+let launchToken = ''
+// 自环换发的 cookie（launchToken → GET /?token= → dsh-auth-* signed cookie，30 天）。
+// 缓存避免每次 RPC 都换发；web 重启后 launchToken 变化，旧 cookie 失效自动重换。
+let authCookie = ''
+let authCookieAt = 0
+
+/** 自环 RPC 鉴权 cookie（dsh 0.1.2+ /api/* 需浏览器 cookie，无则 401）。
+ * launchToken 经 GET /?token= 换发 signed cookie（authorizeIndex 流程，本机回环）；
+ * 缓存复用（6h 内不重换）。launchToken 为空（旧版）返回空串（不加 Cookie 头）。 */
+async function ensureAuthCookie(port) {
+  const base = 'http://127.0.0.1:' + (Number(port) || 3080)
+  if (authCookie && Date.now() - authCookieAt < 6 * 3600 * 1000) return authCookie
+  if (!launchToken) return ''
+  try {
+    const res = await fetch(base + '/?token=' + encodeURIComponent(launchToken), {
+      redirect: 'manual',
+    })
+    const setCookies =
+      typeof res.headers.getSetCookie === 'function'
+        ? res.headers.getSetCookie()
+        : res.headers.get('set-cookie')
+          ? [res.headers.get('set-cookie')]
+          : []
+    const cookie = setCookies
+      .map((s) => String(s).split(';')[0])
+      .filter(Boolean)
+      .join('; ')
+    authCookie = cookie
+    authCookieAt = Date.now()
+    return cookie
+  } catch {
+    // 换发失败：回退旧 cookie（可能仍有效）或空
+    return authCookie || ''
+  }
+}
+
 export async function translateRpcRequest(req, port, reply) {
   const reqId = req && typeof req === 'object' ? req.reqId : undefined
   const method = req && typeof req === 'object' ? req.method : undefined
@@ -87,6 +131,13 @@ export async function translateRpcRequest(req, port, reply) {
     return
   }
   const base = 'http://127.0.0.1:' + (Number(port) || 3080)
+  // vX（dsh 0.1.2+ 鉴权）：/api/* 需要浏览器 cookie（launchToken 换发）；
+  // 无鉴权旧版 launchToken 为空 → ensureAuthCookie 返回空串，行为不变。
+  const cookie = await ensureAuthCookie(port)
+  const headers = {
+    'content-type': 'application/json',
+    ...(cookie ? { cookie } : {}),
+  }
   try {
     if (method === 'respond') {
       // 审批应答：/api/respond 要 client-response 信封（rpcId 路由 web host pending 表），
@@ -96,7 +147,7 @@ export async function translateRpcRequest(req, port, reply) {
       const envelope = { type: 'client-response', ...(req.payload || {}) }
       const res = await fetch(base + '/api/respond', {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers,
         body: JSON.stringify(envelope),
       })
       if (!res.ok) throw new Error('/api/respond HTTP ' + res.status)
@@ -105,15 +156,26 @@ export async function translateRpcRequest(req, port, reply) {
       return
     }
     // Unary：client-request 信封，响应 ServerResponse（rpcId 回显 + result.ok/value
-    // 或 result.ok=false+error）
-    const res = await fetch(base + '/api/' + method, {
+    // 或 result.ok=false+error）。vX（dsh 0.1.2）：RPC 路径与信封 method 均为
+    // <namespace>/<method> 斜杠格式（/api/session/create + method "session/create"），
+    // 宿主侧传 "session.create" 点号格式——翻译时转换（0.1.1 无斜杠拆分，同路径兼容）。
+    const endpoint = method.includes('.') ? method.replace(/\./g, '/') : method
+    // vX（dsh 0.1.2）：Remote payload 要求 { args: <参数名>: <参数> }（typert
+    // Remote descriptor 的参数名；session/* 均声明为 request）。rpcId 注入
+    // request.requestId（0.1.2 create 用它写 jsonl data.source.rpcId，与宿主
+    // 定位键对齐）。非 session/* 的 method 暂以裸 args 透传（respond 走特殊分支）。
+    const isSession = method.startsWith('session.') || method.startsWith('session/')
+    const args = isSession
+      ? { request: { ...(req.payload || {}), requestId: reqId } }
+      : req.payload
+    const res = await fetch(base + '/api/' + endpoint, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers,
       body: JSON.stringify({
         type: 'client-request',
         rpcId: reqId,
-        method,
-        payload: req.payload,
+        method: endpoint,
+        payload: { args },
       }),
     })
     if (!res.ok) throw new Error('dsh /api/' + method + ' HTTP ' + res.status)
@@ -144,6 +206,16 @@ export async function translateRpcRequest(req, port, reply) {
 // ---- 插件 apply：注册 upgrade 路由 + 提供 dshanaBus 服务（全程容错，降级不阻断）----
 export function apply(ctx, config) {
   try {
+    // launchToken：从 connection 服务（HostConnectionService）的 BrowserAuth 读
+    // （dsh 0.1.2+ 浏览器鉴权进程令牌），自环 RPC 用它换 cookie。旧版 dsh 无此
+    // 服务 → 保持空，自环免鉴权兼容（改造前行为）。
+    ctx.inject(['connection'], (connCtx) => {
+      try {
+        launchToken = connCtx.get?.('connection')?.browserAuth?.launchToken || ''
+      } catch {
+        launchToken = ''
+      }
+    })
     ctx.inject(['webServer'], (httpCtx) => {
       httpCtx.effect(() => {
         let bridgeLog = (msg) => {

@@ -44,10 +44,9 @@ import {
 // 生命周期能力（web host 拉起）——本模块只做任务提交，对单例/web host 的依赖经
 // app/lifecycle.js 转发（lifecycle.js 顶层 mountLifecycle 已把 closeProcess / collectDiagnostics /
 // updateDsh / startWebHost / installDeps / verifyDeps / checkDshUpdate 挂到 globalThis 单例）。
-// config.json 引导（config-schema 迁移）经 src/migrate.js 统一入口调度（本模块与 lifecycle.js
-// 同属 index.js 单 bundle 收敛入口的静态 import 链，runMigrations 随 bundle 内联）。
+// config.json 引导已退役（vX，migrate 体系删除）：配置读取侧 resolve* 缺省回退兜底。
+// 与 lifecycle.js 同属 index.js 单 bundle 收敛入口的静态 import 链。
 import { ensureWebHost } from "../lifecycle.js";
-import { runMigrations } from "../migrate.js";
 
 // ---- 本地审批应答（自动放行/超时拒绝共用；信封构造同 tools/dsh-approve.js，不 import 避免模块耦合）----
 // 经总线 rpc.request method="respond" 发送（bridge 翻译器自环调 /api/respond，client-response
@@ -165,6 +164,9 @@ function submitTask(
     const dp = readDshDefaultPreset(join(cfg.dataDir, "dsh-home"));
     preset = dp || null;
   }
+  // vX（dsh 0.1.2）：preset "code" 已并入 "standard"（0.1.2 可用 standard/ptc/minimal/cordis），
+  // 旧配置/settings.yaml 遗留 code 时映射，避免 agent-preset/not-found。
+  if (preset === "code") preset = "standard";
   // reasoningEffort 解析：只取工具显式参数（全局配置已移除），不传为 null（由 dsh 默认处理）。
   const effort = resolveReasoningEffort(reasoningEffort);
   // resume 会话解析：值为 null 或 sessionId
@@ -829,9 +831,7 @@ async function doExecute(input, ctx) {
   const g = getSingleton();
   const dataDir = ctx.dataDir || g.dataDir || join(PLUGIN_ROOT, "data");
   cfg.dataDir = dataDir;
-  // 首次工具调用即自动生成 config.json（不存在时按 manifest 默认值；幂等，失败静默）+
-  // 超时配置毫秒→秒迁移（旧键换算，幂等）——经统一迁移入口调度 config-schema / timeout-sec
-  runMigrations(cfg, { steps: ["config-schema", "timeout-sec"] });
+  // vX（migrate 体系退役）：不再自动生成 config.json / 超时键迁移——配置读取侧兜底。
   // 单例记数据目录（dsh_session 经 g.dataDir 定位 dsh 会话缓存等数据文件）——
   // 只在显式注入（ctx.dataDir 非空）或单例为空（冷启动兜底）时写入；ctx.dataDir
   // 为空且单例已有值时保留单例原值，绝不把 PLUGIN_ROOT/data 回退值覆盖进去。

@@ -1,0 +1,12 @@
+{
+  "name": "@dsh-hanako/dshana-bundle",
+  "private": true,
+  "version": "1.0.0",
+  "description": "dshana profile bundle：官方服务层（无 UI）+ @dsh-hanako/* 子插件，替代官方 web-app 的 UI 入口",
+  "dependencies": {},
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

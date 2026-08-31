@@ -1,0 +1,129 @@
+# The @dsh-hanako/dshana-bundle patch: official service layer (no browser UI),\n# replacing the dsh-web-app UI entry. @dsh-hanako/* sub-plugins are loaded by the\n# dsh-hanako.patch.yml static overlay (--patch), not here (avoids duplicate ids).
+# Applied after dsh-base's insert; the profile's cordis.patch.yml and any
+# --patch overlays still come after. Rows restate every key they own.
+#
+# Kept from dsh-web-app's bundle patch: web-startup / webserver / web-runtime
+# (URL+token print) / connection (Typert API + BrowserAuth) / api-* controllers
+# / cordis runners / workspace & session services / theme service.
+# Dropped: all dsh-client-ui-* browser rows (no official UI — presentation is
+# served by the host plugin page).
+
+# ── surface-specific values the base deliberately omits ─────────────────────
+
+- id: system-prompt
+  config:
+    persona: >-
+      You are a coding agent powered by the {{model}} model. Your working directory is {{cwd}}.
+
+- id: session-query-sqlite
+  config:
+    path: ':memory:'
+    openAt: never
+
+- id: tools
+  config:
+    mode: !!js process.env.DSH_TOOLS_MODE
+
+- insert:
+    # Host-owned opt-in sampled when a new Web session receives its preset
+    # delegation tools.
+    - id: subagent-model-selection-settings
+      name: '@deepseek-ai/dsh-tool-subagent/model-selection-settings'
+
+    - id: code-runtime
+      name: '@deepseek-ai/dsh-code-runtime-worker-thread'
+
+    - id: message-feedback
+      name: '@deepseek-ai/dsh-message-feedback'
+      config:
+        maxNoteBytes: 8192
+
+    - id: session-log-download
+      name: '@deepseek-ai/dsh-session-log-export'
+
+    - id: workspace
+      name: '@deepseek-ai/dsh-workspace'
+
+    - id: session-reference
+      name: '@deepseek-ai/dsh-session-reference'
+
+    - id: file-reference-local
+      name: '@deepseek-ai/dsh-file-reference-local'
+
+    - id: session-stats
+      name: '@deepseek-ai/dsh-session-stats'
+
+    - id: directory-picker
+      name: '@deepseek-ai/dsh-host-directory-picker-auto'
+
+    - id: plugin-inventory
+      name: '@deepseek-ai/dsh-host-plugin-inventory'
+
+    # ── Typert API controllers (session/settings/workspace) ──────────────────
+    - id: session-controller
+      name: '@deepseek-ai/dsh-api-session-controller'
+
+    - id: settings-controller
+      name: '@deepseek-ai/dsh-api-settings-controller'
+
+    - id: workspace-controller
+      name: '@deepseek-ai/dsh-api-workspace-controller'
+
+    - id: cordis-host-runner
+      name: '@deepseek-ai/dsh-cordis-host-runner'
+
+    # Ordinary provider for the parsed launcher flags (host/port/trustedHosts).
+    - id: web-startup
+      name: '@deepseek-ai/dsh-web-app/startup'
+
+    # ── transport/service ────────────────────────────────────────────────────
+    - id: webserver
+      name: '@deepseek-ai/dsh-host-webserver'
+      inject: [webStartup]
+      config:
+        host: !!js ctx.webStartup.host ?? '127.0.0.1'
+        port: !!js ctx.webStartup.port ?? 3080
+        compression: gzip
+        compressionLevel: 1
+        compressionThresholdBytes: 1024
+
+    # Host-side web runtime: prints the URL line (with launch token), mounts the
+    # frontend-static fallback owner, provides webRuntime to the trust fence.
+    - id: web-runtime
+      name: '@deepseek-ai/dsh-web-app'
+      inject: [webStartup]
+      config:
+        openBrowser: !!js ctx.webStartup.openBrowser
+        printUrl: true
+        surfaceContext: true
+        trustedHosts: !!js ctx.webStartup.trustedHosts
+
+    - id: client-hmr
+      name: '@deepseek-ai/dsh-client-hmr'
+
+    - id: modules
+      name: '@deepseek-ai/dsh-client-modules'
+
+    - id: connection
+      name: '@deepseek-ai/dsh-client-connection'
+      inject: [webRuntime]
+      config:
+        trustedHosts: !!js ctx.webRuntime.trustedHosts
+
+    - id: api-remotes
+      name: '@deepseek-ai/dsh-api-remotes'
+
+    - id: cordis-client-runner
+      name: '@deepseek-ai/dsh-cordis-client-runner'
+
+    - id: client-locale
+      name: '@deepseek-ai/dsh-client-locale'
+
+    # Theme service (ctx.theme) — consumed by @dsh-hanako/theme bridge.
+    - id: client-ui-theme
+      name: '@deepseek-ai/dsh-client-ui-theme'
+
+    - id: agent-presets
+      name: '@deepseek-ai/dsh-agent-presets'
+
+
