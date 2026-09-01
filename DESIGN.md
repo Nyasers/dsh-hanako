@@ -2,7 +2,7 @@
 
 插件 id：`dsh-hanako`。把 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（dsh）接进 Hana。
 
-## 架构总览（T7b 进程内 boot）
+## 架构总览（进程内 boot）
 
 ```
 Hana 宿主进程
@@ -17,7 +17,7 @@ Hana 宿主进程
 ```
 
 - **进程内 boot**：`ensureWebHost` → `bootInproc`（动态 import profile-boot → `runProfile`），webserver 保留在宿主进程内 bind；`closeProcess` → `ctx.fiber.dispose()`（不用 runProfile 返回的 shutdown 控制器——其 `shutdown()` 写 process.exitCode、`interrupt()` 会 process.exit 杀宿主进程）
-- **依赖形态（T7d）**：dsh 是插件根 `package.json` 的 dependencies（`@deepseek-ai/dsh` + `@deepseek-ai/cordis` 固定版本随插件发版）；运行时 `pnpm install --prod` 装进**插件根 node_modules**（dsh-pkg 独立安装区已退役——无部署声明副本，版本单一事实源 = 插件声明本身，无 version/tag 逃生门）；`resolveDshPkgDir` 恒插件根
+- **依赖形态**：dsh 是插件根 `package.json` 的 dependencies（`@deepseek-ai/dsh` + `@deepseek-ai/cordis` 固定版本随插件发版）；运行时 `pnpm install --prod` 装进**插件根 node_modules**（dsh-pkg 独立安装区已退役——无部署声明副本，版本单一事实源 = 插件声明本身，无 version/tag 逃生门）；`resolveDshPkgDir` 恒插件根
 - **更新 = 插件发版**：dsh 版本检查/更新整链移除（`updateDsh` / `checkDshUpdate` / `/webui/check-update` / `/webui/update-dsh` / `dsh_install` 的 check/update 全删）；settings 版本卡只显示本地版本
 - **免鉴权数据面**：`@dsh-hanako/bridge` 提供 connection 等价服务（`requestRejection` 恒 undefined = 免 401/403）+ `/api` HTTP 载体（信封解析 → interceptor 分发，协议与官方 rpcFetchHandler 一致）——替代官方 dsh-client-connection 的 BrowserAuth token/cookie 鉴权面；官方 gateway / api-* 插件零改动激活；remote.mux 事件流由 gateway 自带自动放行
 - **WebUI**：`@dsh-hanako/app` 经 webserver `registerFallback` serve 官方 dist 到**根路径**（无 /webui/ 前缀、无 URL 改写），iframe 直嵌 `http://127.0.0.1:<webPort>/`

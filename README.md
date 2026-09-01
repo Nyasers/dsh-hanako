@@ -1,6 +1,6 @@
 # DSHana
 
-插件 id：`dsh-hanako`。把 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（dsh）接进 Hana，作为**进程内内嵌 agent**（T7b：runProfile 在宿主进程内 boot，无独立 dsh 子进程）。任务执行走 **dshana profile**（进程内 boot），dsh 官方 Web UI 以 **DSHana 标签页**内嵌在 Hana 顶部，可见全部任务会话；账本与 dsh-home 锁进插件数据目录，dsh 依赖装进插件 node_modules（版本随插件声明）。
+插件 id：`dsh-hanako`。把 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（dsh）接进 Hana，作为**进程内内嵌 agent**（runProfile 在宿主进程内 boot，无独立 dsh 子进程）。任务执行走 **dshana profile**（进程内 boot），dsh 官方 Web UI 以 **DSHana 标签页**内嵌在 Hana 顶部，可见全部任务会话；账本与 dsh-home 锁进插件数据目录，dsh 依赖装进插件 node_modules（版本随插件声明）。
 
 ## 安装
 
@@ -18,9 +18,9 @@
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
-| `approvalTimeoutSec` | `30` | 审批挂起超过该时长（秒）无人应答自动 rejected（应答方失联检测）；0=禁用；改后对新审批立即生效（v0.25 起单位由毫秒改为秒，旧键 `approvalTimeoutMs` 由迁移自动换算删除） |
+| `approvalTimeoutSec` | `30` | 审批挂起超过该时长（秒）无人应答自动 rejected（应答方失联检测）；0=禁用；改后对新审批立即生效 |
 | `defaultCwd` | 空 | 默认沙箱工作目录。**安装后建议设为实际项目目录**（为空且未传 cwd 时报 `cwd 不能为空`） |
-| `defaultTimeoutSec` | 1800 | 默认超时（秒，30 分钟）。v0.25 起单位由毫秒改为秒，旧键 `defaultTimeoutMs` 由迁移自动换算删除 |
+| `defaultTimeoutSec` | 1800 | 默认超时（秒，30 分钟） |
 | `nodejsPath` | 空 | 自定义 Node.js 路径（可选）：指定系统 node 可执行文件绝对路径（如 /opt/homebrew/bin/node）。留空用 Electron 自带 node；macOS 上 Electron 内嵌 node 跑 pnpm 签名校验失败时填此项解决。路径不存在时警告并降级回退 |
 | `webPort` | 3080 | dsh Web UI 端口：>0 插件加载即拉起 web host（卸载一并回收），0 关闭 |
 
