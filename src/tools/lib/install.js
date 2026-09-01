@@ -41,7 +41,6 @@ import {
   buildPnpmInstallArgs,
   isValidPkgSpec,
 } from "./pnpm.js";
-import { resolveDshTag } from "./config.js";
 
 // ---- 依赖安装日志通道（统一）----
 // installDepsFromPlugin 内部 emitLog(s, src)：同一份文本同时进
@@ -248,19 +247,10 @@ function pnpmErrorTail(stdoutTail, stderrTail) {
   return parts.join("\n").slice(-300) || "无输出";
 }
 
-// dsh 依赖位置两形态——① 数据目录 dsh-pkg/（Agent pnpm install 按声明部署的轻量分发形态，
-// 优先）；② 插件安装目录 node_modules（现役 zip 自带形态，兑底）。DSH_HOME 恒在数据目录。
-export function resolveDshPkgDir(cfg) {
-  if (cfg?.dataDir) {
-    const candidate = join(cfg.dataDir, "dsh-pkg");
-    if (
-      existsSync(
-        join(candidate, "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js"),
-      )
-    ) {
-      return candidate;
-    }
-  }
+// dsh 依赖位置（vY T7d）：唯一形态 = 插件安装目录 node_modules（pnpm install --prod 按
+// 插件根 package.json 声明部署，dsh 作为插件依赖树的一部分）。dsh-pkg 独立安装区已退役
+// （版本单一事实源 = 插件根声明本身，无部署副本/无独立升级通道）。DSH_HOME 恒在数据目录。
+export function resolveDshPkgDir() {
   return PLUGIN_ROOT;
 }
 
@@ -412,30 +402,21 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir, opts = {}) {
   }
   const dataDir = ctxDataDir || g.dataDir || join(PLUGIN_ROOT, "data");
   cfg.dataDir = dataDir;
-  // 安装目标解析（T7a 起）：版本单一事实源 = 插件根 package.json 的 dependencies 声明
-  // （@deepseek-ai/dsh 固定版本随插件发版；opts.spec 显式覆盖——工具层 version/tag
-  // 参数仍是逃生门；声明缺失时回退配置基线 resolveDshTag 兼容旧版）。
-  // 声明版本在读下方部署 package.json 时同步写入（pnpm install 按声明拉取），
-  // 不再走 pnpm add @spec 动态安装。
+  // 安装目标（T7a 起）：版本单一事实源 = 插件根 package.json 的 dependencies 声明
+  // （@deepseek-ai/dsh 固定版本随插件发版）。vY（T7d）：dsh-pkg 退役——pnpm install
+  // 直接装进插件根 node_modules（--prod 只装运行时 dependencies），无部署声明副本；
+  // version/tag 逃生门移除（更新 dsh = 更新插件发版）。
   const declaredDeps = readDeclaredDeps();
   const declaredVersion = readDeclaredDshVersion();
-  const effectiveSpec =
-    (typeof opts?.spec === "string" && opts.spec.trim() ? opts.spec.trim() : null) ||
-    declaredVersion ||
-    resolveDshTag(cfg);
-  // 注入面校验（vX）：effectiveSpec 会拼成 DSH_PACKAGE + "@" + spec（旧 pnpm add
-  // 路径；T7a 后主路径为 pnpm install 按声明拉取，仅 opts.spec 覆盖时才拼 add spec）
-  // spec 可能来自工具参数（version/tag）、声明或配置基线 dshTag；未校验时
-  // "npm:evil@1.0.0"（npm alias）、“github:user/repo”、“file:../x”、“/abs/path” 等会
-  // 让 pnpm add 安装非预期包。校验失败按容错纪律提前返回（不 throw）。
-  if (!isValidPkgSpec(effectiveSpec)) {
+  // 声明注入面校验（保留）：声明来自插件根 package.json（单一事实源），仅允许严格
+  // SemVer 或合法 dist-tag——"npm:evil@1.0.0" / "github:user/repo" 等非法声明直接拒绝。
+  if (declaredVersion === null) {
     return {
       ok: false,
       state: "error",
-      error: "非法安装目标: " + effectiveSpec + "（仅允许 SemVer 版本号或 dist-tag）",
+      error: "插件声明缺少合法 @deepseek-ai/dsh 版本（dependencies 未声明或非法）",
     };
   }
-  const pkgTarget = DSH_PACKAGE + "@" + effectiveSpec;
   // 子进程 node 解析（每次部署解析一次；wrapper 与 pnpm add 用同一解析结果——自定义
   // nodejsPath 时 wrapper 也指向系统 node，macOS 签名校验问题一并解决）。同时传
   // dataDir（直读 config.json 的 global.nodejsPath，单一事实源）与 cfg.nodejsPath
@@ -463,10 +444,10 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir, opts = {}) {
   };
   const milestone = (s) => emitLog("[依赖安装] " + s, "hana");
   try {
-    // 1. 部署目录 = 数据目录 dsh-pkg（mkdir recursive，不存在则建）
-    const pkgDir = join(dataDir, "dsh-pkg");
-    mkdirSync(pkgDir, { recursive: true });
-    milestone("部署目录就绪：" + pkgDir);
+    // 1. 部署目标 = 插件根（vY T7d：dsh-pkg 退役——依赖作为插件 node_modules 的一部分，
+    //    直接 pnpm install --prod 按插件根 package.json 声明拉取；无部署声明副本）。
+    const pkgDir = PLUGIN_ROOT;
+    milestone("部署目标：插件根 " + pkgDir);
     // 1.5 幂等检查：cliBin 存在且已装版本 === 声明版本（精确匹配固定版本）→ 跳过安装
     //    放在停 host 之前，避免版本一致时白停一次 web host。
     const cliBin = join(
@@ -513,35 +494,27 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir, opts = {}) {
       /* 停 host 失败不阻断（后续清理若撞锁会以 error 返回） */
     }
     milestone("[兼容] web host 已停止（部署前）");
-    // 2. 部署清单：package.json（dependencies 来自插件根声明，T7a 固定版本随插件
-    //    发版，单一事实源）+ 插件根 pnpm-workspace.yaml（allowBuilds 白名单放行
-    //    build scripts）。不再写最小空 package.json 以 pnpm add 动态加版本。
+    // 2. 部署清单 = 插件根 package.json（dependencies 单一事实源）+ pnpm-workspace.yaml
+    //    （allowBuilds 白名单放行 build scripts）——不再写部署副本（T7d：dsh-pkg 退役）。
     const srcWs = join(PLUGIN_ROOT, "pnpm-workspace.yaml");
     if (!existsSync(srcWs))
       throw new Error("插件根缺少 pnpm-workspace.yaml：" + srcWs);
-    // 写 package.json（dependencies 来自声明；opts.spec 覆盖时以 spec 改写 dsh 版本）
-    const depPkg = {
-      name: "dsh-pkg",
-      private: true,
-      dependencies: { ...declaredDeps },
-    };
-    if (effectiveSpec && effectiveSpec !== declaredVersion) {
-      depPkg.dependencies["@deepseek-ai/dsh"] = effectiveSpec;
-    }
-    writeFileSync(join(pkgDir, "package.json"), JSON.stringify(depPkg, null, 2) + "\n");
-    copyFileSync(srcWs, join(pkgDir, "pnpm-workspace.yaml"));
-    milestone("写 package.json（dependencies 声明）+ pnpm-workspace.yaml 到 " + pkgDir);
-    // 3. 创建 node 代理；pnpm 入口 = 运行时引导（lib/pnpm.js ensurePnpm）
+    milestone("部署清单：插件根 package.json（声明）+" + srcWs);
+    // 3. 创建 node 代理（数据目录，不污染插件根）；pnpm 入口 = 运行时引导
+    //    （lib/pnpm.js ensurePnpm 下载单文件 pnpm.mjs 到数据目录 pnpm-dist/）。
+    //    PATH 首部指向代理目录——install script（koffi/node-pty 等 build）能找到宿主 node。
+    const proxyDir = join(dataDir, "pnpm-proxy");
+    mkdirSync(proxyDir, { recursive: true });
     if (IS_WIN) {
-      const script = join(pkgDir, "node.cmd");
+      const script = join(proxyDir, "node.cmd");
       const content = `@"${nodeExec}" %*\n`;
       writeFileSync(script, content);
     } else {
-      const script = join(pkgDir, "node");
+      const script = join(proxyDir, "node");
       const content = `#!/bin/sh\nexec "${nodeExec}" "$@"\n`;
       writeFileSync(script, content, { mode: 0o755 });
     }
-    milestone("Created proxy node at " + pkgDir);
+    milestone("node 代理就绪：" + proxyDir);
     // pnpm 不再内置（zip 摘除 node_modules/pnpm）：运行时下载 pnpm-{version} 单文件
     // pnpm.mjs 到数据目录 pnpm-dist/（缓存独立于 dsh-pkg）。引导失败（网络/校验）与
     // 旧「pnpm.cjs 不存在」语义区分：抛可读错误（含两个 CDN 提示），由外层 catch 记入
@@ -553,12 +526,11 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir, opts = {}) {
       throw new Error("pnpm 引导失败：" + (e?.message || e));
     }
     milestone("pnpm 引导就绪：" + pnpmCli);
-    // ---- npm → pnpm 升级兼容清理 ----
-    // 旧版本 dsh-install 用 npm i 部署 dsh-pkg，会留下 package-lock.json 和扁平的
-    // node_modules；新版本改用 pnpm install 部署（按声明），若不先清掉旧 npm 结构，会与 pnpm 自己的
-    // .pnpm 目录和符号链接混装，轻则冗余、重则影响 dsh 的 cordis 依赖解析。
-    // 只清理数据目录 dsh-pkg（pkgDir）内的残留；插件根 PLUGIN_ROOT 下的 node_modules
-    // 或其它目录不受影响。package.json / pnpm-workspace.yaml 由步骤 2 覆盖写，无需删。
+    // ---- npm → pnpm 升级兼容清理 + dsh-pkg 退役 ----------------
+    // 旧版本 npm i 部署 dsh-pkg 会留下 package-lock.json 和扁平 node_modules；新版本
+    // pnpm install --prod 部署到插件根——先清旧残留再装，避免与 pnpm 的 .pnpm 结构混装。
+    // 清理范围：插件根 node_modules/lock（安装目标自身）；旧数据目录 dsh-pkg 整体退役
+    // （T7d：独立安装区移除，依赖收进插件 node_modules）。
     // pnpm-lock.yaml 一并清（中途手动跑过 pnpm 的残留，避免旧 lockfile 与新 package.json 错配）。
     const npmLock = join(pkgDir, "package-lock.json");
     const pnpmLock = join(pkgDir, "pnpm-lock.yaml");
@@ -576,11 +548,22 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir, opts = {}) {
     } else {
       milestone("[兼容] 无旧依赖残留，跳过清理");
     }
+    // dsh-pkg 退役（T7d）：旧独立安装区整体删除（依赖已收进插件 node_modules；
+    // 残留的 dsh-pkg 是历史部署副本，不再使用）。
+    const legacyPkg = join(dataDir, "dsh-pkg");
+    if (existsSync(legacyPkg)) {
+      try {
+        rmSync(legacyPkg, { recursive: true, force: true });
+        milestone("[退役] 旧 dsh-pkg 已删除（依赖收进插件 node_modules）");
+      } catch (e) {
+        milestone("[退役] dsh-pkg 删除失败（可手动清理）：" + (e?.message || e));
+      }
+    }
     // 5. pnpm install 安装目标（参数构造收敛 lib/pnpm.js buildPnpmInstallArgs：按
-    //    声明 package.json 的 dependencies 拉取，registry 兜底由调用方只传 URL 意图）；
-    //    dependencies 无 devDeps 无需 omit；allowBuilds 放行 build scripts；PATH 首部
-    //    指向 pkgDir（代理脚本 node.cmd/node 让 install script 找到宿主 electron node）
-    milestone("安装目标：pnpm install（按声明 " + pkgTarget + "）");
+    //    插件根 package.json 声明拉取 --prod（只装运行时 dependencies，不装 devDeps
+    //    构建树），registry 兜底由调用方只传 URL 意图；allowBuilds 放行 build scripts；
+    //    PATH 首部指向代理目录（node.cmd/node 让 install script 找到宿主 electron node）
+    milestone("安装目标：pnpm install --prod（按插件根声明 " + declaredVersion + "）");
     const run = async (registry) => {
       // stdout/stderr 各持独立跨 chunk 行缓冲（pending 行重组 + tail 错误提取）：两条
       // 管道的 chunk 边界互不相关，共用一个缓冲会把不同流的片段拼成一行，破坏 ndjson

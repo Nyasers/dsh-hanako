@@ -122,61 +122,6 @@ function parseVersion(v) {
   };
 }
 
-function compareVersions(a, b) {
-  const pa = parseVersion(a);
-  const pb = parseVersion(b);
-  if (!pa || !pb) return 0;
-  if (pa.major !== pb.major) return pa.major < pb.major ? -1 : 1;
-  if (pa.minor !== pb.minor) return pa.minor < pb.minor ? -1 : 1;
-  if (pa.patch !== pb.patch) return pa.patch < pb.patch ? -1 : 1;
-  // 三段相同
-  if (!pa.pre && !pb.pre) return 0;
-  if (!pa.pre) return 1;
-  if (!pb.pre) return -1;
-  if (pa.pre.num !== pb.pre.num) return pa.pre.num < pb.pre.num ? -1 : 1;
-  return 0;
-}
-
-// ---- 远端版本直查（HTTP 直查 npm registry；语义与宿主 lib/check.js npmViewLatest 一致）----
-// pnpm view @deepseek-ai/dsh version 的本质就是查 npm registry 的 latest dist-tag——
-// 直接 fetch https://registry.npmjs.org/@deepseek-ai/dsh/latest 的 JSON version 字段
-// （官方源失败重试一次 https://registry.npmmirror.com/@deepseek-ai/dsh/latest），15s
-// 超时（AbortSignal.timeout）。仍失败返回 { version:null, error }（调用方按需降级，不抛）。
-// HTTP 能力：dsh web host 运行在宿主 node v24（全局 fetch 可用），零运行时依赖；
-// 不再 spawn 宿主 electron node + pnpm 入口（config 注入字段 electronNode / npmCliPath
-// 已随 patch 模板占位符删除）。
-async function npmViewLatest() {
-  const fetchJson = async (url) => {
-    try {
-      const res = await fetch(url, {
-        signal: AbortSignal.timeout(15000),
-        headers: { "user-agent": "dsh-hanako-plugin" },
-      });
-      if (!res.ok) return { ok: false, error: "HTTP " + res.status + "：" + url };
-      const data = await res.json();
-      const version =
-        data && typeof data.version === "string" ? data.version.trim() : "";
-      if (!version) return { ok: false, error: "响应缺少 version 字段：" + url };
-      return { ok: true, version };
-    } catch (e) {
-      return { ok: false, error: e?.message || String(e) };
-    }
-  };
-  try {
-    const first = await fetchJson(
-      "https://registry.npmjs.org/@deepseek-ai/dsh/latest",
-    );
-    if (first.ok) return { version: first.version, error: null };
-    const second = await fetchJson(
-      "https://registry.npmmirror.com/@deepseek-ai/dsh/latest",
-    );
-    if (second.ok) return { version: second.version, error: null };
-    return { version: null, error: second.error || first.error || "查询失败" };
-  } catch (e) {
-    return { version: null, error: e?.message || String(e) };
-  }
-}
-
 // ---- 插件 apply：路由注册（全程容错，降级不阻断 dsh 启动；前端分页见 client.js）----
 export function apply(ctx, config) {
   const cfg = config && typeof config === "object" ? config : {};
@@ -248,69 +193,6 @@ export function apply(ctx, config) {
             }
           };
 
-          // ---- 更新事件缓存（v0.22.1+ 事件化）：订阅总线 update.progress / update.result
-          // （宿主 updateDsh 执行期间回投），缓存最新状态供 update-status 一次性查询与
-          // update-stream 事件推送——替代前端 2s 轮询 update-status。v0.24 起
-          // update-result.json 退役，无文件兜底（事件缓存丢失即 idle）。----
-          let updateEventCache = null; // { state, version?, error?, at } | null
-          const updateStreams = new Set(); // 挂起的 update-stream 响应
-          const broadcastUpdateEvent = (value) => {
-            const line = "data: " + JSON.stringify({ ok: true, value }) + "\n\n";
-            for (const stream of updateStreams) {
-              try {
-                stream.res.write(line);
-              } catch {
-                /* 流已关闭 */
-              }
-            }
-            if (
-              value &&
-              (value.state === "done" || value.state === "error")
-            ) {
-              // 终态：关闭所有挂起的流
-              for (const stream of [...updateStreams]) {
-                try {
-                  stream.res.end();
-                } catch {
-                  /* 已结束 */
-                }
-              }
-              updateStreams.clear();
-            }
-          };
-          try {
-            if (httpCtx.dshanaBus && typeof httpCtx.dshanaBus.on === "function") {
-              disposers.push(
-                httpCtx.dshanaBus.on("update.progress", (payload) => {
-                  const p = payload && typeof payload === "object" ? payload : {};
-                  updateEventCache = {
-                    state: "updating",
-                    at: p.at || new Date().toISOString(),
-                  };
-                  broadcastUpdateEvent(updateEventCache);
-                }),
-              );
-              disposers.push(
-                httpCtx.dshanaBus.on("update.result", (payload) => {
-                  const p = payload && typeof payload === "object" ? payload : {};
-                  updateEventCache = {
-                    state: p.state || "error",
-                    ...(typeof p.version === "string" && p.version
-                      ? { version: p.version }
-                      : {}),
-                    ...(typeof p.error === "string" && p.error
-                      ? { error: p.error }
-                      : {}),
-                    at: new Date().toISOString(),
-                  };
-                  broadcastUpdateEvent(updateEventCache);
-                }),
-              );
-            }
-          } catch {
-            /* 事件订阅失败降级：update-status 走文件兜底 */
-          }
-
           // POST /api/hana-settings.read：返回当前默认（{ provider, model, reasoningEffort? }）
           registerRoute("/api/hana-settings.read", async (req, res) => {
             try {
@@ -356,14 +238,10 @@ export function apply(ctx, config) {
             }
           });
 
-          // POST /api/hana-settings.check-version：本地版本直读（零延迟）+ 远端版本
-          // dsh 侧 HTTP 直查——fetch https://registry.npmjs.org/@deepseek-ai/dsh/latest
-          // 的 JSON version 字段（pnpm view 语义等价；官方源失败重试 npmmirror，15s 超时），
-          // 响应 { ok:true, value:{ localVersion, latestVersion, updateAvailable, error? } }。
-          // dshPkgDir 来自总线配置（dshanaBus.getConfig()）；config 未下发（bus 未就绪/
-          // hello 未完成）时返回 { ok:false, error:"总线配置未就绪" }。
-          // 不再写 update-request.json / 读 check-result.json（v0.18.1 起废弃宿主桥接：
-          // resources.watch 链路不可靠导致检查永不完成）。
+          // POST /api/hana-settings.check-version（T7d 简化）：只读本地 dsh 版本——
+          // dsh 版本严格锁插件声明（更新 dsh = 更新插件发版），无远端检查/更新。
+          // dshPkgDir 来自总线配置（dshanaBus.getConfig()）；config 未下发时返回
+          // { ok:false, error:"总线配置未就绪" }。
           registerRoute("/api/hana-settings.check-version", async (req, res) => {
             try {
               await readJsonBody(req);
@@ -373,140 +251,9 @@ export function apply(ctx, config) {
                 return;
               }
               const localVersion = readLocalVersion();
-              const remote = await npmViewLatest();
-              const latestVersion = remote.version;
-              const updateAvailable = !!(
-                localVersion &&
-                latestVersion &&
-                compareVersions(localVersion, latestVersion) < 0
-              );
-              const value = { localVersion, latestVersion, updateAvailable };
-              if (remote.error) value.error = remote.error;
-              settingsLog(
-                `版本检查完成（本地=${localVersion || "未安装"}，远端=${latestVersion || "查询失败"}${remote.error ? "，" + remote.error : ""}${updateAvailable ? "，可更新" : ""}）`,
-              );
-              json(res, { ok: true, value });
+              json(res, { ok: true, value: { localVersion, updateAvailable: false } });
             } catch (e) {
               json(res, { ok: false, error: e?.message || String(e) });
-            }
-          });
-
-          // POST /api/hana-settings.request-update：经 dshana.bus 消息总线发
-          // update.request 直投宿主（v0.22.1 起替代 POST /child/post 单向 HTTP 反向
-          // 信道——/child/post 已退役）。@dsh-hanako/bridge 提供 dshanaBus 服务：
-          // 握手成功（hello 通过）后 emit 即送达宿主，宿主受理后执行 npm i latest +
-          // 重启 web host，执行期间/完成后经总线回投 update.progress / update.result
-          // （本插件事件缓存 + update-status 一次性查询 + update-stream 事件推送）。
-          // bus 未就绪（无已连接客户端）时返回 { ok:false, error:"消息总线未连接" }。
-          registerRoute("/api/hana-settings.request-update", async (req, res) => {
-            try {
-              await readJsonBody(req);
-              const bus = httpCtx.dshanaBus;
-              if (!bus || typeof bus.emit !== "function") {
-                throw new Error("消息总线未连接（dshanaBus 不可用）");
-              }
-              const st = typeof bus.status === "function" ? bus.status() : null;
-              if (!st || st.connected !== true) {
-                throw new Error("消息总线未连接");
-              }
-              // 受理确认：带 reqId 发 update.request，等宿主 update.ack（5s 超时）——
-              // 避免 fire-and-forget 导致宿主未受理时前端仍误报已在更新。
-              const reqId =
-                "ur_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8);
-              const acked = await new Promise((resolve) => {
-                let settled = false;
-                const timer = setTimeout(() => {
-                  if (settled) return;
-                  settled = true;
-                  off();
-                  resolve(false);
-                }, 5000);
-                const off = bus.on("update.ack", (ack) => {
-                  if (settled || !ack || ack.reqId !== reqId) return;
-                  settled = true;
-                  clearTimeout(timer);
-                  off();
-                  resolve(true);
-                });
-                bus.emit("update.request", {
-                  reqId,
-                  at: new Date().toISOString(),
-                  fromVersion: readLocalVersion(),
-                });
-              });
-              if (!acked) throw new Error("宿主未受理更新请求（总线确认超时）");
-              // 新轮次受理：清空事件缓存，防 update-status/update-stream 回放上一轮
-              // done/error 终态（新轮次由 update.progress/result 重新填充；更新未开始
-              // 前缓存为 null，update-status 返回 idle（文件兜底已随 v0.24 退役移除）
-              updateEventCache = null;
-              settingsLog("更新请求已受理，将自动执行更新");
-              json(res, { ok: true, state: "updating" });
-            } catch (e) {
-              try {
-                settingsLog(`更新请求失败：${e?.message || e}`);
-              } catch {
-                /* 日志失败不阻断 */
-              }
-              json(res, { ok: false, error: e?.message || String(e) });
-            }
-          });
-
-          // POST /api/hana-settings.update-status：一次性查询——事件缓存优先（事件化主信道，
-          // v0.22.1+ 替代前端 2s 轮询），无缓存返回 idle（v0.24 起 update-result.json 退役，无文件兜底）。
-          // 只读内存事件缓存，不依赖总线配置（CodeRabbit：移除 dataDir 前置——bus 配置不可用时
-          // 仍应从 updateEventCache 响应；bus-configuration 就绪守卫仅 request-update/check-version 需要）。
-          registerRoute("/api/hana-settings.update-status", async (req, res) => {
-            try {
-              await readJsonBody(req);
-              if (updateEventCache) {
-                json(res, { ok: true, value: updateEventCache });
-                return;
-              }
-              // v0.24 起 update-result.json 退役：无事件缓存即 idle（无文件兜底）
-              json(res, { ok: true, value: { state: "idle" } });
-            } catch (e) {
-              json(res, { ok: false, error: e?.message || String(e) });
-            }
-          });
-
-          // GET /api/hana-settings.update-stream：事件推送（SSE 式流）——更新期间前端订阅
-          // （fetch 流式读取），收到 update.progress/result 事件即推，终态（done/error）后
-          // 关闭。首帧回放当前缓存（若已有事件）；事件缺失时前端可手动刷新（update-status
-          // 兜底）。路由挂起期间前端关闭/断连时自动清理。
-          registerRoute("/api/hana-settings.update-stream", (req, res) => {
-            try {
-              res.writeHead(200, {
-                "Content-Type": "text/event-stream",
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-              });
-              // 首帧回放当前缓存（若已有事件）
-              if (updateEventCache) {
-                res.write(
-                  "data: " + JSON.stringify({ ok: true, value: updateEventCache }) + "\n\n",
-                );
-                if (
-                  updateEventCache.state === "done" ||
-                  updateEventCache.state === "error"
-                ) {
-                  res.end();
-                  return;
-                }
-              }
-              const stream = { res };
-              updateStreams.add(stream);
-              const onClose = () => {
-                updateStreams.delete(stream);
-              };
-              res.on("close", onClose);
-              res.on("error", onClose);
-            } catch (e) {
-              try {
-                res.writeHead(200, { "Content-Type": "application/json" });
-                res.end(JSON.stringify({ ok: false, error: e?.message || String(e) }));
-              } catch {
-                /* 响应已不可写 */
-              }
             }
           });
 

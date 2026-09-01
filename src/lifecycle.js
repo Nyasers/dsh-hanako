@@ -70,7 +70,6 @@ import {
   verifyDepsSmoke,
   readDshInstalledVersion,
 } from "./tools/lib/install.js";
-import { checkDshUpdate } from "./tools/lib/check.js";
 import { connectBus, closeBus, setBusConfigProvider } from "./lib/bus.js";
 
 const STDERR_CAP = 8192;
@@ -1040,110 +1039,6 @@ function ensureProviderPushWatch(cfg) {
 // 直读已提取到 lib/check.js + lib/install.js，经 getSingleton 挂 g.checkDshUpdate 供
 // Agent 工具 dsh_install / DSHana 标签页 webui 路由两面共用，单一事实源；
 // 设置页「DSH 版本」卡片 v0.18.1 起由 dsh 侧 @dsh-hanako/settings 直查远端，不经此通道）----
-
-// ---- 更新 DSH（能力层）：停 web host（closeProcess——回收子进程，Windows 文件锁前提：
-// pnpm install 要替换被 web host 占用的 dsh 包文件）→ installDepsFromPlugin（pnpm install
-// 按插件根 package.json 声明版本，spec 可显式覆盖；成功即
-// 新版本）→ 起 web host（ensureWebHost，失败不阻断结果上报，记 error 字段）→ 读新版本。
-// 结果走内存态分组 g.update = { status, result, error, time, log }（v0.24 状态收敛：
-// update-result.json 退役——总线事件化已打通 update.progress/result + 断线排队补发，
-// 设置页依赖总线、Agent 工具结果全走内存态，文件兜底场景不存在；遗留文件由
-// migrate.js cleanup-update-result 步骤删除）。
-// v0.22.1+ 事件化：开始/完成经总线 emit update.progress/update.result，设置页事件缓存。
-// 并发防护：g.update.status === "running" 进行中重复调用返回 { ok:false, state:"updating" }
-// 不重复执行；与 installDepsFromPlugin 内部 g.deps.status 独立（本状态管整条更新流程）。
-// status 状态机：入口置 running、成功置 ok、catch 置 error——finally 不重置（终态保留，
-// 下次更新入口才回到 running）；g.update.result = updateDsh 返回值终态对象。----
-export async function updateDsh(cfg, spec) {
-  const g = getSingleton();
-  if (g.update.status === "running") return { ok: false, state: "updating" };
-  g.update.status = "running";
-  g.update.error = null;
-  g.update.time = new Date().toISOString();
-  const dataDir = cfg.dataDir || g.dataDir;
-  const log = (s) => {
-    try {
-      g.appendLog?.("hana", `[DSH 更新] ${s}`);
-    } catch {
-      /* 日志失败不阻断 */
-    }
-    console.log(`[dsh-run] DSH 更新：${s}`);
-  };
-  try {
-    // ① 进度态（事件化：bus emit update.progress 直投设置页事件缓存——v0.22.1+
-    // 替代前端 2s 轮询 update-status；不再写文件，结果走内存态 g.update）
-    emitBus("update.progress", { state: "updating", at: g.update.time });
-    // ② 停 web host（Windows 文件锁前提）
-    log("停止 web host…");
-    await closeProcess();
-    // ③ 装依赖（installDepsFromPlugin 内部有 g.deps.status === "installing" 防并发——
-    // vX 起与 update 共享互斥：Agent 工具层 g.depBusy 预留状态下 install/update 任一
-    // 进行中另一动作拒绝，能力层守卫覆盖 webui 路由等其他调用路径，双保险。T7a 起
-    // 按插件根 package.json 声明版本安装（pnpm install），spec 显式传时覆盖声明版本
-    // （逃生门）；成功后会自动运行级重验刷新 g.deps.result）
-    log("安装 dsh 依赖（pnpm install，按声明" + (spec ? " 覆盖 " + spec : "版本") + "）…");
-    const install = await installDepsFromPlugin(cfg, dataDir, { spec });
-    if (!install || !install.ok)
-      throw new Error(install?.error || "依赖安装失败");
-    // ④ 起新进程（失败不阻断结果上报，记 error 字段）
-    let restartError = null;
-    try {
-      await ensureWebHost(cfg);
-    } catch (e) {
-      restartError = String(e?.message || e).slice(0, 1500);
-      log(`web host 重启失败：${restartError}`);
-    }
-    // ④b 重启后重建宿主侧 provider 热跟随 watch——closeProcess 已清理，
-    // ensureWebHost 本身不建（只有 startWebHostFromPlugin 建），不重建则
-    // 更新后 provider 配置变更不再推送。DSH 更新请求不走 watch/轮询：
-    // v0.22.1 起子插件经 dshana.bus 消息总线直投（/child/post 反向信道已退役）。
-    ensureProviderPushWatch(cfg);
-    // 重启用进程后首批 provider 的初始 push 已由 ensureWebHost（唯一就绪点）
-    // 发出；此处只重建跟随 watch，不再重复 push。
-    // ⑤ 读新版本 → done（installDepsFromPlugin 已刷新 g.deps.result，优先用；无则直读 package.json）
-    const version =
-      (g.deps.result && !g.deps.result.running && g.deps.result.ok
-        ? g.deps.result.version
-        : null) ||
-      readDshInstalledVersion({ ...cfg, dataDir }) ||
-      null;
-    const result = {
-      ok: true,
-      state: "done",
-      version,
-      ...(restartError ? { error: restartError } : {}),
-    };
-    // 终态对象写入 g.update.result（= updateDsh 返回值，单一事实源；不再写 update-result.json）
-    g.update.result = result;
-    // 重启失败也是「本次更新的错误」：同步进 g.update.error（诊断 buildDepsDiagCheck
-    // 的 updateError 查找可见），result 与总线事件中的 error 数据均保留
-    if (restartError) g.update.error = restartError;
-    g.update.status = "ok";
-    g.update.time = new Date().toISOString(); // 终态时刻（卡片/诊断的完成时间）
-    // 事件化：bus emit update.result（设置页事件缓存；无文件兜底——update-result.json 已退役）
-    emitBus("update.result", {
-      state: "done",
-      ...(version ? { version } : {}),
-      ...(restartError ? { error: restartError } : {}),
-    });
-    log(
-      `更新完成（version=${version || "未知"}${restartError ? "，web host 重启失败：" + restartError : ""}）`,
-    );
-    return result;
-  } catch (e) {
-    const err = String(e?.message || e).slice(0, 1500);
-    g.update.error = err;
-    g.update.result = { ok: false, state: "error", error: err };
-    g.update.status = "error";
-    g.update.time = new Date().toISOString(); // 终态时刻（失败时刻）
-    // 事件化：bus emit update.result（失败态）
-    emitBus("update.result", { state: "error", error: err });
-    log(`更新失败：${err}`);
-    return { ok: false, state: "error", error: err };
-  }
-  // 无 finally 重置——终态（ok/error）保留，下次更新入口才回到 running
-}
-// 经总线 emit（best-effort：bus 未连接 no-op，不阻断主流程；事件缓存由设置页后端维护）
 function emitBus(channel, payload) {
   try {
     const g = getSingleton();
@@ -1562,10 +1457,8 @@ const mountLifecycle = () => {
   const g = getSingleton();
   g.closeProcess = closeProcess;
   g.collectDiagnostics = collectWebDiagnostics;
-  g.updateDsh = updateDsh;
   g.installDeps = installDepsFromPlugin;
   g.verifyDeps = verifyDepsSmoke;
-  g.checkDshUpdate = checkDshUpdate;
   return g;
 };
 mountLifecycle();

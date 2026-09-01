@@ -178,20 +178,3 @@ export function resolveProfileName(cfg) {
   return "dshana";
 }
 
-// 字符串（npm dist-tag，如 latest/next/alpha；version 参数优先于 tag，见 dsh-install 工具）。
-export function resolveDshTag(cfg) {
-  try {
-    const cf = join(cfg.dataDir, "config.json");
-    if (existsSync(cf)) {
-      const j = JSON.parse(readFileSync(cf, "utf8"));
-      const t = j?.global?.dshTag;
-      if (typeof t === "string" && t.trim()) return t.trim();
-    }
-  } catch {
-    /* 读配置失败忽略 */
-  }
-  const t = cfg?.dshTag;
-  if (typeof t === "string" && t.trim()) return t.trim();
-  return "latest";
-}
-

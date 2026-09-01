@@ -147,26 +147,10 @@ window.__ModuleLoader__.load({
       // ---- DSH 版本卡片 ----
       versionTitle: "DSH 版本",
       versionSub:
-        "@deepseek-ai/dsh 版本检查与更新（本卡片检查直查远端 latest；dsh_install 工具与宿主侧检查/更新未显式传 version/tag 时按配置基线 dshTag（默认 latest）执行，基线非 latest 时两者结果可能不同）",
+        "@deepseek-ai/dsh 版本严格锁插件声明（T7d：更新 dsh = 更新插件发版，无独立检查/更新通道）",
       versionLocal: "本地版本",
-      versionLatest: "最新版本",
       versionNone: "未安装",
-      versionUnknown: "未知",
-      check: "检查更新",
-      checking: "检查中…",
-      upToDate: "已是最新版本",
-      updateAvailableMsg: "可更新至 v",
-      checkFailed: "版本检查失败：",
-      localMissing: "本地未安装 DSH（依赖缺失，请先在 DSHana 标签页安装）",
-      update: "更新到最新",
-      updateConfirm: "更新将重启 DSHana，正在执行的任务会中断，确定继续？",
-      updateConfirmShort: "再次点击确认更新",
-      updatingMsg: "更新中…（将重启 DSHana，正在执行的任务会中断）",
-      updateDone: "更新完成 v",
-      restartNote: "，请重启 DSHana 使完全生效",
-      updateFailed: "更新失败：",
-      updateTimeout:
-        "更新超时：web host 长时间不可达，请检查 DSHana 标签页诊断",
+      updateNote: "更新 dsh = 更新插件版本（插件发版时随声明重装）",
     };
     const en = {
       nav: "DSHana Settings",
@@ -188,16 +172,10 @@ window.__ModuleLoader__.load({
       // ---- DSH version card ----
       versionTitle: "DSH Version",
       versionSub:
-        "@deepseek-ai/dsh version check & update (this card queries the registry for latest directly; dsh_install tool and host-side check/update fall back to the configured dshTag baseline (default latest) when no explicit version/tag is passed — results may differ when the baseline is not latest)",
+        "@deepseek-ai/dsh version is locked to the plugin declaration (T7d: updating dsh = shipping a new plugin version; no standalone check/update channel)",
       versionLocal: "Local version",
-      versionLatest: "Latest version",
       versionNone: "not installed",
-      versionUnknown: "unknown",
-      check: "Check updates",
-      checking: "Checking…",
-      upToDate: "Up to date",
-      updateAvailableMsg: "Update available: v",
-      checkFailed: "Version check failed: ",
+      updateNote: "Updating dsh = shipping a new plugin version (reinstalled from the declaration on release)",
       localMissing:
         "DSH is not installed locally (install it from the DSHana tab first)",
       update: "Update to latest",
@@ -636,11 +614,12 @@ window.__ModuleLoader__.load({
         });
       };
 
-      // 挂载时自动检查一次：本地版本即时显示，远端经桥接（pending 轮询直至结果）
+      // 挂载时读一次本地版本（T7d：无远端检查/更新——check-version 后端只回 localVersion）
       react.useEffect(() => {
         let alive = true;
-        checkWithPoll().then(() => {
-          if (alive) return;
+        doCheck().then((d) => {
+          if (!alive) return;
+          applyCheck(d);
         });
         return () => {
           alive = false;
@@ -859,46 +838,18 @@ window.__ModuleLoader__.load({
                       }),
                     ],
                   }),
-                  jsx_runtime.jsxs("div", {
-                    className: "hs-info-row",
-                    children: [
-                      jsx_runtime.jsx("span", {
-                        className: "hs-info-label",
-                        children: t("versionLatest"),
-                      }),
-                      jsx_runtime.jsx("span", {
-                        className: "hs-info-value",
-                        children: latestVersion || t("versionUnknown"),
-                      }),
-                    ],
+                  jsx_runtime.jsx("div", {
+                    className: "hs-note",
+                    children: t("updateNote"),
                   }),
                 ],
               }),
-              // 状态整行（可换行，长错误/更新进度完整显示）
+              // 状态整行（可换行，长错误完整显示）
               jsx_runtime.jsx("div", {
                 className:
                   "hs-status hs-status-line" +
                   (statusKind ? " hs-" + statusKind : ""),
                 children: status,
-              }),
-              jsx_runtime.jsx("div", {
-                className: "hs-actions",
-                children: [
-                  jsx_runtime.jsx("button", {
-                    type: "button",
-                    className: "hs-btn",
-                    disabled: checking || updating,
-                    onClick: onCheck,
-                    children: t("check"),
-                  }),
-                  jsx_runtime.jsx("button", {
-                    type: "button",
-                    className: "hs-save",
-                    disabled: !updateAvailable || checking || updating,
-                    onClick: onUpdate,
-                    children: armUpdate ? t("updateConfirmShort") : t("update"),
-                  }),
-                ],
               }),
             ],
           }),
