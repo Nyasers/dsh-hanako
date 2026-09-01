@@ -84,7 +84,7 @@ $node = <本机 node.exe 绝对路径，如 C:\Program Files\nodejs\node.exe>
 
 ## DSH 检查与更新（v0.13.0；v0.18.1 设置页检查改 dsh 侧直查）
 
-`@deepseek-ai/dsh` 版本检查与更新收敛为**宿主能力层单一事实源**（tools/lib/ `checkDshUpdate` / `updateDsh` / `installDepsFromPlugin` / `verifyDepsSmoke`，经单例挂载），Agent 工具与标签页共用同一套逻辑；dsh 设置页「DSH 版本」卡片 v0.18.1 起**检查改 dsh 侧直查**（v0.18.2 起 HTTP 直查 npm registry，pnpm view 语义等价），更新仍走宿主能力层。**基线差异**：设置页卡片检查恒直查 `latest`；Agent 工具 / 标签页路由未显式传 version/tag 时按配置基线 dshTag（默认 latest）执行，基线非 latest 时两者结果可能不同：
+`@deepseek-ai/dsh` 版本检查与更新收敛为**宿主能力层单一事实源**（tools/lib/ `checkDshUpdate` / `updateDsh` / `installDepsFromPlugin` / `verifyDepsSmoke`，经单例挂载），Agent 工具与标签页共用同一套逻辑；dsh 设置页「DSH 版本」卡片 v0.18.1 起**检查改 dsh 侧直查**（v0.18.2 起 HTTP 直查 npm registry，pnpm view 语义等价），更新仍走宿主能力层。**基线差异**：设置页卡片检查恒直查 `latest`；**安装/更新版本源 = 插件声明版本**（`installDepsFromPlugin` 优先读插件根 package.json 的 dependencies 声明，仅声明缺失/非法时才回退配置基线 dshTag——CodeRabbit 对齐：dshTag 是版本检查的默认基线，不是安装/更新的直接版本源），基线非 latest 时检查结果与安装版本可能不同：
 
 1. **Agent 工具 `dsh_install`**（vX 起四合一，合并原 dsh_update）：`action=check` 查 `{ localVersion, distTags, baselineTag, baselineVersion, updateAvailable, error? }`（基线 tag = 显式 tag / 配置 dshTag / latest，可传 version 对比指定版本），只读不改；`action=update` 执行完整更新（停 web host → 按声明重装（可显式 version/tag 覆盖）→ 起 web host），默认异步（后台执行 + **升级卡片**实时日志，完成后宿主唤醒带回结果），`wait=true` 同步等待；更新会重启 web host、正在执行的任务会中断，`update` 前确认无运行中任务；更新执行中重复调用返回状态不重复执行。
 2. **DSHana 标签页 deps 卡片**（web host 未就绪时可见）：版本行显示「当前版本 / 最新版本 / 可更新状态」（版本管理入口已迁移到设置页「DSH 版本」卡片与 dsh_install 工具，「检查更新」「更新 DSH」按钮已移除；`/webui/check-update`、`/webui/update-dsh` 路由保留为兼容端点）；更新中显示进度（内存态 g.update 状态），完成显示「更新完成 vX，请重启 DSHana 使完全生效」；更新/安装期间页面自动退到诊断页显示进度，完成后自动切回并刷新

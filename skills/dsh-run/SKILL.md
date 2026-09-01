@@ -1,6 +1,6 @@
 ---
 name: dsh-run
-description: "dsh_run 工具调用手册（源码 tools/dsh-run.js 核对）。触发场景：dsh_run 怎么传参（task/cwd/timeout/agentPreset/reasoningEffort/provider/model/sessionId 的语义与副作用）、异步/同步模式区别与返回结构、后台回调 payload 结构（固定 minimal 定位键）、超时语义（审批挂起不暂停计时）、错误码 DSH_ERROR/DSH_TIMEOUT/DSH_ABORTED、provider/model 显式指定的写回副作用（显式即成为 dsh 新默认）、resume 复用会话、agentPreset 选型（standard/ptc/cordis/minimal）、config.json 单一事实源实时生效。需要提交 dsh 任务前先读本技能。"
+description: "dsh_run 工具调用手册（源码 tools/dsh-run.js 核对）。触发场景：dsh_run 怎么传参（task/cwd/timeout/agentPreset/reasoningEffort/provider/model/sessionId 的语义与副作用）、固定异步模式与返回结构（wait 参数已退役）、后台回调 payload 结构（固定 minimal 定位键）、超时语义（审批挂起不暂停计时）、错误码 DSH_ERROR/DSH_TIMEOUT/DSH_ABORTED、provider/model 显式指定的写回副作用（显式即成为 dsh 新默认）、resume 复用会话、agentPreset 选型（standard/ptc/cordis/minimal）、config.json 单一事实源实时生效。需要提交 dsh 任务前先读本技能。"
 ---
 
 # dsh_run 工具手册
@@ -29,7 +29,7 @@ ensureWebHost（resolveDshPkgDir 定位依赖 → spawn dsh web，DSH_HOME=数�
 → 记 op.sessionId + sessionCwd
 → selectModel（仅显式传 provider/model/effort 时；model-unavailable 报错降级不带 effort 重试）
 → session.prompt（mode=queue，立即 accepted）
-→ events.mux 事件循环 → 终态
+→ 经总线 events 频道事件循环（bridge 订阅 $events 转发）→ 终态
 ```
 
 事件处理要点（dsh 0.1.2）：事件流**不直连 remote.mux**——bridge 在 dsh 进程内订阅 $events 并经总线转发（ready/emit/waterfall）。`api-session/status false` 即任务终态（结果从会话投影 projcache 读 title/tokenUsage）；`api-session/error` 记 pendingFailure（失败兜底）；`api-session/activity` 心跳忽略；waterfall 帧 bridge 已回投 next（宿主审批适配未接入——见「审批」段）。

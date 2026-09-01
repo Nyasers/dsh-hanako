@@ -108,14 +108,16 @@ export function apply(ctx, config) {
                         }
                       })()
                     : false
-                // 断连→连上：先补发缓冲（按序）
-                if (connected && !lastConnected) {
+                // 断连→连上，或缓冲非空（上次补发未清完）：先补发缓冲（按序）——
+                // CodeRabbit：sendLine 失败保留的记录不能被后续 live 直发超越（后发先到
+                // 打乱顺序），buffer 非空时每次调用都重试 flush，且直发仅在缓冲清空后。
+                if (connected && (!lastConnected || buffer.length > 0)) {
                   lastConnected = true
                   flushBuffer()
                 } else if (!connected) {
                   lastConnected = false
                 }
-                if (connected) {
+                if (connected && buffer.length === 0) {
                   // live 直发：发送失败（未入队/写失败）也保留入缓冲，重连后补发重试
                   if (!sendLine(src, t)) {
                     // 有界环形缓冲：满则丢最旧

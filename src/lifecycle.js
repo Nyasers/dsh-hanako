@@ -867,15 +867,32 @@ async function bootInproc(cfg, { pkgDir, dshHome, port, logPath }) {
       web.ctx = r.ctx;
       web.shutdown = r.shutdown;
       emitLog("hana", `[dsh web] 进程内 boot 完成（ctx=${!!r.ctx} shutdown=${typeof r?.shutdown}，webserver ${port} 存活）`);
+      // 就绪探测必须与 boot 同 try：就绪失败（超时/握手失败）时 web.ctx 仍持有
+      // 进程内 cordis 树 + 占用端口——不回收则 g.web 被 ensureWebHost 清掉后引用
+      // 丢失，重试必 EADDRINUSE 直到重启 Hana（CodeRabbit Major：spawn 路径可杀子进程
+      // 自愈，进程内路径必须显式 dispose）。
+      return await waitWebReady(web, port, emitLog, cfg);
     } catch (e) {
       web.bootError = e;
       web.stderr = String(e?.stack || e?.message || e).slice(0, STDERR_CAP);
       emitLog("err", `[dsh web] 进程内 boot 失败：${web.stderr}`);
-      // boot 失败：改写过的进程级 env 立即恢复（不留污染）
+      // 回收：就绪失败或 boot 失败都要 dispose 进程内 cordis 树（释放 HTTP server /
+      // 端口），并恢复改写过的进程级 env（DSH_HOME / DSHANA_BUS_SECRET）——否则
+      // g.web 摘除后 ctx 引用丢失，端口永久占用。
+      try {
+        await web.ctx?.fiber?.dispose();
+      } catch (e2) {
+        try {
+          g.appendLog?.("hana", "[dsh web] 进程内 boot 失败回收 dispose 异常：" + (e2?.message || e2));
+        } catch {
+          /* 日志失败不阻断 */
+        }
+      }
+      web.ctx = null;
+      web.disposed = true;
       restoreInprocEnv();
       throw e;
     }
-    return await waitWebReady(web, port, emitLog, cfg);
   })();
   web.readyPromise = readyPromise;
   g.web = web;

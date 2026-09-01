@@ -483,12 +483,23 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir, opts = {}) {
       declaredVersion &&
       installedVersion === declaredVersion
     ) {
-      milestone("已安装 dsh@" + installedVersion + "（与声明一致），跳过安装");
-      g.deps.error = null;
-      g.deps.result = null;
-      await verifyDepsSmoke(cfg, { force: true });
-      g.deps.status = "ok";
-      return { ok: true, state: "installed", cliBin, skipped: true };
+      // 幂等跳过前必须运行级重验（CodeRabbit：cliBin 存在 ≠ 依赖图完整——声明版本一致
+      // 但运行时包缺失时不能报「已安装成功」；smoke 失败 fall through 走重装流程）。
+      const smoke = await verifyDepsSmoke(cfg, { force: true });
+      if (smoke && smoke.ok) {
+        milestone("已安装 dsh@" + installedVersion + "（与声明一致），跳过安装");
+        g.deps.error = null;
+        g.deps.result = smoke;
+        g.deps.status = "ok";
+        return { ok: true, state: "installed", cliBin, skipped: true };
+      }
+      milestone(
+        "已安装 dsh@" +
+          installedVersion +
+          "（与声明一致）但依赖不完整（" +
+          ((smoke && (smoke.error || smoke.stderr)) || "verify 失败") +
+          "），走重装流程",
+      );
     }
     // 1.6 部署前停 web host：后续要删旧 node_modules，Windows 上被运行中进程加载的原生
     //    模块（koffi/node-pty 的 .node）会锁文件，rmSync 直接失败（EBUSY/EPERM）。

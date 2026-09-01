@@ -103,6 +103,9 @@ let authCookieAt = 0
 // 未证明的连接拒绝返回凭据（其余 RPC 照常——session.create 等非凭据面不受影响）。
 // 模块级单连接语义：新连接 hello 通过后旧连接关闭，这里只需一个授权标志。
 let credAuthed = false
+// 换发进行中 Promise（单飞，CodeRabbit）：并发 translateRpcRequest 共享一次换发，
+// 避免缓存未命中时多请求同时 ?token= 并互相覆盖 authCookie；完成后清空。
+let authCookieInflight = null
 
 /** 自环 RPC 鉴权 cookie（dsh 0.1.2+ /api/* 需浏览器 cookie，无则 401）。
  * launchToken 经 GET /?token= 换发 signed cookie（authorizeIndex 流程，本机回环）；
@@ -111,27 +114,33 @@ async function ensureAuthCookie(port) {
   const base = 'http://127.0.0.1:' + (Number(port) || 3080)
   if (authCookie && Date.now() - authCookieAt < 6 * 3600 * 1000) return authCookie
   if (!launchToken) return ''
-  try {
-    const res = await fetch(base + '/?token=' + encodeURIComponent(launchToken), {
-      redirect: 'manual',
-    })
-    const setCookies =
-      typeof res.headers.getSetCookie === 'function'
-        ? res.headers.getSetCookie()
-        : res.headers.get('set-cookie')
-          ? [res.headers.get('set-cookie')]
-          : []
-    const cookie = setCookies
-      .map((s) => String(s).split(';')[0])
-      .filter(Boolean)
-      .join('; ')
-    authCookie = cookie
-    authCookieAt = Date.now()
-    return cookie
-  } catch {
-    // 换发失败：回退旧 cookie（可能仍有效）或空
-    return authCookie || ''
-  }
+  if (authCookieInflight) return authCookieInflight
+  authCookieInflight = (async () => {
+    try {
+      const res = await fetch(base + '/?token=' + encodeURIComponent(launchToken), {
+        redirect: 'manual',
+      })
+      const setCookies =
+        typeof res.headers.getSetCookie === 'function'
+          ? res.headers.getSetCookie()
+          : res.headers.get('set-cookie')
+            ? [res.headers.get('set-cookie')]
+            : []
+      const cookie = setCookies
+        .map((s) => String(s).split(';')[0])
+        .filter(Boolean)
+        .join('; ')
+      authCookie = cookie
+      authCookieAt = Date.now()
+      return cookie
+    } catch {
+      // 换发失败：回退旧 cookie（可能仍有效）或空
+      return authCookie || ''
+    } finally {
+      authCookieInflight = null
+    }
+  })()
+  return authCookieInflight
 }
 
 export async function translateRpcRequest(req, port, reply) {
@@ -592,6 +601,10 @@ export function apply(ctx, config) {
             })
           } catch (e) {
             bridgeLog('事件流连接失败：' + ((e && e.message) || e))
+            // CodeRabbit：与 close 分支统一保护——插件卸载与连接失败竞态时不再排定重连，
+            // 且清理已存在的旧计时器（否则引用被覆盖，卸载时 clearTimeout 清不掉最新的）。
+            if (evtDisposed) return
+            if (evtRetryTimer) clearTimeout(evtRetryTimer)
             evtRetry = Math.min(evtRetry + 1, 8)
             evtRetryTimer = setTimeout(
               () => evtConnect(),
