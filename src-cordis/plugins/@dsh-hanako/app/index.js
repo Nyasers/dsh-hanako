@@ -23,7 +23,7 @@ import { dirname, extname, join, normalize, resolve, sep } from 'node:path'
 import { readFile } from 'node:fs/promises'
 
 /** Stable Cordis plugin name. */
-export const name = 'web-app'
+export const name = 'app'
 
 /** Services required before the fork seat can be claimed（无需 connection——无鉴权面）。 */
 export const inject = ['webServer']

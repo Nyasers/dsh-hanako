@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// @dsh-hanako/bridge/ws-lib.js — 零依赖 RFC6455 WebSocket 服务端原语（进程间消息总线专用）
+// @dsh-hanako/bus/ws-lib.js — 零依赖 RFC6455 WebSocket 服务端原语（进程间消息总线专用）
 //
-// 背景：@dsh-hanako/bridge 是 dsh 进程内的消息总线服务端（WS 服务端），复用 dsh
+// 背景：@dsh-hanako/bus 是 dsh 进程内的消息总线服务端（WS 服务端），复用 dsh
 // webserver（dsh-host-webserver WebServer）的 upgrade 路由能力：子插件
 // webServer.registerUpgrade({ path, handler }) 注册 /api/dshana.bus，握手在 dsh
 // webserver 内完成（node:http 'upgrade' 事件按 pathname 分发，handler 拥有 socket

@@ -4,6 +4,18 @@
   "private": true,
   "type": "module",
   "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "inject": [],
+      "platform": "web",
+      "immediately": true
+    }
+  },
   "cordis": {
     "name": "@dsh-hanako/bridge"
   }

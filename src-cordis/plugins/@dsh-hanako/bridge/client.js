@@ -2,7 +2,7 @@
 // id rewritten to @dsh-hanako/api-bridge. Browser-side connection carrier (no auth —
 // auth lives in the host half, replaced by api-bridge). Re-vendor on upstream bump.
 window.__ModuleLoader__.load({
-	id: "@dsh-hanako/api-bridge",
+	id: "@dsh-hanako/bridge",
 	factory: (require) => {
 		var module = { exports: {} };
 		var exports = module.exports;

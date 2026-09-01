@@ -4,7 +4,7 @@
 // src/lib/bus.js — dshana.bus 进程间消息总线客户端（宿主侧）
 //
 // 语义：宿主插件作为 dshana.bus 的**客户端**，连 dsh 进程内的消息总线服务端
-// （@dsh-hanako/bridge 经 dsh webserver upgrade 路由注册 /api/dshana.bus）——
+// （@dsh-hanako/bus 经 dsh webserver upgrade 路由注册 /api/dshana.bus）——
 // 双向收发 JSON 文本帧 { channel, payload }，替代旧的单向 HTTP 反向信道
 // POST /child/post（v0.21.2 引入，已退役）。只做消息总线，不做代理：无 SW 拦截、
 // 无 HTTP 隧道、无请求转发（bridge 历史教训：feat/bridge-channel 曾做三层通道，
@@ -18,7 +18,7 @@
 // 同级，本机信任——不再生成 busToken、不再注入 {{BUS_TOKEN}} 占位符；hello 只作身份
 // 宣告，bridge 不再比对）。
 //
-// 协议（JSON 文本帧，{ channel, payload }，与子插件 @dsh-hanako/bridge 同协议）：
+// 协议（JSON 文本帧，{ channel, payload }，与子插件 @dsh-hanako/bus 同协议）：
 //   { "channel":"hello", "payload":{} }                     —— 首帧握手（免鉴权身份宣告）
 //   { "channel":"hello-ok", "payload":{} }                   —— 服务端应答（握手成功）
 //   { "channel":"config", "payload":{ dshPkgDir, dataDir } }—— 配置下发（web host 就绪点注册
