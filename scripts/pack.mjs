@@ -49,7 +49,6 @@ const staticItems = [
   "package.json",
   "manifest.json",
   "pnpm-workspace.yaml",
-  "dsh-plugin",
   "skills",
 ];
 const distDir = join(ROOT, "dist");
@@ -72,7 +71,8 @@ for (const item of staticItems) {
 }
 
 // 2.5 静态资产压缩（terser JS 纯语法级 + clean-css CSS 压缩，覆盖写回 dist 副本）
-//     cordis 插件（dsh-plugin/*/index.js）被 dsh 运行时 import() 加载、client.js 被浏览器
+//     cordis 插件（dist/cordis/node_modules/@dsh-hanako/*/index.js，由 build 从
+//     src-cordis 组装）被 dsh 运行时 import() 加载、client.js 被浏览器
 //     ModuleLoader 按 window.__ModuleLoader__.load 注册；均只做语法级压缩。
 function resolveTool(pkgName) {
   const envDir = process.env.RSPACK_ENV;
@@ -113,7 +113,7 @@ function isEsm(code) {
   const terser = resolveTool("terser");
   const minify = terser.minify ?? terser.default?.minify;
   if (typeof minify !== "function") throw new Error("terser 加载失败：未找到 minify");
-  const staticJs = [...collectStaticFiles(join(distDir, "dsh-plugin"))];
+  const staticJs = [...collectStaticFiles(join(distDir, "cordis"))];
   console.log(`[pack] minify static js (${staticJs.length} files)...`);
   for (const file of staticJs) {
     const code = fs.readFileSync(file, "utf8");

@@ -56,7 +56,8 @@ const staticUrlToMeta = new Map();
       name === "node_modules" ||
       name === "releases" ||
       name === "_tmp" ||
-      name === ".git"
+      name === ".git" ||
+      name === "src-cordis"
     )
       continue;
     const p = join(urlRoot, name);
@@ -151,8 +152,43 @@ function extraTerser(root) {
 }
 await extraTerser(join(ROOT, "dist"));
 
+// 4) 构建 dshana profile（dist/cordis）：src-cordis = $DSH_HOME/profiles/dshana 源码根目录
+//    产物即 dshana profile 自包含材料（运行时整体挂载为 profiles/dshana，spawn --profile dshana
+//    消费；落位见 lifecycle.js ensureDshanaProfile）：
+//      dist/cordis/package.json        ← src-cordis/package.json（profile manifest，dsh.profile.bundles）
+//      dist/cordis/cordis.patch.yml     ← src-cordis/cordis.patch.yml（profile user patch 层）
+//      dist/cordis/cordis.yml           ← 空 entry 根（与官方 profile 同构）
+//      dist/cordis/pnpm-workspace.yaml  ← hoisted workspace（与官方 profile 同构）
+//      dist/cordis/node_modules/@dsh-hanako/** ← src-cordis/plugins/@dsh-hanako/**（其他子插件）
+//    插件 JS 不做 build 这轮 terser（归 pack.mjs 静态压缩步），故不在此遍历的 node_modules
+//    跳过名单之外再压缩。
+const PROFILE_CORDIS_YML = `# dsh profile root — an empty entry list. The tree is composed as patches:\n# each bundle in package.json's dsh.profile.bundles, then cordis.patch.yml, then any\n# --patch overlays. Edit cordis.patch.yml, not this file.\n[]\n`;
+const PROFILE_PNPM_WORKSPACE = `packages:\n  - .\n\nnodeLinker: hoisted\nautoInstallPeers: false\n`;
+function buildCordis(srcRoot, outRoot) {
+  fs.removeSync(outRoot);
+  fs.ensureDirSync(outRoot);
+  // 1) profile 根三件套 + manifest 直接落到 profile 根
+  for (const f of ["cordis.patch.yml", "package.json"]) {
+    const s = join(srcRoot, f);
+    if (!fs.pathExistsSync(s)) throw new Error(`cordis profile 文件缺失：${s}`);
+    fs.copySync(s, join(outRoot, f));
+  }
+  fs.writeFileSync(join(outRoot, "cordis.yml"), PROFILE_CORDIS_YML);
+  fs.writeFileSync(join(outRoot, "pnpm-workspace.yaml"), PROFILE_PNPM_WORKSPACE);
+  // 2) 其他子插件（scope 目录整体复制）：plugins/@dsh-hanako → node_modules/@dsh-hanako
+  const pluginsRoot = join(srcRoot, "plugins");
+  if (!fs.pathExistsSync(pluginsRoot)) throw new Error("src-cordis/plugins 缺失");
+  for (const scope of fs.readdirSync(pluginsRoot)) {
+    const scopeDir = join(pluginsRoot, scope);
+    if (!fs.statSync(scopeDir).isDirectory()) continue;
+    fs.copySync(scopeDir, join(outRoot, "node_modules", scope));
+  }
+  console.log("cordis profile -> dist/cordis/");
+}
+buildCordis(join(ROOT, "src-cordis"), join(ROOT, "dist", "cordis"));
 
-// 4) 构建后强制校验：产物不得残留带引号的 file:// 字面量（构建机路径泄漏即失败）。
+
+// 5) 构建后强制校验：产物不得残留带引号的 file:// 字面量（构建机路径泄漏即失败）。
 // 回归防护：收集范围再全也有漏网可能，这里兜底——CI 出包残留即构建失败。
 function assertNoStaticFileUrl(root) {
   const offenders = [];

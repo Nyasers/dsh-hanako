@@ -56,9 +56,18 @@
 // 空操作，不阻断 dsh 启动。注释风格同 @dsh-hanako/provider（中文/单引号/无分号）。
 
 import { EventEmitter } from 'node:events'
+import { randomUUID } from 'node:crypto'
 import { handleUpgrade } from './ws-lib.js'
 
 export const name = '@dsh-hanako/bridge'
+// connection（dsh-client-connection 注册的 HostConnectionService 服务名，见其
+// super(ctx, "connection")）：读 BrowserAuth.launchToken（dsh 0.1.2+ 浏览器鉴权
+// 进程令牌）——自环 RPC 换发 cookie（vX；旧版 dsh 无此服务时保持免鉴权兼容）。
+// 注意：插件名是 client-connection，服务名是 connection，inject 用服务名。
+// inject 只声明 webServer（硬依赖）：connection 是可选服务——旧版 dsh 无
+// dsh-client-connection 时 apply 仍须执行（总线照常，launchToken 为空降级免鉴权），
+// 故不写进静态 inject（cordis 静态 inject 缺失会挂起 apply），改由 apply 内
+// ctx.inject(['connection']) 运行时可选获取（服务缺失时回调不执行，launchToken 留空）。
 export const inject = ['webServer']
 
 // ---- 常量 ----
@@ -79,6 +88,61 @@ const REPLACED_CLOSE_CODE = 1001 // 旧连接被新连接顶掉
 // req：{ reqId, method, payload }；port：dsh web 端口（取不到由调用方回退 3080）；
 // reply(frame)：回投一帧 rpc.result 载荷（{ reqId, ok, value? } 或 { reqId, ok:false, error }），
 // 不应抛出（插件侧接线已包 try/catch 隔离）。
+// ---- 模块级鉴权状态（apply 经 connection 服务初始化；translateRpcRequest 消费）----
+// launchToken：dsh 进程浏览器鉴权令牌（BrowserAuth.launchToken，dsh web 打印 URL 的
+// token）。自环 RPC 用它换 cookie（0.1.2+ /api/* 需浏览器 cookie）。
+// 旧版 dsh（无 connection 服务）为空 → 自环免鉴权（改造前行为）。
+let launchToken = ''
+// 自环换发的 cookie（launchToken → GET /?token= → dsh-auth-* signed cookie，30 天）。
+// 缓存避免每次 RPC 都换发；web 重启后 launchToken 变化，旧 cookie 失效自动重换。
+let authCookie = ''
+let authCookieAt = 0
+// ---- 连接级凭据授权（vX bridge 凭据保护）----
+// hello 帧携带的共享秘密（宿主 spawn 时注入子进程 env DSHANA_BUS_SECRET，hello 时
+// 回传证明身份）。仅当 secret 匹配时，launchToken/authCookie 两个凭据方法才放行；
+// 未证明的连接拒绝返回凭据（其余 RPC 照常——session.create 等非凭据面不受影响）。
+// 模块级单连接语义：新连接 hello 通过后旧连接关闭，这里只需一个授权标志。
+let credAuthed = false
+// 换发进行中 Promise（单飞，CodeRabbit）：并发 translateRpcRequest 共享一次换发，
+// 避免缓存未命中时多请求同时 ?token= 并互相覆盖 authCookie；完成后清空。
+let authCookieInflight = null
+
+/** 自环 RPC 鉴权 cookie（dsh 0.1.2+ /api/* 需浏览器 cookie，无则 401）。
+ * launchToken 经 GET /?token= 换发 signed cookie（authorizeIndex 流程，本机回环）；
+ * 缓存复用（6h 内不重换）。launchToken 为空（旧版）返回空串（不加 Cookie 头）。 */
+async function ensureAuthCookie(port) {
+  const base = 'http://127.0.0.1:' + (Number(port) || 3080)
+  if (authCookie && Date.now() - authCookieAt < 6 * 3600 * 1000) return authCookie
+  if (!launchToken) return ''
+  if (authCookieInflight) return authCookieInflight
+  authCookieInflight = (async () => {
+    try {
+      const res = await fetch(base + '/?token=' + encodeURIComponent(launchToken), {
+        redirect: 'manual',
+      })
+      const setCookies =
+        typeof res.headers.getSetCookie === 'function'
+          ? res.headers.getSetCookie()
+          : res.headers.get('set-cookie')
+            ? [res.headers.get('set-cookie')]
+            : []
+      const cookie = setCookies
+        .map((s) => String(s).split(';')[0])
+        .filter(Boolean)
+        .join('; ')
+      authCookie = cookie
+      authCookieAt = Date.now()
+      return cookie
+    } catch {
+      // 换发失败：回退旧 cookie（可能仍有效）或空
+      return authCookie || ''
+    } finally {
+      authCookieInflight = null
+    }
+  })()
+  return authCookieInflight
+}
+
 export async function translateRpcRequest(req, port, reply) {
   const reqId = req && typeof req === 'object' ? req.reqId : undefined
   const method = req && typeof req === 'object' ? req.method : undefined
@@ -87,7 +151,43 @@ export async function translateRpcRequest(req, port, reply) {
     return
   }
   const base = 'http://127.0.0.1:' + (Number(port) || 3080)
+  // vX（dsh 0.1.2+ 鉴权）：/api/* 需要浏览器 cookie（launchToken 换发）；
+  // 无鉴权旧版 launchToken 为空 → ensureAuthCookie 返回空串，行为不变。
+  const cookie = await ensureAuthCookie(port)
+  const headers = {
+    'content-type': 'application/json',
+    ...(cookie ? { cookie } : {}),
+  }
   try {
+    // ---- 凭据方法门（vX）：仅持有共享秘密（hello 校验通过）的宿主可读取 ----
+    // launchToken 是进程浏览器鉴权令牌、authCookie 是换发的会话凭据——两者都是高敏
+    // 凭据，不能对任意连上总线（本机任意进程可达）的连接开放。hello 帧携带 spawn
+    // 注入的 DSHANA_BUS_SECRET 即证明「宿主」（只有宿主 spawn 时知道）。
+    if ((method === 'authCookie' || method === 'launchToken') && !credAuthed) {
+      reply({
+        reqId,
+        ok: false,
+        error: {
+          code: 'unauthorized',
+          message: '凭据方法需共享秘密授权（hello 帧携带 DSHANA_BUS_SECRET）',
+        },
+      })
+      return
+    }
+    if (method === 'authCookie') {
+      // 返回当前自环 cookie（launchToken 换发，缓存 6h；旧版无 connection 服务
+      // 返回空串 → 宿主免鉴权回退）。宿主侧无 launchToken 源（token 在 dsh 进程
+      // 内 BrowserAuth），remote.mux 等 WS 端点需 Cookie 头——经总线代取。
+      reply({ reqId, ok: true, value: await ensureAuthCookie(port) })
+      return
+    }
+    if (method === 'launchToken') {
+      // 返回进程内 launchToken（BrowserAuth，重启换新）：宿主渲染插件页拼
+      // iframe URL（/?token= 免 cookie 换发，SPA 随后经 cookie 正常访问）——
+      // 跨域宿主（LAN 虚拟域名）下 Set-Cookie 落不到 dsh 域，必须走 token 换发。
+      reply({ reqId, ok: true, value: launchToken })
+      return
+    }
     if (method === 'respond') {
       // 审批应答：/api/respond 要 client-response 信封（rpcId 路由 web host pending 表），
       // 响应是 rpcReceipt { accepted } 而非 ServerResponse——与 Unary 响应结构不同，
@@ -96,7 +196,7 @@ export async function translateRpcRequest(req, port, reply) {
       const envelope = { type: 'client-response', ...(req.payload || {}) }
       const res = await fetch(base + '/api/respond', {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers,
         body: JSON.stringify(envelope),
       })
       if (!res.ok) throw new Error('/api/respond HTTP ' + res.status)
@@ -105,15 +205,26 @@ export async function translateRpcRequest(req, port, reply) {
       return
     }
     // Unary：client-request 信封，响应 ServerResponse（rpcId 回显 + result.ok/value
-    // 或 result.ok=false+error）
-    const res = await fetch(base + '/api/' + method, {
+    // 或 result.ok=false+error）。vX（dsh 0.1.2）：RPC 路径与信封 method 均为
+    // <namespace>/<method> 斜杠格式（/api/session/create + method "session/create"），
+    // 宿主侧传 "session.create" 点号格式——翻译时转换（0.1.1 无斜杠拆分，同路径兼容）。
+    const endpoint = method.includes('.') ? method.replace(/\./g, '/') : method
+    // vX（dsh 0.1.2）：Remote payload 要求 { args: <参数名>: <参数> }（typert
+    // Remote descriptor 的参数名；session/* 均声明为 request）。rpcId 注入
+    // request.requestId（0.1.2 create 用它写 jsonl data.source.rpcId，与宿主
+    // 定位键对齐）。非 session/* 的 method 暂以裸 args 透传（respond 走特殊分支）。
+    const isSession = method.startsWith('session.') || method.startsWith('session/')
+    const args = isSession
+      ? { request: { ...(req.payload || {}), requestId: reqId } }
+      : req.payload
+    const res = await fetch(base + '/api/' + endpoint, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers,
       body: JSON.stringify({
         type: 'client-request',
         rpcId: reqId,
-        method,
-        payload: req.payload,
+        method: endpoint,
+        payload: { args },
       }),
     })
     if (!res.ok) throw new Error('dsh /api/' + method + ' HTTP ' + res.status)
@@ -144,6 +255,16 @@ export async function translateRpcRequest(req, port, reply) {
 // ---- 插件 apply：注册 upgrade 路由 + 提供 dshanaBus 服务（全程容错，降级不阻断）----
 export function apply(ctx, config) {
   try {
+    // launchToken：从 connection 服务（HostConnectionService）的 BrowserAuth 读
+    // （dsh 0.1.2+ 浏览器鉴权进程令牌），自环 RPC 用它换 cookie。旧版 dsh 无此
+    // 服务 → 保持空，自环免鉴权兼容（改造前行为）。
+    ctx.inject(['connection'], (connCtx) => {
+      try {
+        launchToken = connCtx.get?.('connection')?.browserAuth?.launchToken || ''
+      } catch {
+        launchToken = ''
+      }
+    })
     ctx.inject(['webServer'], (httpCtx) => {
       httpCtx.effect(() => {
         let bridgeLog = (msg) => {
@@ -197,8 +318,7 @@ export function apply(ctx, config) {
               return
             }
             if (!authed) {
-              // 首帧必须是 hello（免鉴权身份宣告：不再比对 token——总线与 mux、
-              // /api/session.* 同级，本机信任；payload 可为空对象）
+              // 首帧必须是 hello（身份宣告；payload 可带共享秘密）
               if (!frame || frame.channel !== 'hello') {
                 try {
                   wsConn.close(HELLO_CLOSE_CODE, 'hello required')
@@ -209,6 +329,23 @@ export function apply(ctx, config) {
               }
               authed = true
               clearTimeout(helloTimer)
+              // vX（bridge 凭据保护）：hello 携带的 secret 与 spawn 注入 env 的
+              // DSHANA_BUS_SECRET 比对——匹配才放行 launchToken/authCookie 凭据方法。
+              // 兼容：旧版宿主未携带 / 本机无 env 时 credAuthed 置 false（凭据方法
+              // 拒绝，其余 RPC 不受影响）；防本机任意进程连总线直取凭据。
+              try {
+                const envSecret = process.env.DSHANA_BUS_SECRET
+                const helloSecret =
+                  frame.payload && typeof frame.payload === 'object'
+                    ? frame.payload.secret
+                    : undefined
+                credAuthed =
+                  typeof envSecret === 'string' &&
+                  envSecret.length > 0 &&
+                  helloSecret === envSecret
+              } catch {
+                credAuthed = false
+              }
               // 单连接语义：新连接 hello 通过后旧连接关闭（宿主唯一客户端，重连顶替）
               if (conn && conn !== wsConn) {
                 try {
@@ -223,7 +360,11 @@ export function apply(ctx, config) {
                 // 已连接：经总线 log 帧直投宿主（会话文件行格式 [ts] [bridge] 由宿主侧统一）
                 sendFrame({ channel: 'log', payload: { src: 'bridge', line: msg } })
               }
-              bridgeLog('dshana.bus 握手成功（宿主已连接，免鉴权）')
+              bridgeLog(
+                'dshana.bus 握手成功（' +
+                  (credAuthed ? '共享秘密已校验' : '未携带共享秘密，凭据方法拒绝') +
+                  '）',
+              )
               return
             }
             // 已握手：channel 分发 + 心跳 + config 缓存
@@ -256,6 +397,7 @@ export function apply(ctx, config) {
             clearTimeout(helloTimer)
             if (conn === wsConn) {
               conn = null
+              credAuthed = false // 连接关闭：清凭据授权（新连接须重新 hello 校验）
               bridgeLog('dshana.bus 连接断开')
             }
           }
@@ -273,6 +415,10 @@ export function apply(ctx, config) {
               path: BUS_PATH,
               handler: (req, socket, head) => {
                 handleUpgrade(req, socket, head, {
+                  // 总线是凭据通道（launchToken/authCookie）：启用浏览器 Origin 校验，
+                  // 拒绝恶意网页向 127.0.0.1 upgrade 直取凭据（CSWSH）；宿主 Node 客户端
+                  // 无 Origin 头不受影响。
+                  requireLocalOrigin: true,
                   onConnection,
                   onError: (err) => {
                     bridgeLog('dshana.bus 连接错误：' + ((err && err.message) || err))
@@ -339,12 +485,158 @@ export function apply(ctx, config) {
           )
         })
 
+        // ---- 事件流订阅（remote.mux + $events）：bridge 在 dsh 进程内代宿主订阅，
+        // 经总线 events 频道转发——宿主无需 WS 连接/鉴权（launchToken 在进程内
+        // BrowserAuth，ensureAuthCookie 换发无竞态）。0.1.2 的 $events 只广播
+        // api-session/*（added/removed/status/error/activity）；waterfall 帧（审批等）
+        // bridge 回投 next 后照转（宿主审批应答适配后续接入）。 ----
+        const evtPort = httpCtx.webServer?.port ?? 3080
+        let evtWs = null
+        let evtClientId = ''
+        let evtRetry = 0
+        let evtRetryTimer = null
+        let evtDisposed = false
+
+        const evtEmit = (frame) => {
+          try {
+            service.emit('events', frame)
+          } catch {
+            /* 转发失败不阻断（宿主退订/未连接 no-op） */
+          }
+        }
+
+        const evtConnect = async () => {
+          if (evtDisposed) return
+          try {
+            const cookie = await ensureAuthCookie(evtPort)
+            // CodeRabbit：cookie 获取期间插件可能已卸载——重查 disposed 再建 socket，
+            // 否则新 evtWs 与其 $events 订阅在 disposer 跑完后仍开着（泄漏）。
+            if (evtDisposed) return
+            evtWs = new WebSocket(
+              'ws://127.0.0.1:' + evtPort + '/api/remote.mux',
+              cookie ? { headers: { Cookie: cookie } } : {},
+            )
+            evtWs.addEventListener('open', () => {
+              evtRetry = 0
+              bridgeLog('事件流 remote.mux 已连接（$events 订阅）')
+              try {
+                evtWs.send(
+                  JSON.stringify({
+                    type: 'open',
+                    streamId: randomUUID(),
+                    endpoint: '$events',
+                    payload: { args: {} },
+                  }),
+                )
+              } catch (e) {
+                bridgeLog('事件流 open 帧发送失败：' + ((e && e.message) || e))
+              }
+            })
+            evtWs.addEventListener('message', (e) => {
+              let item = null
+              try {
+                item = JSON.parse(e.data)
+              } catch {
+                return
+              }
+              const value = item && typeof item === 'object' ? item.value : null
+              if (!value || typeof value.type !== 'string') return
+              if (value.type === 'ready') {
+                evtClientId =
+                  typeof value.clientId === 'string' ? value.clientId : ''
+                evtEmit({ type: 'ready' }) // 宿主就绪信号
+                return
+              }
+              if (value.type === 'waterfall') {
+                // 回投 next（宿主只读不处理，否则服务端挂起；fire-and-forget）
+                if (evtClientId && typeof value.eventId === 'string') {
+                  try {
+                    fetch('http://127.0.0.1:' + evtPort + '/api/$events/result', {
+                      method: 'POST',
+                      headers: {
+                        'content-type': 'application/json',
+                        ...(cookie ? { cookie } : {}),
+                      },
+                      body: JSON.stringify({
+                        type: 'client-request',
+                        rpcId: 'ev_' + Date.now().toString(36),
+                        method: '$events/result',
+                        payload: {
+                          args: {
+                            clientId: evtClientId,
+                            eventId: value.eventId,
+                            outcome: { kind: 'next' },
+                          },
+                        },
+                      }),
+                    }).catch(() => {})
+                  } catch {
+                    /* 回投失败忽略（服务端超时自愈） */
+                  }
+                }
+                evtEmit({
+                  type: 'waterfall',
+                  event: value.event,
+                  eventId: value.eventId,
+                  agentId: value.agentId,
+                  request: value.request,
+                })
+                return
+              }
+              if (value.type === 'emit') {
+                evtEmit({ type: 'emit', event: value.event, args: value.args })
+              }
+              // cancel 帧：忽略（宿主无取消订阅语义，重连自愈）
+            })
+            evtWs.addEventListener('close', () => {
+              evtWs = null
+              if (evtDisposed) return
+              evtRetry = Math.min(evtRetry + 1, 8)
+              const delay = Math.min(1000 * 2 ** evtRetry, 30000)
+              bridgeLog(
+                '事件流断开，' + delay + 'ms 后重连（第 ' + evtRetry + ' 次）',
+              )
+              evtRetryTimer = setTimeout(() => evtConnect(), delay)
+              evtRetryTimer.unref?.()
+            })
+            evtWs.addEventListener('error', () => {
+              /* 错误由 close 兜底 */
+            })
+          } catch (e) {
+            bridgeLog('事件流连接失败：' + ((e && e.message) || e))
+            // CodeRabbit：与 close 分支统一保护——插件卸载与连接失败竞态时不再排定重连，
+            // 且清理已存在的旧计时器（否则引用被覆盖，卸载时 clearTimeout 清不掉最新的）。
+            if (evtDisposed) return
+            if (evtRetryTimer) clearTimeout(evtRetryTimer)
+            evtRetry = Math.min(evtRetry + 1, 8)
+            evtRetryTimer = setTimeout(
+              () => evtConnect(),
+              Math.min(1000 * 2 ** evtRetry, 30000),
+            )
+            evtRetryTimer.unref?.()
+          }
+        }
+        evtConnect()
+
         const provideDisposer = ctx.provide('dshanaBus', service)
 
         bridgeLog('bridge 插件已启动（dshana.bus 消息总线服务端，免鉴权）')
 
         return () => {
-          // 卸载：注销 provide + upgrade 路由 + 关闭当前连接
+          // 卸载：注销 provide + upgrade 路由 + 关闭当前连接 + 事件流订阅
+          evtDisposed = true
+          if (evtRetryTimer) {
+            clearTimeout(evtRetryTimer)
+            evtRetryTimer = null
+          }
+          if (evtWs) {
+            try {
+              evtWs.close()
+            } catch {
+              /* 忽略 */
+            }
+            evtWs = null
+          }
           if (provideDisposer && typeof provideDisposer === 'function') {
             try {
               provideDisposer()

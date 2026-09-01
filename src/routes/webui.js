@@ -130,9 +130,9 @@ function buildShell({
   // 下内层声明无法生效，属无效方案已回滚，见 CHANGELOG）。
   // 剪贴板问题的正规解法是 @dsh-hanako/clipboard 插件（tapIndex 注入桥 → 宿主 capability）
   // + 下方壳页面桥（hostRequest + __dshCopy 监听）。
-  const iframe = ready
-    ? `<iframe id="dsh-frame" src="http://127.0.0.1:${port}/"></iframe>`
-    : `<iframe id="dsh-frame"></iframe>`;
+  // iframe src 由壳页 JS 统一设置（attach）：直嵌 @dsh-hanako/web-app 子插件
+  // （dsh 3080 fork SPA）——同源 iframe，无需 BFF 代理/凭据透传。
+  const iframe = `<iframe id="dsh-frame"></iframe>`;
   // 嵌入首帧自检 JSON：把 </ 转义成 <\/，防诊断文本（路径/stderr）里的 </script> 提前闭合脚本
   const initDiag = diagnostics
     ? JSON.stringify(diagnostics).replace(/<\//g, "<\\/")
@@ -163,7 +163,14 @@ export default function registerWebuiRoutes(app, ctx) {
   // 订阅 /webui/events 就绪事件流，bus ready 后宿主推 ready 事件动态挂载）。不再服务端
   // probeHost（就绪事件化，probeHost 仅诊断路径使用）。未就绪时服务端同步收集一次自检
   // （首屏即渲染，诊断路径刷新）；就绪不收集保持轻量。
+  // 壳页不再注入任何脚本/横幅：web host 状态与诊断由壳页 JS 订阅 /webui/events
+  // 事件流驱动（就绪事件化），SPA 全部资源由 @dsh-hanako/web-app 子插件
+  // （dsh 3080）iframe 同源直嵌提供，无浏览器端劫持/改写。
+
   app.get("/webui", async (c) => {
+    // 壳页：iframe 直嵌 @dsh-hanako/web-app 子插件（dsh 3080）serve 的 fork SPA——
+    // iframe 内同源（资源/API/SSE/WS 全由子插件提供，免鉴权，无劫持无 token/PSS）；
+    // 宿主只做页面壳：就绪事件化 / 诊断 / 主题与剪贴板桥（全部在壳页 JS 里）。
     const ready = busReady();
     const hc = c.req.query("hana-css") || "";
     const th = c.req.query("hana-theme") || "inherit";
@@ -456,9 +463,9 @@ export default function registerWebuiRoutes(app, ctx) {
 
   // 更新 DSH（deps 卡片「更新 DSH」按钮 + Agent 工具 dsh_install 共用能力层）：
   // 更新中（g.update.status === "running"）→ {ok:true,state:"updating"}；否则异步触发
-  // g.updateDsh(cfg)（不 await 其完成——pnpm add 可能耗时数分钟，前端经诊断/设置页
-  // update 事件看进度）→ {ok:true,state:"updating"}。未传版本/tag 时按配置基线
-  // （config.json global.dshTag，默认 latest）安装。更新会重启 web host，正在执行的
+  // g.updateDsh(cfg)（不 await 其完成——pnpm install 可能耗时数分钟，前端经诊断/设置页
+  // update 事件看进度）→ {ok:true,state:"updating"}。未传版本/tag 时按插件声明版本
+  // 安装（config.json global.dshTag 已退役为新默认的兑底）。更新会重启 web host，正在执行的
   // dsh 任务会中断（前端按钮已有确认文案）。单例缺失/无函数/异常一律容错回
   // {ok:false}，本路由不抛异常。
   app.post("/webui/update-dsh", (c) => {

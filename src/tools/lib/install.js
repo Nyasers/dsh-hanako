@@ -38,7 +38,7 @@ import {
   runPnpm,
   PNPM_VERSION,
   DSH_PACKAGE,
-  buildPnpmAddArgs,
+  buildPnpmInstallArgs,
   isValidPkgSpec,
 } from "./pnpm.js";
 import { resolveDshTag } from "./config.js";
@@ -248,7 +248,7 @@ function pnpmErrorTail(stdoutTail, stderrTail) {
   return parts.join("\n").slice(-300) || "无输出";
 }
 
-// dsh 依赖位置两形态——① 数据目录 dsh-pkg/（Agent pnpm i @deepseek-ai/dsh 部署的轻量分发形态，
+// dsh 依赖位置两形态——① 数据目录 dsh-pkg/（Agent pnpm install 按声明部署的轻量分发形态，
 // 优先）；② 插件安装目录 node_modules（现役 zip 自带形态，兑底）。DSH_HOME 恒在数据目录。
 export function resolveDshPkgDir(cfg) {
   if (cfg?.dataDir) {
@@ -262,6 +262,32 @@ export function resolveDshPkgDir(cfg) {
     }
   }
   return PLUGIN_ROOT;
+}
+
+// ---- T7a：运行时依赖声明读取（单一事实源 = 插件根 package.json 的 dependencies）----
+// 声明版本固定随插件发版：@deepseek-ai/dsh（dsh 运行时本体）+ @deepseek-ai/cordis
+// （cordis 运行时，dsh 插件树的宿主容器）。读取失败/未声明 → null（调用方回退旧基线）。
+function readDeclaredDeps() {
+  try {
+    const pkg = JSON.parse(
+      readFileSync(join(PLUGIN_ROOT, "package.json"), "utf8"),
+    );
+    const deps = (pkg && pkg.dependencies) || {};
+    const out = {};
+    if (typeof deps["@deepseek-ai/dsh"] === "string")
+      out["@deepseek-ai/dsh"] = deps["@deepseek-ai/dsh"];
+    if (typeof deps["@deepseek-ai/cordis"] === "string")
+      out["@deepseek-ai/cordis"] = deps["@deepseek-ai/cordis"];
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+// 声明版本号（严格 semver 或合法 dist-tag 校验通过才返回；未声明/非法 → null）
+function readDeclaredDshVersion() {
+  const v = readDeclaredDeps()["@deepseek-ai/dsh"];
+  return v && isValidPkgSpec(v) ? v : null;
 }
 
 // ---- 零依赖 semver 比较（major.minor.patch 三段数字逐个比；预发布按 SemVer §11.4 比较）----
@@ -348,23 +374,27 @@ export function readDshInstalledVersion(cfg) {
 // ---- 依赖自主部署（deps 缺失项「安装依赖」按钮的后端逻辑）----
 // 参照技能文档 dsh-hanako/SKILL.md 依赖自主部署章节：部署目标恒为数据目录 dsh-pkg
 // （升级安装会清插件目录 node_modules，数据目录随插件生命周期保留；不部署到插件根），
-// 把最小 package.json + 插件根的 pnpm-workspace.yaml（allowBuilds 白名单）写入 pkgDir，
-// 并创建指向宿主 electron node 的代理脚本，然后经 lib/pnpm.js 的 buildPnpmAddArgs 执行
-// pnpm add @deepseek-ai/dsh --reporter=ndjson（结构化安装进度事件流 → 可读进度行，见下）。
+// 把声明 package.json + 插件根的 pnpm-workspace.yaml（allowBuilds 白名单）写入 pkgDir，
+// 并创建指向宿主 electron node 的代理脚本，然后经 lib/pnpm.js 的 buildPnpmInstallArgs 执行
+// pnpm install --reporter=ndjson（按声明 package.json 的 dependencies 拉取，结构化安装进度
+// 事件流 → 可读进度行，见下）。不再走 pnpm add @spec 动态安装（T7a 起版本由插件根 package.json
+// 的 dependencies 声明，单一事实源，固定版本随插件发版）。
 // 关键：PATH 首部指向 pkgDir——代理脚本（node.cmd/node）将子进程 node 请求转发到宿主 electron node，
 // koffi/node-pty 的 install script 经 cmd 起子进程 node 时就能找到宿主 electron node。
 // 不复制插件根 package.json：其 devDependencies 是 rspack 构建树，复制进来需 --omit=dev 剔除，
-// 而 pnpm 11 的 add 命令不支持 --omit CLI 旗标（报 Unknown option: 'omit'）；
-// 最小 package.json 无 devDeps，pnpm add 天然只装 @deepseek-ai/dsh 运行时树（peer 自动装默认开启）。
+// 而 pnpm 11 的 install 命令不支持 --omit CLI 旗标（报 Unknown option: 'omit'）；
+// 声明 package.json 只含运行时 dependencies（@deepseek-ai/dsh + @deepseek-ai/cordis），
+// pnpm install 天然只装运行时树。
 // registry 默认官方源，失败自动重试 npmmirror。部署是长任务：本函数异步
 // 执行不 await（调用方立即返回，页面靠轮询诊断刷新）；状态记单例分组 g.deps =
 // { status, result, error, time, log }（v0.24 状态收敛：status 入口置 installing、
 // 成功置 ok、catch 置 error——终态保留，下次入口才回到 installing；log 内存尾环
 // ≤DEPS_LOG_CAP，pnpm 输出与里程碑同通道 emitLog 实时写，见文件头「依赖安装日志通道」）。
-// spec 参数（vX 起，opts.spec）：可指定安装版本/tag（如 "1.0.0-alpha.1" / "next"），
-// 传入后 pnpm add @deepseek-ai/dsh@<spec>；缺省回退配置基线（resolveDshTag：
-// config.json global.dshTag，默认 "latest"）——version 参数优先于 tag 的解析在
-// 工具层（tools/dsh-install.js），能力层只认最终 spec。
+// spec 参数（T7a 起，opts.spec）：工具层显式传 version/tag 时覆盖声明版本安装（逃生门）；
+// 缺省默认走插件根 package.json 的 dependencies 声明版本（@deepseek-ai/dsh 固定版本随插件发版，
+// 单一事实源），不再回退配置基线 resolveDshTag（保留仅作旧版兼容兜底）。
+// 解耦（D6）：工具包/生命周期自身不 import pnpm 或 cordis 运行时——pnpm 经运行时引导
+// （ensurePnpm 下载单文件）；诊断经 spawn subprocess + HTTP 直查，不加载 cordis。
 export async function installDepsFromPlugin(ctxConfig, ctxDataDir, opts = {}) {
   const g = getSingleton();
   // 部署中并发调用直接返回（路由侧也会先查 g.deps.status，这里是直调兜底）。
@@ -382,16 +412,22 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir, opts = {}) {
   }
   const dataDir = ctxDataDir || g.dataDir || join(PLUGIN_ROOT, "data");
   cfg.dataDir = dataDir;
-  // 安装目标解析（vX 起）：opts.spec（工具层已做 version||tag 解析）优先；缺省回退
-  // 配置基线（resolveDshTag：config.json global.dshTag → 快照 → "latest"）——webui
-  // 路由/设置页总线等不带 spec 的调用方同样遵循配置基线，单一事实源。
+  // 安装目标解析（T7a 起）：版本单一事实源 = 插件根 package.json 的 dependencies 声明
+  // （@deepseek-ai/dsh 固定版本随插件发版；opts.spec 显式覆盖——工具层 version/tag
+  // 参数仍是逃生门；声明缺失时回退配置基线 resolveDshTag 兼容旧版）。
+  // 声明版本在读下方部署 package.json 时同步写入（pnpm install 按声明拉取），
+  // 不再走 pnpm add @spec 动态安装。
+  const declaredDeps = readDeclaredDeps();
+  const declaredVersion = readDeclaredDshVersion();
   const effectiveSpec =
     (typeof opts?.spec === "string" && opts.spec.trim() ? opts.spec.trim() : null) ||
+    declaredVersion ||
     resolveDshTag(cfg);
-  // 注入面校验（vX）：effectiveSpec 会拼成 DSH_PACKAGE + "@" + spec 传给 pnpm add，
-  // spec 可能来自工具参数（version/tag）或配置基线 dshTag；未校验时 "npm:evil@1.0.0"
-  // （npm alias）、"github:user/repo"、"file:../x"、"/abs/path" 等会让 pnpm add 安装
-  // 非预期包。校验失败按容错纪律提前返回（不 throw）。
+  // 注入面校验（vX）：effectiveSpec 会拼成 DSH_PACKAGE + "@" + spec（旧 pnpm add
+  // 路径；T7a 后主路径为 pnpm install 按声明拉取，仅 opts.spec 覆盖时才拼 add spec）
+  // spec 可能来自工具参数（version/tag）、声明或配置基线 dshTag；未校验时
+  // "npm:evil@1.0.0"（npm alias）、“github:user/repo”、“file:../x”、“/abs/path” 等会
+  // 让 pnpm add 安装非预期包。校验失败按容错纪律提前返回（不 throw）。
   if (!isValidPkgSpec(effectiveSpec)) {
     return {
       ok: false,
@@ -431,7 +467,41 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir, opts = {}) {
     const pkgDir = join(dataDir, "dsh-pkg");
     mkdirSync(pkgDir, { recursive: true });
     milestone("部署目录就绪：" + pkgDir);
-    // 1.5 部署前停 web host：后续要删旧 node_modules，Windows 上被运行中进程加载的原生
+    // 1.5 幂等检查：cliBin 存在且已装版本 === 声明版本（精确匹配固定版本）→ 跳过安装
+    //    放在停 host 之前，避免版本一致时白停一次 web host。
+    const cliBin = join(
+      pkgDir,
+      "node_modules",
+      "@deepseek-ai",
+      "dsh",
+      "lib",
+      "bin.js",
+    );
+    const installedVersion = readDshInstalledVersion({ dataDir });
+    if (
+      existsSync(cliBin) &&
+      declaredVersion &&
+      installedVersion === declaredVersion
+    ) {
+      // 幂等跳过前必须运行级重验（CodeRabbit：cliBin 存在 ≠ 依赖图完整——声明版本一致
+      // 但运行时包缺失时不能报「已安装成功」；smoke 失败 fall through 走重装流程）。
+      const smoke = await verifyDepsSmoke(cfg, { force: true });
+      if (smoke && smoke.ok) {
+        milestone("已安装 dsh@" + installedVersion + "（与声明一致），跳过安装");
+        g.deps.error = null;
+        g.deps.result = smoke;
+        g.deps.status = "ok";
+        return { ok: true, state: "installed", cliBin, skipped: true };
+      }
+      milestone(
+        "已安装 dsh@" +
+          installedVersion +
+          "（与声明一致）但依赖不完整（" +
+          ((smoke && (smoke.error || smoke.stderr)) || "verify 失败") +
+          "），走重装流程",
+      );
+    }
+    // 1.6 部署前停 web host：后续要删旧 node_modules，Windows 上被运行中进程加载的原生
     //    模块（koffi/node-pty 的 .node）会锁文件，rmSync 直接失败（EBUSY/EPERM）。
     //    经单例调用 closeProcess（lifecycle.js 挂载，幂等；dsh-install 工具 update
     //    action 同款「停 host → 装依赖 → 起 host」编排），异常不阻断部署（撞锁时会以
@@ -443,18 +513,24 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir, opts = {}) {
       /* 停 host 失败不阻断（后续清理若撞锁会以 error 返回） */
     }
     milestone("[兼容] web host 已停止（部署前）");
-    // 2. 部署清单：最小 package.json（无 devDeps，避免 pnpm 11 add 缺 --omit 旗标时误装构建树）
-    //    + 插件根 pnpm-workspace.yaml（allowBuilds 白名单放行 dsh 树 build scripts；pnpm 11
-    //    配置已迁至 pnpm-workspace.yaml，package.json 的 allowScripts / onlyBuiltDependencies 不再读取）
+    // 2. 部署清单：package.json（dependencies 来自插件根声明，T7a 固定版本随插件
+    //    发版，单一事实源）+ 插件根 pnpm-workspace.yaml（allowBuilds 白名单放行
+    //    build scripts）。不再写最小空 package.json 以 pnpm add 动态加版本。
     const srcWs = join(PLUGIN_ROOT, "pnpm-workspace.yaml");
     if (!existsSync(srcWs))
       throw new Error("插件根缺少 pnpm-workspace.yaml：" + srcWs);
-    writeFileSync(
-      join(pkgDir, "package.json"),
-      JSON.stringify({ name: "dsh-pkg", private: true }, null, 2) + "\n",
-    );
+    // 写 package.json（dependencies 来自声明；opts.spec 覆盖时以 spec 改写 dsh 版本）
+    const depPkg = {
+      name: "dsh-pkg",
+      private: true,
+      dependencies: { ...declaredDeps },
+    };
+    if (effectiveSpec && effectiveSpec !== declaredVersion) {
+      depPkg.dependencies["@deepseek-ai/dsh"] = effectiveSpec;
+    }
+    writeFileSync(join(pkgDir, "package.json"), JSON.stringify(depPkg, null, 2) + "\n");
     copyFileSync(srcWs, join(pkgDir, "pnpm-workspace.yaml"));
-    milestone("写最小 package.json + pnpm-workspace.yaml 到 " + pkgDir);
+    milestone("写 package.json（dependencies 声明）+ pnpm-workspace.yaml 到 " + pkgDir);
     // 3. 创建 node 代理；pnpm 入口 = 运行时引导（lib/pnpm.js ensurePnpm）
     if (IS_WIN) {
       const script = join(pkgDir, "node.cmd");
@@ -479,7 +555,7 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir, opts = {}) {
     milestone("pnpm 引导就绪：" + pnpmCli);
     // ---- npm → pnpm 升级兼容清理 ----
     // 旧版本 dsh-install 用 npm i 部署 dsh-pkg，会留下 package-lock.json 和扁平的
-    // node_modules；新版本改用 pnpm add 部署，若不先清掉旧 npm 结构，会与 pnpm 自己的
+    // node_modules；新版本改用 pnpm install 部署（按声明），若不先清掉旧 npm 结构，会与 pnpm 自己的
     // .pnpm 目录和符号链接混装，轻则冗余、重则影响 dsh 的 cordis 依赖解析。
     // 只清理数据目录 dsh-pkg（pkgDir）内的残留；插件根 PLUGIN_ROOT 下的 node_modules
     // 或其它目录不受影响。package.json / pnpm-workspace.yaml 由步骤 2 覆盖写，无需删。
@@ -500,12 +576,11 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir, opts = {}) {
     } else {
       milestone("[兼容] 无旧依赖残留，跳过清理");
     }
-    // 5. pnpm add 安装目标（参数构造收敛 lib/pnpm.js buildPnpmAddArgs：spec = 显式
-    //    version/tag 或配置基线 dshTag，合法性已在上方 isValidPkgSpec 校验；registry
-    //    兜底由调用方只传 URL 意图）；最小
-    //    package.json 无 devDeps 无需 omit；allowBuilds 放行 build scripts；PATH 首部
+    // 5. pnpm install 安装目标（参数构造收敛 lib/pnpm.js buildPnpmInstallArgs：按
+    //    声明 package.json 的 dependencies 拉取，registry 兜底由调用方只传 URL 意图）；
+    //    dependencies 无 devDeps 无需 omit；allowBuilds 放行 build scripts；PATH 首部
     //    指向 pkgDir（代理脚本 node.cmd/node 让 install script 找到宿主 electron node）
-    milestone("安装目标：" + pkgTarget);
+    milestone("安装目标：pnpm install（按声明 " + pkgTarget + "）");
     const run = async (registry) => {
       // stdout/stderr 各持独立跨 chunk 行缓冲（pending 行重组 + tail 错误提取）：两条
       // 管道的 chunk 边界互不相关，共用一个缓冲会把不同流的片段拼成一行，破坏 ndjson
@@ -533,9 +608,9 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir, opts = {}) {
           if (readable !== "") emitLog(readable + "\n", "pnpm");
         }
       };
-      // 参数构造收敛 lib/pnpm.js buildPnpmAddArgs（含 --reporter=ndjson；spec = 显式
-      // version/tag 或配置基线；registry 兜底意图由调用方只传 URL）
-      const r = await runPnpm(buildPnpmAddArgs({ registry, spec: effectiveSpec }), {
+      // 参数构造收敛 lib/pnpm.js buildPnpmInstallArgs（含 --reporter=ndjson；按声明
+      // 安装，registry 兜底意图由调用方只传 URL）
+      const r = await runPnpm(buildPnpmInstallArgs({ registry }), {
         pnpmCli,
         cwd: pkgDir,
         env: {
@@ -554,28 +629,20 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir, opts = {}) {
       }
       if (r.code !== 0)
         throw new Error(
-          "pnpm add 失败 " + DSH_PACKAGE + "（exit " + r.code + "）：" + pnpmErrorTail(buffers.out.tail, buffers.err.tail),
+          "pnpm install 失败 " + DSH_PACKAGE + "（exit " + r.code + "）：" + pnpmErrorTail(buffers.out.tail, buffers.err.tail),
         );
       return buffers.out.tail; // 无消费者（run 返回值未使用）；保持 string 返回语义
     };
     try {
-      await run(null); // 官方源（buildPnpmAddArgs 不加 registry 参数）
+      await run(null); // 官方源（buildPnpmInstallArgs 不加 registry 参数）
     } catch (e) {
       milestone("[官方源失败] " + e.message + "，重试 npmmirror…");
       await run("https://registry.npmmirror.com");
     }
     // 6. 校验 dsh 包就位（resolveDshPkgDir 优先 dsh-pkg，这里 cliBin 即部署产物）
-    const cliBin = join(
-      pkgDir,
-      "node_modules",
-      "@deepseek-ai",
-      "dsh",
-      "lib",
-      "bin.js",
-    );
     if (!existsSync(cliBin)) {
       throw new Error(
-        "pnpm add 完成但未找到 DSH 包：" +
+        "pnpm install 完成但未找到 DSH 包：" +
           cliBin +
           " 不存在（部署目录 " +
           pkgDir +

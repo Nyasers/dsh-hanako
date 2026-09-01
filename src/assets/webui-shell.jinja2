@@ -417,12 +417,18 @@
       clearReadyTimers();
       var wasPending = document.body.getAttribute("data-pending") === "1";
       document.body.setAttribute("data-pending", "0");
+      // @dsh-hanako/web-app 子插件（dsh 进程内）serve 完整 fork SPA——iframe 直接嵌
+      // （同源 3080，免鉴权：资源/API/SSE/WS 全由子插件提供，无宿主代理、无劫持、
+      // 无 token/PSS 负担；跨源桥（主题/剪贴板）经 postMessage 走壳页）。
+      // vY（T7b）：dsh WebUI 由 @dsh-hanako/web-app serve 在根路径（registerFallback 席位），
+      // /webui/ 前缀已退役——iframe 直嵌 127.0.0.1:<port>/，不带 ?dshReload bust
+      // （index.html no-cache + assets hash 文件名，更新后自然换新，bust 多余且污染 URL）。
       var base = "http://127.0.0.1:{{= it.port }}/";
       // 首次挂载（src 空）或从加载/诊断态切回（更新/停机后）：强制加载当前 web host
       // （带时间戳 bust，避免相同 src 不触发重新加载，保证更新后拿到新版本 UI）；
       // 已挂载且非 pending（重复 ready）不重复 reload，不打断 dsh UI
       if (wasPending || !frame.getAttribute("src")) {
-        frame.src = base + "?dshReload=" + Date.now();
+        frame.src = base;
       }
       startThemePush();
       pushPanel(); // 就绪挂载后同步面板状态（运行中）
@@ -1025,9 +1031,10 @@
         if (!readyReceived) loadDiagnosticsNow(); // 30s 未就绪：引导看诊断（可刷新/修复）
       }, 30000);
     } else {
-      // 就绪态（服务端渲染即已连接）：iframe 首帧已带 src，直接启动主题推送
+      // 就绪态（服务端渲染即已连接）：统一走 attach 挂载（src 由壳页 JS 设置——
+      // 直嵌根路径，无 BFF 代理/凭据透传（vY：pluginSurfaceSession 仅用于 hana.api.fetch 调用））
       readyReceived = true;
-      startThemePush();
+      attach();
     }
     syncPanelFromDiag(initDiag); // 初始面板状态（readyReceived 已就位，避免初始错推「未就绪」）
 }) ();

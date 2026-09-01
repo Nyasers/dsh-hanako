@@ -20,6 +20,8 @@
 // checkDshUpdate）。本文件为 bundle 收敛入口：静态 import 全部插件模块（单 bundle 内无模块缓存问题）。
 import { existsSync, mkdirSync, appendFileSync } from "node:fs";
 import { join, dirname } from "node:path";
+// 日志生命周期（vX 起独立于 migrate 体系）：旧日志归档压缩 + 时间戳日志文件命名
+import { archiveOldLogs, logFileStamp, nextTimestampLogPath } from "./log-archive.js";
 
 // ---- bundle 收敛 ----（单 bundle 形态）
 // 生命周期能力：src/lifecycle.js 顶层 mountLifecycle() 在 import 时即挂单例
@@ -56,12 +58,6 @@ function logTs() {
   const p = (n, w) => String(n).padStart(w || 2, "0");
   return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
 }
-function logFileStamp(d) {
-  const p = (n) => String(n).padStart(2, "0");
-  const p3 = (n) => String(n).padStart(3, "0");
-  // 毫秒级精度：同一秒内多次会话（快速重启）天然不撞名，无需后缀消歧
-  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}-${p3(d.getMilliseconds())}`;
-}
 // 追加日志（行规范化）：\r\n / 裸 \r（npm 进度帧、TTY 重绘）统一折行，逐行加
 // [ts] [src] 前缀、空行丢弃——保证会话日志每行都带时间戳/来源（旧实现整块只加一次
 // 前缀，多行块后续行无前缀，不合规范）；chunk 内所有行共用同一时间戳（单次 append，
@@ -87,18 +83,6 @@ function appendLogLine(logPath, src, chunk) {
     /* 日志失败不阻断 */
   }
 }
-// 下一个时间戳日志文件路径（now 毫秒级命名；极端同毫秒冲突加 -i 后缀），用于新会话
-// 文件与旧 latest 归档——文件名即应用层创建时刻，不依赖文件系统元数据
-function nextTimestampLogPath(logsDir) {
-  const stamp = logFileStamp(new Date());
-  let target = join(logsDir, stamp + ".log");
-  let i = 1;
-  while (existsSync(target)) {
-    i += 1;
-    target = join(logsDir, stamp + "-" + i + ".log");
-  }
-  return target;
-}
 // routes 具名导出：dist/routes/index.js 壳 import { pluginRoutes } 转发（组合工厂，一次挂全部路由）
 export const pluginRoutes = (app, ctx) => {
   registerWebuiRoutes(app, ctx);
@@ -116,17 +100,11 @@ export default class DshHanakoPlugin {
 
     const logsDir = join(dataDir, "logs");
     mkdirSync(logsDir, { recursive: true });
-    // 统一迁移入口（src/migrate.js，经单例挂载调用）：archive-old-logs 步骤做旧日志归档
-    // 压缩（latest.log 残留归档/清理 + 时间戳 .log → .log.zst，全部保留不删除）——须在
-    // 建新会话文件之前执行（步骤内部先归档 latest.log 再压缩旧日志，避免把新会话文件
-    // 也压缩）；返回 { archivedName, compressed } 供下方记日志。config.json schema /
-    // junction 收敛等其余迁移在 lifecycle.js 启动路径经统一入口执行，不在此处。
-    const migration = g.runMigrations
-      ? g.runMigrations({ dataDir }, { steps: ["archive-old-logs"] })
-      : null;
-    const archiveStep = migration?.find?.((s) => s.id === "archive-old-logs");
-    const archivedName = archiveStep?.detail?.archivedName ?? null;
-    const compressed = archiveStep?.detail?.compressed ?? 0;
+    // 旧日志归档压缩（生命周期，每次运行执行——非版本迁移；vX 起独立于 migrate 体系）：
+    // latest.log 残留归档 + 时间戳 .log → .log.zst（全部保留不删除）——须在建新会话文件
+    // 之前执行（先归档 latest.log 再压缩旧日志，避免把新会话文件也压缩）；返回
+    // { archivedName, compressed } 供下方记日志。
+    const { archivedName, compressed } = archiveOldLogs({ dataDir });
     const sessionFile = nextTimestampLogPath(logsDir);
     const logPath = sessionFile;
     // 挂单例：dsh-run.js 的 logPath 优先取 g.logPath；appendLog 供 dsh-run 复用（行格式一致）

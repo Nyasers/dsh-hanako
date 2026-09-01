@@ -1,0 +1,13 @@
+{
+  "name": "dsh-profile-dshana",
+  "private": true,
+  "version": "1.0.0",
+  "description": "dshana profile：官方服务层（dsh-base）复用官方 UI client 插件（ui-layout/ui-workspace 等纯呈现组件，不强联鉴权）+ @dsh-hanako/* 子插件；不走官方 web profile（无 connection/browser-auth 鉴权面，WebUI 由宿主专供）；由插件运行时整体挂载为 $DSH_HOME/profiles/dshana",
+  "dependencies": {},
+  "dsh": {
+    "profile": {
+      "bundles": ["@deepseek-ai/dsh-base"],
+      "patchReload": "live"
+    }
+  }
+}

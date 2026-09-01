@@ -5,8 +5,9 @@
 // 宿主能力层（tools/lib/install.js installDepsFromPlugin / verifyDepsSmoke、lib/check.js
 // checkDshUpdate，经单例 g.installDeps / g.verifyDeps / g.checkDshUpdate / g.updateDsh
 // 调用）的 Agent 入口（vX 起合并原 dsh_update 工具）：
-//   action=install（默认）：pnpm add @deepseek-ai/dsh（可指定 version/tag；registry
-//     官方源失败自动重试 npmmirror + 自动运行级重验）→ 完成后 autoStart（默认 true：
+//   action=install（默认）：按插件根 package.json 声明版本安装（pnpm install；可显式传
+//     version/tag 覆盖声明作为逃生门；registry 官方源失败自动重试 npmmirror + 自动运行级
+//     重验）→ 完成后 autoStart（默认 true：
 //     web host 未起时经 g.startWebHost 拉起，失败不阻断结果上报；已起跳过）→
 //     { installed: true, version, autoStart 结果 }。
 //   action=verify：检测依赖完整性（g.verifyDeps：node cliBin --version 冒烟，能跑 =
@@ -14,10 +15,11 @@
 //   action=check：版本检查（g.checkDshUpdate：本地版本 + 远端 dist-tags + 基线 tag →
 //     { localVersion, distTags, baselineTag, baselineVersion, updateAvailable, error? }，
 //     只读；可指定 version/tag 对比）。
-//   action=update：完整更新（g.updateDsh：停 web host → pnpm add（可指定 version/tag）
-//     → 起 web host → 读新版本）。
-// 版本/tag 参数：version（具体版本号）优先于 tag（dist-tag），二者都不传时用配置基线
-// （config.json global.dshTag，默认 "latest"，见 lib/config.js resolveDshTag）。
+//   action=update：完整更新（g.updateDsh：停 web host → 按声明重装（可显式 version/tag
+//     覆盖）→ 起 web host → 读新版本）。
+// 版本/tag 参数：version（具体版本号）优先于 tag（dist-tag），二者都不传时用插件声明版本
+// （@deepseek-ai/dsh 固定版本随插件发版，见 lib/install.js readDeclaredDshVersion；
+// config.json global.dshTag 仅作旧版兼容兜底）。
 // 默认异步：立即返回 + 渲染「安装/升级卡片」（/card/dep，见 routes/card.js /ops/dep-stream，
 // 数据源 = 宿主单例 g.depTasks + g.deps.log 实时日志），完成/失败经宿主 deferred
 // 通道唤醒 Agent 带回结果；wait=true 同步等待直接返回。
@@ -38,10 +40,11 @@ import {
   failDeferredWake,
 } from "./lib/wake.js";
 
-// pnpm add 目标展示文本（版本/tag 描述）：spec = version || tag（显式参数），未显式传
-// 时展示无 @ 后缀（能力层回退配置基线 dshTag，默认 latest）。
+// 安装目标展示文本（T7a 起，按声明版本安装）：spec = version || tag（显式参数，覆盖声明版本安装），
+// 未显式传时展示「按声明版本」——T7a 起默认按插件根 package.json 的 dependencies 声明
+// 安装（pnpm install），显式 spec 为逃生门。
 function pkgTargetText(spec) {
-  return "pnpm add @deepseek-ai/dsh" + (spec ? "@" + spec : "");
+  return "pnpm install 按声明" + (spec ? "（覆盖 " + spec + "）" : "");
 }
 
 function buildVerifyText(r) {
@@ -95,11 +98,11 @@ function buildUpdateText(r) {
 export const name = "dsh_install";
 
 export const description =
-  "安装/验证 DeepSeek Harness（DSH）依赖与检查/更新 DSH 版本四合一：action=install（默认）pnpm add @deepseek-ai/dsh（可指定 version/tag）到数据目录 dsh-pkg（registry 兜底 + 自动运行级重验 + autoStart 拉起 web host，渲染安装卡片）；" +
+  "安装/验证 DeepSeek Harness（DSH）依赖与检查/更新 DSH 版本四合一：action=install（默认）按插件声明版本安装（pnpm install 到数据目录 dsh-pkg，可显式传 version/tag 覆盖作为逃生门；registry 兜底 + 自动运行级重验 + autoStart 拉起 web host，渲染安装卡片）；" +
   "action=verify 只检测依赖完整性（运行级冒烟，只读）；" +
   "action=check 版本检查（本地 + 远端 dist-tags + 基线 tag，只读）；" +
-  "action=update 完整更新（停 web host → pnpm add → 起 web host，渲染升级卡片，正在执行的任务会中断）。" +
-  "version 参数优先于 tag 参数，都不传用配置基线（config.json global.dshTag，默认 latest）。" +
+  "action=update 完整更新（停 web host → 按声明重装 → 起 web host，渲染升级卡片，正在执行的任务会中断）。" +
+  "version 参数优先于 tag 参数，都不传用插件声明版本（config.json global.dshTag 已退役为新默认的兜底）。" +
   "适用场景：dsh_run 报「DSH 包未就绪」、DSHana 标签页依赖缺失、需要检查/更新 dsh 版本。" +
   "默认异步：后台执行 + 完成回调，wait=true 同步；安装/更新进行中重复调用返回状态不重复执行。" +
   "完整调用手册见 SKILL: skills/dsh-install/SKILL.md";
@@ -111,12 +114,12 @@ export const parameters = {
       type: "string",
       enum: ["install", "verify", "check", "update"],
       description:
-        "install=安装依赖（默认，pnpm add @deepseek-ai/dsh 到 dsh-pkg，可指定 version/tag，registry 兜底 + 自动重验 + autoStart）；verify=只检测依赖完整性（运行级冒烟，只读）；check=版本检查（本地 + 远端 dist-tags + 基线 tag，只读）；update=完整更新（停 web host → pnpm add → 起 web host，正在执行的 dsh 任务会中断）",
+        "install=安装依赖（默认，按插件声明版本 pnpm install 到 dsh-pkg，可显式传 version/tag 覆盖，registry 兜底 + 自动重验 + autoStart）；verify=只检测依赖完整性（运行级冒烟，只读）；check=版本检查（本地 + 远端 dist-tags + 基线 tag，只读）；update=完整更新（停 web host → 按声明重装 → 起 web host，正在执行的 dsh 任务会中断）",
     },
     wait: {
       type: "boolean",
       description:
-        "false（默认）= 异步：install/update 立即返回，后台执行 + 卡片实时日志，完成后宿主唤醒带回结果；true = 同步：等安装/更新跑完直接返回最终结果（pnpm add 可能耗时数分钟，会阻塞当前回合）",
+        "false（默认）= 异步：install/update 立即返回，后台执行 + 卡片实时日志，完成后宿主唤醒带回结果；true = 同步：等安装/更新跑完直接返回最终结果（pnpm install 可能耗时数分钟，会阻塞当前回合）",
     },
     autoStart: {
       type: "boolean",
@@ -126,12 +129,12 @@ export const parameters = {
     version: {
       type: "string",
       description:
-        "具体版本号（如「1.0.0-alpha.1」）：install/update 时 pnpm add @deepseek-ai/dsh@<version>；check 时对比该版本（远端查询指定版本是否存在）。优先于 tag 与配置基线",
+        "具体版本号（如「1.0.0-alpha.1」）：install/update 时覆盖声明版本安装（逃生门，pnpm install 前改写声明）；check 时对比该版本（远端查询指定版本是否存在）。优先于 tag 与声明版本",
     },
     tag: {
       type: "string",
       description:
-        "dist-tag（如「latest」/「next」/「alpha」）：install/update 时 pnpm add @deepseek-ai/dsh@<tag>；check 时作为对比基线。显式传优先于配置基线（config.json global.dshTag，默认 latest）；version 参数优先于 tag",
+        "dist-tag（如「latest」/「next」/「alpha」）：install/update 时覆盖声明版本安装（逃生门）；check 时作为对比基线。显式传优先于声明版本（config.json global.dshTag 为新默认的兜底）；version 参数优先于 tag",
     },
   },
   required: [],
@@ -142,7 +145,7 @@ export const sessionPermission = {
   describeSideEffect: () => ({
     kind: "external_api",
     summary:
-      "安装/验证/检查/更新 DeepSeek Harness（DSH）依赖与版本：pnpm add @deepseek-ai/dsh（消耗网络，写入插件数据目录 dsh-pkg），可选自动启动 DSH web host；update 会停止并重启 DSH web host，正在执行的 DSH 任务会中断",
+      "安装/验证/检查/更新 DeepSeek Harness（DSH）依赖与版本：按插件声明版本 pnpm install（默认，可显式 version/tag 覆盖；消耗网络，写入插件数据目录 dsh-pkg），可选自动启动 DSH web host；update 会停止并重启 DSH web host，正在执行的 DSH 任务会中断",
     ruleId: "dsh-hanako-dsh-install",
   }),
 };

@@ -362,9 +362,13 @@ export class WsConnection extends EventEmitter {
  * 响应并创建 WsConnection（head 中可能已带首批帧数据，交给连接后续解析）。
  * 失败时写 HTTP 错误响应并 end socket（不 destroy——让对端读到错误响应）。
  * onConnection(conn) 在握手成功后调用；onError(err) 记录监听/握手层错误（可省略）。
+ * options.requireLocalOrigin：可选——为 true 时拒绝携带非本机 Origin 头的浏览器
+ * 连接（CSWSH 防护：恶意网页可向 127.0.0.1 upgrade，浏览器必带 Origin）。无 Origin
+ * 头的连接（Node/undici 客户端等非浏览器）不受影响。调用方按威胁面决定是否启用：
+ * 总线 /api/dshana.bus（凭据通道）启用；fork 静态/代理面（浏览器跨源访问）不启用。
  */
 export function handleUpgrade(req, socket, head, options = {}) {
-  const { onConnection, onError } = options;
+  const { onConnection, onError, requireLocalOrigin } = options;
   const fail = (status, text) => {
     try {
       socket.end(
@@ -396,6 +400,25 @@ export function handleUpgrade(req, socket, head, options = {}) {
   if (typeof key !== "string" || !key) {
     fail(400, "Bad Request");
     return;
+  }
+  // 浏览器 Origin 校验（CSWSH 防护，可选启用）：浏览器 WebSocket 必带 Origin 头——
+  // 恶意网页可向 127.0.0.1:3080 upgrade 总线（凭据通道），须拒绝非本机 Origin。
+  // 允许的本地 origin：127.0.0.1 / localhost / [::1] 任意端口（含宿主 UI 域
+  // localhost:35058 等本机页面）；无 Origin 头（Node/undici 客户端）不受影响。
+  if (requireLocalOrigin && req.headers.origin) {
+    let host = "";
+    try {
+      const u = new URL(req.headers.origin);
+      host = (u.hostname || "").replace(/^\[(.+)\]$/, "$1");
+    } catch {
+      host = "";
+    }
+    const local =
+      host === "127.0.0.1" || host === "localhost" || host === "::1";
+    if (!local) {
+      fail(403, "Forbidden");
+      return;
+    }
   }
   const accept = acceptKey(key);
   try {

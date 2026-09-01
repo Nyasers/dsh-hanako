@@ -1,0 +1,256 @@
+# dshana profile 的 user patch 层（$DSH_HOME/profiles/dshana/cordis.patch.yml）。
+# 作为 profile 挂在官方 @deepseek-ai/dsh-base 服务层之后；叠加官方 UI client 插件
+# （复用纯呈现组件）与 @dsh-hanako/* 子插件。@dsh-hanako/* 子插件经
+# node_modules/@dsh-hanako/* 实体随 profile 落位（见 build.mjs buildCordis）。
+#
+# 形态说明（vX 定稿，SDD dshana-webui-headless）：自定义 profile 不走官方 web
+# profile——bundles 只用 dsh-base（纯服务层），无 connection/browser-auth 鉴权面。
+# UI 组件（ui-layout/ui-workspace/ui-conversation 等）是 browser-only 纯呈现层
+# （host apply 空函数，client 注入链自闭环），复用它们不强联鉴权（实测：dsh-base-only
+# + 完整 UI roster 下全部激活，仅 connection 依赖者 pending——已从 roster 去除）。
+# 数据面（API/事件/WS）由总线桥承载（宿主 V2 app route → callUnaryBus → bridge →
+# dsh 服务），浏览器不直连 dsh HTTP。未来 headless 自包含（构建期拷贝 dist + client
+# 插件进插件产物）后再评估裁剪。
+#
+# 注意：session-log-export（浏览器导出端点）依赖 connection，headless 下不走，
+# 本 roster 不包含（如需要按总线桥改造后补回）。
+
+# ── surface-specific 值覆盖（与官方 web bundle 同值，显式保留防演进漂移）──
+
+- id: system-prompt
+  config:
+    persona: >-
+      You are a coding agent powered by the {{model}} model. Your working directory is {{cwd}}.
+
+- id: session-query-sqlite
+  config:
+    path: ':memory:'
+    openAt: never
+
+- id: tools
+  config:
+    mode: !!js process.env.DSH_TOOLS_MODE
+
+- insert:
+    # ── 服务层（官方 web-app bundle 的服务行，dsh-base 不带的）──
+    - id: subagent-model-selection-settings
+      name: '@deepseek-ai/dsh-tool-subagent/model-selection-settings'
+
+    - id: code-runtime
+      name: '@deepseek-ai/dsh-code-runtime-worker-thread'
+
+    - id: message-feedback
+      name: '@deepseek-ai/dsh-message-feedback'
+      config:
+        maxNoteBytes: 8192
+
+    - id: workspace
+      name: '@deepseek-ai/dsh-workspace'
+
+    - id: session-reference
+      name: '@deepseek-ai/dsh-session-reference'
+
+    - id: file-reference-local
+      name: '@deepseek-ai/dsh-file-reference-local'
+
+    - id: session-stats
+      name: '@deepseek-ai/dsh-session-stats'
+
+    - id: directory-picker
+      name: '@deepseek-ai/dsh-host-directory-picker-auto'
+
+    - id: plugin-inventory
+      name: '@deepseek-ai/dsh-host-plugin-inventory'
+
+    - id: session-controller
+      name: '@deepseek-ai/dsh-api-session-controller'
+
+    - id: settings-controller
+      name: '@deepseek-ai/dsh-api-settings-controller'
+
+    - id: workspace-controller
+      name: '@deepseek-ai/dsh-api-workspace-controller'
+
+    - id: cordis-host-runner
+      name: '@deepseek-ai/dsh-cordis-host-runner'
+
+    - id: web-startup
+      name: '@deepseek-ai/dsh-web-app/startup'
+
+    - id: webserver
+      name: '@deepseek-ai/dsh-host-webserver'
+      inject: [webStartup]
+      config:
+        host: !!js ctx.webStartup.host ?? '127.0.0.1'
+        port: !!js ctx.webStartup.port ?? 3080
+        compression: gzip
+        compressionLevel: 1
+        compressionThresholdBytes: 1024
+
+    - id: web-runtime
+      name: '@deepseek-ai/dsh-web-app'
+      inject: [webStartup]
+      config:
+        openBrowser: !!js ctx.webStartup.openBrowser
+        printUrl: true
+        surfaceContext: true
+        trustedHosts: !!js ctx.webStartup.trustedHosts
+
+    - id: client-hmr
+      name: '@deepseek-ai/dsh-client-hmr'
+
+    # ── browser 基础设施（无 connection/鉴权面）──
+    - id: modules
+      name: '@deepseek-ai/dsh-client-modules'
+
+    - id: api-remotes
+      name: '@deepseek-ai/dsh-api-remotes'
+
+    - id: cordis-client-runner
+      name: '@deepseek-ai/dsh-cordis-client-runner'
+
+    # ── UI 组件（复用官方 client 插件，纯呈现层不强联鉴权）──
+    - id: ui-theme
+      name: '@deepseek-ai/dsh-client-ui-theme'
+
+    - id: locale
+      name: '@deepseek-ai/dsh-client-locale'
+
+    - id: ui-layout
+      name: '@deepseek-ai/dsh-client-ui-layout'
+
+    - id: ui-renderer
+      name: '@deepseek-ai/dsh-client-ui-renderer'
+
+    - id: ui-session
+      name: '@deepseek-ai/dsh-client-ui-session'
+
+    - id: ui-sidebar
+      name: '@deepseek-ai/dsh-client-ui-sidebar'
+
+    - id: ui-settings
+      name: '@deepseek-ai/dsh-client-ui-settings'
+
+    - id: ui-settings-general
+      name: '@deepseek-ai/dsh-client-ui-settings-general'
+
+    - id: ui-settings-models
+      name: '@deepseek-ai/dsh-client-ui-settings-models'
+
+    - id: ui-settings-plugin-inventory
+      name: '@deepseek-ai/dsh-client-ui-settings-plugin-inventory'
+
+    - id: ui-conversation
+      name: '@deepseek-ai/dsh-client-ui-conversation'
+
+    - id: ui-approval
+      name: '@deepseek-ai/dsh-client-ui-approval'
+
+    - id: ui-chat
+      name: '@deepseek-ai/dsh-client-ui-chat'
+
+    - id: ui-brand-official
+      name: '@deepseek-ai/dsh-client-ui-brand-official'
+
+    - id: ui-attachment
+      name: '@deepseek-ai/dsh-client-ui-attachment'
+
+    - id: ui-tool
+      name: '@deepseek-ai/dsh-client-ui-tool'
+
+    - id: ui-cordis
+      name: '@deepseek-ai/dsh-client-ui-cordis'
+
+    - id: ui-workflow-run
+      name: '@deepseek-ai/dsh-client-ui-workflow-run'
+
+    - id: ui-deliverables
+      name: '@deepseek-ai/dsh-client-ui-deliverables'
+
+    - id: ui-workspace
+      name: '@deepseek-ai/dsh-client-ui-workspace'
+
+    - id: ui-input-trigger
+      name: '@deepseek-ai/dsh-client-ui-input-trigger'
+
+    - id: ui-commands
+      name: '@deepseek-ai/dsh-client-ui-commands'
+
+    - id: ui-skill
+      name: '@deepseek-ai/dsh-client-ui-skill'
+
+    - id: ui-subagent
+      name: '@deepseek-ai/dsh-client-ui-subagent'
+
+    - id: ui-reference
+      name: '@deepseek-ai/dsh-client-ui-reference'
+
+    - id: ui-schedule
+      name: '@deepseek-ai/dsh-client-ui-schedule'
+
+    - id: ui-jobs
+      name: '@deepseek-ai/dsh-client-ui-jobs'
+
+    - id: ui-goal
+      name: '@deepseek-ai/dsh-client-ui-goal'
+
+    - id: ui-message-feedback
+      name: '@deepseek-ai/dsh-client-ui-message-feedback'
+
+    - id: ui-model-selection
+      name: '@deepseek-ai/dsh-client-ui-model-selection'
+
+    - id: ui-permission
+      name: '@deepseek-ai/dsh-client-ui-permission-presets'
+
+    - id: ui-agent-preset
+      name: '@deepseek-ai/dsh-client-ui-agent-preset'
+
+    - id: ui-settings-plugins
+      name: '@deepseek-ai/dsh-client-ui-settings-plugins'
+
+    - id: ui-plan
+      name: '@deepseek-ai/dsh-client-ui-plan'
+
+    - id: ui-user-questions
+      name: '@deepseek-ai/dsh-client-ui-user-questions'
+
+    - id: ui-trajectory
+      name: '@deepseek-ai/dsh-client-ui-trajectory'
+
+    # ── agent-presets（dsh-base 不带，显式 insert 补 default）──
+    - id: agent-presets
+      name: '@deepseek-ai/dsh-agent-presets'
+      config:
+        default: standard
+
+    # ── @dsh-hanako/* 子插件 ──
+    - id: '@dsh-hanako/logger'
+      name: '@dsh-hanako/logger'
+
+    - id: '@dsh-hanako/clipboard'
+      name: '@dsh-hanako/clipboard'
+
+    - id: '@dsh-hanako/theme'
+      name: '@dsh-hanako/theme'
+
+    - id: '@dsh-hanako/provider'
+      name: '@dsh-hanako/provider'
+
+    - id: '@dsh-hanako/settings'
+      name: '@dsh-hanako/settings'
+
+    - id: '@dsh-hanako/bridge'
+      name: '@dsh-hanako/bridge'
+
+    # 免鉴权 connection 等价服务 + /api HTTP 载体（替代官方 dsh-client-connection 的
+    # BrowserAuth token/cookie 鉴权面——SPA 数据面 /api 一元 RPC 与 gateway 激活的
+    # 依赖；requestRejection 恒 undefined = 拔鉴权墙）。须在 gateway/api-* 插件之前
+    # 或同批激活（cordis inject 异步协调，服务可用即回调，顺序不敏感）。
+    - id: '@dsh-hanako/api-bridge'
+      name: '@dsh-hanako/api-bridge'
+
+    # 宿主专供 WebUI：serve fork 官方前端到根路径（fallback 席位，无代理/无鉴权面，
+    # 数据面走 api-bridge 免鉴权 /api + gateway remote.mux）
+    - id: '@dsh-hanako/web-app'
+      name: '@dsh-hanako/web-app'

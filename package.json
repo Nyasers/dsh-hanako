@@ -1,6 +1,6 @@
 {
   "name": "dsh-hanako",
-  "version": "1.0.0-alpha.3",
+  "version": "1.0.0-alpha.4",
   "private": true,
   "packageManager": "pnpm@11.24.0",
   "type": "module",
@@ -8,6 +8,10 @@
     "build": "node scripts/build.mjs",
     "pack": "node scripts/pack.mjs",
     "version": "node scripts/version.mjs"
+  },
+  "dependencies": {
+    "@deepseek-ai/cordis": "4.0.2",
+    "@deepseek-ai/dsh": "0.1.2-alpha.3"
   },
   "devDependencies": {
     "@rspack/core": "^2.1.10",

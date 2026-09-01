@@ -188,85 +188,72 @@ async function respondDirect(base, payload, signal) {
   return await res.json();
 }
 
-// ---- 事件流（/api/events.mux，WebSocket 通道）----
-// dsh 的事件流要求 WebSocket 升级（GET 返回 426 Upgrade Required，浏览器 UI 即走 WS）。
-// Node 24 内置全局 WebSocket；帧为 JSON，payload 即 MuxFrame。
+// ---- 事件流（dsh 0.1.2：宿主不直连 remote.mux，经 dshana.bus 消费）----
+// bridge 在 dsh 进程内订阅 remote.mux + $events（launchToken 在 BrowserAuth，
+// ensureAuthCookie 换发无竞态），经总线 events 频道转发帧：ready（就绪信号）/ emit
+// （api-session/* 广播）/ waterfall（审批等，bridge 已回投 next）。宿主 openMux 纯
+// 总线订阅——无 WS 连接、无 cookie 管理（直连 remote.mux 的 cookie 换发有启动竞态
+// 且宿主侧无 launchToken 源，已废弃）。
+
 async function* openMux(base, signal) {
-  if (typeof WebSocket !== "function") {
-    throw new Error("宿主环境无全局 WebSocket，无法订阅 DSH 事件流");
+  // dsh 0.1.2：宿主不直连 remote.mux——bridge 在 dsh 进程内订阅 $events 并经
+  // dshana.bus events 频道转发（ready/emit/waterfall），这里纯总线消费。
+  const g = getSingleton();
+  const bus = g?.dshanaBus;
+  if (!bus || typeof bus.on !== "function") {
+    throw new Error("dshana.bus 不可用，无法订阅 DSH 事件流");
   }
-  const url = base.replace(/^http/, "ws") + "/api/events.mux";
-  const ws = new WebSocket(url);
   const queue = [];
   const waiters = [];
-  let wsError = null;
-  let wsClosed = false;
-  ws.onmessage = (ev) => {
-    let frame = {};
-    let envelope = null;
-    try {
-      envelope = JSON.parse(ev.data);
-      frame = envelope?.payload || envelope || {};
-    } catch {
+  let off = null;
+  let ready = false;
+  let aborted = false; // abort 已触发标志：唤醒 waiters 后供循环检查（防 abort 后新建 waiter 挂死）
+  const onFrame = (payload) => {
+    if (!payload || typeof payload.type !== "string") return;
+    if (payload.type === "ready") {
+      ready = true; // bridge 事件流就绪信号，不投上层
       return;
     }
-    // server-request 信封（approval/requested 等应答类帧）：外层 rpcId 补进 frame——
-    // dsh web host 的 /api/respond 靠 client-response 信封的 rpcId 路由 pending 表，
-    // 审批帧的 rpcId 只在外层，只取 payload 会丢（审批应答就断链）。
-    if (
-      envelope &&
-      typeof envelope === "object" &&
-      typeof envelope.rpcId === "string" &&
-      typeof frame.rpcId !== "string"
-    ) {
-      frame.rpcId = envelope.rpcId;
-    }
-    if (!frame || typeof frame.type !== "string") return;
-    if (waiters.length) waiters.shift()(frame);
-    else queue.push(frame);
+    if (waiters.length) waiters.shift()(payload);
+    else queue.push(payload);
   };
-  ws.onerror = () => {
-    wsError = new Error("dsh events.mux WebSocket 错误");
-  };
-  ws.onclose = () => {
-    wsClosed = true;
-    while (waiters.length) waiters.shift()(null);
-  };
+  off = bus.on("events", onFrame);
   if (signal?.aborted) {
-    try {
-      ws.close();
-    } catch {}
+    aborted = true;
+    off();
     throw Object.assign(new Error("dsh_run 已取消"), { code: "DSH_ABORTED" });
   }
   const onAbort = () => {
-    try {
-      ws.close();
-    } catch {}
+    aborted = true; // 记录中止：消费者处理帧期间 abort 时，循环下一次迭代检查后退出
+    while (waiters.length) waiters.shift()(null); // 唤醒当前 waiters 使其退出
   };
   signal?.addEventListener("abort", onAbort, { once: true });
-  await new Promise((resolve, reject) => {
-    ws.onopen = resolve;
-    ws.onerror = () => reject(wsError || new Error("dsh events.mux 连接失败"));
-  });
   try {
+    // 等 bridge 事件流就绪（bridge 连 remote.mux 后转发 ready 帧；最多 5s，
+    // 超时不阻塞——帧到达自然流转，bridge 重连期间事件可能晚到）
+    const readyDeadline = Date.now() + 5000;
+    while (!ready) {
+      if (queue.length) break;
+      if (Date.now() > readyDeadline) break;
+      if (aborted) return; // abort 后不再等待就绪，走 finally 清理
+      await new Promise((r) => setTimeout(r, 50));
+    }
     while (true) {
+      if (aborted) return; // abort 已触发：退出（finally 统一清理监听/队列）
       if (queue.length) {
         yield queue.shift();
         continue;
       }
-      if (wsError) throw wsError;
-      if (wsClosed) return;
+      // 创建新 waiter 前再查一次 aborted：abort 可能发生在上一帧 yield 给消费者
+      // 处理期间（此时 waiters 为空，onAbort 只置标志），不检查则新建 waiter 永不被唤醒
+      if (aborted) return;
       const frame = await new Promise((resolve) => waiters.push(resolve));
       if (frame === null) return;
       yield frame;
     }
   } finally {
     signal?.removeEventListener("abort", onAbort);
-    try {
-      ws.close();
-    } catch {
-      /* 已关闭 */
-    }
+    if (typeof off === "function") off();
   }
 }
 
