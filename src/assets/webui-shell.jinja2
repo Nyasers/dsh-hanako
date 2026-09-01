@@ -1031,8 +1031,8 @@
         if (!readyReceived) loadDiagnosticsNow(); // 30s 未就绪：引导看诊断（可刷新/修复）
       }, 30000);
     } else {
-      // 就绪态（服务端渲染即已连接）：统一走 attach 挂载（src 由壳页 JS 设置，
-      // 透传 pluginSurfaceSession 到 BFF 代理）
+      // 就绪态（服务端渲染即已连接）：统一走 attach 挂载（src 由壳页 JS 设置——
+      // 直嵌根路径，无 BFF 代理/凭据透传（vY：pluginSurfaceSession 仅用于 hana.api.fetch 调用））
       readyReceived = true;
       attach();
     }

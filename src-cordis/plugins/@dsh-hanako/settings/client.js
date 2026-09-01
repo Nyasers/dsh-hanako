@@ -742,12 +742,16 @@ window.__ModuleLoader__.load({
                     if (streamClosed) return;
                   }
                   // 递归 read 同样附加 rejection 处理：流错误时置 reader 为 null，
-                  // 与 done/streamClosed/初始 read 的 catch 分支一致（不留悬空 reader）
+                  // 与 done/streamClosed/初始 read 的 catch 分支一致（不留悬空 reader）；
+                  // 且回查一次性状态（CodeRabbit：stream error 而非 EOF 时 updating 会
+                  // 卡 true、控件禁用——queryStatusOnce 让界面恢复）。
                   reader.read().then(process).catch(function () {
                     reader = null;
+                    if (!streamClosed) queryStatusOnce();
                   });
                 }).catch(function () {
                   reader = null;
+                  if (!streamClosed) queryStatusOnce();
                 });
               };
               pump();

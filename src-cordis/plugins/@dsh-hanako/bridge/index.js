@@ -509,6 +509,9 @@ export function apply(ctx, config) {
           if (evtDisposed) return
           try {
             const cookie = await ensureAuthCookie(evtPort)
+            // CodeRabbit：cookie 获取期间插件可能已卸载——重查 disposed 再建 socket，
+            // 否则新 evtWs 与其 $events 订阅在 disposer 跑完后仍开着（泄漏）。
+            if (evtDisposed) return
             evtWs = new WebSocket(
               'ws://127.0.0.1:' + evtPort + '/api/remote.mux',
               cookie ? { headers: { Cookie: cookie } } : {},
