@@ -186,9 +186,10 @@ function submitTask(
     const dp = readDshDefaultPreset(join(cfg.dataDir, "dsh-home"));
     preset = dp || null;
   }
-  // vX（dsh 0.1.2）：preset "code" 已并入 "standard"（0.1.2 可用 standard/ptc/minimal/cordis），
-  // 旧配置/settings.yaml 遗留 code 时映射，避免 agent-preset/not-found。
-  if (preset === "code") preset = "standard";
+  // vX（dsh 0.1.2）：preset 词表 = standard/ptc/cordis/minimal（code 已退役——旧版
+  // "code"（工具呈现批量调用）即现 ptc（PTC 模式 SDK 呈现工具，见 dsh-agent-presets
+  // presets/ptc））。旧配置/settings.yaml 遗留 code 时映射到 ptc，避免 agent-preset/not-found。
+  if (preset === "code") preset = "ptc";
   // reasoningEffort 解析：只取工具显式参数（全局配置已移除），不传为 null（由 dsh 默认处理）。
   const effort = resolveReasoningEffort(reasoningEffort);
   // resume 会话解析：值为 null 或 sessionId
@@ -587,9 +588,9 @@ export const parameters = {
     },
     agentPreset: {
       type: "string",
-      enum: ["standard", "code", "cordis", "minimal"],
+      enum: ["standard", "ptc", "cordis", "minimal"],
       description:
-        "agent 预设模式：standard=完整编码 agent（默认）/ code=工具呈现批量调用（适合大型编码任务）/ cordis=可读写运行时的 agent / minimal=固定提示词精简 agent。缺省不传，用 DSH 默认（DSH Web UI 可调）。",
+        "agent 预设模式：standard=完整编码 agent（默认）/ ptc=PTC 模式（以 TypeScript 程序组合多步操作的工具呈现）/ cordis=可读写运行时的 agent / minimal=固定提示词精简 agent。缺省不传，用 DSH 默认（DSH Web UI 可调）。",
     },
     reasoningEffort: {
       type: "string",

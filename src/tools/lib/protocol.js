@@ -207,6 +207,7 @@ async function* openMux(base, signal) {
   const waiters = [];
   let off = null;
   let ready = false;
+  let aborted = false; // abort 已触发标志：唤醒 waiters 后供循环检查（防 abort 后新建 waiter 挂死）
   const onFrame = (payload) => {
     if (!payload || typeof payload.type !== "string") return;
     if (payload.type === "ready") {
@@ -218,11 +219,13 @@ async function* openMux(base, signal) {
   };
   off = bus.on("events", onFrame);
   if (signal?.aborted) {
+    aborted = true;
     off();
     throw Object.assign(new Error("dsh_run 已取消"), { code: "DSH_ABORTED" });
   }
   const onAbort = () => {
-    while (waiters.length) waiters.shift()(null); // 唤醒循环使其退出
+    aborted = true; // 记录中止：消费者处理帧期间 abort 时，循环下一次迭代检查后退出
+    while (waiters.length) waiters.shift()(null); // 唤醒当前 waiters 使其退出
   };
   signal?.addEventListener("abort", onAbort, { once: true });
   try {
@@ -232,13 +235,18 @@ async function* openMux(base, signal) {
     while (!ready) {
       if (queue.length) break;
       if (Date.now() > readyDeadline) break;
+      if (aborted) return; // abort 后不再等待就绪，走 finally 清理
       await new Promise((r) => setTimeout(r, 50));
     }
     while (true) {
+      if (aborted) return; // abort 已触发：退出（finally 统一清理监听/队列）
       if (queue.length) {
         yield queue.shift();
         continue;
       }
+      // 创建新 waiter 前再查一次 aborted：abort 可能发生在上一帧 yield 给消费者
+      // 处理期间（此时 waiters 为空，onAbort 只置标志），不检查则新建 waiter 永不被唤醒
+      if (aborted) return;
       const frame = await new Promise((resolve) => waiters.push(resolve));
       if (frame === null) return;
       yield frame;

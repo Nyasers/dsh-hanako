@@ -453,15 +453,11 @@ export function apply(ctx, config) {
 
           // POST /api/hana-settings.update-status：一次性查询——事件缓存优先（事件化主信道，
           // v0.22.1+ 替代前端 2s 轮询），无缓存返回 idle（v0.24 起 update-result.json 退役，无文件兜底）。
-          // dataDir 来自总线配置；config 未下发时报「总线配置未就绪」。
+          // 只读内存事件缓存，不依赖总线配置（CodeRabbit：移除 dataDir 前置——bus 配置不可用时
+          // 仍应从 updateEventCache 响应；bus-configuration 就绪守卫仅 request-update/check-version 需要）。
           registerRoute("/api/hana-settings.update-status", async (req, res) => {
             try {
               await readJsonBody(req);
-              const bc = busConfig();
-              if (!bc || typeof bc.dataDir !== "string" || !bc.dataDir) {
-                json(res, { ok: false, error: "总线配置未就绪" });
-                return;
-              }
               if (updateEventCache) {
                 json(res, { ok: true, value: updateEventCache });
                 return;

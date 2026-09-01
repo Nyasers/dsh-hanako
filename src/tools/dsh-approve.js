@@ -17,7 +17,8 @@ export const name = "dsh_approve";
 export const description =
   "应答 DSH 任务挂起的权限审批（approval/requested）：allowed-once=放行该次请求 / rejected=拒绝。" +
   "sessionId 与 approvalId 来自审批通知；应答前评估通知里的 toolName 与 reason（命令原文）决定放行或拒绝。" +
-  "无人应答也可在 DSH Web UI 人工处理。完整调用手册见 SKILL: skills/dsh-approve/SKILL.md";
+  "注意：当前宿主审批适配未接入（审批在 DSH Web UI 人工处理），本工具为预留接口，审批通知链路接入后生效。" +
+  "完整调用手册见 SKILL: skills/dsh-approve/SKILL.md";
 
 export const parameters = {
   type: "object",

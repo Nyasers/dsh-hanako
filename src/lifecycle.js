@@ -37,6 +37,7 @@
 // 拆分前一致；updateDsh 流程（停 host→装依赖→起 host→读版本）保持完整；collectWebDiagnostics 输出的
 // checks 结构（t1 依赖 / t2 进程）令 routes/webui.js 渲染不变。
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 // dsh profile 名解析（vX：dshana profile 路线，spawn --profile 用配置；config.js 内联进 bundle）
 import { resolveProfileName } from "./tools/lib/config.js";
 import {
@@ -410,7 +411,7 @@ export function ensureDshanaProfile(cfg) {
     !cmp(join(srcRoot, "cordis.patch.yml"), join(destRoot, "cordis.patch.yml"));
   if (need()) {
     mkdirSync(destRoot, { recursive: true });
-    fs.cpSync(srcRoot, destRoot, { recursive: true, force: true });
+    cpSync(srcRoot, destRoot, { recursive: true, force: true });
     g.appendLog?.("hana", `[cordis] dshana profile 落位 -> ${destRoot}`);
   }
 }
@@ -456,6 +457,10 @@ export async function ensureWebHost(cfg) {
   }
 
   const dshHome = join(cfg.dataDir, "dsh-home");
+  // 总线共享秘密（bridge 凭据保护）：每次 web host spawn 随机生成——注入子进程 env
+  // （DSHANA_BUS_SECRET，bridge 读）并挂单例 g.busSecret（bus.js hello 帧携带证明）。
+  // web host 重启即换新 secret，旧连接/旧进程失效自动重建。
+  g.busSecret = randomUUID();
   // spawn 的 cwd 必须是已存在目录（无效 cwd 会让 Node 报误导性的 ENOENT）
   mkdirSync(cfg.dataDir, { recursive: true });
   const port = Number(cfg.webPort) || 3080;
@@ -519,6 +524,10 @@ export async function ensureWebHost(cfg) {
         ...resolveNodeExecEnv(cfg),
         DSH_HOME: dshHome,
         DSH_TELEMETRY_DISABLED: "1",
+        // vX（bridge 凭据保护）：总线共享秘密——宿主与 dsh 进程间建立（hello 帧校验，
+        // launchToken/authCookie 凭据方法只对持有 secret 的宿主放行）。每次 spawn 随机
+        // 生成，注入子进程 env；bus.js 经同一 secret 发 hello 证明身份。
+        DSHANA_BUS_SECRET: g.busSecret,
       },
       windowsHide: true,
     },

@@ -151,8 +151,13 @@ body{${tokenCss(DEFAULT_THEME)}}
 // 动态脚本：宿主声明（壳桥 vars）直接应用 + preference 边界。自包含。
 const BRIDGE = `<script id="@dsh-hanako/theme-bridge">
 (function () {
-  var staticEl = document.getElementById("@dsh-hanako/theme");
-  if (staticEl && staticEl.remove) staticEl.remove();
+  // 父窗口（宿主壳页）origin（postMessage 定向 + 回执校验；无 ancestorOrigins 时为 null）
+  var parentOrigin = null;
+  try {
+    if (window.location.ancestorOrigins && window.location.ancestorOrigins.length > 0) {
+      parentOrigin = window.location.ancestorOrigins[0];
+    }
+  } catch (e) { /* 忽略 */ }
   var cur = null;
   var pref = null;
   function cssOf(v) {
@@ -173,13 +178,26 @@ const BRIDGE = `<script id="@dsh-hanako/theme-bridge">
       st.remove();
     }
   }
-  function ask() { try { window.parent.postMessage({ dshHanaThemeRequest: true }, "*"); } catch (e) {} }
+  // 移除静态 fallback（DEFAULT_THEME）：仅在拿到有效宿主主题（cur 已应用）或确认
+  // 非 system 偏好（pref 明确 light/dark，静态默认即正确）之后——壳桥永久失败时
+  // 保留 DEFAULT_THEME 兜底，页面不致裸样式（CodeRabbit）。
+  function maybeDropStatic() {
+    if ((cur && Object.keys(cur).length) || (pref && pref !== "system")) {
+      var se = document.getElementById("@dsh-hanako/theme");
+      if (se && se.remove) se.remove();
+    }
+  }
+  function ask() { try { window.parent.postMessage({ dshHanaThemeRequest: true }, parentOrigin || "*"); } catch (e) {} }
   window.addEventListener("message", function (e) {
+    // 来源校验：宿主壳页（window.parent）+ 匹配 origin——防第三方窗口伪造 dshHanaTheme
+    if (e.source !== window.parent) return;
+    if (parentOrigin && e.origin !== parentOrigin) return;
     if (e.data && e.data.dshHanaTheme) {
       var v = e.data.dshHanaTheme.vars;
       if (v && Object.keys(v).length) {
         cur = v;
         applyOrRemove();
+        maybeDropStatic();
         // 收到主题 vars：停止周期重试（竞态已破除）
         if (askTimer) { clearInterval(askTimer); askTimer = null; }
       }
@@ -201,6 +219,7 @@ const BRIDGE = `<script id="@dsh-hanako/theme-bridge">
           }
         }
         applyOrRemove();
+        maybeDropStatic();
       })
       .catch(function () {});
   }

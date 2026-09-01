@@ -36,6 +36,15 @@ const BRIDGE = `<script id="@dsh-hanako/clipboard-bridge">
     try { return window.parent !== window; } catch (e) { return false; }
   })();
   if (!isEmbedded) return;
+  // 父窗口（宿主壳页）origin：postMessage 定向投递 + 回执校验（防第三方窗口伪造）。
+  // 读取方式：Chromium 的 ancestorOrigins 第一位 = 最近父窗口 origin；不可用时回退
+  // location.href 推导不可靠，故 postMessage 兜底用 "*"（仅回执侧校验 source+origin）。
+  var parentOrigin = null;
+  try {
+    if (window.location.ancestorOrigins && window.location.ancestorOrigins.length > 0) {
+      parentOrigin = window.location.ancestorOrigins[0];
+    }
+  } catch (e) { /* 忽略 */ }
   var nc = navigator.clipboard;
   if (!nc || typeof nc.writeText !== "function") return;
   var orig = nc.writeText.bind(nc);
@@ -54,10 +63,13 @@ const BRIDGE = `<script id="@dsh-hanako/clipboard-bridge">
       ch.port1.onmessage = function (e) {
         clearTimeout(to);
         ch.port1.close();
+        // 回执校验：来源必须是宿主壳页窗口（parent）+ 匹配其 origin，防伪造 __dshCopyResult
+        if (e.origin && parentOrigin && e.origin !== parentOrigin) { reject(new Error("copy bridge origin mismatch")); return; }
         if (e.data && e.data.__dshCopyResult && e.data.__dshCopyResult.ok) resolve();
         else reject(new Error("copy bridge failed"));
       };
-      window.parent.postMessage({ __dshCopy: true, id: "cb" + Math.random().toString(36).slice(2), text: text }, "*", [ch.port2]);
+      // 定向投递到宿主壳页（已知其 origin 时）；未知时退 "*"（仅本窗口的 parent 收得到）
+      window.parent.postMessage({ __dshCopy: true, id: "cb" + Math.random().toString(36).slice(2), text: text }, parentOrigin || "*", [ch.port2]);
     });
   }
 })();

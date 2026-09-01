@@ -217,10 +217,18 @@ function open() {
   sock.addEventListener("open", () => {
     lastMessageAt = Date.now();
     try {
-      // 免鉴权 hello（身份宣告，不带 token）
-      sock.send(JSON.stringify({ channel: "hello", payload: {} }));
+      // hello 帧带共享秘密（vX bridge 凭据保护）：spawn 时注入子进程 env 的同一 secret
+      // （g.busSecret，lifecycle.js 生成）——bridge 校验后放行 launchToken/authCookie 等
+      // 凭据方法；旧版 bridge（无校验）忽略该字段，兼容。
+      const g = getSingleton();
+      sock.send(
+        JSON.stringify({
+          channel: "hello",
+          payload: g && g.busSecret ? { secret: g.busSecret } : {},
+        }),
+      );
       authed = true;
-      log("已连接，hello 已发送（免鉴权）");
+      log("已连接，hello 已发送（" + (g && g.busSecret ? "带共享秘密" : "免鉴权") + "）");
     } catch (e) {
       /* 发送失败由 close/error 路径兜底 */
     }

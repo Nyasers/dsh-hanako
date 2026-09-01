@@ -64,7 +64,11 @@ export const name = '@dsh-hanako/bridge'
 // super(ctx, "connection")）：读 BrowserAuth.launchToken（dsh 0.1.2+ 浏览器鉴权
 // 进程令牌）——自环 RPC 换发 cookie（vX；旧版 dsh 无此服务时保持免鉴权兼容）。
 // 注意：插件名是 client-connection，服务名是 connection，inject 用服务名。
-export const inject = ['webServer', 'connection']
+// inject 只声明 webServer（硬依赖）：connection 是可选服务——旧版 dsh 无
+// dsh-client-connection 时 apply 仍须执行（总线照常，launchToken 为空降级免鉴权），
+// 故不写进静态 inject（cordis 静态 inject 缺失会挂起 apply），改由 apply 内
+// ctx.inject(['connection']) 运行时可选获取（服务缺失时回调不执行，launchToken 留空）。
+export const inject = ['webServer']
 
 // ---- 常量 ----
 const BUS_PATH = '/api/dshana.bus' // upgrade 路由路径（宿主连 ws://127.0.0.1:<port> 该路径）
@@ -93,6 +97,12 @@ let launchToken = ''
 // 缓存避免每次 RPC 都换发；web 重启后 launchToken 变化，旧 cookie 失效自动重换。
 let authCookie = ''
 let authCookieAt = 0
+// ---- 连接级凭据授权（vX bridge 凭据保护）----
+// hello 帧携带的共享秘密（宿主 spawn 时注入子进程 env DSHANA_BUS_SECRET，hello 时
+// 回传证明身份）。仅当 secret 匹配时，launchToken/authCookie 两个凭据方法才放行；
+// 未证明的连接拒绝返回凭据（其余 RPC 照常——session.create 等非凭据面不受影响）。
+// 模块级单连接语义：新连接 hello 通过后旧连接关闭，这里只需一个授权标志。
+let credAuthed = false
 
 /** 自环 RPC 鉴权 cookie（dsh 0.1.2+ /api/* 需浏览器 cookie，无则 401）。
  * launchToken 经 GET /?token= 换发 signed cookie（authorizeIndex 流程，本机回环）；
@@ -140,6 +150,21 @@ export async function translateRpcRequest(req, port, reply) {
     ...(cookie ? { cookie } : {}),
   }
   try {
+    // ---- 凭据方法门（vX）：仅持有共享秘密（hello 校验通过）的宿主可读取 ----
+    // launchToken 是进程浏览器鉴权令牌、authCookie 是换发的会话凭据——两者都是高敏
+    // 凭据，不能对任意连上总线（本机任意进程可达）的连接开放。hello 帧携带 spawn
+    // 注入的 DSHANA_BUS_SECRET 即证明「宿主」（只有宿主 spawn 时知道）。
+    if ((method === 'authCookie' || method === 'launchToken') && !credAuthed) {
+      reply({
+        reqId,
+        ok: false,
+        error: {
+          code: 'unauthorized',
+          message: '凭据方法需共享秘密授权（hello 帧携带 DSHANA_BUS_SECRET）',
+        },
+      })
+      return
+    }
     if (method === 'authCookie') {
       // 返回当前自环 cookie（launchToken 换发，缓存 6h；旧版无 connection 服务
       // 返回空串 → 宿主免鉴权回退）。宿主侧无 launchToken 源（token 在 dsh 进程
@@ -284,8 +309,7 @@ export function apply(ctx, config) {
               return
             }
             if (!authed) {
-              // 首帧必须是 hello（免鉴权身份宣告：不再比对 token——总线与 mux、
-              // /api/session.* 同级，本机信任；payload 可为空对象）
+              // 首帧必须是 hello（身份宣告；payload 可带共享秘密）
               if (!frame || frame.channel !== 'hello') {
                 try {
                   wsConn.close(HELLO_CLOSE_CODE, 'hello required')
@@ -296,6 +320,23 @@ export function apply(ctx, config) {
               }
               authed = true
               clearTimeout(helloTimer)
+              // vX（bridge 凭据保护）：hello 携带的 secret 与 spawn 注入 env 的
+              // DSHANA_BUS_SECRET 比对——匹配才放行 launchToken/authCookie 凭据方法。
+              // 兼容：旧版宿主未携带 / 本机无 env 时 credAuthed 置 false（凭据方法
+              // 拒绝，其余 RPC 不受影响）；防本机任意进程连总线直取凭据。
+              try {
+                const envSecret = process.env.DSHANA_BUS_SECRET
+                const helloSecret =
+                  frame.payload && typeof frame.payload === 'object'
+                    ? frame.payload.secret
+                    : undefined
+                credAuthed =
+                  typeof envSecret === 'string' &&
+                  envSecret.length > 0 &&
+                  helloSecret === envSecret
+              } catch {
+                credAuthed = false
+              }
               // 单连接语义：新连接 hello 通过后旧连接关闭（宿主唯一客户端，重连顶替）
               if (conn && conn !== wsConn) {
                 try {
@@ -310,7 +351,11 @@ export function apply(ctx, config) {
                 // 已连接：经总线 log 帧直投宿主（会话文件行格式 [ts] [bridge] 由宿主侧统一）
                 sendFrame({ channel: 'log', payload: { src: 'bridge', line: msg } })
               }
-              bridgeLog('dshana.bus 握手成功（宿主已连接，免鉴权）')
+              bridgeLog(
+                'dshana.bus 握手成功（' +
+                  (credAuthed ? '共享秘密已校验' : '未携带共享秘密，凭据方法拒绝') +
+                  '）',
+              )
               return
             }
             // 已握手：channel 分发 + 心跳 + config 缓存
@@ -343,6 +388,7 @@ export function apply(ctx, config) {
             clearTimeout(helloTimer)
             if (conn === wsConn) {
               conn = null
+              credAuthed = false // 连接关闭：清凭据授权（新连接须重新 hello 校验）
               bridgeLog('dshana.bus 连接断开')
             }
           }
@@ -360,6 +406,10 @@ export function apply(ctx, config) {
               path: BUS_PATH,
               handler: (req, socket, head) => {
                 handleUpgrade(req, socket, head, {
+                  // 总线是凭据通道（launchToken/authCookie）：启用浏览器 Origin 校验，
+                  // 拒绝恶意网页向 127.0.0.1 upgrade 直取凭据（CSWSH）；宿主 Node 客户端
+                  // 无 Origin 头不受影响。
+                  requireLocalOrigin: true,
                   onConnection,
                   onError: (err) => {
                     bridgeLog('dshana.bus 连接错误：' + ((err && err.message) || err))

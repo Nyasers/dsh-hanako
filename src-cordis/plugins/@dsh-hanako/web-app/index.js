@@ -53,6 +53,24 @@ const CORS = {
   'access-control-expose-headers': 'X-Hana-Resource-Id, X-Hana-File-MtimeMs',
 }
 
+// 代理面（/webui/api/*、/webui/plugins/*——带凭据转发官方）的 CORS 白名单：
+// 只放行宿主 UI origin（本机回环 localhost/127.0.0.1/[::1] 任意端口——壳页 iframe 在
+// 宿主域跨源访问子插件）；无 Origin 头（同源/非浏览器）放行；其他 origin（恶意网页）
+// 返回 null，调用方回 403。静态 fork 资源（无凭据，公开内容）保持 CORS 通配。
+function corsFor(req) {
+  const origin = req?.headers?.origin
+  if (!origin) return CORS
+  try {
+    const host = new URL(origin).hostname
+    if (host === '127.0.0.1' || host === 'localhost' || host === '[::1]') {
+      return { ...CORS, 'access-control-allow-origin': origin }
+    }
+  } catch {
+    /* 非法 Origin：按拒绝处理 */
+  }
+  return null
+}
+
 // ---- 自环 cookie（launchToken → dsh-auth，缓存 6h；转发官方 API/SSE/WS 用）----
 let launchToken = ''
 let authCookie = ''
@@ -77,6 +95,24 @@ async function ensureAuthCookie(port) {
   } catch {
     return authCookie || ''
   }
+}
+
+// 上游 401/403（dsh 重启后 launchToken 变化，旧 cookie 失效）→ 清缓存换发重试一次；
+// 重试仍失败返回首次响应（保留原语义，不无限重试）。成功路径 6h 缓存行为不变。
+async function fetchAuth(port, url, init) {
+  const r = await fetch(url, init)
+  if ((r.status === 401 || r.status === 403) && authCookie) {
+    authCookie = ''
+    authCookieAt = 0
+    const fresh = await ensureAuthCookie(port)
+    if (fresh) {
+      const headers = { ...(init.headers || {}) }
+      headers.cookie = fresh
+      const r2 = await fetch(url, { ...init, headers })
+      if (r2.status !== 401 && r2.status !== 403) return r2
+    }
+  }
+  return r
 }
 
 /** 前端 dist 锚定（workspace knowledge：复用官方 frontend 包构建产物）。 */
@@ -161,25 +197,32 @@ function readBody(req) {
  * 0.1.2 API 路径用斜杠（/api/settings/describe）；SPA 发点号（settings.describe）——
  * 转换（同 bridge 翻译器；query 保留）。 */
 async function proxyApi(req, res, rel, port) {
+  const cors = corsFor(req)
+  if (!cors) {
+    res.writeHead(403, CORS)
+    res.end()
+    return
+  }
   const cookie = await ensureAuthCookie(port)
   let body = await readBody(req)
-  // 信封 method 转换（点号 → 斜杠，同路径转换；仅 JSON body 的 "method" 字段）
+  // 信封 method 转换（点号 → 斜杠，同路径转换）：只改 JSON body 顶层的 "method" 字段，
+  // 嵌套值不动；解析/转换失败保留原 body（防正则误伤嵌套 method）。
   if (body.length && String(req.headers['content-type'] || '').includes('json')) {
     try {
-      const txt = body.toString('utf8').replace(
-        /"method":"([^"]+)"/g,
-        (m, mv) => '"method":"' + mv.replace(/\./g, '/') + '"',
-      )
-      body = Buffer.from(txt, 'utf8')
+      const obj = JSON.parse(body.toString('utf8'))
+      if (obj && typeof obj === 'object' && typeof obj.method === 'string' && obj.method.includes('.')) {
+        obj.method = obj.method.replace(/\./g, '/')
+        body = Buffer.from(JSON.stringify(obj), 'utf8')
+      }
     } catch {
-      /* 转换失败用原 body */
+      /* 解析/转换失败用原 body */
     }
   }
   const qIdx = rel.indexOf('?')
   const pathPart = qIdx === -1 ? rel : rel.slice(0, qIdx)
   const queryPart = qIdx === -1 ? '' : rel.slice(qIdx)
   const targetRel = pathPart.replace(/\./g, '/') + queryPart
-  const r = await fetch('http://127.0.0.1:' + port + targetRel, {
+  const r = await fetchAuth(port, 'http://127.0.0.1:' + port + targetRel, {
     method: req.method || 'GET',
     headers: {
       'content-type': req.headers['content-type'] || 'application/json',
@@ -189,7 +232,7 @@ async function proxyApi(req, res, rel, port) {
   })
   const ct = r.headers.get('content-type') || 'application/json'
   const buf = Buffer.from(await r.arrayBuffer())
-  res.writeHead(r.status, { 'content-type': ct, ...CORS })
+  res.writeHead(r.status, { 'content-type': ct, ...cors })
   res.end(buf)
 }
 
@@ -197,13 +240,19 @@ async function proxyApi(req, res, rel, port) {
  * JS/JSON 响应做 URL 改写：/api/、/plugins/、/assets/ → /webui/...（SPA 资源统一走
  * 子插件免鉴权——官方 /api 在跨 site iframe 里有 cookie 墙，必须经子插件代理）。 */
 async function proxyPlugins(req, res, rel, port) {
+  const cors = corsFor(req)
+  if (!cors) {
+    res.writeHead(403, CORS)
+    res.end()
+    return
+  }
   const cookie = await ensureAuthCookie(port)
-  const r = await fetch('http://127.0.0.1:' + port + rel, {
+  const r = await fetchAuth(port, 'http://127.0.0.1:' + port + rel, {
     method: req.method || 'GET',
     headers: cookie ? { cookie } : {},
   })
   const ct = r.headers.get('content-type') || 'application/octet-stream'
-  const cacheHeaders = { 'content-type': ct, 'cache-control': 'public, max-age=31536000, immutable', ...CORS }
+  const cacheHeaders = { 'content-type': ct, 'cache-control': 'public, max-age=31536000, immutable', ...cors }
   if (ct.includes('javascript') || ct.includes('json')) {
     const text = rewriteUrls(await r.text())
     res.writeHead(r.status, cacheHeaders)
@@ -217,8 +266,14 @@ async function proxyPlugins(req, res, rel, port) {
 
 /** 代理官方 SSE（/plugins/events）：帧流转发 + 帧内 URL 改写（graph 的 /plugins/ → /webui/plugins/）。 */
 async function proxySse(req, res, port) {
+  const cors = corsFor(req)
+  if (!cors) {
+    res.writeHead(403, CORS)
+    res.end()
+    return
+  }
   const cookie = await ensureAuthCookie(port)
-  const r = await fetch('http://127.0.0.1:' + port + '/plugins/events', {
+  const r = await fetchAuth(port, 'http://127.0.0.1:' + port + '/plugins/events', {
     headers: cookie ? { cookie } : {},
   })
   res.writeHead(r.status, {
@@ -226,13 +281,29 @@ async function proxySse(req, res, port) {
     'cache-control': 'no-cache',
     connection: 'keep-alive',
     'x-accel-buffering': 'no',
-    ...CORS,
+    ...cors,
   })
+  let reader = null
+  let cancelled = false
+  // 客户端断开（浏览器关页/刷新）：取消上游 read，防上游连接泄漏
+  const onClose = () => {
+    cancelled = true
+    if (reader) {
+      try {
+        reader.cancel()
+      } catch {
+        /* 已取消 */
+      }
+      reader = null
+    }
+  }
+  res.on('close', onClose)
   try {
-    const reader = r.body.getReader()
+    reader = r.body.getReader()
     const dec = new TextDecoder()
     let buf = ''
     while (true) {
+      if (cancelled) break
       const { done, value } = await reader.read()
       if (done) break
       buf += dec.decode(value, { stream: true })
@@ -244,10 +315,11 @@ async function proxySse(req, res, port) {
           res.write(rewriteUrls(p) + '\n\n')
         } catch {
           /* 客户端断开 */
+          cancelled = true
         }
       }
     }
-    if (buf) {
+    if (buf && !cancelled) {
       try {
         res.write(rewriteUrls(buf) + '\n\n')
       } catch {
@@ -256,6 +328,16 @@ async function proxySse(req, res, port) {
     }
   } catch {
     /* 上游断开 */
+  } finally {
+    res.removeListener('close', onClose)
+    if (reader) {
+      try {
+        reader.cancel()
+      } catch {
+        /* 已取消 */
+      }
+      reader = null
+    }
   }
   try {
     res.end()
@@ -271,6 +353,8 @@ async function pumpWs(conn, port, wsPath) {
   try {
     up = new WebSocket('ws://127.0.0.1:' + port + wsPath, cookie ? { headers: { Cookie: cookie } } : {})
   } catch (e) {
+    // 构造失败（cookie/URL 异常等）：记诊断日志再关闭（CodeRabbit：close 前保留错误现场）
+    console.warn('[web-app] WS 上游连接构造失败（' + wsPath + '）：' + ((e && e.message) || e))
     try {
       conn.close(1011, 'upstream connect failed')
     } catch {

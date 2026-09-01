@@ -62,8 +62,8 @@ export function apply(ctx, config) {
         }
 
         // 连接状态检查 + 缓冲补发：每次 log 调用时判断——未连接入缓冲，已连接先补发再直发。
-        // 补发仅清除送达成功的记录（sendLine 返回 true）；发送失败的记录保留在缓冲中，
-        // 重连后下次补发重试（有界缓冲满丢最旧仍由入缓冲侧保证，不丢已送达的顺序）。
+        // 补发保序（CodeRabbit）：遇第一条发送失败的记录即停止，失败项及后续全部原序保留
+        // ——不继续尝试后续（后发先到会打乱日志顺序）；重连后从断点继续补发。
         const flushBuffer = () => {
           if (!bus || typeof bus.status !== 'function') return
           try {
@@ -73,10 +73,17 @@ export function apply(ctx, config) {
           }
           if (buffer.length === 0) return
           const retained = []
+          let failed = false
           for (const item of buffer) {
-            if (!sendLine(item.src, item.line)) retained.push(item)
+            if (failed) {
+              retained.push(item)
+              continue
+            }
+            if (!sendLine(item.src, item.line)) {
+              failed = true // 断点：本条及后续全部保留（保序）
+              retained.push(item)
+            }
           }
-          // 只保留发送失败的记录：成功清掉，失败原序保留
           if (retained.length === 0) buffer.length = 0
           else buffer.splice(0, buffer.length, ...retained)
         }

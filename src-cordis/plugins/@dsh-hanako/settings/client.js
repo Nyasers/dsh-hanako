@@ -713,8 +713,10 @@ window.__ModuleLoader__.load({
                 reader.read().then(function process({ done, value }) {
                   if (done || streamClosed) {
                     reader = null;
-                    // 流关闭但未收到终态：web host 重启窗口断开——保持「更新中…」，
-                    // 用户可点「检查更新」或稍后重进分页查看
+                    // 流关闭但未收到终态：web host 重启窗口断开——回查一次一次性状态，
+                    // 避免界面停在「更新中…」（重启完成后 update-status 能读到真实终态）；
+                    // 无终态事件时保持现状可手动刷新。
+                    queryStatusOnce();
                     return;
                   }
                   buf += decoder.decode(value, { stream: true });

@@ -379,12 +379,19 @@ export async function apply(ctx, config) {
           auth: {},
           onReplayDegrade: () => {},
         });
-      if (routes.length === 0) {
-        snapshotFacts = facts;
-        return;
+      if (registration === null) {
+        // 首次注册：空 routes（初始无 provider）不注册 adapter（无 provider 可注册），
+        // 只推进 snapshotFacts——后续 refresh 填入 routes 时再注册。
+        if (routes.length === 0) {
+          snapshotFacts = facts;
+          return;
+        }
+        registration = ctx.llm.registerAdapter(routes, adapter);
+      } else {
+        // 已注册：一律 replace（空数组也是有效快照——provider 全移除时清空注册表，
+        // resolveApiKey 经 hostRoutes.get 返回 undefined，凭据不再对外暴露）
+        registration.replace(routes);
       }
-      if (registration === null) registration = ctx.llm.registerAdapter(routes, adapter);
-      else registration.replace(routes);
       snapshotFacts = facts;
     };
 
@@ -398,17 +405,33 @@ export async function apply(ctx, config) {
         providerData && Array.isArray(providerData.routes)
           ? providerData.routes
           : null;
-      if (!routes || routes.length === 0) {
+      if (!routes) {
+        // routes 缺失（null/undefined，非空数组）：数据不可用，保留旧 snapshot
         ctx.logger.warn(
           "[@dsh-hanako/provider] 收到空 routes（宿主持有 provider 缺失或未 push），保留旧 snapshot",
         );
         providerLog(`refresh 收到空 routes（${source}），保留旧 snapshot`);
         return;
       }
+      // 先构建候选快照再提交：不预先 mutate 活跃 hostRoutes——applySnapshot 失败时
+      // 恢复旧值（hostRoutes/profilesCache/snapshotFacts），日志与行为一致。
+      let candidate;
       try {
-        hostRoutes = new Map(routes.map((r) => [r.id, r]));
-        profilesCache = null; // 强制重建 profiles
-        snapshotFacts = null;
+        candidate = new Map(routes.map((r) => [r.id, r]));
+      } catch (e) {
+        ctx.logger.error(
+          `[@dsh-hanako/provider] routes 快照构建失败：${e?.message || e}`,
+        );
+        providerLog(`refresh 快照构建失败（${source}）：${e?.message || e}`);
+        return;
+      }
+      const prevHostRoutes = hostRoutes;
+      const prevProfilesCache = profilesCache;
+      const prevSnapshotFacts = snapshotFacts;
+      hostRoutes = candidate;
+      profilesCache = null; // 强制重建 profiles
+      snapshotFacts = null;
+      try {
         applySnapshot();
         const modelCount = [...hostRoutes.values()].reduce(
           (n, r) => n + (Array.isArray(r.models) ? r.models.length : 0),
@@ -421,11 +444,15 @@ export async function apply(ctx, config) {
           `refresh 完成（${source}）：${hostRoutes.size} 个 provider / ${modelCount} 个模型，耗时 ${Date.now() - t0}ms`,
         );
       } catch (e) {
+        // 应用失败：恢复旧 snapshot（hostRoutes/profilesCache/snapshotFacts 回到提交前值）
+        hostRoutes = prevHostRoutes;
+        profilesCache = prevProfilesCache;
+        snapshotFacts = prevSnapshotFacts;
         ctx.logger.error(
-          `[@dsh-hanako/provider] 应用配置失败，保留旧 snapshot：${e?.message || e}`,
+          `[@dsh-hanako/provider] 应用配置失败，已恢复旧 snapshot：${e?.message || e}`,
         );
         providerLog(
-          `refresh 应用失败（${source}），保留旧 snapshot：${e?.message || e}`,
+          `refresh 应用失败（${source}），已恢复旧 snapshot：${e?.message || e}`,
         );
       }
     };
