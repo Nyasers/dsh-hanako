@@ -78,6 +78,5 @@ web host 未就绪时 DSHana 标签页展示自检诊断：t1 依赖（cliBin �
 ## 已知限制
 
 - **bash 工具在 Windows 上可能 `E_ACCESSDENIED`**（dsh-bash-sandbox 创建 bash 服务实例失败，属 DSH 沙箱环境限制）。文件系统工具正常，Windows 上优先用文件系统工具
-- **审批通知链路未接入宿主**：审批在 DSH Web UI 人工处理；`dsh_approve` 为预留接口（allowed-once/rejected 决策看 args 不听 reason）
 - **HMR 降级**：进程内 boot 无 `--expose-internals`，dshana profile 的 patchReload live 依赖 HMR 可能静默降级（patch 静态/重启生效，插件升级时 dispose+reboot 重载）
 - 越界权限请求默认走审批自动化：插件捕获 approval/requested → 通知 Agent → `dsh_approve` 应答；无人应答超时自动拒绝
