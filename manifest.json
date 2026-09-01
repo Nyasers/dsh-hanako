@@ -2,7 +2,7 @@
   "manifestVersion": 2,
   "id": "dsh-hanako",
   "name": "DSHana",
-  "version": "1.0.0-alpha.4",
+  "version": "1.0.0-alpha.5",
   "description": "DSHana: DeepSeek Harness as a subagent for HanaAgent",
   "author": "Nyaser",
   "minAppVersion": "0.810.0",
