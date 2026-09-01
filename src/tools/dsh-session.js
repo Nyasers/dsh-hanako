@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// tools/dsh-session.js — dsh 会话全生命周期工具（T7e 收敛：list/get/create/send/cancel）
+// tools/dsh-session.js — dsh 会话全生命周期工具（list/get/create/send/cancel）
 // 继承 dsh_ops（清单）+ dsh_run（任务提交）+ dsh_cancel（取消）全部能力：
 //   - list：解析 dsh 官方会话持久化缓存 <dataDir>/dsh-home/storages/session_projcache.json
 //     （session-persistence 单元的 proj cache，含全部历史会话摘要）。纯本地文件读。
@@ -36,7 +36,7 @@ while (!existsSync(join(PLUGIN_ROOT, "manifest.json"))) {
 export const name = "dsh_session";
 
 export const description =
-  "DSH 会话全生命周期工具（T7e 收敛，合并原 dsh_run / dsh_cancel）：list=会话清单（解析 session_projcache，dsh-home 唯一事实源，limit 默认 10）；" +
+  "DSH 会话全生命周期工具（合并原 dsh_run / dsh_cancel）：list=会话清单（解析 session_projcache，dsh-home 唯一事实源，limit 默认 10）；" +
   "get=凭 sessionId 直取会话元数据 + 最终结论 summary；" +
   "create=新建会话 + 提交任务（task 必填，cwd 默认配置）；" +
   "send=续已有会话发消息（sessionId + task 必填，resume 语义）；" +
