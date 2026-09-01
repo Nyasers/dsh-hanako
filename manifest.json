@@ -2,22 +2,34 @@
   "manifestVersion": 2,
   "id": "dsh-hanako",
   "name": "DSHana",
-  "version": "1.0.0-alpha.3",
+  "version": "1.0.0-alpha.4",
   "description": "DSHana: DeepSeek Harness as a subagent for HanaAgent",
   "author": "Nyaser",
   "minAppVersion": "0.810.0",
   "trust": "full-access",
   "ui": {
-    "hostCapabilities": ["clipboard.writeText"]
+    "hostCapabilities": [
+      "clipboard.writeText"
+    ]
   },
-  "capabilities": ["resource.watch", "network.fetch"],
+  "capabilities": [
+    "resource.watch",
+    "network.fetch"
+  ],
   "network": {
-    "allowedHosts": ["127.0.0.1", "localhost"],
-    "methods": ["POST"],
+    "allowedHosts": [
+      "127.0.0.1",
+      "localhost"
+    ],
+    "methods": [
+      "POST"
+    ],
     "defaultTimeoutMs": 5000,
     "maxResponseBytes": 1024
   },
-  "activationEvents": ["onStartup"],
+  "activationEvents": [
+    "onStartup"
+  ],
   "entry": "index.js",
   "contributes": {
     "configuration": {
