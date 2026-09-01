@@ -71,24 +71,15 @@ function readSessionProjection(dataDir, sessionId) {
 }
 
 // ---- 本地审批应答（自动放行/超时拒绝共用；信封构造同 tools/dsh-approve.js，不 import 避免模块耦合）----
-// 经总线 rpc.request method="respond" 发送（bridge 翻译器自环调 /api/respond，client-response
-// 信封 rpcId 路由 web host pending 表），校验 j.accepted 语义不变；callUnaryBus 总线优先、
-// HTTP 兜底（总线未连接时降级直连，行为与改造前一致），base 参数不再需要（端口从单例取）。
-// 成功返回 true，失败抛错由调用方决定：自动放行失败回退人工通知，超时拒绝失败静默忽略。
+h// dsh 0.1.2 瀑布帧应答：$events/result 通道（clientId 由总线补齐，宿主无 launchToken 源）——
+// 应答 = RemoteEventResult { clientId, eventId, outcome }，outcome = { kind: 'result', value }。
+// callUnaryBus("respond") 经总线 rpc.request 投递 → bus 翻译器自环调 /api/$events/result，
+// 回投 { accepted }（ConnectionRpcResult.ok 转译）；成功返回 true，失败抛错由调用方决定。
 async function respondApprovalLocal(approval, outcome) {
-  const body = {
-    type: "client-response",
-    rpcId: approval.respondRpcId,
-    result: {
-      ok: true,
-      value: {
-        sessionId: approval.sessionId,
-        approvalId: approval.approvalId,
-        outcome,
-      },
-    },
-  };
-  const j = await callUnaryBus("respond", body);
+  const j = await callUnaryBus("respond", {
+    eventId: approval.eventId,
+    outcome: { kind: "result", value: outcome },
+  });
   if (!j || !j.accepted) {
     throw new Error(
       `审批应答未接受（${(j && j.reason) || "unknown"}）：可能已超时或被其他方处理`,
@@ -375,12 +366,107 @@ function submitTask(
             }
             // api-session/added / removed：会话清单事件，忽略
           } else if (frame.type === "waterfall") {
-            // 0.1.2 瀑布事件（审批等）：openMux 已默认回投 next；
-            // 宿主审批应答适配后续接入。
-            getSingleton().appendLog?.(
-              "hana",
-              `[dsh] 收到瀑布事件 ${frame.event}（宿主审批适配待接入）`,
-            );
+            // 0.1.2 瀑布帧：approval/request（越界权限请求，agent 挂起等决策）。
+            // 宿主审批适配：解析审批对象（approvalId = 瀑布帧 eventId，应答凭据）→
+            // 填充 activeApprovals（dsh_approve 工具应答路由）→ 暂停执行超时（审批等待
+            // 是外部决策，不计入任务超时）→ notifyApprovalWake（interlude 插话投递宿主，
+            // Agent 收到后调 dsh_approve）→ 起审批超时拒绝表（approvalTimeoutSec 无人
+            // 应答自动 rejected）。
+            if (frame.event === "approval/request") {
+              const req =
+                frame.request && typeof frame.request === "object"
+                  ? frame.request
+                  : {};
+              const approvalId =
+                typeof frame.eventId === "string" && frame.eventId
+                  ? frame.eventId
+                  : null;
+              if (!approvalId) continue;
+              const cached =
+                typeof req.callId === "string" && req.callId
+                  ? toolCallCache.get(`${taskRpcId || "?"}::${req.callId}`)
+                  : null;
+              const approval = {
+                approvalId,
+                eventId: approvalId,
+                sessionId,
+                toolName:
+                  typeof req.toolName === "string" ? req.toolName : "tool",
+                callId: typeof req.callId === "string" ? req.callId : null,
+                reason: typeof req.reason === "string" ? req.reason : null,
+                args: cached ? cached.args : null,
+                status: "pending",
+                requestedAt: new Date().toISOString(),
+                _resume: resumeTimeout,
+              };
+              const op = getSingleton().ops.get(sessionId);
+              if (op && Array.isArray(op.activeApprovals)) {
+                op.activeApprovals.push(approval);
+              }
+              // 审批挂起：暂停任务执行超时（应答/超时拒绝后 resumeTimeout 恢复）
+              pauseTimeout();
+              // 宿主 task 体系：审批任务注册（type: 'dsh-approval'，面板可见；应答/
+              // 超时拒绝后 complete）
+              try {
+                await bus.request("task:register", {
+                  taskId: `${sessionId}::approval::${approvalId}`,
+                  type: "dsh-approval",
+                  parentSessionPath: sessionPath || null,
+                  sessionId,
+                  meta: {
+                    rpcId: taskRpcId || "",
+                    toolName: approval.toolName,
+                    kind: "dsh-approval",
+                  },
+                  persist: true,
+                });
+              } catch {
+                /* 注册失败不阻断（审批照常，Web UI 可处理） */
+              }
+              // 通知 Agent（interlude 插话投递；通知失败不影响任务——审批仍可在
+              // DSH Web UI（3080）人工处理）
+              await notifyApprovalWake({
+                bus,
+                sessionPath,
+                rpcId: taskRpcId || "",
+                approval,
+                task: taskText,
+              });
+              // 审批超时拒绝（approvalTimeoutSec 秒无人应答自动 rejected；0=禁用）
+              const ats = resolveApprovalTimeoutSec(cfg);
+              if (ats > 0) {
+                const tKey = `${taskRpcId || "?"}::${approvalId}`;
+                const timer = setTimeout(async () => {
+                  try {
+                    await respondApprovalLocal(approval, "rejected");
+                    approval.status = "answered";
+                    approval.outcome = "rejected";
+                    approval.answeredAt = new Date().toISOString();
+                    if (typeof approval._resume === "function") {
+                      approval._resume();
+                    }
+                    // 宿主 task 终态同步（自动超时拒绝）
+                    try {
+                      await getSingleton().bus?.request?.("task:complete", {
+                        taskId: `${sessionId}::approval::${approvalId}`,
+                        result: { outcome: "rejected", auto: "expired" },
+                      });
+                    } catch {
+                      /* 忽略 */
+                    }
+                  } catch {
+                    /* 超时拒绝失败静默（任务侧自行感知/终局） */
+                  }
+                }, ats * 1000);
+                timer.unref?.();
+                approvalTimers.set(tKey, timer);
+              }
+            } else {
+              getSingleton().appendLog?.(
+                "hana",
+                `[dsh] 收到瀑布事件 ${frame.event}`,
+              );
+            }
           }
         }
         if (!outcome) outcome = { stopReason: "end_turn" };
@@ -470,6 +556,27 @@ function submitTask(
       // （上一轮终态 finally 已删条目），当轮条目语义正确。
       taskRpcId = promptMeta.rpcId || "";
       createOpEntry(sessionId);
+      // 宿主 task 体系接入：任务注册（type: 'dsh'，taskId = sessionId——取消链路经宿主
+      // task:abort → handler.abort → session.cancel，Agent 取消统一走宿主 task 能力，
+      // dsh_cancel 不再直连）。注册失败不阻断任务（宿主面板不可见，任务照跑；终态同步
+      // 同样跳过）。
+      try {
+        await bus.request("task:register", {
+          taskId: sessionId,
+          type: "dsh",
+          parentSessionPath: sessionPath || null,
+          sessionId,
+          meta: {
+            rpcId: taskRpcId,
+            cwd,
+            task: taskText.slice(0, 200),
+            kind: "dsh-session",
+          },
+          persist: true,
+        });
+      } catch {
+        /* 注册失败不阻断任务 */
+      }
       resolveReady({ sessionId, rpcId: taskRpcId });
 
       // 4. 竞速：事件循环终态 / 超时 / 取消
@@ -488,6 +595,19 @@ function submitTask(
         throw Object.assign(new Error("dsh_run 已取消"), {
           code: "DSH_ABORTED",
         });
+      }
+      // 宿主 task 终态同步（register 失败时 complete 也失败，静默跳过）
+      try {
+        await bus.request("task:complete", {
+          taskId: sessionId,
+          result: {
+            status: "ok",
+            rpcId: taskRpcId,
+            stopReason: outcome.stopReason,
+          },
+        });
+      } catch {
+        /* 终态同步失败不阻断 */
       }
 
       const fullOutput = collected;
@@ -516,6 +636,24 @@ function submitTask(
         } catch {
           /* 忽略 */
         }
+      }
+      // 宿主 task 终态同步：取消走 task:cancel（宿主 aborted/canceled 状态保留），
+      // 超时/错误走 task:fail；正常终态已在上方 task:complete。
+      try {
+        if (err?.code === "DSH_ABORTED") {
+          await bus.request("task:cancel", {
+            taskId: sessionId,
+            reason: "aborted",
+          });
+        } else {
+          await bus.request("task:fail", {
+            taskId: sessionId,
+            reason:
+              String((err && err.message) || err || "dsh task failed").slice(0, 300),
+          });
+        }
+      } catch {
+        /* 终态同步失败不阻断 */
       }
       // 附加已创建的 sessionId（session.create 成功后 prompt/执行失败时）：回调层
       // abnormalWakeResult 优先用 err.sessionId——session.prompt 失败时 ready 的 loc 为 null

@@ -97,6 +97,10 @@ function abnormalWakeResult({ err, loc, taskRpcId }) {
 // rpcId = 任务 rpcId（prompt 提交产生的 RPC id，与 jsonl data.source.rpcId 同值；
 // 区别于审批帧的 respondRpcId——那是 server-request 信封自己的 RPC id，respond 路由用）。
 // 容错纪律同任务回调：通知失败不影响任务，审批仍可在 dsh Web UI 人工处理。
+//
+// 投递形态（宿主 0.814.0+ interlude 插话式 deferred）：meta.interlude=true 时宿主走
+// pre_reply_interlude 插话队列——Agent 回合进行中也能投递，回复前插入时间线，不再等
+// 回合边界（subagent/workflow 同款组合：interlude + deliveryIntent=trigger_parent_turn）。
 async function notifyApprovalWake({ bus, sessionPath, rpcId, approval, task }) {
   if (!bus?.request || !sessionPath) return;
   const taskId = `${rpcId}::approval::${approval.approvalId}`;
@@ -107,6 +111,8 @@ async function notifyApprovalWake({ bus, sessionPath, rpcId, approval, task }) {
       meta: {
         type: "dsh-approval",
         label: `DSH 审批: ${approval.toolName || "tool"}`,
+        interlude: true,
+        deliveryIntent: "trigger_parent_turn",
       },
     });
     await bus.request("deferred:resolve", {
