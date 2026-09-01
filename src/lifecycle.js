@@ -47,6 +47,11 @@ import {
   writeFileSync,
   appendFileSync,
   cpSync,
+  lstatSync,
+  realpathSync,
+  symlinkSync,
+  rmSync,
+  rmdirSync,
 } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
@@ -372,20 +377,23 @@ function buildProviderRoutes() {
   g.latestProviderRoutes = result.routes;
   return result;
 }
-// ---- dshana profile 落位：dist/cordis → $DSH_HOME/profiles/dshana ----
+// ---- dshana profile 挂载：目录链接 → PLUGIN_ROOT/cordis（替代拷贝落位）----
 // vX（dshana profile 路线）：子插件与服务层全部收敛进 dshana profile，spawn 只带
 // --profile（默认 dshana）。dsh 的 loadProfile 要求 $DSH_HOME/profiles/<name> 存在且含
-// package.json（dsh.profile.bundles），空目录会直接抛「profile does not exist」。故启动前
-// 须把交付物 dist/cordis（打包后 = PLUGIN_ROOT/cordis，见 build.mjs buildCordis）整体
-// 落位为 profile 目录：package.json（manifest）+ cordis.patch.yml（user patch 层）+
-// cordis.yml + pnpm-workspace.yaml + node_modules/@dsh-hanako/* 子插件。
-// 幂等：目标已就绪且与源一致时不重复拷贝（内容比对 package.json 与 cordis.patch.yml），
-// 避免每次启动全量覆盖（大幅改动触发会略慢，但正确性优先）。落位失败记 warn 不阻断——
-// 若 profile 缺失 dsh 侧会再报，最终由诊断引导修复。
+// package.json（dsh.profile.bundles），空目录会直接抛「profile does not exist」。
+// 挂载方式：$DSH_HOME/profiles/dshana 建目录链接指向插件目录 cordis/（打包产物 =
+// PLUGIN_ROOT/cordis，见 build.mjs buildCordis）——单一事实源（插件更新即 profile
+// 更新，零拷贝零漂移），dsh 的 loadProfile 对目录链接透明（node fs 直读）。
+// 平台：Windows 用 directory junction（免管理员权限），非 Windows 用目录 symlink
+// （type=dir，无需特权）；两者 lstat isSymbolicLink / realpath 语义一致，幂等检查通用。
+// 幂等：目标是链接且指向源目录时不动；非链接 / 指向过期则重建（删实体目录或旧链接，
+// 重新建链接）。源缺失记 warn 不阻断——若 profile 缺失 dsh 侧会再报，最终由诊断引导修复。
+// 注：链接指向插件安装目录（宿主升级插件会整体替换该目录），重建时机 = 每次
+// web host spawn 前（ensureDshanaProfile），插件升级后首次拉起自动重建链接。
 const PROFILE_NAME = "dshana";
 export function ensureDshanaProfile(cfg) {
   const g = getSingleton();
-  // 仅 dshana profile 路线需要落位：配置改回官方 profile（如 web）时不落位，
+  // 仅 dshana profile 路线需要挂载：配置改回官方 profile（如 web）时不挂载，
   // 走官方 bundle（dsh 自动 initProfile）；dshana 才需要插件自带的 profile 材料。
   if (resolveProfileName(cfg) !== PROFILE_NAME) return;
   const dshHome = join(cfg.dataDir, "dsh-home");
@@ -398,21 +406,64 @@ export function ensureDshanaProfile(cfg) {
     );
     return;
   }
-  const cmp = (a, b) => {
-    try {
-      return readFileSync(a, "utf8") === readFileSync(b, "utf8");
-    } catch {
-      return false;
+  // 已是正确链接：跳过（零拷贝，无内容比对）
+  try {
+    const stat = lstatSync(destRoot);
+    if (stat.isSymbolicLink()) {
+      const resolved = realpathSync(destRoot);
+      if (resolved === realpathSync(srcRoot)) return;
     }
-  };
-  const need = () =>
-    !existsSync(join(destRoot, "package.json")) ||
-    !cmp(join(srcRoot, "package.json"), join(destRoot, "package.json")) ||
-    !cmp(join(srcRoot, "cordis.patch.yml"), join(destRoot, "cordis.patch.yml"));
-  if (need()) {
-    mkdirSync(destRoot, { recursive: true });
-    cpSync(srcRoot, destRoot, { recursive: true, force: true });
-    g.appendLog?.("hana", `[cordis] dshana profile 落位 -> ${destRoot}`);
+  } catch {
+    /* 不存在或无法 stat：重建 */
+  }
+  // 非链接 / 指向过期：先删旧目标（实体目录或旧链接），再建链接
+  try {
+    if (existsSync(destRoot)) {
+      const stat = lstatSync(destRoot);
+      if (stat.isSymbolicLink()) {
+        // 旧链接（指向过期源）：rmdir 删链接本身，不递归（防误删链接目标）
+        rmdirSync(destRoot);
+      } else {
+        // 旧实体目录（历史拷贝落位残留）：整体删除后重建链接
+        rmSync(destRoot, { recursive: true, force: true });
+      }
+    }
+  } catch (e) {
+    g.appendLog?.(
+      "hana",
+      `[cordis] 旧 profile 清理失败：${(e && e.message) || e}（跳过重建）`,
+    );
+    return;
+  }
+  try {
+    mkdirSync(dirname(destRoot), { recursive: true });
+    // 平台差异：Windows 用 directory junction（免管理员权限创建目录链接）；
+    // 非 Windows（Linux/macOS）用目录符号链接（symlink type=dir，无需特权）。
+    // 两者对 node fs 透明（lstat isSymbolicLink / realpath 均成立），幂等检查通用。
+    if (process.platform === "win32") {
+      symlinkSync(srcRoot, destRoot, "junction");
+    } else {
+      symlinkSync(srcRoot, destRoot, "dir");
+    }
+    g.appendLog?.(
+      "hana",
+      `[cordis] dshana profile 链接（${process.platform === "win32" ? "junction" : "symlink"}）-> ${srcRoot}`,
+    );
+  } catch (e) {
+    // 链接建立失败（跨盘/权限等）：回退拷贝落位（旧行为，保证 profile 可用）
+    g.appendLog?.(
+      "hana",
+      `[cordis] profile 链接失败（${(e && e.message) || e}），回退拷贝落位`,
+    );
+    try {
+      cpSync(srcRoot, destRoot, { recursive: true, force: true });
+      g.appendLog?.("hana", `[cordis] dshana profile 落位（拷贝回退）-> ${destRoot}`);
+    } catch (e2) {
+      g.appendLog?.(
+        "hana",
+        `[cordis] profile 落位失败：${(e2 && e2.message) || e2}`,
+      );
+    }
   }
 }
 
@@ -687,6 +738,11 @@ export async function ensureWebHost(cfg) {
           // 直查不受影响）。不 await，页面/任务不阻塞。
           try {
             connectBus({ webPort: port });
+            // bus.ready 补推接线（幂等，只挂一次）：总线连接成功后如有待补推 routes
+            // 立即补推（connectBus 是异步建连，pushProviderRoutes 在握手前调用必然
+            // 未送达记 pending——补推监听必须与 connectBus 同一就绪点挂上，否则工具
+            // 路径（ensureWebHost）不经过 startWebHostFromPlugin 时待补推永不到达）。
+            wireProviderPushOnBusReady();
             // config 下发 provider（替代 patch config 注入）：hello-ok 后自动发 config 帧
             // （dshPkgDir/dataDir），settings/provider 子插件经 dshanaBus.getConfig() 取路径。
             // 每次握手重发，覆盖 web host 重启后新 bridge 实例。
