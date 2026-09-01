@@ -45,6 +45,7 @@ import {
   mkdirSync,
   writeFileSync,
   appendFileSync,
+  cpSync,
 } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
@@ -370,6 +371,50 @@ function buildProviderRoutes() {
   g.latestProviderRoutes = result.routes;
   return result;
 }
+// ---- dshana profile 落位：dist/cordis → $DSH_HOME/profiles/dshana ----
+// vX（dshana profile 路线）：子插件与服务层全部收敛进 dshana profile，spawn 只带
+// --profile（默认 dshana）。dsh 的 loadProfile 要求 $DSH_HOME/profiles/<name> 存在且含
+// package.json（dsh.profile.bundles），空目录会直接抛「profile does not exist」。故启动前
+// 须把交付物 dist/cordis（打包后 = PLUGIN_ROOT/cordis，见 build.mjs buildCordis）整体
+// 落位为 profile 目录：package.json（manifest）+ cordis.patch.yml（user patch 层）+
+// cordis.yml + pnpm-workspace.yaml + node_modules/@dsh-hanako/* 子插件。
+// 幂等：目标已就绪且与源一致时不重复拷贝（内容比对 package.json 与 cordis.patch.yml），
+// 避免每次启动全量覆盖（大幅改动触发会略慢，但正确性优先）。落位失败记 warn 不阻断——
+// 若 profile 缺失 dsh 侧会再报，最终由诊断引导修复。
+const PROFILE_NAME = "dshana";
+export function ensureDshanaProfile(cfg) {
+  const g = getSingleton();
+  // 仅 dshana profile 路线需要落位：配置改回官方 profile（如 web）时不落位，
+  // 走官方 bundle（dsh 自动 initProfile）；dshana 才需要插件自带的 profile 材料。
+  if (resolveProfileName(cfg) !== PROFILE_NAME) return;
+  const dshHome = join(cfg.dataDir, "dsh-home");
+  const srcRoot = join(PLUGIN_ROOT, "cordis");
+  const destRoot = join(dshHome, "profiles", PROFILE_NAME);
+  if (!existsSync(join(srcRoot, "package.json"))) {
+    g.appendLog?.(
+      "hana",
+      `[cordis] profile 源缺失：${srcRoot}（插件未打包 cordis/ 或安装不完整）`,
+    );
+    return;
+  }
+  const cmp = (a, b) => {
+    try {
+      return readFileSync(a, "utf8") === readFileSync(b, "utf8");
+    } catch {
+      return false;
+    }
+  };
+  const need = () =>
+    !existsSync(join(destRoot, "package.json")) ||
+    !cmp(join(srcRoot, "package.json"), join(destRoot, "package.json")) ||
+    !cmp(join(srcRoot, "cordis.patch.yml"), join(destRoot, "cordis.patch.yml"));
+  if (need()) {
+    mkdirSync(destRoot, { recursive: true });
+    fs.cpSync(srcRoot, destRoot, { recursive: true, force: true });
+    g.appendLog?.("hana", `[cordis] dshana profile 落位 -> ${destRoot}`);
+  }
+}
+
 // ---- web host 生命周期：spawn dsh web（DSH_HOME 锁进插件数据目录）----
 // dsh 依赖位置解析（resolveDshPkgDir）已提取到 lib/install.js——数据目录
 // dsh-pkg/ 优先（Agent npm i @deepseek-ai/dsh 部署的轻量分发形态），插件安装目录
@@ -448,6 +493,9 @@ export async function ensureWebHost(cfg) {
   // 子进程 node 解析（每次 spawn 前解析，运行期改 nodejsPath 即时生效）：默认
   // Electron 自带 node（ELECTRON_RUN_AS_NODE=1）；配置自定义系统 node 时用自定义路径
   // （macOS 上 Electron 内嵌 node 签名校验失败场景的解法）
+  // 启动前确保 dshana profile 已落位（dist/cordis → $DSH_HOME/profiles/dshana），
+  // 否则 dsh loadProfile 会抛「profile does not exist」。
+  ensureDshanaProfile(cfg);
   const nodeExec = resolveNodeExec(cfg);
   const child = spawn(
     nodeExec,

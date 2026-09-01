@@ -1,12 +1,12 @@
-# The @dsh-hanako/dshana-bundle patch: official service layer (no browser UI),\n# replacing the dsh-web-app UI entry. @dsh-hanako/* sub-plugins are loaded by the\n# dsh-hanako.patch.yml static overlay (--patch), not here (avoids duplicate ids).
-# Applied after dsh-base's insert; the profile's cordis.patch.yml and any
-# --patch overlays still come after. Rows restate every key they own.
+# dshana profile 的 user patch 层（$DSH_HOME/profiles/dshana/cordis.patch.yml）。
+# 作为 profile 挂在官方 @deepseek-ai/dsh-base bundle 之后；叠加 @dsh-hanako/* 子插件
+# 与服务层（无浏览器 UI，替代官方 web-app 的 UI 入口）。@dsh-hanako/* 子插件经
+# node_modules/@dsh-hanako/* 实体随 profile 落位（见 build.mjs buildCordis）。
 #
-# Kept from dsh-web-app's bundle patch: web-startup / webserver / web-runtime
+# 保留自 dsh-web-app 的 bundle patch：web-startup / webserver / web-runtime
 # (URL+token print) / connection (Typert API + BrowserAuth) / api-* controllers
-# / cordis runners / workspace & session services / theme service.
-# Dropped: all dsh-client-ui-* browser rows (no official UI — presentation is
-# served by the host plugin page).
+# / cordis runners / workspace & session services / theme service。
+# 丢弃：全部 dsh-client-ui-* browser rows（无官方 UI——呈现由宿主插件页承担）。
 
 # ── surface-specific values the base deliberately omits ─────────────────────
 
@@ -123,7 +123,30 @@
     - id: client-ui-theme
       name: '@deepseek-ai/dsh-client-ui-theme'
 
+    # Agent 预设停靠点：default 指向 shipped preset（standard），dsh_run 的
+    # agentPreset 参数会在会话预设处覆盖 default。
     - id: agent-presets
       name: '@deepseek-ai/dsh-agent-presets'
+      config:
+        default: standard
+
+    # ── @dsh-hanako/* 子插件（覆盖 v0.22.1 静态 overlay 六段 insert）──────
+    - id: '@dsh-hanako/logger'
+      name: '@dsh-hanako/logger'
+
+    - id: '@dsh-hanako/clipboard'
+      name: '@dsh-hanako/clipboard'
+
+    - id: '@dsh-hanako/theme'
+      name: '@dsh-hanako/theme'
+
+    - id: '@dsh-hanako/provider'
+      name: '@dsh-hanako/provider'
+
+    - id: '@dsh-hanako/settings'
+      name: '@dsh-hanako/settings'
+
+    - id: '@dsh-hanako/bridge'
+      name: '@dsh-hanako/bridge'
 
 
