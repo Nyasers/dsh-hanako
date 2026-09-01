@@ -420,9 +420,10 @@
       // @dsh-hanako/web-app 子插件（dsh 进程内）serve 完整 fork SPA——iframe 直接嵌
       // （同源 3080，免鉴权：资源/API/SSE/WS 全由子插件提供，无宿主代理、无劫持、
       // 无 token/PSS 负担；跨源桥（主题/剪贴板）经 postMessage 走壳页）。
-      // dshReload 时间戳 bust（更新后强制换新 UI）
-      var base =
-        "http://127.0.0.1:{{= it.port }}/webui/" + "?dshReload=" + Date.now();
+      // vY（T7b）：dsh WebUI 由 @dsh-hanako/web-app serve 在根路径（registerFallback 席位），
+      // /webui/ 前缀已退役——iframe 直嵌 127.0.0.1:<port>/，不带 ?dshReload bust
+      // （index.html no-cache + assets hash 文件名，更新后自然换新，bust 多余且污染 URL）。
+      var base = "http://127.0.0.1:{{= it.port }}/";
       // 首次挂载（src 空）或从加载/诊断态切回（更新/停机后）：强制加载当前 web host
       // （带时间戳 bust，避免相同 src 不触发重新加载，保证更新后拿到新版本 UI）；
       // 已挂载且非 pending（重复 ready）不重复 reload，不打断 dsh UI

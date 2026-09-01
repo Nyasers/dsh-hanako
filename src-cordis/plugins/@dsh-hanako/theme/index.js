@@ -9,10 +9,10 @@
 //     theme.css 变量生效，getComputedStyle 读到当前主题 16 个变量的渲染值。
 //     随宿主更新：宿主切主题 → dataset.theme 变 → 插件 iframe 重载 → 壳桥
 //     回传新值；宿主新增/修改主题无需插件更新（无静态主题表）。
-// 边界：dsh preference 经 settings.describe 读取一次，并监听 dsh 自身的 settings
-//   变更广播（`settings/document-updated`，经 /api/events.host WebSocket 下发，
-//   参数 [ns, revision]）在偏好变化时实时回读 pref 并重跑 applyOrRemove——
-//   无需重开标签页。system → 覆盖 Hana 配色；light/dark → 完全原生。
+// 边界：dsh preference 经 settings/describe 读取（加载时一次 + 轻量轮询 3s——
+//   vY T7b 后 0.1.2 无旧 /api/events.host WS，官方主题 preference 走服务端注入 +
+//   client presenter；注入脚本轮询读偏好，system ↔ light/dark 切换即时重评）。
+//   system → 覆盖 Hana 配色；light/dark → 完全原生。
 //
 // 机制：经 dsh-host-webserver 的 tapIndex 扩展点，向每个 index 响应注入：
 //   1) 静态 <style>：无脚本/桥失败时的默认主题 fallback
@@ -159,7 +159,9 @@ const BRIDGE = `<script id="@dsh-hanako/theme-bridge">
     }
   } catch (e) { /* 忽略 */ }
   var cur = null;
-  var pref = null;
+  // vY（T7b 后 dsh 0.1.2）：preference 默认 system——跟随宿主配色（壳桥 vars 即应用）；
+  // 读 dsh settings/describe 失败/缺失时按 system 处理，主题不因此失效。
+  var pref = "system";
   function cssOf(v) {
     var m = ${JSON.stringify(TOKEN_MAP)};
     var c = "";
@@ -205,10 +207,12 @@ const BRIDGE = `<script id="@dsh-hanako/theme-bridge">
   });
   // 回读一次 preference 并重跑 applyOrRemove（加载时 + 偏好变更时共用）。
   function refreshPref() {
-    fetch("/api/settings.describe", {
+    // vY（T7b 后 dsh 0.1.2）：settings.describe 端点改斜杠 settings/describe（0.1.1
+    // 点号端点已退役）；信封 payload 走 { args }（0.1.2 Remote 约定）。
+    fetch("/api/settings/describe", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type: "client-request", rpcId: "theme-pref-" + Date.now(), method: "settings.describe", payload: {} })
+      body: JSON.stringify({ type: "client-request", rpcId: "theme-pref-" + Date.now(), method: "settings/describe", payload: { args: {} } })
     })
       .then(function (r) { return r.json(); })
       .then(function (d) {
@@ -224,38 +228,14 @@ const BRIDGE = `<script id="@dsh-hanako/theme-bridge">
       .catch(function () {});
   }
   refreshPref();
-  // 偏好实时化：dsh 前端写 settings 后，host 经 /api/events.host WebSocket 下发
-  // 'settings/document-updated' 帧（frame.args = [ns, revision]）。本脚本无法访问
-  // dsh 内部 ctx.remote.$on，故同源再开一条 WebSocket 订阅该下行；收到 ui-theme
-  // 变更即回读 pref 并重跑 applyOrRemove（无需重开标签页）。
-  function connectThemePref() {
-    try {
-      var scheme = window.location.protocol === "https:" ? "wss:" : "ws:";
-      var ws = new WebSocket(scheme + "//" + window.location.host + "/api/events.host");
-      ws.onmessage = function (ev) {
-        try {
-          if (typeof ev.data !== "string") return;
-          var env = JSON.parse(ev.data);
-          var frame = env && env.payload;
-          if (frame && frame.type === "host/remote-event" && frame.event === "settings/document-updated") {
-            var args = frame.args || [];
-            if (args[0] === "ui-theme") refreshPref();
-          }
-        } catch (e) { /* 忽略无法解析的帧 */ }
-      };
-      ws.onclose = function () {
-        // dsh 会自行重建下行；脚本侧温和重连（指数退避封顶），失败过多则安静停住，
-        // 依赖加载时读一次兜底，不阻断主题功能。
-        if (reconnectAttempts < 10) {
-          reconnectAttempts += 1;
-          setTimeout(connectThemePref, Math.min(1000 * Math.pow(2, reconnectAttempts), 30000));
-        }
-      };
-      ws.onerror = function () { /* 后面 onclose 会接手重连 */ };
-    } catch (e) { /* 无 WebSocket/连接失败时维持加载时读一次的语义 */ }
-  }
-  var reconnectAttempts = 0;
-  connectThemePref();
+  // 偏好实时化（vY：T7b 后 dsh 0.1.2 无 /api/events.host（旧 0.1.1 端点）——
+  // 官方主题 preference 走服务端注入 + client presenter，注入脚本无法访问 ctx.remote.$on；
+  // 改为轻量轮询 settings/describe（本地回环，3s 间隔；preference 变化时 refreshPref 内
+  // 自动重跑 applyOrRemove/maybeDropStatic——system ↔ light/dark 切换即时生效）。
+  var prefTimer = setInterval(function () {
+    if (document.hidden) return; // 标签页隐藏时不轮询
+    refreshPref();
+  }, 3000);
   var mq = window.matchMedia && matchMedia("(prefers-color-scheme: dark)");
   if (mq && mq.addEventListener) mq.addEventListener("change", ask);
   // 竞态修复：壳页（宿主 iframe 外层）主题桥的注册可能与 dsh 页面加载不同步——脚本加载时

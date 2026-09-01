@@ -15,10 +15,11 @@
 // 「默认模型表单 + 版本块硬堆叠」）：
 //   页头：DSHana 品牌区（图标 + 「DSHana 设置」标题）——让分页先有一个属于
 //   「DSHana 设置」自身的身份，而不是一进来就是默认模型表单。
-//   ① 默认模型卡片：组件语义与旧面板一致——llm.models RPC（经 connection.api，宿主
-//      注入的 sensenova/agnes/deepseek 与 dsh 单独配置的 deepseek-official 全量）→
-//      provider → model → 思考强度（reasoning.efforts，无 reasoning 的模型不显示思考
-//      下拉）三级联动；当前默认回显（POST /api/hana-settings.read）；保存
+//   ① 默认模型卡片：组件语义与旧面板一致——模型列表改新版 **session/modelCatalog** RPC
+//      （connection.rpc.call，dsh 0.1.2 的 ModelCatalog：provider → model → 思考强度
+//      三级联动；旧 connection.api（0.1.1）已随新版 connection handle 退役——新版 handle
+//      无 api 字段，vY T7b 后 connection 由 @dsh-hanako/api-bridge 的 client 载体提供）；
+//      当前默认回显（POST /api/hana-settings.read）；保存
 //      （POST /api/hana-settings.save）→ agentDefaultModel 服务写 settings.yaml。
 //   ② DSH 版本卡片：@deepseek-ai/dsh 版本检查与更新（v0.18.1 起检查改 **dsh 侧直查**——
 //      后端 HTTP 直查 npm registry（fetch https://registry.npmjs.org/@deepseek-ai/dsh/latest
@@ -40,7 +41,8 @@
 // 替代改名前的 hdm（hana-default-model）标识）。
 //
 // 服务注入：inject = ['slots', 'locale', 'connection']——slots（注册）、locale
-// （导航 label 与文案 i18n）、connection（llm.models RPC）。自定义路由
+// （导航 label 与文案 i18n）、connection（session/modelCatalog RPC，新版 rpc.call）。
+// 自定义路由
 // （read/save/check-version/request-update/update-status）不走 RPC 信封
 // （不在 ApiProxy 契约内），组件里直接 fetch。
 
@@ -213,9 +215,10 @@ window.__ModuleLoader__.load({
 
     // ---- 默认模型卡片：三级联动表单（设置中心分组卡片一）----
     // props 组合（web-react standardKit + inject + ownerProps）：close（shell 提供，
-    // 本面板不用）、t（locale 选项绑定 NS）、api（connection.api，inject 提供）。
+    // 本面板不用）、t（locale 选项绑定 NS）、connection（新版 connection handle，
+    // inject 提供——模型列表经 connection.rpc.call('/api', 'session/modelCatalog')）。
     function DefaultModelBlock(props) {
-      const { t, api } = props;
+      const { t, connection } = props;
       const [groups, setGroups] = react.useState(null);
       const [provider, setProvider] = react.useState("");
       const [model, setModel] = react.useState("");
@@ -230,18 +233,17 @@ window.__ModuleLoader__.load({
         setStatusKind(kind || "");
       };
 
-      // 加载：llm.models RPC + 当前默认回显（挂载即一次；切 tab 卸载重挂）
+      // 加载：session/modelCatalog RPC + 当前默认回显（挂载即一次；切 tab 卸载重挂）
       react.useEffect(() => {
         let alive = true;
-        if (api && typeof api.llm?.models === "function") {
-          api.llm
-            .models({})
+        const conn = connection;
+        if (conn && typeof conn.rpc?.call === "function") {
+          conn.rpc
+            .call("/api", "session/modelCatalog", { args: {} })
             .then((response) => {
               if (!alive) return;
               const value =
-                response && response.result && response.result.ok
-                  ? response.result.value
-                  : null;
+                response && response.ok ? response.value : null;
               if (value && Array.isArray(value.groups)) setGroups(value.groups);
               else setStatusBoth(t("loadFailed"), "err");
             })
@@ -902,7 +904,7 @@ window.__ModuleLoader__.load({
 
     // ---- 分页容器：设置中心式布局——页头品牌区 + 两个并列分组卡片（默认模型 / DSH 版本）----
     function HanaSettingsSection(props) {
-      const { t, api } = props;
+      const { t, connection } = props;
       return jsx_runtime.jsxs("div", {
         className: "hs-page",
         children: [
@@ -923,7 +925,7 @@ window.__ModuleLoader__.load({
               }),
             ],
           }),
-          jsx_runtime.jsx(DefaultModelBlock, { t, api }),
+          jsx_runtime.jsx(DefaultModelBlock, { t, connection }),
           jsx_runtime.jsx(DshVersionBlock, { t }),
         ],
       });
@@ -943,7 +945,7 @@ window.__ModuleLoader__.load({
         "@dsh-hanako/settings: dictionaries",
       );
       const connection = ctx.get("connection");
-      const injected = () => ({ api: connection.api });
+      const injected = () => ({ connection });
       ctx.slots.inject("settings.section", () =>
         ctx.slots.register(
           {
