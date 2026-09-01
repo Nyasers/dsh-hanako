@@ -56,7 +56,8 @@ const staticUrlToMeta = new Map();
       name === "node_modules" ||
       name === "releases" ||
       name === "_tmp" ||
-      name === ".git"
+      name === ".git" ||
+      name === "src-cordis"
     )
       continue;
     const p = join(urlRoot, name);
@@ -151,8 +152,36 @@ function extraTerser(root) {
 }
 await extraTerser(join(ROOT, "dist"));
 
+// 4) 构建 dshana profile（dist/cordis）：src-cordis = profiles/dshana 源码根目录
+//    产物即 dshana profile 自包含材料（运行时 spawn --profile dshana 消费）：
+//      dist/cordis/cordis.patch.yml        ← src-cordis/cordis.patch.yml（bundle 置顶）
+//      dist/cordis/package.json            ← src-cordis/package.json（bundle 置顶）
+//      dist/cordis/node_modules/@dsh-hanako/** ← src-cordis/plugins/@dsh-hanako/**（其他插件）
+//    插件 JS 不做 build 这轮 terser（归 pack.mjs 静态压缩步），故不在此遍历的 node_modules
+//    跳过名单之外再压缩。
+function buildCordis(srcRoot, outRoot) {
+  fs.removeSync(outRoot);
+  fs.ensureDirSync(outRoot);
+  // 1) bundle 置顶文件直接落到 profile 根
+  for (const f of ["cordis.patch.yml", "package.json"]) {
+    const s = join(srcRoot, f);
+    if (!fs.pathExistsSync(s)) throw new Error(`cordis bundle 文件缺失：${s}`);
+    fs.copySync(s, join(outRoot, f));
+  }
+  // 2) 其他插件（scope 目录整体复制）：plugins/@dsh-hanako → node_modules/@dsh-hanako
+  const pluginsRoot = join(srcRoot, "plugins");
+  if (!fs.pathExistsSync(pluginsRoot)) throw new Error("src-cordis/plugins 缺失");
+  for (const scope of fs.readdirSync(pluginsRoot)) {
+    const scopeDir = join(pluginsRoot, scope);
+    if (!fs.statSync(scopeDir).isDirectory()) continue;
+    fs.copySync(scopeDir, join(outRoot, "node_modules", scope));
+  }
+  console.log("cordis profile -> dist/cordis/");
+}
+buildCordis(join(ROOT, "src-cordis"), join(ROOT, "dist", "cordis"));
 
-// 4) 构建后强制校验：产物不得残留带引号的 file:// 字面量（构建机路径泄漏即失败）。
+
+// 5) 构建后强制校验：产物不得残留带引号的 file:// 字面量（构建机路径泄漏即失败）。
 // 回归防护：收集范围再全也有漏网可能，这里兜底——CI 出包残留即构建失败。
 function assertNoStaticFileUrl(root) {
   const offenders = [];
