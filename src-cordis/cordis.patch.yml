@@ -240,17 +240,17 @@
     - id: '@dsh-hanako/settings'
       name: '@dsh-hanako/settings'
 
-    - id: '@dsh-hanako/bridge'
-      name: '@dsh-hanako/bridge'
+    - id: '@dsh-hanako/bus'
+      name: '@dsh-hanako/bus'
 
     # 免鉴权 connection 等价服务 + /api HTTP 载体（替代官方 dsh-client-connection 的
     # BrowserAuth token/cookie 鉴权面——SPA 数据面 /api 一元 RPC 与 gateway 激活的
     # 依赖；requestRejection 恒 undefined = 拔鉴权墙）。须在 gateway/api-* 插件之前
     # 或同批激活（cordis inject 异步协调，服务可用即回调，顺序不敏感）。
-    - id: '@dsh-hanako/api-bridge'
-      name: '@dsh-hanako/api-bridge'
+    - id: '@dsh-hanako/bridge'
+      name: '@dsh-hanako/bridge'
 
     # 宿主专供 WebUI：serve fork 官方前端到根路径（fallback 席位，无代理/无鉴权面，
-    # 数据面走 api-bridge 免鉴权 /api + gateway remote.mux）
-    - id: '@dsh-hanako/web-app'
-      name: '@dsh-hanako/web-app'
+    # 数据面走 bridge 免鉴权 /api + gateway remote.mux）
+    - id: '@dsh-hanako/app'
+      name: '@dsh-hanako/app'

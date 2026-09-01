@@ -4,7 +4,7 @@
 // src/lib/bus.js — dshana.bus 进程间消息总线客户端（宿主侧）
 //
 // 语义：宿主插件作为 dshana.bus 的**客户端**，连 dsh 进程内的消息总线服务端
-// （@dsh-hanako/bridge 经 dsh webserver upgrade 路由注册 /api/dshana.bus）——
+// （@dsh-hanako/bus 经 dsh webserver upgrade 路由注册 /api/dshana.bus）——
 // 双向收发 JSON 文本帧 { channel, payload }，替代旧的单向 HTTP 反向信道
 // POST /child/post（v0.21.2 引入，已退役）。只做消息总线，不做代理：无 SW 拦截、
 // 无 HTTP 隧道、无请求转发（bridge 历史教训：feat/bridge-channel 曾做三层通道，
@@ -18,7 +18,7 @@
 // 同级，本机信任——不再生成 busToken、不再注入 {{BUS_TOKEN}} 占位符；hello 只作身份
 // 宣告，bridge 不再比对）。
 //
-// 协议（JSON 文本帧，{ channel, payload }，与子插件 @dsh-hanako/bridge 同协议）：
+// 协议（JSON 文本帧，{ channel, payload }，与子插件 @dsh-hanako/bus 同协议）：
 //   { "channel":"hello", "payload":{} }                     —— 首帧握手（免鉴权身份宣告）
 //   { "channel":"hello-ok", "payload":{} }                   —— 服务端应答（握手成功）
 //   { "channel":"config", "payload":{ dshPkgDir, dataDir } }—— 配置下发（web host 就绪点注册
@@ -73,13 +73,11 @@ let authed = false; // hello 已发送（服务端 hello-ok 前即为 true）
 let url = null;
 // update.result 断线/未握手时排队（有界 ≤20），连接恢复后补发——更新结果不因
 // 总线窗口（web host 重启停机/重连）丢失，settings 侧能等到最终状态。
-let pendingResults = [];
 let stopFlag = false; // closeBus 置位：不再重连（下次 connectBus 复位）
 let reconnectAttempt = 0;
 let reconnectTimer = null;
 let heartbeatTimer = null;
 let lastMessageAt = 0;
-let updateWired = false; // update.request → updateDsh 接线只做一次
 // 宿主侧 config 下发 provider（web host 就绪点注册；hello-ok 后自动发 config 帧，
 // 替代 patch config 注入——settings/provider 子插件经 dshanaBus.getConfig() 取路径）
 let configProvider = null;
@@ -125,9 +123,6 @@ function disconnectInternal() {
 /** 发 JSON 文本帧（未连接/未握手时：update.result 排队待补发，其余 no-op，返回是否送达） */
 function sendFrame(frame) {
   if (!ws || ws.readyState !== 1 || !authed) {
-    if (frame && frame.channel === "update.result") {
-      if (pendingResults.length < 20) pendingResults.push(frame);
-    }
     return false;
   }
   try {
@@ -136,13 +131,6 @@ function sendFrame(frame) {
   } catch {
     return false;
   }
-}
-
-/** 补发排队的 update.result（连接 + 握手成功后调用；失败帧重新入队等下次补发） */
-function flushPending() {
-  const queue = pendingResults;
-  pendingResults = [];
-  for (const f of queue) sendFrame(f);
 }
 
 /** 收到一帧：channel 分发 + 心跳应答 + 本机事件 */
@@ -163,7 +151,6 @@ function onFrame(text) {
   if (frame.channel === "hello-ok") {
     log("总线握手确认（hello-ok，免鉴权）");
     reconnectAttempt = 0; // 握手成功：退避归零
-    flushPending(); // 连接恢复：补发断线期间排队的 update.result
     // 下发 config（dshPkgDir/dataDir 替代 patch config 注入；每次握手重发，
     // 覆盖 web host 重启后新 bridge 实例）
     if (configProvider) {
@@ -289,63 +276,6 @@ function startHeartbeat() {
   heartbeatTimer.unref?.();
 }
 
-/** 更新链路接线（只做一次）：总线 update.request → g.updateDsh → 回投 update.progress/result */
-function wireUpdateRequest() {
-  if (updateWired) return;
-  updateWired = true;
-  emitter.on("update.request", (payload) => {
-    const g = getSingleton();
-    if (!g || typeof g.updateDsh !== "function") {
-      log("收到 update.request 但插件能力层未加载，忽略");
-      return;
-    }
-    const p = payload && typeof payload === "object" ? payload : {};
-    // 受理确认：先回 update.ack（settings request-update 等 ack 才返回 updating，
-    // 5s 超时视为宿主未受理）——避免 fire-and-forget 导致前端误报已在更新。
-    if (p.reqId) {
-      sendFrame({ channel: "update.ack", payload: { reqId: p.reqId } });
-    }
-    log("收到 update.request（fromVersion=" + (p.fromVersion || "?") + "），触发更新");
-    // 复用现有 updateDsh（停 host → npm i latest → 起 host；结果走内存态 g.update，
-    // update-result.json 已退役）：并发防护 g.update.status === "running" 在 updateDsh
-    // 内部（进行中重复请求返回 { ok:false, state:"updating" }，不重复执行）。updateDsh
-    // 内部会经总线 emit
-    // update.progress/update.result（事件化，见 lifecycle.js）；这里只受理请求。
-    let result;
-    try {
-      result = g.updateDsh({
-        dataDir: g.dataDir,
-        webPort: Number(g.webServerPort) || 3080,
-      });
-    } catch (e) {
-      sendFrame({
-        channel: "update.result",
-        payload: { state: "error", error: String(e?.message || e).slice(0, 1500) },
-      });
-      return;
-    }
-    Promise.resolve(result)
-      .then((r) => {
-        // 并发请求（已在更新中）：不重复触发、不回投（首个请求拥有结果上报）
-        if (r && r.state === "updating") return;
-        // 终态已由 updateDsh 内部 emitBus 回投（lifecycle.js 完成点：done/error 都
-        // emitBus("update.result")；bus 未连接时 sendFrame 会把 update.result 排队
-        // 待 hello-ok 补发，不丢终态）——这里不再重复 sendFrame，确保只发一个终态
-        // （CodeRabbit 三轮意见：双发 update.result 属协议冗余；settings 事件缓存
-        // 虽幂等去重，但流侧会收到两次终态）。
-        log("更新完成（state=" + (r && r.state) + "），终态已由 lifecycle 回投");
-      })
-      .catch((e) => {
-        // 兜底：updateDsh 理论异常 reject（正常路径内部已 emit 终态；此分支仅防御
-        // 未来重构去掉内部 try/catch 时不丢终态）
-        sendFrame({
-          channel: "update.result",
-          payload: { state: "error", error: String(e?.message || e).slice(0, 1500) },
-        });
-      });
-  });
-}
-
 /**
  * 连接 dshana.bus（web host 就绪点调用，幂等）：已连接 no-op；否则断开旧连接/定时器
  * 后全新建立。cfg：{ webPort } 等（与 ensureWebHost cfg 同源）。
@@ -354,7 +284,6 @@ export function connectBus(cfg = {}) {
   const g = getSingleton();
   const port = Number(cfg.webPort) || Number(g.webServerPort) || 3080;
   stopFlag = false;
-  wireUpdateRequest();
   if (ws && ws.readyState === 1 && authed) return; // 已连接
   disconnectInternal();
   url = "ws://127.0.0.1:" + port + BUS_PATH;

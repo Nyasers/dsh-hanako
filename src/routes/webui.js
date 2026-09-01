@@ -130,7 +130,7 @@ function buildShell({
   // 下内层声明无法生效，属无效方案已回滚，见 CHANGELOG）。
   // 剪贴板问题的正规解法是 @dsh-hanako/clipboard 插件（tapIndex 注入桥 → 宿主 capability）
   // + 下方壳页面桥（hostRequest + __dshCopy 监听）。
-  // iframe src 由壳页 JS 统一设置（attach）：直嵌 @dsh-hanako/web-app 子插件
+  // iframe src 由壳页 JS 统一设置（attach）：直嵌 @dsh-hanako/app 子插件
   // （dsh 3080 fork SPA）——同源 iframe，无需 BFF 代理/凭据透传。
   const iframe = `<iframe id="dsh-frame"></iframe>`;
   // 嵌入首帧自检 JSON：把 </ 转义成 <\/，防诊断文本（路径/stderr）里的 </script> 提前闭合脚本
@@ -164,11 +164,11 @@ export default function registerWebuiRoutes(app, ctx) {
   // probeHost（就绪事件化，probeHost 仅诊断路径使用）。未就绪时服务端同步收集一次自检
   // （首屏即渲染，诊断路径刷新）；就绪不收集保持轻量。
   // 壳页不再注入任何脚本/横幅：web host 状态与诊断由壳页 JS 订阅 /webui/events
-  // 事件流驱动（就绪事件化），SPA 全部资源由 @dsh-hanako/web-app 子插件
+  // 事件流驱动（就绪事件化），SPA 全部资源由 @dsh-hanako/app 子插件
   // （dsh 3080）iframe 同源直嵌提供，无浏览器端劫持/改写。
 
   app.get("/webui", async (c) => {
-    // 壳页：iframe 直嵌 @dsh-hanako/web-app 子插件（dsh 3080）serve 的 fork SPA——
+    // 壳页：iframe 直嵌 @dsh-hanako/app 子插件（dsh 3080）serve 的 fork SPA——
     // iframe 内同源（资源/API/SSE/WS 全由子插件提供，免鉴权，无劫持无 token/PSS）；
     // 宿主只做页面壳：就绪事件化 / 诊断 / 主题与剪贴板桥（全部在壳页 JS 里）。
     const ready = busReady();
@@ -421,69 +421,6 @@ export default function registerWebuiRoutes(app, ctx) {
         e?.message || String(e),
       );
       return c.json({ ok: false, error: "检测请求失败，请稍后重试" });
-    }
-  });
-
-  // 版本检查（deps 卡片「检查更新」按钮 + Agent 工具 dsh_install 共用能力层；
-  // GET 只读）：检查中（g.check.status === "running"）→ {ok:true,running:true}；否则
-  // await g.checkDshUpdate(cfg)（HTTP 直查 npm registry 根包 JSON dist-tags ≤~15s，
-  // 官方源失败重试 npmmirror）→ {ok:true, localVersion, distTags, baselineTag,
-  // baselineVersion, updateAvailable, error?}（latestVersion 保留为 baselineVersion
-  // 别名）。基线 tag = 显式 tag / 配置 dshTag（config.json global.dshTag，默认
-  // "latest"）。结果缓存进 g.check.result（内存，不再写 check-result.json——v0.18.1
-  // 起设置页检查改 dsh 侧直查），前端随后经 health 读取诊断刷新 deps 卡片。
-  // 单例缺失/无函数/异常一律容错回 {ok:false}，本路由不抛异常。
-  app.get("/webui/check-update", async (c) => {
-    const g = globalThis.__dshHanako;
-    try {
-      if (!g || typeof g.checkDshUpdate !== "function") {
-        return c.json({ ok: false, error: "插件工具模块未加载，稍后重试" });
-      }
-      if (g.check.status === "running") return c.json({ ok: true, running: true });
-      const r = await g.checkDshUpdate({
-        dataDir: ctx.dataDir || g.dataDir,
-        webPort: port,
-      });
-      return c.json({
-        ok: true,
-        running: false,
-        localVersion: r.localVersion,
-        distTags: r.distTags || null,
-        baselineTag: r.baselineTag || null,
-        baselineVersion: r.baselineVersion,
-        latestVersion: r.latestVersion ?? r.baselineVersion,
-        updateAvailable: r.updateAvailable,
-        error: r.error || null,
-      });
-    } catch (e) {
-      ctx.log?.warn?.("[dsh-hanako] 版本检查失败:", e?.message || String(e));
-      return c.json({ ok: false, error: "版本检查失败，请稍后重试" });
-    }
-  });
-
-  // 更新 DSH（deps 卡片「更新 DSH」按钮 + Agent 工具 dsh_install 共用能力层）：
-  // 更新中（g.update.status === "running"）→ {ok:true,state:"updating"}；否则异步触发
-  // g.updateDsh(cfg)（不 await 其完成——pnpm install 可能耗时数分钟，前端经诊断/设置页
-  // update 事件看进度）→ {ok:true,state:"updating"}。未传版本/tag 时按插件声明版本
-  // 安装（config.json global.dshTag 已退役为新默认的兑底）。更新会重启 web host，正在执行的
-  // dsh 任务会中断（前端按钮已有确认文案）。单例缺失/无函数/异常一律容错回
-  // {ok:false}，本路由不抛异常。
-  app.post("/webui/update-dsh", (c) => {
-    const g = globalThis.__dshHanako;
-    try {
-      if (!g || typeof g.updateDsh !== "function") {
-        return c.json({ ok: false, error: "插件工具模块未加载，稍后重试" });
-      }
-      if (g.update.status === "running") return c.json({ ok: true, state: "updating" });
-      // 异步触发（updateDsh 内部已 try/catch 置 g.update 状态 + 总线回投事件；
-      // 这里再 .catch 兜底——路由不等待完成、不抛异常）。dataDir 缺省用单例记录值。
-      Promise.resolve(
-        g.updateDsh({ dataDir: ctx.dataDir || g.dataDir, webPort: port }),
-      ).catch(() => {});
-      return c.json({ ok: true, state: "updating" });
-    } catch (e) {
-      ctx.log?.warn?.("[dsh-hanako] 更新 DSH 失败:", e?.message || String(e));
-      return c.json({ ok: false, error: "更新请求失败，请稍后重试" });
     }
   });
 }

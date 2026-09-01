@@ -27,7 +27,7 @@ export const parameters = {
     sessionId: {
       type: "string",
       description:
-        "审批所属 DSH 会话的 sessionId（审批通知里带；全链路唯一定位键，dsh_run 提交返回/卡片 URL 同键）",
+        "审批所属 DSH 会话的 sessionId（审批通知里带；全链路唯一定位键，dsh_session 提交返回/卡片 URL 同键）",
     },
     approvalId: {
       type: "string",

@@ -417,10 +417,10 @@
       clearReadyTimers();
       var wasPending = document.body.getAttribute("data-pending") === "1";
       document.body.setAttribute("data-pending", "0");
-      // @dsh-hanako/web-app 子插件（dsh 进程内）serve 完整 fork SPA——iframe 直接嵌
+      // @dsh-hanako/app 子插件（dsh 进程内）serve 完整 fork SPA——iframe 直接嵌
       // （同源 3080，免鉴权：资源/API/SSE/WS 全由子插件提供，无宿主代理、无劫持、
       // 无 token/PSS 负担；跨源桥（主题/剪贴板）经 postMessage 走壳页）。
-      // vY（T7b）：dsh WebUI 由 @dsh-hanako/web-app serve 在根路径（registerFallback 席位），
+      // vY（T7b）：dsh WebUI 由 @dsh-hanako/app serve 在根路径（registerFallback 席位），
       // /webui/ 前缀已退役——iframe 直嵌 127.0.0.1:<port>/，不带 ?dshReload bust
       // （index.html no-cache + assets hash 文件名，更新后自然换新，bust 多余且污染 URL）。
       var base = "http://127.0.0.1:{{= it.port }}/";

@@ -368,7 +368,9 @@ export async function runPnpm(args, opts = {}) {
 export const DSH_PACKAGE = "@deepseek-ai/dsh";
 
 export function buildPnpmInstallArgs({ registry } = {}) {
-  const args = ["install", "--reporter=ndjson"];
+  // --prod：只装运行时 dependencies（插件根 package.json 有 rspack 等 devDeps 构建树，
+  // 运行时不需要；dsh + cordis 在 dependencies，T7d 起部署目标 = 插件根）。
+  const args = ["install", "--prod", "--reporter=ndjson"];
   if (typeof registry === "string" && registry) {
     args.push("--registry=" + registry);
   }

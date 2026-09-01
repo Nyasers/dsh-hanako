@@ -8,7 +8,7 @@
 // 经本模块转发生命周期能力。
 //
 // 本模块承载（逐字迁移自 dsh-run.js，逻辑零改动）：
-//   web host 拉起    ensureWebHost（spawn dsh web + 端口就绪等待，幂等）+ startWebHostFromPlugin（挂 g.startWebHost）
+//   web host 拉起    ensureWebHost（进程内 boot dsh + 端口就绪等待，幂等）+ startWebHostFromPlugin（挂 g.startWebHost）
 //   关闭回收         closeProcess（先清 provider/update watch，再 kill 子进程）
 //   连接失败自检     collectWebDiagnostics + buildDepsDiagCheck + buildProcessDiagCheck + pickProcessFix
 //   更新 DSH         updateDsh（停 host → 装依赖 → 起 host → 读版本，结果走内存态 g.update）
@@ -36,11 +36,10 @@
 // （index.js register 回收调用 g.closeProcess）；providerPushCleanup / updateWatchCleanup 清理时机与
 // 拆分前一致；updateDsh 流程（停 host→装依赖→起 host→读版本）保持完整；collectWebDiagnostics 输出的
 // checks 结构（t1 依赖 / t2 进程）令 routes/webui.js 渲染不变。
-import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
-// dsh profile 名解析（vX：dshana profile 路线，spawn --profile 用配置；config.js 内联进 bundle）
+// dsh profile 名解析（vX：dshana profile 路线，boot --profile 用配置；config.js 内联进 bundle）
 import { resolveProfileName } from "./tools/lib/config.js";
 import {
   readFileSync,
@@ -63,8 +62,6 @@ import {
   getSingleton,
   PLUGIN_ROOT,
   manifestDefaults,
-  resolveNodeExec,
-  resolveNodeExecEnv,
 } from "./tools/lib/state.js";
 // vX（migrate 体系退役）：不再有版本迁移入口（junction-converge / config-schema 等全丢）
 import {
@@ -73,7 +70,6 @@ import {
   verifyDepsSmoke,
   readDshInstalledVersion,
 } from "./tools/lib/install.js";
-import { checkDshUpdate } from "./tools/lib/check.js";
 import { connectBus, closeBus, setBusConfigProvider } from "./lib/bus.js";
 
 const STDERR_CAP = 8192;
@@ -381,7 +377,7 @@ function buildProviderRoutes() {
   return result;
 }
 // ---- dshana profile 挂载：目录链接 → PLUGIN_ROOT/cordis（替代拷贝落位）----
-// vX（dshana profile 路线）：子插件与服务层全部收敛进 dshana profile，spawn 只带
+// vX（dshana profile 路线）：子插件与服务层全部收敛进 dshana profile，进程内 boot 只带
 // --profile（默认 dshana）。dsh 的 loadProfile 要求 $DSH_HOME/profiles/<name> 存在且含
 // package.json（dsh.profile.bundles），空目录会直接抛「profile does not exist」。
 // 挂载方式：$DSH_HOME/profiles/dshana 建目录链接指向插件目录 cordis/（打包产物 =
@@ -392,7 +388,7 @@ function buildProviderRoutes() {
 // 幂等：目标是链接且指向源目录时不动；非链接 / 指向过期则重建（删实体目录或旧链接，
 // 重新建链接）。源缺失记 warn 不阻断——若 profile 缺失 dsh 侧会再报，最终由诊断引导修复。
 // 注：链接指向插件安装目录（宿主升级插件会整体替换该目录），重建时机 = 每次
-// web host spawn 前（ensureDshanaProfile），插件升级后首次拉起自动重建链接。
+// web host boot 前（ensureDshanaProfile），插件升级后首次拉起自动重建链接。
 const PROFILE_NAME = "dshana";
 export function ensureDshanaProfile(cfg) {
   const g = getSingleton();
@@ -470,14 +466,13 @@ export function ensureDshanaProfile(cfg) {
   }
 }
 
-// ---- web host 生命周期：进程内 boot dsh（T7b 方案 A；spawn 形态保留为 legacy 回退）----
+// ---- web host 生命周期：进程内 boot dsh（T7b 方案 A；spawn 形态已整体退役）----
 // dsh 依赖位置解析（resolveDshPkgDir）已提取到 lib/install.js——数据目录
 // dsh-pkg/ 优先（Agent npm i @deepseek-ai/dsh 部署的轻量分发形态），插件安装目录
 // node_modules 兑底（现役 zip 自带形态）。DSH_HOME 恒在数据目录。
-// WEB_PROCESS_MODE 逃生开关：默认 "inproc"（宿主进程内 runProfile() boot dshana，
-// webserver 保留在进程内 bind 端口）；改 "spawn" 回退旧形态（child_process.spawn +
-// --expose-internals）。实机验证确认 inproc 稳定后，spawn 分支可整体删除（T7b 步骤 5）。
-const WEB_PROCESS_MODE = "inproc";
+// 唯一形态 = 宿主进程内 runProfile() boot dshana（webserver 保留在进程内 bind 端口）。
+// 诊断/安装面仍保留 spawn（verifyDepsSmoke 冒烟 + pnpm install 子进程——D6 解耦：
+// 诊断与工具包不 import cordis/pnpm，见 lib/install.js / lib/pnpm.js）。
 
 // ---- T7b 进程内 boot：dsh 模块动态定位（解耦 D6）----
 // dsh 包不在插件 node_modules（数据目录 dsh-pkg），且 profile-boot-*.js 是带构建
@@ -673,11 +668,10 @@ export async function ensureWebHost(cfg) {
       /* 启动失败：清掉允许重试 */ g.web = null;
     }
   }
-  if (g.web?.child || g.web?.ctx) {
-    // 旧实例启动失败过：清掉重建（spawn 形态 kill；进程内形态 dispose）
+  if (g.web?.ctx) {
+    // 旧实例启动失败过：清掉重建（进程内形态 dispose）
     try {
-      if (g.web.processMode === "inproc") await g.web.ctx?.fiber?.dispose();
-      else g.web.child?.kill();
+      await g.web.ctx?.fiber?.dispose();
     } catch {
       /* 已退出 */
     }
@@ -687,9 +681,8 @@ export async function ensureWebHost(cfg) {
 
   const pkgDir = cfg.dshPkgDir;
   const dshHome = join(cfg.dataDir, "dsh-home");
-  // 总线共享秘密（bridge 凭据保护）：每次 web host 拉起随机生成——spawn 形态注入子进程
-  // env（DSHANA_BUS_SECRET，bridge 读）；进程内形态 boot 前写 process.env（同进程共享）。
-  // web host 重启即换新 secret，旧连接/旧进程失效自动重建。
+  // 总线共享秘密（bridge 凭据保护）：每次 web host 拉起随机生成——进程内形态 boot 前
+  // 写 process.env.DSHANA_BUS_SECRET（同进程共享，bridge 读）；重启即换新 secret。
   g.busSecret = randomUUID();
   mkdirSync(cfg.dataDir, { recursive: true });
   const port = Number(cfg.webPort) || 3080;
@@ -699,133 +692,8 @@ export async function ensureWebHost(cfg) {
   // 启动前确保 dshana profile 已落位（dist/cordis → $DSH_HOME/profiles/dshana），
   // 否则 dsh loadProfile 会抛「profile does not exist」。
   ensureDshanaProfile(cfg);
-  if (WEB_PROCESS_MODE === "inproc") {
-    return bootInproc(cfg, { pkgDir, dshHome, port, logPath });
-  }
-  return bootSpawn(cfg, { pkgDir, dshHome, port, logPath });
+  return bootInproc(cfg, { pkgDir, dshHome, port, logPath });
 }
-
-// ---- legacy：spawn dsh web（T7b 前形态；WEB_PROCESS_MODE="spawn" 时启用，inproc 验证稳定后删除）----
-async function bootSpawn(cfg, { pkgDir, dshHome, port, logPath }) {
-  const g = getSingleton();
-  const cliBin = join(
-    pkgDir,
-    "node_modules",
-    "@deepseek-ai",
-    "dsh",
-    "lib",
-    "bin.js",
-  );
-  if (!existsSync(cliBin)) {
-    throw new Error(
-      `DSH 包未就绪：${cliBin} 不存在。请在 DSHana 标签页执行「安装依赖」（pnpm install 按声明拉取到 dsh-pkg），或手动在插件数据目录 dsh-pkg 执行 pnpm install`,
-    );
-  }
-  // --expose-internals 是 node 运行时 flag，必须置于 cliBin 之前（node --expose-internals <cliBin> …）。
-  // HMR 服务需要 Node 内部 ESM loader：上游 drop 该 flag 后改走原生 addon 兜底
-  // （require('node-addon-require-builtin')），但该 addon 在 macOS arm64 上加载失败
-  // （node-addon-require-builtin: Unsupported/no-getter (arm64 …)），导致 `dsh web` boot 崩溃。
-  // 显式注入 flag 切到 require('internal/modules/esm/loader') 直连路径，绕开崩溃 addon；
-  // Windows x64 等其余平台走直连同样成立、行为不变（Hana 内置 node 24.15，v2 loader）。
-  // 子进程 node 解析（每次 spawn 前解析，运行期改 nodejsPath 即时生效）：默认
-  // Electron 自带 node（ELECTRON_RUN_AS_NODE=1）；配置自定义系统 node 时用自定义路径
-  // （macOS 上 Electron 内嵌 node 签名校验失败场景的解法）
-  const nodeExec = resolveNodeExec(cfg);
-  const child = spawn(
-    nodeExec,
-    [
-      "--expose-internals",
-      cliBin,
-      "--profile",
-      resolveProfileName(cfg),
-      "--port",
-      String(port),
-      // 不自动打开默认浏览器（dsh web app 默认会 open；插件以 iframe 内嵌，
-      // 更新/重启后弹浏览器是噪音，web app 参数须在 launcher flag 之后）
-      "--no-open",
-    ],
-    {
-      cwd: cfg.dataDir,
-      stdio: ["ignore", "pipe", "pipe"],
-      // 恒不注入 API Key 环境变量——凭据由 @dsh-hanako/provider 插件直读
-      // 宿主 provider-catalog.json（dsh models 页/任务均走 Hana 宿主 provider）
-      env: {
-        ...resolveNodeExecEnv(cfg),
-        DSH_HOME: dshHome,
-        DSH_TELEMETRY_DISABLED: "1",
-        // vX（bridge 凭据保护）：总线共享秘密——宿主与 dsh 进程间建立（hello 帧校验，
-        // launchToken/authCookie 凭据方法只对持有 secret 的宿主放行）。每次 spawn 随机
-        // 生成，注入子进程 env；bus.js 经同一 secret 发 hello 证明身份。
-        DSHANA_BUS_SECRET: g.busSecret,
-      },
-      windowsHide: true,
-    },
-  );
-
-  const web = {
-    child,
-    port,
-    dshHome,
-    logPath,
-    ready: false,
-    stderr: "",
-    readyPromise: null,
-    nodeExec,
-  };
-  // stdout/stderr 全量落盘（src=out/err；stderr 另保留内存尾部供诊断界面）。
-  // 写入优先用单例 appendLog（index.js 提供，行格式一致 [ts] [src] 内容），
-  // 无单例时回退本模块 appendLog（两者写同一 logPath）
-  const emitLog = (src, d) => {
-    if (typeof g.appendLog === "function") g.appendLog(src, d);
-    else appendLog(logPath, src, d);
-  };
-  child.stdout.on("data", (d) => {
-    emitLog("out", d);
-  });
-  child.stderr.on("data", (d) => {
-    emitLog("err", d);
-    web.stderr = (web.stderr + String(d)).slice(-STDERR_CAP);
-  });
-  child.once("exit", (code, signal) => {
-    web.ready = false;
-    web.stderr += `\n[dsh web 退出 code=${code} signal=${signal}]`;
-    emitLog("hana", `dsh web 退出 code=${code} signal=${signal}`);
-    // 退出信息记入单例持久字段（随后 g.web 摘除，局部 web.stderr 会丢）——
-    // 进程被外部杀掉（kill / Stop-Process）时诊断仍能区分「已退出」而非误报「尚未启动」
-    g.webLastExit = {
-      code,
-      signal,
-      at: new Date().toISOString(),
-      stderr: web.stderr.slice(-800),
-      logPath,
-    };
-    if (g.web === web) g.web = null;
-  });
-  // spawn 失败（node 路径不可执行 / EACCES / ENOENT 等）：子进程上触发 'error' 且不再
-  // 触发 'exit'——必须监听，否则 unhandled 'error' 事件会直接抛崩插件进程。处理：记入
-  // stderr/webLastExit 并置 web.spawnError，让下方 readyPromise 立即失败（否则空等端口
-  // 超时）；resolveNodeExec 已做可执行文件校验 + 降级，此处是兜底防御。
-  child.once("error", (err) => {
-    const msg = err?.message || String(err);
-    web.stderr += `\n[dsh web spawn 失败：${msg}]`;
-    emitLog("err", `dsh web spawn 失败：${msg}`);
-    web.spawnError = err;
-    g.webLastExit = {
-      code: null,
-      signal: null,
-      at: new Date().toISOString(),
-      stderr: web.stderr.slice(-800),
-      logPath,
-    };
-    if (g.web === web) g.web = null;
-  });
-
-  const readyPromise = waitWebReady(web, port, emitLog, cfg);
-  web.readyPromise = readyPromise;
-  g.web = web;
-  return readyPromise;
-}
-
 // ---- T7b：进程内 boot dsh（动态 import + runProfile，webserver 保留在进程内 bind）----
 async function bootInproc(cfg, { pkgDir, dshHome, port, logPath }) {
   const g = getSingleton();
@@ -900,27 +768,15 @@ async function bootInproc(cfg, { pkgDir, dshHome, port, logPath }) {
 }
 
 // 等端口就绪（HTTP /api/host.describe 直连 + WS 总线握手，任一通过即 markReady）。
-// 进程内/spawn 两形态共用：快速失败检查读 web 对象字段（spawnError / bootError /
-// child.exitCode），两形态只填各自相关字段。就绪后 markReady 返回 web 对象。
+// 进程内形态：快速失败检查读 web.bootError（bootInproc 记录）。就绪后 markReady 返回 web 对象。
 async function waitWebReady(web, port, emitLog, cfg) {
   const g = getSingleton();
   const deadline = Date.now() + PORT_READY_TIMEOUT_MS;
   while (Date.now() < deadline) {
-    // spawn 失败（见 error 监听）：立即抛出，不等端口超时
-    if (web.spawnError) {
-      throw new Error(
-        `DSH web 进程 spawn 失败（node=${web.nodeExec}）：${web.spawnError.message}（完整日志：${web.logPath}）`,
-      );
-    }
     // 进程内 boot 失败：立即抛出（bootError 由 bootInproc 记录）
-    if (web.processMode === "inproc" && web.bootError) {
+    if (web.bootError) {
       throw new Error(
         `DSH 进程内 boot 失败：${web.bootError.message || web.bootError}（完整日志：${web.logPath}）`,
-      );
-    }
-    if (web.child?.exitCode !== null && web.child?.exitCode !== undefined) {
-      throw new Error(
-        `DSH web 进程提前退出 (code=${web.child.exitCode})：${web.stderr.slice(-1200) || "无 stderr"}（完整日志：${web.logPath}）`,
       );
     }
     try {
@@ -1183,110 +1039,6 @@ function ensureProviderPushWatch(cfg) {
 // 直读已提取到 lib/check.js + lib/install.js，经 getSingleton 挂 g.checkDshUpdate 供
 // Agent 工具 dsh_install / DSHana 标签页 webui 路由两面共用，单一事实源；
 // 设置页「DSH 版本」卡片 v0.18.1 起由 dsh 侧 @dsh-hanako/settings 直查远端，不经此通道）----
-
-// ---- 更新 DSH（能力层）：停 web host（closeProcess——回收子进程，Windows 文件锁前提：
-// pnpm install 要替换被 web host 占用的 dsh 包文件）→ installDepsFromPlugin（pnpm install
-// 按插件根 package.json 声明版本，spec 可显式覆盖；成功即
-// 新版本）→ 起 web host（ensureWebHost，失败不阻断结果上报，记 error 字段）→ 读新版本。
-// 结果走内存态分组 g.update = { status, result, error, time, log }（v0.24 状态收敛：
-// update-result.json 退役——总线事件化已打通 update.progress/result + 断线排队补发，
-// 设置页依赖总线、Agent 工具结果全走内存态，文件兜底场景不存在；遗留文件由
-// migrate.js cleanup-update-result 步骤删除）。
-// v0.22.1+ 事件化：开始/完成经总线 emit update.progress/update.result，设置页事件缓存。
-// 并发防护：g.update.status === "running" 进行中重复调用返回 { ok:false, state:"updating" }
-// 不重复执行；与 installDepsFromPlugin 内部 g.deps.status 独立（本状态管整条更新流程）。
-// status 状态机：入口置 running、成功置 ok、catch 置 error——finally 不重置（终态保留，
-// 下次更新入口才回到 running）；g.update.result = updateDsh 返回值终态对象。----
-export async function updateDsh(cfg, spec) {
-  const g = getSingleton();
-  if (g.update.status === "running") return { ok: false, state: "updating" };
-  g.update.status = "running";
-  g.update.error = null;
-  g.update.time = new Date().toISOString();
-  const dataDir = cfg.dataDir || g.dataDir;
-  const log = (s) => {
-    try {
-      g.appendLog?.("hana", `[DSH 更新] ${s}`);
-    } catch {
-      /* 日志失败不阻断 */
-    }
-    console.log(`[dsh-run] DSH 更新：${s}`);
-  };
-  try {
-    // ① 进度态（事件化：bus emit update.progress 直投设置页事件缓存——v0.22.1+
-    // 替代前端 2s 轮询 update-status；不再写文件，结果走内存态 g.update）
-    emitBus("update.progress", { state: "updating", at: g.update.time });
-    // ② 停 web host（Windows 文件锁前提）
-    log("停止 web host…");
-    await closeProcess();
-    // ③ 装依赖（installDepsFromPlugin 内部有 g.deps.status === "installing" 防并发——
-    // vX 起与 update 共享互斥：Agent 工具层 g.depBusy 预留状态下 install/update 任一
-    // 进行中另一动作拒绝，能力层守卫覆盖 webui 路由等其他调用路径，双保险。T7a 起
-    // 按插件根 package.json 声明版本安装（pnpm install），spec 显式传时覆盖声明版本
-    // （逃生门）；成功后会自动运行级重验刷新 g.deps.result）
-    log("安装 dsh 依赖（pnpm install，按声明" + (spec ? " 覆盖 " + spec : "版本") + "）…");
-    const install = await installDepsFromPlugin(cfg, dataDir, { spec });
-    if (!install || !install.ok)
-      throw new Error(install?.error || "依赖安装失败");
-    // ④ 起新进程（失败不阻断结果上报，记 error 字段）
-    let restartError = null;
-    try {
-      await ensureWebHost(cfg);
-    } catch (e) {
-      restartError = String(e?.message || e).slice(0, 1500);
-      log(`web host 重启失败：${restartError}`);
-    }
-    // ④b 重启后重建宿主侧 provider 热跟随 watch——closeProcess 已清理，
-    // ensureWebHost 本身不建（只有 startWebHostFromPlugin 建），不重建则
-    // 更新后 provider 配置变更不再推送。DSH 更新请求不走 watch/轮询：
-    // v0.22.1 起子插件经 dshana.bus 消息总线直投（/child/post 反向信道已退役）。
-    ensureProviderPushWatch(cfg);
-    // 重启用进程后首批 provider 的初始 push 已由 ensureWebHost（唯一就绪点）
-    // 发出；此处只重建跟随 watch，不再重复 push。
-    // ⑤ 读新版本 → done（installDepsFromPlugin 已刷新 g.deps.result，优先用；无则直读 package.json）
-    const version =
-      (g.deps.result && !g.deps.result.running && g.deps.result.ok
-        ? g.deps.result.version
-        : null) ||
-      readDshInstalledVersion({ ...cfg, dataDir }) ||
-      null;
-    const result = {
-      ok: true,
-      state: "done",
-      version,
-      ...(restartError ? { error: restartError } : {}),
-    };
-    // 终态对象写入 g.update.result（= updateDsh 返回值，单一事实源；不再写 update-result.json）
-    g.update.result = result;
-    // 重启失败也是「本次更新的错误」：同步进 g.update.error（诊断 buildDepsDiagCheck
-    // 的 updateError 查找可见），result 与总线事件中的 error 数据均保留
-    if (restartError) g.update.error = restartError;
-    g.update.status = "ok";
-    g.update.time = new Date().toISOString(); // 终态时刻（卡片/诊断的完成时间）
-    // 事件化：bus emit update.result（设置页事件缓存；无文件兜底——update-result.json 已退役）
-    emitBus("update.result", {
-      state: "done",
-      ...(version ? { version } : {}),
-      ...(restartError ? { error: restartError } : {}),
-    });
-    log(
-      `更新完成（version=${version || "未知"}${restartError ? "，web host 重启失败：" + restartError : ""}）`,
-    );
-    return result;
-  } catch (e) {
-    const err = String(e?.message || e).slice(0, 1500);
-    g.update.error = err;
-    g.update.result = { ok: false, state: "error", error: err };
-    g.update.status = "error";
-    g.update.time = new Date().toISOString(); // 终态时刻（失败时刻）
-    // 事件化：bus emit update.result（失败态）
-    emitBus("update.result", { state: "error", error: err });
-    log(`更新失败：${err}`);
-    return { ok: false, state: "error", error: err };
-  }
-  // 无 finally 重置——终态（ok/error）保留，下次更新入口才回到 running
-}
-// 经总线 emit（best-effort：bus 未连接 no-op，不阻断主流程；事件缓存由设置页后端维护）
 function emitBus(channel, payload) {
   try {
     const g = getSingleton();
@@ -1677,8 +1429,8 @@ export async function closeProcess() {
   }
   const web = g.web;
   g.web = null;
-  if (web?.processMode === "inproc") {
-    // T7b：进程内形态——await ctx.fiber.dispose() 释放 dsh cordis 树（HTTP server +
+  if (web?.ctx) {
+    // T7b 进程内形态：await ctx.fiber.dispose() 释放 dsh cordis 树（HTTP server +
     // loader + 全部插件）。不用 runProfile 返回的 shutdown 控制器：其 shutdown() 会写
     // process.exitCode、interrupt() 会 process.exit 直接杀宿主进程（createProcessShutdown
     // 为独立 CLI 设计）；ctx.fiber.dispose() 与控制器内部 dispose 同源，进程内无副作用。
@@ -1695,13 +1447,6 @@ export async function closeProcess() {
     }
     // 恢复 boot 时改写过的进程级 env（DSH_HOME / DSHANA_BUS_SECRET）
     restoreInprocEnv();
-  } else if (web?.child) {
-    try {
-      web.child.kill();
-    } catch {
-      /* 已退出 */
-    }
-    await new Promise((r) => setTimeout(r, 200));
   }
 }
 // ---- 单例挂载（原 tools/dsh-run.js 的 mountSingleton 迁入本模块；g.startWebHost 已在上方
@@ -1712,10 +1457,8 @@ const mountLifecycle = () => {
   const g = getSingleton();
   g.closeProcess = closeProcess;
   g.collectDiagnostics = collectWebDiagnostics;
-  g.updateDsh = updateDsh;
   g.installDeps = installDepsFromPlugin;
   g.verifyDeps = verifyDepsSmoke;
-  g.checkDshUpdate = checkDshUpdate;
   return g;
 };
 mountLifecycle();

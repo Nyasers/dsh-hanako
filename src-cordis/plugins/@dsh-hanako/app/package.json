@@ -1,5 +1,5 @@
 {
-  "name": "@dsh-hanako/web-app",
+  "name": "@dsh-hanako/app",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -9,6 +9,6 @@
     "./package.json": "./package.json"
   },
   "cordis": {
-    "name": "@dsh-hanako/web-app"
+    "name": "@dsh-hanako/app"
   }
 }
