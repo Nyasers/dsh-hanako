@@ -1,27 +1,26 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// tools/dsh-session.js — dsh 会话统一查询工具（list / get 两模式，只读）
-// 继承 dsh_ops（清单）能力并新增 get（凭 sessionId 直取会话内容）：主上下文收到
-// minimal 回调定位键后，凭 sessionId 直接取会话内容/续接，不再需要关键词搜索先决条件。
-// search 模式已移除（权限收敛）：dsh 默认 openAt: never 禁用全文搜索，插件也不再注入
-// session-query-sqlite patch 覆盖启用——不再有全局全文搜索入口。
-// 权限模型：sessionId 即访问凭证——拿得到 id（dsh_run 回调 / list 清单）即可 get/resume，
-// 拿不到天然无所有权；会话存在性与内容的唯一事实源在 dsh-home，无需额外注册表。
+// tools/dsh-session.js — dsh 会话全生命周期工具（T7e 收敛：list/get/create/send/cancel）
+// 继承 dsh_ops（清单）+ dsh_run（任务提交）+ dsh_cancel（取消）全部能力：
 //   - list：解析 dsh 官方会话持久化缓存 <dataDir>/dsh-home/storages/session_projcache.json
-//     （session-persistence 单元的 proj cache，含全部历史会话摘要：标题/cwd/创建时间/
-//     最近提示时间/token usage/会话统计）。纯本地文件读，不调 dsh web host。
-//   - get：凭 sessionId 直取会话内容——projcache 元数据（同 list 字段）+ summary
-//     （会话最终结论 = jsonl 最后一条 assistant/message 的 text，截断 ≤4000 字符）。
-//     jsonl 文件 <dataDir>/dsh-home/sessions/<cwd-key>/<sessionId>/session.jsonl.zstd
-//     是 dsh 逐批 append 的多帧 zstd 容器（每批一帧，帧 magic 0xFD2FB528），
-//     node:zlib zstdDecompressSync 一次只解一帧，需按 magic 逐帧拆解再拼接。
-// 只读查询，不改变任何会话。数据定位键统一为 sessionId（与 dsh_run 回调同键）。
+//     （session-persistence 单元的 proj cache，含全部历史会话摘要）。纯本地文件读。
+//   - get：凭 sessionId 直取会话内容——projcache 元数据 + summary（jsonl 最后一条
+//     assistant/message 的 text，截断 ≤4000 字符）。
+//   - create：新建会话 + 提交任务（原 dsh_run 无 sessionId 路径；task 必填）
+//   - send：续已有会话发消息（原 dsh_run resume 路径；sessionId + task 必填）
+//   - cancel：取消任务（原 dsh_cancel；sessionId 必填）
+// create/send 复用 dsh-run.js 的 execute（提交主流程：submitTask + 事件流 + 卡片）；
+// cancel 复用 dsh-cancel.js 的 execute。dsh-run/dsh-cancel 不再作为独立工具注册
+// （index.js 移除），保留为内部模块供本工具调用。
+// 权限模型：sessionId 即访问凭证——拿得到 id 即可 get/send/cancel。
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { zstdDecompressSync } from "node:zlib";
 import { textFromMessageBlocks } from "./lib/protocol.js";
+import { execute as runExecute } from "./dsh-run.js";
+import { execute as cancelExecute } from "./dsh-cancel.js";
 
 const __here = dirname(fileURLToPath(import.meta.url));
 // PLUGIN_ROOT 向上查找含 manifest.json 的目录——源码形态（tools/ 下）与
@@ -37,17 +36,20 @@ while (!existsSync(join(PLUGIN_ROOT, "manifest.json"))) {
 export const name = "dsh_session";
 
 export const description =
-  "查询 DSH 会话（list/get 两模式，只读）：list=会话清单与摘要（解析 DSH 会话缓存 session_projcache，dsh-home 唯一事实源，limit 默认 10）；" +
-  "get=凭 sessionId 直取会话元数据 + 最终结论 summary（读会话 jsonl，zstd 多帧容器本地解压）。" +
-  "权限模型：sessionId 即访问凭证——拿得到 id 即可读取/续接。完整调用手册见 SKILL: skills/dsh-session/SKILL.md";
+  "DSH 会话全生命周期工具（T7e 收敛，合并原 dsh_run / dsh_cancel）：list=会话清单（解析 session_projcache，dsh-home 唯一事实源，limit 默认 10）；" +
+  "get=凭 sessionId 直取会话元数据 + 最终结论 summary；" +
+  "create=新建会话 + 提交任务（task 必填，cwd 默认配置）；" +
+  "send=续已有会话发消息（sessionId + task 必填，resume 语义）；" +
+  "cancel=取消任务（sessionId 必填）。" +
+  "权限模型：sessionId 即访问凭证。完整调用手册见 SKILL: skills/dsh-session/SKILL.md";
 
 export const parameters = {
   type: "object",
   properties: {
     action: {
       type: "string",
-      enum: ["list", "get"],
-      description: "两模式：list=会话清单；get=凭 sessionId 直取会话内容（dsh-home 存在即读）",
+      enum: ["list", "get", "create", "send", "cancel"],
+      description: "list=会话清单；get=凭 sessionId 取内容；create=新建会话+提交；send=续会话发消息；cancel=取消任务",
     },
     limit: {
       type: "integer",
@@ -55,7 +57,35 @@ export const parameters = {
     },
     sessionId: {
       type: "string",
-      description: "仅 get 模式（必传）：目标会话 id（形如 session-<uuid>，取自 dsh_run 回调 / 卡片 URL / list 结果；dsh-home 存在即读）",
+      description: "get/send/cancel 必传（形如 session-<uuid>，取自回调/卡片/ list 结果）：get=读取、send=续会话、cancel=取消",
+    },
+    task: {
+      type: "string",
+      description: "create/send 必传：任务描述/消息文本（create 新建会话首条，send 续会话消息）",
+    },
+    cwd: {
+      type: "string",
+      description: "仅 create：默认可写工作区目录（缺省用插件配置 defaultCwd）",
+    },
+    timeout: {
+      type: "number",
+      description: "仅 create/send：任务超时（秒），缺省用插件配置 defaultTimeoutSec",
+    },
+    agentPreset: {
+      type: "string",
+      description: "仅 create/send：agent 预设（standard/ptc/cordis/minimal）",
+    },
+    reasoningEffort: {
+      type: "string",
+      description: "仅 create/send：推理强度（off/high/max）",
+    },
+    provider: {
+      type: "string",
+      description: "仅 create/send：显式 provider（显式即成为 dsh 新默认）",
+    },
+    model: {
+      type: "string",
+      description: "仅 create/send：显式 model id（与 provider 一起传时覆盖 dsh 默认）",
     },
   },
   required: ["action"],
@@ -66,7 +96,7 @@ export const sessionPermission = {
   describeSideEffect: () => ({
     kind: "local_read",
     summary:
-      "读取 DSH 会话持久化缓存 session_projcache.json 与会话 jsonl（zstd 容器本地解压，只读；dsh-home 唯一事实源，sessionId 即访问凭证），不改变任何会话",
+      "读取 DSH 会话持久化缓存 session_projcache.json 与会话 jsonl（zstd 容器本地解压，只读；dsh-home 唯一事实源，sessionId 即访问凭证）；create/send 经总线提交 dsh 任务、cancel 取消任务（写会话状态）",
     ruleId: "dsh-hanako-session",
   }),
 };
@@ -368,7 +398,26 @@ async function doExecute(input, ctx) {
     return doGet(input, ctx, g, dataDir, projSessions);
   }
 
-  throw new Error(`action 必须是 list / get（收到 "${action}"）`);
+  if (action === "create" || action === "send") {
+    const sessionId = String(input.sessionId ?? "").trim();
+    if (action === "create" && sessionId)
+      throw new Error("create 是新建会话，不允许传 sessionId（续会话请用 send）");
+    if (action === "send" && !sessionId)
+      throw new Error("send 必须传 sessionId（续已有会话；新建请用 create）");
+    if (!String(input.task ?? "").trim())
+      throw new Error(action + " 必须传 task（任务描述/消息文本）");
+    // 复用 dsh-run 的 execute（提交主流程：submitTask + 事件流 + 卡片 + 审批接线）；
+    // create 不传 sessionId（新建）、send 传 sessionId（resume 语义）。
+    return runExecute(input, ctx);
+  }
+
+  if (action === "cancel") {
+    const sessionId = String(input.sessionId ?? "").trim();
+    if (!sessionId) throw new Error("cancel 必须传 sessionId");
+    return cancelExecute(input, ctx);
+  }
+
+  throw new Error(`action 必须是 list / get / create / send / cancel（收到 "${action}"）`);
 }
 
 export async function execute(input, ctx) {

@@ -28,17 +28,19 @@ import { archiveOldLogs, logFileStamp, nextTimestampLogPath } from "./log-archiv
 import "./lifecycle.js";
 // 5 个工具模块（ESM 导出 name/description/parameters/execute(+sessionPermission)；
 // dsh_update 已并入 dsh_install 四合一，见 tools/dsh-install.js）
-import * as dshRun from "./tools/dsh-run.js";
 import * as dshInstall from "./tools/dsh-install.js";
 import * as dshApprove from "./tools/dsh-approve.js";
-import * as dshCancel from "./tools/dsh-cancel.js";
+// T7e 工具收敛：dsh-run / dsh-cancel 并入 dsh-session（create/send/cancel 分支），
+// 不再作为独立工具注册；dsh-session.js 内部 import 复用它们的 execute 实现。
 import * as dshSession from "./tools/dsh-session.js";
 // 路由工厂（默认导出）
 import registerWebuiRoutes from "./routes/webui.js";
 import registerCardRoutes from "./routes/card.js";
 
 // 工具清单（registerTool 消费普通契约；宿主自动加 pluginId_ 前缀）
-const HANAKO_TOOLS = [dshRun, dshInstall, dshApprove, dshCancel, dshSession];
+// T7e：dsh-run/dsh-cancel 并入 dsh-session（create/send/cancel）；approve 独立保留
+// （权限应答语义正交，非会话操作）；install 独立（依赖管理）。
+const HANAKO_TOOLS = [dshSession, dshInstall, dshApprove];
 
 // ---- 统一日志（时间戳会话文件；旧日志 zstd 压缩保留经 migrate.js 统一迁移入口）----
 // DSHana 插件全量运行日志：每次插件会话创建 <YYYYMMDD-HHmmss-SSS>.log 真实文件（文件名

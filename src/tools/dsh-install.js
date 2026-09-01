@@ -64,7 +64,7 @@ export const description =
   "安装/验证 DeepSeek Harness（DSH）依赖两合一：action=install（默认）按插件声明版本 pnpm install --prod（dsh-pkg 退役——依赖装进插件根 node_modules，无 version/tag 逃生门；registry 兜底 + 自动运行级重验 + autoStart 拉起 web host，渲染安装卡片）；" +
   "action=verify 只检测依赖完整性（运行级冒烟，只读）。" +
   "版本严格锁插件 package.json 声明（更新 dsh = 更新插件发版，无独立升级通道）。" +
-  "适用场景：dsh_run 报「DSH 包未就绪」、DSHana 标签页依赖缺失。" +
+  "适用场景：dsh_session create 报「DSH 包未就绪」、DSHana 标签页依赖缺失。" +
   "默认异步：后台执行 + 完成回调，wait=true 同步；安装进行中重复调用返回状态不重复执行。" +
   "完整调用手册见 SKILL: skills/dsh-install/SKILL.md";
 
