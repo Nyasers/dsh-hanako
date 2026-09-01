@@ -463,9 +463,9 @@ export default function registerWebuiRoutes(app, ctx) {
 
   // 更新 DSH（deps 卡片「更新 DSH」按钮 + Agent 工具 dsh_install 共用能力层）：
   // 更新中（g.update.status === "running"）→ {ok:true,state:"updating"}；否则异步触发
-  // g.updateDsh(cfg)（不 await 其完成——pnpm add 可能耗时数分钟，前端经诊断/设置页
-  // update 事件看进度）→ {ok:true,state:"updating"}。未传版本/tag 时按配置基线
-  // （config.json global.dshTag，默认 latest）安装。更新会重启 web host，正在执行的
+  // g.updateDsh(cfg)（不 await 其完成——pnpm install 可能耗时数分钟，前端经诊断/设置页
+  // update 事件看进度）→ {ok:true,state:"updating"}。未传版本/tag 时按插件声明版本
+  // 安装（config.json global.dshTag 已退役为新默认的兑底）。更新会重启 web host，正在执行的
   // dsh 任务会中断（前端按钮已有确认文案）。单例缺失/无函数/异常一律容错回
   // {ok:false}，本路由不抛异常。
   app.post("/webui/update-dsh", (c) => {

@@ -503,7 +503,7 @@ export async function ensureWebHost(cfg) {
   );
   if (!existsSync(cliBin)) {
     throw new Error(
-      `DSH 包未就绪：${cliBin} 不存在。请在插件数据目录 dsh-pkg 执行 pnpm add @deepseek-ai/dsh`,
+      `DSH 包未就绪：${cliBin} 不存在。请在 DSHana 标签页执行「安装依赖」（pnpm install 按声明拉取到 dsh-pkg），或手动在插件数据目录 dsh-pkg 执行 pnpm install`,
     );
   }
 
@@ -978,8 +978,8 @@ function ensureProviderPushWatch(cfg) {
 // 设置页「DSH 版本」卡片 v0.18.1 起由 dsh 侧 @dsh-hanako/settings 直查远端，不经此通道）----
 
 // ---- 更新 DSH（能力层）：停 web host（closeProcess——回收子进程，Windows 文件锁前提：
-// pnpm add 要替换被 web host 占用的 dsh 包文件）→ installDepsFromPlugin（pnpm add
-// @deepseek-ai/dsh，spec 可指定版本/tag，缺省配置基线 dshTag（默认 latest）；成功即
+// pnpm install 要替换被 web host 占用的 dsh 包文件）→ installDepsFromPlugin（pnpm install
+// 按插件根 package.json 声明版本，spec 可显式覆盖；成功即
 // 新版本）→ 起 web host（ensureWebHost，失败不阻断结果上报，记 error 字段）→ 读新版本。
 // 结果走内存态分组 g.update = { status, result, error, time, log }（v0.24 状态收敛：
 // update-result.json 退役——总线事件化已打通 update.progress/result + 断线排队补发，
@@ -1014,10 +1014,10 @@ export async function updateDsh(cfg, spec) {
     await closeProcess();
     // ③ 装依赖（installDepsFromPlugin 内部有 g.deps.status === "installing" 防并发——
     // vX 起与 update 共享互斥：Agent 工具层 g.depBusy 预留状态下 install/update 任一
-    // 进行中另一动作拒绝，能力层守卫覆盖 webui 路由等其他调用路径，双保险。spec 可
-    // 指定版本/tag，缺省配置基线 dshTag（默认 latest）；成功后会自动运行级重验刷新
-    // g.deps.result）
-    log("执行 pnpm add @deepseek-ai/dsh" + (spec ? "@" + spec : "") + "…");
+    // 进行中另一动作拒绝，能力层守卫覆盖 webui 路由等其他调用路径，双保险。T7a 起
+    // 按插件根 package.json 声明版本安装（pnpm install），spec 显式传时覆盖声明版本
+    // （逃生门）；成功后会自动运行级重验刷新 g.deps.result）
+    log("安装 dsh 依赖（pnpm install，按声明" + (spec ? " 覆盖 " + spec : "版本") + "）…");
     const install = await installDepsFromPlugin(cfg, dataDir, { spec });
     if (!install || !install.ok)
       throw new Error(install?.error || "依赖安装失败");
@@ -1318,7 +1318,7 @@ function buildDepsDiagCheck(g, cfg) {
       (checked.length > 1 ? "（已检查 " + checked.join("、") + "）" : "");
     if (installError) check.detail += "\n[上次安装失败] " + installError;
     check.fix =
-      "依赖缺失：点击本卡片「安装依赖」按钮自动在插件数据目录 dsh-pkg 执行 pnpm add @deepseek-ai/dsh（完成后自动验证）；或确认插件目录 node_modules 解压完整";
+      "依赖缺失：点击本卡片「安装依赖」按钮自动在插件数据目录 dsh-pkg 执行 pnpm install（按声明拉取，完成后自动验证）；或确认插件目录 node_modules 解压完整";
   } else if (!smoke) {
     // 未检测过（进标签页自动检测一次 / 手动「检测依赖」；ok 暂算 installed）
     check.detail = "DSH 包已就绪，点击「检测依赖」验证依赖完整性";
@@ -1331,7 +1331,7 @@ function buildDepsDiagCheck(g, cfg) {
       "DSH 包存在但依赖不完整：" +
       (verifyError ? "\n" + verifyError : "运行级验证失败");
     check.fix =
-      "点击本卡片「重新安装依赖」按钮重新执行 pnpm add @deepseek-ai/dsh（自动部署到 dsh-pkg，完成后自动验证）";
+      "点击本卡片「重新安装依赖」按钮重新执行 pnpm install（按声明拉取，自动部署到 dsh-pkg，完成后自动验证）";
   } else {
     // 存在 + 验证通过：能跑 = 依赖图完整
     check.detail =
@@ -1437,7 +1437,7 @@ function buildProcessDiagCheck(g, out) {
 function pickProcessFix(lastError, stderr, port) {
   const text = (lastError || "") + "\n" + (stderr || "");
   if (/dsh 包未就绪|DSH 包未就绪|cliBin|npm i/i.test(text)) {
-    return "按上方「DSH 依赖安装」项修复（数据目录 dsh-pkg 执行 pnpm add @deepseek-ai/dsh，完成后自动验证）";
+    return "按上方「DSH 依赖安装」项修复（数据目录 dsh-pkg 执行 pnpm install，按声明拉取，完成后自动验证）";
   }
   if (/EADDRINUSE|address already in use|占用|bind/i.test(text)) {
     return "检查端口 " + port + " 是否被占用（释放后重启 Hana）";

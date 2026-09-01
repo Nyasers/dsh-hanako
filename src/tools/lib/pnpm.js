@@ -7,11 +7,11 @@
 // （自包含入口 CLI，静态 import 全为 node: 内置模块，宿主 electron node 直接执行）
 // + dist/worker.js（package 导入 worker）到数据目录
 // <dataDir>/pnpm-dist/pnpm-{version}/，固定版本 + sha256 校验。
-// 实测确认（宿主 node v24.15.0）：pnpm view 路径只依赖 pnpm.mjs；pnpm add 的导入
+// 实测确认（宿主 node v24.15.0）：pnpm view 路径只依赖 pnpm.mjs；pnpm install/add 的导入
 // 阶段经 new Worker(join(import.meta.dirname, "worker.js")) 加载 worker.js（pnpm.mjs
 // 内联处 workerScriptPath），缺 worker.js 时导入 worker 静默退出 1（无错误信息）——
 // 故引导下载两个文件，缺一即重下。版本与校验同源静态配置（见下方 PNPM_BOOTSTRAP），
-// 与构建期 packageManager 解耦（运行时引导只需 view/add 两条路径，锁版本足够）。
+// 与构建期 packageManager 解耦（运行时引导只需 view/install/add 三条路径，锁版本足够）。
 //
 // 为什么自给自足：宿主 electron node 不带 npm/corepack/npx（Electron 发行只有 node
 // 运行时），引导是唯一自给自足路径；宿主侧未来可能开放 npm 调用（liliMozi 口头确认，
@@ -20,10 +20,10 @@
 //
 // 导出：PNPM_VERSION（版本常量）/ ensurePnpm（幂等引导，返回 pnpm 入口绝对路径）
 // / tryHostChannel（宿主通道探测占位）/ runPnpm（spawn 宿主 node + pnpm 入口封装）
-// / DSH_PACKAGE + buildPnpmAddArgs（pnpm add 参数构造收敛入口：v0.20.x 起
-// lib/install.js 唯一 pnpm add 调用点只传 registry 兜底意图，包名/旗标同源本模块）
+// / DSH_PACKAGE + buildPnpmInstallArgs（pnpm install 参数构造收敛入口：T7a 起
+// lib/install.js 唯一安装调用点只传 registry 兜底意图，包名/旗标同源本模块）
 // / isValidPkgSpec（spec 注入面校验：仅接受严格 SemVer 或合法 dist-tag；校验职责在
-// 调用方——installDepsFromPlugin 计算 effectiveSpec 后、传 buildPnpmAddArgs 前负责）。
+// 调用方——installDepsFromPlugin 计算 effectiveSpec 后、传 buildPnpmInstallArgs 前负责）。
 // 消费方（v0.18.2 收敛）：lib/install.js（installDepsFromPlugin 部署 dsh 依赖树 +
 // verifyDepsSmoke 的 pnpm 引导检查）。lib/check.js（npmViewDistTags）与 src/lifecycle.js
 // （patch 模板 {{NPM_CLI_PATH}} 占位符）v0.18.2 起退出——版本检查改 HTTP 直查 npm
@@ -353,26 +353,22 @@ export async function runPnpm(args, opts = {}) {
   });
 }
 
-// ---- pnpm add 参数构造（lib/install.js 唯一 pnpm add 调用点的收敛入口）----
-// v0.20.x 起：install.js 不再手拼 pnpm add 参数，改调 buildPnpmAddArgs——只传意图
-// （registry 兜底 URL + spec），包名/旗标同源本模块：DSH_PACKAGE（依赖包名）+ 本函数静态旗标。
-// spec 支持（vX 起）：可传具体版本号或 dist-tag（如 "1.0.0-alpha.1" / "next"），拼成
-// @deepseek-ai/dsh@<spec>（npm/pnpm 原生支持 tag spec）；缺省（undefined/空串）装默认
-// 最新（buildPnpmAddArgs 不拼 @ 后缀）。registry 兜底与 spec 相互独立、互不影响。
-// ⚠️ 本函数保持纯拼接不做校验——spec 合法性（严格 SemVer 或合法 dist-tag，见
-// isValidPkgSpec）由调用方负责：installDepsFromPlugin 计算 effectiveSpec 后、传入
-// 前校验（注入面收口，防 "npm:evil@1.0.0" / "github:user/repo" / "file:../x" /
-// "/abs/path" 等安装非预期包）。
-// --reporter=ndjson 取代旧 --loglevel=http：pnpm 11.24.0 的 ndjson reporter 每行一个
-// JSON 对象（bole 序列化到 stdout，level 为 debug/info/warn/error 字符串，name 标识
-// 事件类型），输出结构化安装进度事件流（pnpm:fetching-progress / pnpm:stage /
-// pnpm:root / pnpm:stats / pnpm:lifecycle …），供 install.js 逐行解析转可读进度行。
+// ---- pnpm install 参数构造（T7a：lib/install.js 唯一安装调用点的收敛入口）----
+// v0.20.x 起：install.js 不再手拼 pnpm add 参数，改调 buildPnpmAddArgs（add @spec）。
+// T7a（dshana-embed-headless）：dsh 固定版本声明进插件根 package.json 的 dependencies，
+// 安装语义从「pnpm add @deepseek-ai/dsh@<spec>（版本基线 dshTag，外部可独立升级）」转为
+// 「pnpm install（按声明拉取，版本随插件发版）」——dsh 从外部可升级运行时依赖变为插件
+// 不可分割组成。故本函数废弃 add 形态，改为 buildPnpmInstallArgs：不拼包名/spec，只
+// 声明 install + --reporter=ndjson（结构化安装进度事件流，供 install.js 逐行解析转可读
+// 进度行）；registry 兜底意图由调用方只传 URL。
+// ⚠️ 本函数保持纯拼接不做校验——声明版本合法性（严格 SemVer 或合法 dist-tag，见
+// isValidPkgSpec）由调用方负责：installDepsFromPlugin 读取插件根 package.json 的
+// dependencies 后校验（注入面收口，防 "npm:evil@1.0.0" / "github:user/repo" /
+// "file:../x" / "/abs/path" 等安装非预期包）。
 export const DSH_PACKAGE = "@deepseek-ai/dsh";
 
-export function buildPnpmAddArgs({ registry, spec } = {}) {
-  const target =
-    DSH_PACKAGE + (typeof spec === "string" && spec.trim() ? "@" + spec.trim() : "");
-  const args = ["add", target, "--reporter=ndjson"];
+export function buildPnpmInstallArgs({ registry } = {}) {
+  const args = ["install", "--reporter=ndjson"];
   if (typeof registry === "string" && registry) {
     args.push("--registry=" + registry);
   }
@@ -380,9 +376,10 @@ export function buildPnpmAddArgs({ registry, spec } = {}) {
 }
 
 // ---- spec 注入面校验（vX：installDepsFromPlugin 调用前收口）----
-// effectiveSpec 会拼成 DSH_PACKAGE + "@" + spec 传给 pnpm add；spec 来自工具参数
-// （version/tag）或配置基线 dshTag。不校验时 "npm:evil@1.0.0"（npm alias）、
-// "github:user/repo"、"file:../x"、"/abs/path" 等会让 pnpm add 安装非预期包。
+// effectiveSpec 会拼成 DSH_PACKAGE + "@" + spec（仅 opts.spec 显式覆盖的逃生门路径）；
+// spec 来自工具参数（version/tag）、插件声明或配置基线 dshTag。不校验时
+// "npm:evil@1.0.0"（npm alias）、“github:user/repo”、“file:../x”、“/abs/path” 等会
+// 让 pnpm 安装非预期包。
 // 只接受两类：
 //   ① 合法 SemVer（严格：核心组件与数字 prerelease 标识符必须 0|[1-9]\d*，无前导零；
 //      prerelease/build 允许；build 标识符不受前导零限制——SemVer §10 无此约束）
@@ -391,8 +388,8 @@ export function buildPnpmAddArgs({ registry, spec } = {}) {
 //      严格校验不过的版本号不应被 dist-tag 规则放行）；tag 正则本身已排除
 //      @ / : / 空格等协议与 alias 字符（规则冗余防御）。
 // 校验失败返回 false，由调用方按容错纪律提前返回 { ok:false, error }（不 throw）。
-// 校验职责在调用方（lib/install.js installDepsFromPlugin 计算 effectiveSpec 后、
-// 传给 buildPnpmAddArgs 前调用）；buildPnpmAddArgs 保持纯拼接（目标恒为已校验 spec）。
+// 校验职责在调用方（lib/install.js installDepsFromPlugin 计算 effectiveSpec 后调用）；
+// buildPnpmInstallArgs 保持纯拼接（声明已由调用方校验）。
 export function isValidPkgSpec(spec) {
   const s = String(spec || "").trim();
   if (!s) return false;
