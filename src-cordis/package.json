@@ -2,11 +2,11 @@
   "name": "dsh-profile-dshana",
   "private": true,
   "version": "1.0.0",
-  "description": "dshana profile：官方服务层（无浏览器 UI）+ @dsh-hanako/* 子插件，替代官方 web-app 的 UI 入口；由插件运行时整体挂载为 $DSH_HOME/profiles/dshana",
+  "description": "dshana profile：官方 web 服务层（dsh-base + dsh-web-app bundle，含完整 client roster——当前形态 iframe 直嵌 3080 fork SPA，需官方 client 插件树渲染）+ @dsh-hanako/* 子插件；由插件运行时整体挂载为 $DSH_HOME/profiles/dshana",
   "dependencies": {},
   "dsh": {
     "profile": {
-      "bundles": ["@deepseek-ai/dsh-base"],
+      "bundles": ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app"],
       "patchReload": "live"
     }
   }
