@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased（refactor/t7b-retire-spawn）
+## v1.0.0-alpha.5（2026-09-02）
 
 - **T7b 步骤 5：spawn 分支整体退役**（PR #40 之一）：删 bootSpawn（child_process.spawn + --expose-internals）+ WEB_PROCESS_MODE 逃生开关；ensureWebHost 唯一形态 = 进程内 runProfile；waitWebReady 去 spawn 快速失败分支；closeProcess 唯一 dispose 路径。保留：verifyDepsSmoke 冒烟 + pnpm install 子进程（D6 解耦设计）。
 - **dsh-pkg 退役 + 更新/检查链整链移除**：部署目标 dsh-pkg → 插件根（pnpm install --prod 按插件声明，无部署声明副本，版本单一事实源 = 插件声明本身）；version/tag 逃生门移除；updateDsh / checkDshUpdate / check.js / resolveDshTag / /webui/check-update / /webui/update-dsh 全删；dsh_install 收敛 install/verify；settings 版本卡去更新功能（只显示本地版本）。实机成本：插件根 pnpm install --prod ≈19s（store 硬链接）。
