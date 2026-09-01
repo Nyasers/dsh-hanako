@@ -152,23 +152,30 @@ function extraTerser(root) {
 }
 await extraTerser(join(ROOT, "dist"));
 
-// 4) 构建 dshana profile（dist/cordis）：src-cordis = profiles/dshana 源码根目录
-//    产物即 dshana profile 自包含材料（运行时 spawn --profile dshana 消费）：
-//      dist/cordis/cordis.patch.yml        ← src-cordis/cordis.patch.yml（bundle 置顶）
-//      dist/cordis/package.json            ← src-cordis/package.json（bundle 置顶）
-//      dist/cordis/node_modules/@dsh-hanako/** ← src-cordis/plugins/@dsh-hanako/**（其他插件）
+// 4) 构建 dshana profile（dist/cordis）：src-cordis = $DSH_HOME/profiles/dshana 源码根目录
+//    产物即 dshana profile 自包含材料（运行时整体挂载为 profiles/dshana，spawn --profile dshana
+//    消费；落位见 lifecycle.js ensureDshanaProfile）：
+//      dist/cordis/package.json        ← src-cordis/package.json（profile manifest，dsh.profile.bundles）
+//      dist/cordis/cordis.patch.yml     ← src-cordis/cordis.patch.yml（profile user patch 层）
+//      dist/cordis/cordis.yml           ← 空 entry 根（与官方 profile 同构）
+//      dist/cordis/pnpm-workspace.yaml  ← hoisted workspace（与官方 profile 同构）
+//      dist/cordis/node_modules/@dsh-hanako/** ← src-cordis/plugins/@dsh-hanako/**（其他子插件）
 //    插件 JS 不做 build 这轮 terser（归 pack.mjs 静态压缩步），故不在此遍历的 node_modules
 //    跳过名单之外再压缩。
+const PROFILE_CORDIS_YML = `# dsh profile root — an empty entry list. The tree is composed as patches:\n# each bundle in package.json's dsh.profile.bundles, then cordis.patch.yml, then any\n# --patch overlays. Edit cordis.patch.yml, not this file.\n[]\n`;
+const PROFILE_PNPM_WORKSPACE = `packages:\n  - .\n\nnodeLinker: hoisted\nautoInstallPeers: false\n`;
 function buildCordis(srcRoot, outRoot) {
   fs.removeSync(outRoot);
   fs.ensureDirSync(outRoot);
-  // 1) bundle 置顶文件直接落到 profile 根
+  // 1) profile 根三件套 + manifest 直接落到 profile 根
   for (const f of ["cordis.patch.yml", "package.json"]) {
     const s = join(srcRoot, f);
-    if (!fs.pathExistsSync(s)) throw new Error(`cordis bundle 文件缺失：${s}`);
+    if (!fs.pathExistsSync(s)) throw new Error(`cordis profile 文件缺失：${s}`);
     fs.copySync(s, join(outRoot, f));
   }
-  // 2) 其他插件（scope 目录整体复制）：plugins/@dsh-hanako → node_modules/@dsh-hanako
+  fs.writeFileSync(join(outRoot, "cordis.yml"), PROFILE_CORDIS_YML);
+  fs.writeFileSync(join(outRoot, "pnpm-workspace.yaml"), PROFILE_PNPM_WORKSPACE);
+  // 2) 其他子插件（scope 目录整体复制）：plugins/@dsh-hanako → node_modules/@dsh-hanako
   const pluginsRoot = join(srcRoot, "plugins");
   if (!fs.pathExistsSync(pluginsRoot)) throw new Error("src-cordis/plugins 缺失");
   for (const scope of fs.readdirSync(pluginsRoot)) {
