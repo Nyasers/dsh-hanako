@@ -5,14 +5,16 @@
 //
 // 形态（vX 定稿，SDD dshana-webui-headless）：对外 headless，3080 仅回环；web-app 是
 // 给宿主专供的 WebUI 载体（宿主插件页 /webui 壳页 iframe 直嵌，或未来 V2 app route
-// 同源直嵌）。它 serve 官方 dsh-web-frontend/dist（复用官方构建产物）到独立前缀
-// /webui/，并把 SPA 内 URL（/api/、/plugins/、/assets/）改写为 /webui/... 前缀：
-//   GET  /webui/                fork index.html（dist + 注入表，CORS）
-//   GET  /webui/assets/*        前端静态（dist assets，CORS）
-// 数据面（API/事件/WS）不走本插件——浏览器不直连 dsh HTTP（对外 headless），
-// 走总线桥（宿主 V2 app route → callUnaryBus → bridge → dsh 服务，SDD D3/D4）。
-// 代理逻辑（proxyApi/proxyPlugins/proxySse/pumpWs/ensureAuthCookie）与
-// connection 依赖（launchToken/browser-auth 鉴权面）整体退役（SDD Non-Goals）。
+// 同源直嵌）。vY（T7b + 拔鉴权墙）：**serve 官方 dist 到根路径**（webserver
+// registerFallback 兜底席位），不再挂 /webui/ 前缀、不再做 URL 改写——SPA 用官方原始
+// URL（/api/、/plugins/、/assets/），数据面由 @dsh-hanako/api-bridge（免鉴权 connection
+// 等价服务）与 gateway 自带 remote.mux 承载；iframe 直嵌 http://127.0.0.1:<port>/。
+//   GET  /                fork index.html（dist + 注入表，CORS）
+//   GET  /assets/*        前端静态（dist assets，CORS）
+//   GET  /plugins/*       未命中命名路由时也走 fallback（dist 内无则 404；client bundle
+//                          由 modules 插件的 /plugins 命名路由优先 serve）
+// 数据面（API/事件/WS）不走本插件——浏览器同源直连 /api/*（api-bridge 免鉴权载体）与
+// /api/remote.mux（gateway 自带，requestRejection 放行）。
 //
 // 凭据：子插件免鉴权（同源/回环资源，公开内容），无 token/PSS 传播。
 
@@ -103,15 +105,8 @@ async function readDistIndex(distIndex) {
   }
 }
 
-/** 官方 SPA 路径改写（graph 帧/JS 内 URL：/plugins/、/assets/、/api/ → /webui/...）。
- * 只改绝对路径（行首或前导非 [.\w]）——./assets（相对，iframe 内同源解析）不动，
- * 已带 /webui/ 前缀的（幂等）不动。 */
-function rewriteUrls(text) {
-  return String(text).replace(
-    /(^|[^.\w])\/(plugins|assets|api)\//g,
-    (m, pre, seg) => pre + '/webui/' + seg + '/',
-  )
-}
+/** 官方 SPA 路径（vY：serve 根路径后不再改写——SPA 用官方原始 /api /plugins /assets URL）。
+ * rewriteUrls 已退役（/webui/ 前缀 + URL 改写整层删除，见文件头）。 */
 
 /** Serve one GET/HEAD request from the fork dist root（学 frontend-static serveStatic）。 */
 async function serveStatic(pathname, res, distRoot, distIndex, renderIndex) {
@@ -125,9 +120,8 @@ async function serveStatic(pathname, res, distRoot, distIndex, renderIndex) {
   let type
   try {
     if (target === distRoot || target === distIndex) {
-      // index：注入表渲染后 URL 改写（官方 /plugins/、/assets/、/api/ → /webui/...
-      // 子插件路径——SPA 全部资源走本进程，免鉴权）
-      body = rewriteUrls(await renderIndex())
+      // index：注入表渲染（官方 index-inject 表，无 URL 改写——SPA 用官方原始路径）
+      body = await renderIndex()
       type = HTML_MIME
     } else {
       body = await readFile(target)
@@ -149,7 +143,9 @@ async function serveStatic(pathname, res, distRoot, distIndex, renderIndex) {
   res.end(body)
 }
 
-/** Mount the fork seat over the webserver（纯静态 serve，无代理/无鉴权面）。 */
+/** Claim the fallback seat over the webserver（serve 根路径：所有未匹配命名路由的请求）。
+ * 命名路由优先（exact 优先、prefix 最长优先）：/api（api-bridge）、/api/remote.mux
+ * （gateway）、/plugins（modules 插件 client bundle）等不受影响。 */
 export function apply(ctx, config) {
   try {
     // 宿主配置（dshPkgDir 等）：bridge 握手后经 dshanaBus.getConfig() 下发（provider 同款）。
@@ -165,33 +161,31 @@ export function apply(ctx, config) {
     const distRoot = dirname(distIndex)
     ctx.inject(['webServer'], (httpCtx) => {
       const ws = httpCtx && httpCtx.webServer
-      if (!ws || typeof ws.register !== 'function') return
-      ws.register({
-        kind: 'prefixes',
-        path: '/webui',
-        handler: async (req, res) => {
+      if (!ws || typeof ws.registerFallback !== 'function') {
+        // 老宿主无 fallback 席位：降级不挂（WebUI 不可用，诊断兜底；不阻断 dsh 启动）
+        try {
+          ctx.logger?.warn?.('[@dsh-hanako/web-app] webServer.registerFallback 不可用，WebUI 不挂载')
+        } catch {
+          /* 忽略 */
+        }
+        return
+      }
+      ws.registerFallback(async (req, res) => {
+        try {
+          const pathname = new URL(req.url || '/', 'http://dsh.internal').pathname
+          const renderIndex =
+            typeof ws.renderIndex === 'function'
+              ? async () => ws.renderIndex(await readDistIndex(distIndex))
+              : () => readDistIndex(distIndex)
+          await serveStatic(pathname, res, distRoot, distIndex, renderIndex)
+        } catch (e) {
           try {
-            const raw = String(req.url || '/')
-            const rel =
-              raw === '/webui' || raw === '/webui/'
-                ? '/'
-                : raw.slice('/webui'.length)
-            const pathname = rel.split('?')[0]
-            // 静态（fork dist）
-            const renderIndex =
-              typeof ws.renderIndex === 'function'
-                ? async () => ws.renderIndex(await readDistIndex(distIndex))
-                : () => readDistIndex(distIndex)
-            await serveStatic(pathname, res, distRoot, distIndex, renderIndex)
-          } catch (e) {
-            try {
-              res.writeHead(500, CORS)
-              res.end(String((e && e.message) || e))
-            } catch {
-              /* 已关 */
-            }
+            res.writeHead(500, CORS)
+            res.end(String((e && e.message) || e))
+          } catch {
+            /* 已关 */
           }
-        },
+        }
       })
     })
   } catch (e) {

@@ -38,6 +38,8 @@
 // checks 结构（t1 依赖 / t2 进程）令 routes/webui.js 渲染不变。
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { createRequire } from "node:module";
+import { pathToFileURL } from "node:url";
 // dsh profile 名解析（vX：dshana profile 路线，spawn --profile 用配置；config.js 内联进 bundle）
 import { resolveProfileName } from "./tools/lib/config.js";
 import {
@@ -52,6 +54,7 @@ import {
   symlinkSync,
   rmSync,
   rmdirSync,
+  readdirSync,
 } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
@@ -467,10 +470,199 @@ export function ensureDshanaProfile(cfg) {
   }
 }
 
-// ---- web host 生命周期：spawn dsh web（DSH_HOME 锁进插件数据目录）----
+// ---- web host 生命周期：进程内 boot dsh（T7b 方案 A；spawn 形态保留为 legacy 回退）----
 // dsh 依赖位置解析（resolveDshPkgDir）已提取到 lib/install.js——数据目录
 // dsh-pkg/ 优先（Agent npm i @deepseek-ai/dsh 部署的轻量分发形态），插件安装目录
 // node_modules 兑底（现役 zip 自带形态）。DSH_HOME 恒在数据目录。
+// WEB_PROCESS_MODE 逃生开关：默认 "inproc"（宿主进程内 runProfile() boot dshana，
+// webserver 保留在进程内 bind 端口）；改 "spawn" 回退旧形态（child_process.spawn +
+// --expose-internals）。实机验证确认 inproc 稳定后，spawn 分支可整体删除（T7b 步骤 5）。
+const WEB_PROCESS_MODE = "inproc";
+
+// ---- T7b 进程内 boot：dsh 模块动态定位（解耦 D6）----
+// dsh 包不在插件 node_modules（数据目录 dsh-pkg），且 profile-boot-*.js 是带构建
+// hash 的产物名（bin.js 按 hash 动态 import）——不能硬编码文件名，枚举 lib 目录试出
+// 导出 runProfile 的候选（probe-inproc 验证过的定位方式）。
+// app-boot 经 createRequire 从 dsh 包视角解析：pnpm 严格结构下 @deepseek-ai/dsh-app-boot
+// 是 dsh 的间接依赖，不在顶层 node_modules——createRequire 沿 dsh 包的 .pnpm 依赖链
+// 解析，比枚举 .pnpm 目录稳（不依赖 pnpm 内部布局）。
+// 返回 { profileBoot, bootEntry, appBoot, appBootEntry }：profileBoot 提供 runProfile，
+// appBoot 提供 loadLayeredEnv。
+// 注意：动态 import 必须带 webpackIgnore 注释（rspack 兼容 webpack 语义）——源码里的
+// import(expr) 会被 rspack 编译成自身 chunk runtime（s(<id>)(url)），对运行时绝对路径
+// file:// URL 不适用（实机验证：dsh 包无可用 profile-boot 模块）；webpackIgnore 告诉
+// bundler 完全不要处理该 import，保留原生 import() 调用，且不丢静态语义。
+async function loadInprocDsh(pkgDir) {
+  const dshPkg = join(pkgDir, "node_modules", "@deepseek-ai", "dsh");
+  const libDir = join(dshPkg, "lib");
+  if (!existsSync(join(dshPkg, "package.json"))) {
+    throw new Error(
+      `DSH 包未就绪：${dshPkg} 不存在。请在 DSHana 标签页执行「安装依赖」（pnpm install 按声明拉取到 dsh-pkg），或手动在插件数据目录 dsh-pkg 执行 pnpm install`,
+    );
+  }
+  // ① profile-boot：枚举 lib 下 profile-boot-*.js，逐个 import 试 runProfile
+  let profileBoot = null;
+  let bootEntry = null;
+  let tried = 0;
+  try {
+    for (const f of readdirSync(libDir)) {
+      if (!f.startsWith("profile-boot-") || !f.endsWith(".js")) continue;
+      const abs = join(libDir, f);
+      tried += 1;
+      try {
+        const m = await import(/* webpackIgnore: true */ pathToFileURL(abs).href);
+        if (typeof m.runProfile === "function") {
+          profileBoot = m;
+          bootEntry = abs;
+          break;
+        }
+      } catch {
+        /* 单个候选加载失败：继续试下一个（dsh 版本演进产物名变化） */
+      }
+    }
+  } catch (e) {
+    throw new Error(
+      `无法枚举 dsh profile-boot 模块（${libDir}）：${e?.message || e}`,
+    );
+  }
+  if (!profileBoot) {
+    throw new Error(
+      `dsh 包无可用 profile-boot 模块（lib 下已检查 ${tried} 个 profile-boot-*.js）`,
+    );
+  }
+  // ② app-boot 定位（双保险）：
+  //    a) createRequire 从 dsh 包视角解析（标准 pnpm 布局：dsh 的依赖在 .pnpm 节点同级
+  //       node_modules，Node 沿父目录链能找到）；
+  //    b) 失败回退 .pnpm 虚拟存储枚举（手工/自定义链接树布局下 createRequire 的 realpath
+  //       解析不可靠——实测 symlink 路径向上只到顶层 node_modules，找不到间接依赖；
+  //       probe-inproc 验证过的定位方式）。
+  let appBootEntry = null;
+  try {
+    const dshRequire = createRequire(join(dshPkg, "package.json"));
+    appBootEntry = dshRequire.resolve("@deepseek-ai/dsh-app-boot");
+  } catch {
+    // 回退 .pnpm 枚举
+    appBootEntry = null;
+  }
+  if (appBootEntry === null) {
+    const pnpmDir = join(pkgDir, "node_modules", ".pnpm");
+    let found = null;
+    try {
+      for (const d of readdirSync(pnpmDir)) {
+        if (!d.startsWith("@deepseek-ai+dsh-app-boot@")) continue;
+        const candidate = join(
+          pnpmDir,
+          d,
+          "node_modules",
+          "@deepseek-ai",
+          "dsh-app-boot",
+          "lib",
+          "index.js",
+        );
+        if (existsSync(candidate)) {
+          found = candidate;
+          break;
+        }
+      }
+    } catch {
+      /* 枚举失败（.pnpm 不存在等）：保持 null */
+    }
+    appBootEntry = found;
+  }
+  if (appBootEntry === null) {
+    throw new Error(
+      `无法解析 @deepseek-ai/dsh-app-boot（dsh 依赖缺失？createRequire 与 .pnpm 枚举均未命中）`,
+    );
+  }
+  const appBoot = await import(/* webpackIgnore: true */ pathToFileURL(appBootEntry).href);
+  if (typeof appBoot.loadLayeredEnv !== "function") {
+    throw new Error(
+      `@deepseek-ai/dsh-app-boot 缺 loadLayeredEnv 导出（${appBootEntry}）`,
+    );
+  }
+  return { profileBoot, bootEntry, appBoot, appBootEntry };
+}
+
+// ---- T7b 进程内 boot：进程级 env 管理 ----
+// 进程内形态 dsh 与宿主同进程：boot 前把 DSH_HOME / DSHANA_BUS_SECRET 写入
+// process.env（dsh 侧 loadProfile / resolveDshHome / bridge 凭据读同一 env，
+// 与 spawn 注入子进程 env 语义等价），dispose 后恢复原值（不留污染）。
+let inprocEnv = null; // { DSH_HOME?, DSHANA_BUS_SECRET? } 原值快照（undefined = 未设置）
+function setInprocEnv(dshHome, busSecret) {
+  inprocEnv = {
+    DSH_HOME: process.env.DSH_HOME,
+    DSHANA_BUS_SECRET: process.env.DSHANA_BUS_SECRET,
+  };
+  process.env.DSH_HOME = dshHome;
+  process.env.DSHANA_BUS_SECRET = busSecret;
+}
+function restoreInprocEnv() {
+  if (!inprocEnv) return;
+  const prev = inprocEnv;
+  inprocEnv = null;
+  for (const k of ["DSH_HOME", "DSHANA_BUS_SECRET"]) {
+    if (prev[k] === undefined) delete process.env[k];
+    else process.env[k] = prev[k];
+  }
+}
+
+// ---- 总线免鉴权握手探测（vX：适配 dsh 0.1.2+ token 鉴权）----
+// dsh 0.1.2-alpha.2 起对 HTTP API（/api/host.describe 等）加 token 鉴权，无 token
+// 请求返回 401/403；但 /api/dshana.bus 总线 hello 仍免鉴权（本机信任通道，patch
+// bridge 注册）——HTTP 探测收到 401/403 时用 WS 握手（hello → hello-ok）判定就绪。
+// 临时连接用完即关；注意 bridge 凭据方法（launchToken/authCookie）要求 hello 帧携带
+// spawn 注入的共享秘密（DSHANA_BUS_SECRET）且 bridge 保持单连接语义——probe 的
+// hello 必须带同样的 secret，否则会挤掉常驻 connectBus 连接并关闭凭据 gate
+// （credAuthed=false，凭据 RPC 拒绝直到 bus.js 重连）。
+// 失败 resolve(false)（不抛），由调用方按容错纪律继续等待/超时。
+function probeBusReady(port, timeoutMs = 3000) {
+  return new Promise((resolve) => {
+    let sock;
+    let done = false;
+    let timer = null;
+    const finish = (ok) => {
+      if (done) return;
+      done = true;
+      if (timer) clearTimeout(timer);
+      try {
+        sock?.close();
+      } catch {
+        /* 已关闭 */
+      }
+      resolve(ok);
+    };
+    try {
+      sock = new WebSocket("ws://127.0.0.1:" + port + "/api/dshana.bus");
+    } catch {
+      finish(false);
+      return;
+    }
+    timer = setTimeout(() => finish(false), timeoutMs);
+    sock.addEventListener("open", () => {
+      try {
+        const g = getSingleton();
+        const secret = g?.busSecret || "";
+        sock.send(
+          JSON.stringify({ channel: "hello", payload: secret ? { secret } : {} }),
+        );
+      } catch {
+        /* send 失败由 close/error 兜底 */
+      }
+    });
+    sock.addEventListener("message", (ev) => {
+      if (typeof ev.data !== "string") return;
+      try {
+        const f = JSON.parse(ev.data);
+        if (f && f.channel === "hello-ok") finish(true);
+      } catch {
+        /* 非 JSON 帧忽略 */
+      }
+    });
+    sock.addEventListener("close", () => finish(false));
+    sock.addEventListener("error", () => finish(false));
+  });
+}
+
 export async function ensureWebHost(cfg) {
   const g = getSingleton();
   if (g.web?.ready) return g.web;
@@ -481,10 +673,11 @@ export async function ensureWebHost(cfg) {
       /* 启动失败：清掉允许重试 */ g.web = null;
     }
   }
-  if (g.web?.child) {
-    // 旧实例启动失败过：清掉重建
+  if (g.web?.child || g.web?.ctx) {
+    // 旧实例启动失败过：清掉重建（spawn 形态 kill；进程内形态 dispose）
     try {
-      g.web.child.kill();
+      if (g.web.processMode === "inproc") await g.web.ctx?.fiber?.dispose();
+      else g.web.child?.kill();
     } catch {
       /* 已退出 */
     }
@@ -493,6 +686,28 @@ export async function ensureWebHost(cfg) {
   if (!cfg.dshPkgDir) cfg.dshPkgDir = resolveDshPkgDir(cfg);
 
   const pkgDir = cfg.dshPkgDir;
+  const dshHome = join(cfg.dataDir, "dsh-home");
+  // 总线共享秘密（bridge 凭据保护）：每次 web host 拉起随机生成——spawn 形态注入子进程
+  // env（DSHANA_BUS_SECRET，bridge 读）；进程内形态 boot 前写 process.env（同进程共享）。
+  // web host 重启即换新 secret，旧连接/旧进程失效自动重建。
+  g.busSecret = randomUUID();
+  mkdirSync(cfg.dataDir, { recursive: true });
+  const port = Number(cfg.webPort) || 3080;
+  // 当前会话日志 = 时间戳会话文件（index.js onload 已初始化单例 g.logPath）。
+  // 单例优先；index.js 未初始化（冷启动边缘）时兜底自建。写进 web/logLastExit/错误消息供诊断。
+  const logPath = g.logPath || newWebLogPath(cfg.dataDir);
+  // 启动前确保 dshana profile 已落位（dist/cordis → $DSH_HOME/profiles/dshana），
+  // 否则 dsh loadProfile 会抛「profile does not exist」。
+  ensureDshanaProfile(cfg);
+  if (WEB_PROCESS_MODE === "inproc") {
+    return bootInproc(cfg, { pkgDir, dshHome, port, logPath });
+  }
+  return bootSpawn(cfg, { pkgDir, dshHome, port, logPath });
+}
+
+// ---- legacy：spawn dsh web（T7b 前形态；WEB_PROCESS_MODE="spawn" 时启用，inproc 验证稳定后删除）----
+async function bootSpawn(cfg, { pkgDir, dshHome, port, logPath }) {
+  const g = getSingleton();
   const cliBin = join(
     pkgDir,
     "node_modules",
@@ -506,40 +721,6 @@ export async function ensureWebHost(cfg) {
       `DSH 包未就绪：${cliBin} 不存在。请在 DSHana 标签页执行「安装依赖」（pnpm install 按声明拉取到 dsh-pkg），或手动在插件数据目录 dsh-pkg 执行 pnpm install`,
     );
   }
-
-  const dshHome = join(cfg.dataDir, "dsh-home");
-  // 总线共享秘密（bridge 凭据保护）：每次 web host spawn 随机生成——注入子进程 env
-  // （DSHANA_BUS_SECRET，bridge 读）并挂单例 g.busSecret（bus.js hello 帧携带证明）。
-  // web host 重启即换新 secret，旧连接/旧进程失效自动重建。
-  g.busSecret = randomUUID();
-  // spawn 的 cwd 必须是已存在目录（无效 cwd 会让 Node 报误导性的 ENOENT）
-  mkdirSync(cfg.dataDir, { recursive: true });
-  const port = Number(cfg.webPort) || 3080;
-  // 当前会话日志 = 时间戳会话文件（index.js onload 已初始化单例 g.logPath）。
-  // 单例优先；index.js 未初始化（冷启动边缘）时兜底自建。写进 web/logLastExit/错误消息供诊断。
-  const logPath = g.logPath || newWebLogPath(cfg.dataDir);
-  // session-query-sqlite 注入已移除（权限收敛）：dsh 默认 openAt: never 禁用
-  // 全文搜索，插件不再 --patch 覆盖启用——不再有全局全文搜索入口；会话管理以
-  // dsh-home 为唯一事实源（sessionId 即访问凭证，见 tools/dsh-session.js）。
-  // 主题注入 overlay + 宿主 provider 跟随 overlay——六内嵌插件合并为静态 patch
-  // dsh-plugin/dsh-hanako.patch.yml（v0.22.1+ tpl 整层退役）：纯 insert
-  // logger/clipboard/theme/provider/settings/bridge 六段，全部零 config（busToken
-  // 免鉴权、config 经总线下发、logPath 占位符删除——见下方 patchStatic 注释）。
-  // cordis 插件加载：六段均以包名注册（dsh client 模块发现按 loader entry 的 name 做
-  // require.resolve('<name>/package.json')，file:// 无法解析），故启动前须在
-  // $DSH_HOME/profiles/node_modules 统一建 junction（包名 → 插件安装目录
-  // dsh-plugin/<pkg>），与 dsh 自维护的 junction farm 同机制。该动作（旧名清理 +
-  // @dsh-hanako scope 无条件收敛，每次启动重建）已收敛进 src/migrate.js 的
-  // junction-converge 迁移步骤，经 runMigrations 统一调度（下方 spawn 前调用）。
-  // --patch 直接指向静态文件；launcher flag（--profile/--patch）必须位于应用参数
-  // （--port）之前。静态文件缺失（安装不完整）时不挂任何 patch 记 warn（内嵌插件
-  // 降级不可用，dsh 启动不受影响），不阻断 dsh 启动。
-  // 静态 patch：dsh-plugin/dsh-hanako.patch.yml（v0.22.1+ tpl 整层退役）——
-  // vX（dshana profile 路线）：不再对官方 web profile 做 --patch 注入——子插件与服务层
-  // 全部收敛进 dshana profile（cordis.patch.yml + node_modules 自包含），spawn 只带
-  // --profile（resolveProfileName，默认 dshana）。旧 junction farm / 静态 patch 退役。
-  // launcher flag（--profile）必须位于应用参数（--port）之前（dsh 0.1.x：--profile 之后
-  // 的参数视为 web app 参数）。
   // --expose-internals 是 node 运行时 flag，必须置于 cliBin 之前（node --expose-internals <cliBin> …）。
   // HMR 服务需要 Node 内部 ESM loader：上游 drop 该 flag 后改走原生 addon 兜底
   // （require('node-addon-require-builtin')），但该 addon 在 macOS arm64 上加载失败
@@ -549,9 +730,6 @@ export async function ensureWebHost(cfg) {
   // 子进程 node 解析（每次 spawn 前解析，运行期改 nodejsPath 即时生效）：默认
   // Electron 自带 node（ELECTRON_RUN_AS_NODE=1）；配置自定义系统 node 时用自定义路径
   // （macOS 上 Electron 内嵌 node 签名校验失败场景的解法）
-  // 启动前确保 dshana profile 已落位（dist/cordis → $DSH_HOME/profiles/dshana），
-  // 否则 dsh loadProfile 会抛「profile does not exist」。
-  ensureDshanaProfile(cfg);
   const nodeExec = resolveNodeExec(cfg);
   const child = spawn(
     nodeExec,
@@ -592,6 +770,7 @@ export async function ensureWebHost(cfg) {
     ready: false,
     stderr: "",
     readyPromise: null,
+    nodeExec,
   };
   // stdout/stderr 全量落盘（src=out/err；stderr 另保留内存尾部供诊断界面）。
   // 写入优先用单例 appendLog（index.js 提供，行格式一致 [ts] [src] 内容），
@@ -641,146 +820,157 @@ export async function ensureWebHost(cfg) {
     if (g.web === web) g.web = null;
   });
 
-  // ---- 总线免鉴权握手探测（vX：适配 dsh 0.1.2+ token 鉴权）----
-  // dsh 0.1.2-alpha.2 起对 HTTP API（/api/host.describe 等）加 token 鉴权，无 token
-  // 请求返回 401/403；但 /api/dshana.bus 总线 hello 仍免鉴权（本机信任通道，patch
-  // bridge 注册）——HTTP 探测收到 401/403 时用 WS 握手（hello → hello-ok）判定就绪。
-  // 临时连接用完即关；注意 bridge 凭据方法（launchToken/authCookie）要求 hello 帧携带
-  // spawn 注入的共享秘密（DSHANA_BUS_SECRET）且 bridge 保持单连接语义——probe 的
-  // hello 必须带同样的 secret，否则会挤掉常驻 connectBus 连接并关闭凭据 gate
-  // （credAuthed=false，凭据 RPC 拒绝直到 bus.js 重连）。
-  // 失败 resolve(false)（不抛），由调用方按容错纪律继续等待/超时。
-  function probeBusReady(port, timeoutMs = 3000) {
-    return new Promise((resolve) => {
-      let sock;
-      let done = false;
-      let timer = null;
-      const finish = (ok) => {
-        if (done) return;
-        done = true;
-        if (timer) clearTimeout(timer);
-        try {
-          sock?.close();
-        } catch {
-          /* 已关闭 */
-        }
-        resolve(ok);
-      };
-      try {
-        sock = new WebSocket("ws://127.0.0.1:" + port + "/api/dshana.bus");
-      } catch {
-        finish(false);
-        return;
-      }
-      timer = setTimeout(() => finish(false), timeoutMs);
-      sock.addEventListener("open", () => {
-        try {
-          const g = getSingleton();
-          const secret = g?.busSecret || "";
-          sock.send(
-            JSON.stringify({ channel: "hello", payload: secret ? { secret } : {} }),
-          );
-        } catch {
-          /* send 失败由 close/error 兜底 */
-        }
-      });
-      sock.addEventListener("message", (ev) => {
-        if (typeof ev.data !== "string") return;
-        try {
-          const f = JSON.parse(ev.data);
-          if (f && f.channel === "hello-ok") finish(true);
-        } catch {
-          /* 非 JSON 帧忽略 */
-        }
-      });
-      sock.addEventListener("close", () => finish(false));
-      sock.addEventListener("error", () => finish(false));
-    });
-  }
+  const readyPromise = waitWebReady(web, port, emitLog, cfg);
+  web.readyPromise = readyPromise;
+  g.web = web;
+  return readyPromise;
+}
 
-  // 等端口就绪（stdout 出现 "dsh web: http://" 或端口可连）
+// ---- T7b：进程内 boot dsh（动态 import + runProfile，webserver 保留在进程内 bind）----
+async function bootInproc(cfg, { pkgDir, dshHome, port, logPath }) {
+  const g = getSingleton();
+  const emitLog = (src, d) => {
+    if (typeof g.appendLog === "function") g.appendLog(src, d);
+    else appendLog(logPath, src, d);
+  };
+  const web = {
+    processMode: "inproc",
+    port,
+    dshHome,
+    logPath,
+    ready: false,
+    stderr: "",
+    readyPromise: null,
+    // T7b 进程内形态字段：ctx/shutdown（runProfile 返回）、disposed（回收标记）、bootError
+    ctx: null,
+    shutdown: null,
+    disposed: false,
+    bootError: null,
+  };
+  // 进程内形态：dsh 与宿主同进程——boot 前把 DSH_HOME / DSHANA_BUS_SECRET 写入
+  // process.env（dsh 侧 loadProfile / resolveDshHome / bridge 凭据读同一 env，
+  // 与 spawn 注入子进程 env 语义等价），dispose 后恢复（见 closeProcess / restoreInprocEnv）。
+  setInprocEnv(dshHome, g.busSecret);
   const readyPromise = (async () => {
-    const deadline = Date.now() + PORT_READY_TIMEOUT_MS;
-    while (Date.now() < deadline) {
-      // spawn 失败（见 error 监听）：立即抛出，不等端口超时
-      if (web.spawnError) {
-        throw new Error(
-          `DSH web 进程 spawn 失败（node=${nodeExec}）：${web.spawnError.message}（完整日志：${logPath}）`,
-        );
-      }
-      if (child.exitCode !== null) {
-        throw new Error(
-          `DSH web 进程提前退出 (code=${child.exitCode})：${web.stderr.slice(-1200) || "无 stderr"}（完整日志：${logPath}）`,
-        );
-      }
-      try {
-        // web host 就绪探测保留 HTTP 直连（/api/host.describe，一次性启动握手）：发生在
-        // connectBus 之前——总线还没连上，总线化是鸡生蛋；Unary RPC 指令面已收敛进总线
-        // （callUnaryBus），此处只做端口就绪探测，不进总线。
-        const r = await fetch(`http://127.0.0.1:${port}/api/host.describe`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            type: "client-request",
-            rpcId: "probe",
-            method: "host.describe",
-            payload: {},
-          }),
-          signal: AbortSignal.timeout(2000),
-        });
-        // 就绪标记（HTTP 直连或总线握手任一通过即调用）：connectBus / config 下发 /
-        // provider push 收敛在同一就绪点（connectBus 幂等 + 内部退避重连，失败不阻断）。
-        const markReady = () => {
-          web.ready = true;
-          // 新进程就绪：清掉上次退出记录（持久字段只反映最近一次退出）
-          g.webLastExit = null;
-          // dshana.bus 消息总线：同一就绪点连接（bridge 段随 patch 挂载，子插件注册了
-          // /api/dshana.bus upgrade 路由）。connectBus 幂等 + 内部退避重连（连接失败不阻断
-          // dsh 启动——更新请求信道降级：settings 报「消息总线未连接」，check-version 走 dsh 侧
-          // 直查不受影响）。不 await，页面/任务不阻塞。
-          try {
-            connectBus({ webPort: port });
-            // bus.ready 补推接线（幂等，只挂一次）：总线连接成功后如有待补推 routes
-            // 立即补推（connectBus 是异步建连，pushProviderRoutes 在握手前调用必然
-            // 未送达记 pending——补推监听必须与 connectBus 同一就绪点挂上，否则工具
-            // 路径（ensureWebHost）不经过 startWebHostFromPlugin 时待补推永不到达）。
-            wireProviderPushOnBusReady();
-            // config 下发 provider（替代 patch config 注入）：hello-ok 后自动发 config 帧
-            // （dshPkgDir/dataDir），settings/provider 子插件经 dshanaBus.getConfig() 取路径。
-            // 每次握手重发，覆盖 web host 重启后新 bridge 实例。
-            setBusConfigProvider(() => ({
-              dshPkgDir: cfg.dshPkgDir || resolveDshPkgDir(cfg),
-              dataDir: cfg.dataDir,
-            }));
-          } catch (e) {
-            g.appendLog?.("hana", "[dshana.bus] 连接失败：" + (e?.message || e));
-          }
-          // provider 路由推送走总线（替代 /api/hana-provider.refresh HTTP push，任务 G）：
-          // 唯一新进程就绪点主动推一次最新 routes（任意 spawn 路径都保证有初始 push）；
-          // bus 未连接（hello-ok 未到）时记待补推，bus.ready 后自动补推——覆盖连接窗口期。
-          pushProviderRoutes();
-          return web;
-        };
-        if (r.ok) return markReady();
-        // 端口已有响应（401/403/404/500 等）= web 进程已活：0.1.2+ HTTP API 加
-        // token 鉴权（无 cookie 401）且端点路径有变（host.describe 404），无 token
-        // 探测无法再靠 HTTP 判定就绪；总线 hello 免鉴权（本机信任通道），握手判定。
-        if (await probeBusReady(port)) {
-          return markReady();
-        }
-      } catch {
-        /* 未就绪，继续等 */
-      }
-      await new Promise((r) => setTimeout(r, 500));
+    try {
+      const { profileBoot, bootEntry, appBoot, appBootEntry } = await loadInprocDsh(pkgDir);
+      emitLog("hana", `[dsh web] 进程内 boot dsh（profile-boot=${bootEntry}，app-boot=${appBootEntry}）`);
+      const environment = appBoot.loadLayeredEnv("dsh");
+      const profile = resolveProfileName(cfg);
+      emitLog("hana", `[dsh web] runProfile({ profile: "${profile}", port: ${port} }) ...`);
+      const r = await profileBoot.runProfile({
+        environment,
+        profile,
+        patchFiles: [],
+        args: ["--port", String(port), "--no-open"],
+      });
+      web.ctx = r.ctx;
+      web.shutdown = r.shutdown;
+      emitLog("hana", `[dsh web] 进程内 boot 完成（ctx=${!!r.ctx} shutdown=${typeof r?.shutdown}，webserver ${port} 存活）`);
+    } catch (e) {
+      web.bootError = e;
+      web.stderr = String(e?.stack || e?.message || e).slice(0, STDERR_CAP);
+      emitLog("err", `[dsh web] 进程内 boot 失败：${web.stderr}`);
+      // boot 失败：改写过的进程级 env 立即恢复（不留污染）
+      restoreInprocEnv();
+      throw e;
     }
-    throw new Error(
-      `DSH web 启动超时（${Math.round(PORT_READY_TIMEOUT_MS / 1000)}s 内端口 ${port} 未就绪）：${web.stderr.slice(-1200) || "无 stderr"}（完整日志：${logPath}）`,
-    );
+    return await waitWebReady(web, port, emitLog, cfg);
   })();
   web.readyPromise = readyPromise;
   g.web = web;
   return readyPromise;
 }
+
+// 等端口就绪（HTTP /api/host.describe 直连 + WS 总线握手，任一通过即 markReady）。
+// 进程内/spawn 两形态共用：快速失败检查读 web 对象字段（spawnError / bootError /
+// child.exitCode），两形态只填各自相关字段。就绪后 markReady 返回 web 对象。
+async function waitWebReady(web, port, emitLog, cfg) {
+  const g = getSingleton();
+  const deadline = Date.now() + PORT_READY_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    // spawn 失败（见 error 监听）：立即抛出，不等端口超时
+    if (web.spawnError) {
+      throw new Error(
+        `DSH web 进程 spawn 失败（node=${web.nodeExec}）：${web.spawnError.message}（完整日志：${web.logPath}）`,
+      );
+    }
+    // 进程内 boot 失败：立即抛出（bootError 由 bootInproc 记录）
+    if (web.processMode === "inproc" && web.bootError) {
+      throw new Error(
+        `DSH 进程内 boot 失败：${web.bootError.message || web.bootError}（完整日志：${web.logPath}）`,
+      );
+    }
+    if (web.child?.exitCode !== null && web.child?.exitCode !== undefined) {
+      throw new Error(
+        `DSH web 进程提前退出 (code=${web.child.exitCode})：${web.stderr.slice(-1200) || "无 stderr"}（完整日志：${web.logPath}）`,
+      );
+    }
+    try {
+      // web host 就绪探测保留 HTTP 直连（/api/host.describe，一次性启动握手）：发生在
+      // connectBus 之前——总线还没连上，总线化是鸡生蛋；Unary RPC 指令面已收敛进总线
+      // （callUnaryBus），此处只做端口就绪探测，不进总线。
+      const r = await fetch(`http://127.0.0.1:${port}/api/host.describe`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          type: "client-request",
+          rpcId: "probe",
+          method: "host.describe",
+          payload: {},
+        }),
+        signal: AbortSignal.timeout(2000),
+      });
+      // 就绪标记（HTTP 直连或总线握手任一通过即调用）：connectBus / config 下发 /
+      // provider push 收敛在同一就绪点（connectBus 幂等 + 内部退避重连，失败不阻断）。
+      const markReady = () => {
+        web.ready = true;
+        // 新进程就绪：清掉上次退出记录（持久字段只反映最近一次退出）
+        g.webLastExit = null;
+        // dshana.bus 消息总线：同一就绪点连接（bridge 段随 patch 挂载，子插件注册了
+        // /api/dshana.bus upgrade 路由）。connectBus 幂等 + 内部退避重连（连接失败不阻断
+        // dsh 启动——更新请求信道降级：settings 报「消息总线未连接」，check-version 走 dsh 侧
+        // 直查不受影响）。不 await，页面/任务不阻塞。
+        try {
+          connectBus({ webPort: port });
+          // bus.ready 补推接线（幂等，只挂一次）：总线连接成功后如有待补推 routes
+          // 立即补推（connectBus 是异步建连，pushProviderRoutes 在握手前调用必然
+          // 未送达记 pending——补推监听必须与 connectBus 同一就绪点挂上，否则工具
+          // 路径（ensureWebHost）不经过 startWebHostFromPlugin 时待补推永不到达）。
+          wireProviderPushOnBusReady();
+          // config 下发 provider（替代 patch config 注入）：hello-ok 后自动发 config 帧
+          // （dshPkgDir/dataDir），settings/provider 子插件经 dshanaBus.getConfig() 取路径。
+          // 每次握手重发，覆盖 web host 重启后新 bridge 实例。
+          setBusConfigProvider(() => ({
+            dshPkgDir: cfg.dshPkgDir || resolveDshPkgDir(cfg),
+            dataDir: cfg.dataDir,
+          }));
+        } catch (e) {
+          g.appendLog?.("hana", "[dshana.bus] 连接失败：" + (e?.message || e));
+        }
+        // provider 路由推送走总线（替代 /api/hana-provider.refresh HTTP push，任务 G）：
+        // 唯一新进程就绪点主动推一次最新 routes（任意 spawn 路径都保证有初始 push）；
+        // bus 未连接（hello-ok 未到）时记待补推，bus.ready 后自动补推——覆盖连接窗口期。
+        pushProviderRoutes();
+        return web;
+      };
+      if (r.ok) return markReady();
+      // 端口已有响应（401/403/404/500 等）= web 进程已活：0.1.2+ HTTP API 加
+      // token 鉴权（无 cookie 401）且端点路径有变（host.describe 404），无 token
+      // 探测无法再靠 HTTP 判定就绪；总线 hello 免鉴权（本机信任通道），握手判定。
+      if (await probeBusReady(port)) {
+        return markReady();
+      }
+    } catch {
+      /* 未就绪，继续等 */
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  throw new Error(
+    `DSH web 启动超时（${Math.round(PORT_READY_TIMEOUT_MS / 1000)}s 内端口 ${port} 未就绪）：${web.stderr.slice(-1200) || "无 stderr"}（完整日志：${web.logPath}）`,
+  );
+}
+
 
 // ---- 宿主侧 provider 跟随 push 链路（fs.watch → ctx.resources.watch + 总线 push）----
 // 语义：@dsh-hanako/provider 插件不再自建 fs.watch（Windows rename 原子替换等平台坑一并消除）——
@@ -1349,11 +1539,15 @@ function buildDepsDiagCheck(g, cfg) {
 function buildProcessDiagCheck(g, out) {
   const web = g.web || null;
   const child = web?.child || null;
+  // T7b 进程内形态：无子进程——「存活」= boot 完成且未 shutdown（disposed 标记）
+  const inproc = web?.processMode === "inproc";
   const lastExit = g.webLastExit || null; // 持久退出记录：{ code, signal, at, stderr, logPath } | null
   const started = Boolean(web || g.webLastError || lastExit);
-  const alive = Boolean(child && child.exitCode === null);
+  const alive = inproc
+    ? Boolean(web && !web.disposed)
+    : Boolean(child && child.exitCode === null);
   const ready = Boolean(web?.ready);
-  const exitCode = child?.exitCode ?? lastExit?.code ?? null;
+  const exitCode = inproc ? null : child?.exitCode ?? lastExit?.code ?? null;
   const stderr = String(web?.stderr || lastExit?.stderr || "").slice(-800); // stderr 尾部截断 ≤800
   const lastError = String(g.webLastError || "").slice(-800);
   const lastErrorAt = g.webLastErrorAt || "";
@@ -1383,15 +1577,17 @@ function buildProcessDiagCheck(g, out) {
     check.fix =
       "稍候自动重试；若持续未就绪，可点击本卡片「手动启动 web host」按钮重新拉起，或检查上方依赖项";
   } else if (ready && alive) {
-    // 进程侧已就绪但探测未命中（端口短暂不可达等）：仍提示重试
+    // 已就绪但探测未命中（端口短暂不可达等）：仍提示重试
     check.detail =
-      "进程运行中且已就绪，但端口 " + port + " 探测未命中（可能短暂不可达）";
+      (inproc ? "进程内 boot 已就绪，但端口 " : "进程运行中且已就绪，但端口 ") +
+      port +
+      " 探测未命中（可能短暂不可达）";
     check.fix = "稍候自动重试；若持续未就绪，检查端口是否被其他程序占用";
   } else if (alive) {
     check.detail =
-      "进程运行中，端口 " +
-      port +
-      " 尚未就绪" +
+      (inproc
+        ? "进程内 boot 完成，端口 " + port + " 尚未就绪"
+        : "进程运行中，端口 " + port + " 尚未就绪") +
       (stderr ? "\n[stderr 尾部] " + stderr : "");
     check.fix =
       "正在启动，请稍候自动重试；若长时间未就绪，检查端口是否被占用，或重启 Hana";
@@ -1464,7 +1660,25 @@ export async function closeProcess() {
   }
   const web = g.web;
   g.web = null;
-  if (web?.child) {
+  if (web?.processMode === "inproc") {
+    // T7b：进程内形态——await ctx.fiber.dispose() 释放 dsh cordis 树（HTTP server +
+    // loader + 全部插件）。不用 runProfile 返回的 shutdown 控制器：其 shutdown() 会写
+    // process.exitCode、interrupt() 会 process.exit 直接杀宿主进程（createProcessShutdown
+    // 为独立 CLI 设计）；ctx.fiber.dispose() 与控制器内部 dispose 同源，进程内无副作用。
+    // 必须 await：进程内不能像 kill 一样 fire-and-forget，否则端口未释放、重载 EADDRINUSE。
+    web.disposed = true;
+    try {
+      await web.ctx?.fiber?.dispose();
+    } catch (e) {
+      try {
+        g.appendLog?.("hana", "[dsh web] 进程内 shutdown dispose 失败：" + (e?.message || e));
+      } catch {
+        /* 日志失败不阻断 */
+      }
+    }
+    // 恢复 boot 时改写过的进程级 env（DSH_HOME / DSHANA_BUS_SECRET）
+    restoreInprocEnv();
+  } else if (web?.child) {
     try {
       web.child.kill();
     } catch {
