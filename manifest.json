@@ -3,33 +3,21 @@
   "id": "dsh-hanako",
   "name": "DSHana",
   "version": "1.0.0-alpha.3",
-  "description": "常驻 DeepSeek Harness（dsh）web host（--profile web），向 Agent 提供进程外 subagent 能力：任务经 dsh /api 网关提交（Hana 宿主 provider、沙箱 bash/文件系统、compaction、subagent 级联），DSH_HOME 锁进插件数据目录（账本随插件生命周期），dsh Web UI 天然可见全部任务（可浏览器查看/继续）。默认异步：提交即渲染实时卡片（状态 / 耗时 / 摘要 + 完整输出懒加载），完成后宿主唤醒结果后台送达（PTC 式回调压缩：默认只带最终结论摘要，省上下文）；可 wait=true 同步返回。",
+  "description": "DSHana: DeepSeek Harness as a subagent for HanaAgent",
   "author": "Nyaser",
   "minAppVersion": "0.810.0",
   "trust": "full-access",
   "ui": {
-    "hostCapabilities": [
-      "clipboard.writeText"
-    ]
+    "hostCapabilities": ["clipboard.writeText"]
   },
-  "capabilities": [
-    "resource.watch",
-    "network.fetch"
-  ],
+  "capabilities": ["resource.watch", "network.fetch"],
   "network": {
-    "allowedHosts": [
-      "127.0.0.1",
-      "localhost"
-    ],
-    "methods": [
-      "POST"
-    ],
+    "allowedHosts": ["127.0.0.1", "localhost"],
+    "methods": ["POST"],
     "defaultTimeoutMs": 5000,
     "maxResponseBytes": 1024
   },
-  "activationEvents": [
-    "onStartup"
-  ],
+  "activationEvents": ["onStartup"],
   "entry": "index.js",
   "contributes": {
     "configuration": {
@@ -38,32 +26,31 @@
         "webPort": {
           "type": "number",
           "default": 3080,
-          "title": "dsh Web UI 端口",
-          "description": "dsh web host 监听端口（执行后端 + 浏览器观察面，默认 3080）。"
+          "title": "DSH WebUI 端口"
         },
         "defaultCwd": {
           "type": "string",
           "default": "",
           "title": "默认工作目录",
-          "description": "dsh agent 的沙箱工作目录（bash 与文件系统工具的活动范围）。初始为空（不预设路径），建议安装后设置为你自己的项目工作目录；工具调用显式传 cwd 时优先。"
+          "description": "默认可写工作区目录"
         },
         "approvalTimeoutSec": {
           "type": "number",
           "default": 30,
-          "title": "审批超时自动拒绝（秒）",
-          "description": "审批唯一配置（单位：秒）。dsh agent 请求越界权限时任务挂起，插件通知 Agent 应答（附命令/路径原文）；挂起超过该时长无人应答自动 rejected（默认 30 秒：应答方失联检测，正常应答几秒内完成；宿主重启场景由会话中断兜底，不走超时拒绝）；0=禁用超时拒绝。改后对新审批立即生效。旧键 approvalTimeoutMs（毫秒）由迁移自动换算并删除。"
+          "title": "审批超时",
+          "description": "审批超时自动拒绝（单位：秒）"
         },
         "defaultTimeoutSec": {
           "type": "number",
           "default": 1800,
-          "title": "默认超时（秒）",
-          "description": "单次任务默认超时（单位：秒），工具调用未显式传 timeout 时使用。默认 1800 秒（30 分钟）。旧键 defaultTimeoutMs（毫秒）由迁移自动换算并删除。"
+          "title": "任务超时",
+          "description": "单次任务默认超时（单位：秒）"
         },
         "nodejsPath": {
           "type": "string",
           "default": "",
-          "title": "自定义 Node.js 路径",
-          "description": "可选：指定系统安装的 node 可执行文件绝对路径（如 /opt/homebrew/bin/node）。留空（默认）用 Electron 自带 node。macOS 上 Electron 内嵌 node 跑 pnpm 会触发签名校验失败（Electron 的 node 二进制非标准 node 签名），此时填系统 node 绝对路径解决。路径不存在、指向目录或不可执行时均发出警告并回退 Electron node。改后对下一次子进程（pnpm / web host）立即生效；已生成的 node 代理脚本（wrapper）在下次依赖安装时更新为新的 node 执行体。"
+          "title": "自定义 NodeJS 路径",
+          "description": "可选，留空使用 hana-server 作为 Node 运行时，修改后需重启"
         }
       }
     },
