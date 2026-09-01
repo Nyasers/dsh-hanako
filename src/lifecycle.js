@@ -645,8 +645,10 @@ export async function ensureWebHost(cfg) {
   // dsh 0.1.2-alpha.2 起对 HTTP API（/api/host.describe 等）加 token 鉴权，无 token
   // 请求返回 401/403；但 /api/dshana.bus 总线 hello 仍免鉴权（本机信任通道，patch
   // bridge 注册）——HTTP 探测收到 401/403 时用 WS 握手（hello → hello-ok）判定就绪。
-  // 临时连接用完即关（与 connectBus 常驻连接互不影响；bridge 支持多 WS 连接）。
-  // hello 携带 launch token（bridge 校验时用；旧 bridge 免鉴权忽略 payload）。
+  // 临时连接用完即关；注意 bridge 凭据方法（launchToken/authCookie）要求 hello 帧携带
+  // spawn 注入的共享秘密（DSHANA_BUS_SECRET）且 bridge 保持单连接语义——probe 的
+  // hello 必须带同样的 secret，否则会挤掉常驻 connectBus 连接并关闭凭据 gate
+  // （credAuthed=false，凭据 RPC 拒绝直到 bus.js 重连）。
   // 失败 resolve(false)（不抛），由调用方按容错纪律继续等待/超时。
   function probeBusReady(port, timeoutMs = 3000) {
     return new Promise((resolve) => {
@@ -674,9 +676,9 @@ export async function ensureWebHost(cfg) {
       sock.addEventListener("open", () => {
         try {
           const g = getSingleton();
-          const tok = g?.web?.token || "";
+          const secret = g?.busSecret || "";
           sock.send(
-            JSON.stringify({ channel: "hello", payload: tok ? { token: tok } : {} }),
+            JSON.stringify({ channel: "hello", payload: secret ? { secret } : {} }),
           );
         } catch {
           /* send 失败由 close/error 兜底 */

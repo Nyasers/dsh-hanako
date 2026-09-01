@@ -130,8 +130,8 @@ function buildShell({
   // 下内层声明无法生效，属无效方案已回滚，见 CHANGELOG）。
   // 剪贴板问题的正规解法是 @dsh-hanako/clipboard 插件（tapIndex 注入桥 → 宿主 capability）
   // + 下方壳页面桥（hostRequest + __dshCopy 监听）。
-  // iframe src 由壳页 JS 统一设置（attach）：透传宿主注入的 pluginSurfaceSession
-  // query 到 BFF 代理（/webui/app/）——带凭据加载官方 SPA，宿主路由层放行。
+  // iframe src 由壳页 JS 统一设置（attach）：直嵌 @dsh-hanako/web-app 子插件
+  // （dsh 3080 fork SPA）——同源 iframe，无需 BFF 代理/凭据透传。
   const iframe = `<iframe id="dsh-frame"></iframe>`;
   // 嵌入首帧自检 JSON：把 </ 转义成 <\/，防诊断文本（路径/stderr）里的 </script> 提前闭合脚本
   const initDiag = diagnostics
@@ -163,9 +163,9 @@ export default function registerWebuiRoutes(app, ctx) {
   // 订阅 /webui/events 就绪事件流，bus ready 后宿主推 ready 事件动态挂载）。不再服务端
   // probeHost（就绪事件化，probeHost 仅诊断路径使用）。未就绪时服务端同步收集一次自检
   // （首屏即渲染，诊断路径刷新）；就绪不收集保持轻量。
-  // 注入脚本：DSHana 诊断横幅（web host 状态轮询宿主 health 端点）——资源基址改写已
-  // 退役（SPA 全部资源由 @dsh-hanako/web-app 子插件（dsh 3080）iframe 同源直嵌提供，
-  // 无浏览器端劫持/改写）。
+  // 壳页不再注入任何脚本/横幅：web host 状态与诊断由壳页 JS 订阅 /webui/events
+  // 事件流驱动（就绪事件化），SPA 全部资源由 @dsh-hanako/web-app 子插件
+  // （dsh 3080）iframe 同源直嵌提供，无浏览器端劫持/改写。
 
   app.get("/webui", async (c) => {
     // 壳页：iframe 直嵌 @dsh-hanako/web-app 子插件（dsh 3080）serve 的 fork SPA——
