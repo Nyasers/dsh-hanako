@@ -15,11 +15,9 @@
 //                         → 推 diag-changed（信号，壳页刷新 boot-state）；DSH 主题偏好
 //                         变更 → 推 theme-pref。壳页订阅此流实现事件化（挂载/自举状态
 //                         刷新/偏好跟随全事件驱动）。
-//   GET  /webui/check-update 版本检查（经宿主能力层 g.checkDshUpdate；按钮已移除——版本
-//                            管理归设置页「检查与更新 DSH」卡片 + dsh_install 工具，路由保留）
-//   POST /webui/update-dsh   更新 DSH（经宿主能力层 g.updateDsh，异步触发，更新会重启
-//                            web host、正在执行的任务中断；按钮已移除，入口归设置页
-//                            dsh_install 工具，路由保留）
+//   （已移除，不再注册：/webui/check-update、/webui/update-dsh——版本检查与更新整链随
+//    「更新 DSH = 更新插件发版」退役（updateDsh / checkDshUpdate 及 dsh_install 的
+//    check/update 动作全删），DSH 设置页「DSH 版本」卡片只显示本地版本）
 //   （T5 退役：/webui/health 与 /webui/start、/webui/install-deps、/webui/verify-deps
 //   已删除——壳页无手动入口，install/verify/start 通道收敛为自动链 + dsh_install 工具）
 //
