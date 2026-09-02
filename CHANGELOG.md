@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.0.0-beta.2（2026-09-02）
+
+- **自动链状态机化 T2**（PR #55，spec：dsh-deps-zero-intervention）：一次性启动链升级为持久状态机，状态存单例 `g.boot`——phase 流转 ensure-deps（依赖幂等安装，失败按 errorClass 决策）→ waiting（退避等下一尝试 / 不可恢复停等条件变化）→ booting（startWebHost）→ ready（收敛）。可恢复失败（network/environment/unknown/native-toolchain）后台退避重试 30s→2m→10m→30m（cap，插件生命周期内持续）；不可恢复类（macos-signature/declaration/restart-needed）停等 + 通知一次，macos-signature 挂 config.json watch（保存即自动续跑）；同一失败原因只通知一次。卸载/重载安全（unloaded 标记覆盖全部异步边界 + 清退避定时/config watch）。
+- **自举状态快照端点 T3**：新增 `GET /webui/boot-state`——g.boot 状态机 + g.deps（T1 errorClass/guidance）+ g.web 就绪收敛成单一状态出口 `{ phase, ready, deps:{status,errorClass,guidance,error,version,logTail}, boot:{attempt,nextRetryAt,errorClass,guidance,lastError}, web:{ready,lastError} }`（字段全显式空值兜底）；失败决策 guidance 随 `g.boot.guidance` 持久（index.js/state.js 极小联动）。
+- **Bootstrap 自举壳页重写 T4**：DSHana 标签页从「诊断壳 + 手动操作面板」重写为三态自举页——booting（阶段时间线 + 安装实时日志尾滚动 + 退避倒计时）/ action-needed（errorClass 人话 + 明确操作步骤 + 自动续跑/停等说明，原始错误折叠详情）/ ready（iframe 直嵌现状保留）。数据源 = boot-state 快照 + /webui/events 事件流；删除功能面板 actions 段、t1/t2 诊断卡片、门禁链与全部手动按钮。
+- **手动入口退役 + 路由清理 T5**：删除 `/webui/start`、`/webui/install-deps`、`/webui/verify-deps`、`/webui/health` 路由；`collectWebDiagnostics` / `buildDepsDiagCheck` / `buildProcessDiagCheck` / `pickProcessFix` / `readLogTail` 及挂载/readDiagnostics/probeHost 整体退役删除（浏览器侧 checks 展示层废弃，日志诊断保留会话文件）；/webui/events 的 diagnostics 载荷事件收敛为 `diag-changed` 信号（无载荷，壳页刷新 boot-state）。
+- **文档同步 T6**：README 安装引导改全自动（无手动按钮/人工 pnpm 指引移除）、排错按 errorClass/三态；dsh-hanako/dsh-install SKILL 同步现状（verify 静态核对语义、自动链、页面三态）；DESIGN 依赖生命周期章节 + 已知限制补「dsh 升级需重启宿主」。
+
 ## v1.0.0-beta.1（2026-09-02）
 
 - **依赖零干预 T1：错误分类器**（PR #50，spec：dsh-deps-zero-intervention）：新增 `src/tools/lib/errclass.js` 纯函数 `classifyInstallError`——install 失败从「只看 exit 1」升级为六类 errorClass（network / macos-signature / native-toolchain / declaration / environment / unknown）+ 一句中文 guidance，匹配优先级从具体到一般。`run()` 失败结构化 throw（message 可读、原始 stdout/stderr 尾 + 退出码附 Error）；外层 catch 归类存 `g.deps.errorClass`；声明非法分支同步产出 declaration；新尝试起点清旧分类。回归样本四类全收（koffi ELIFECYCLE / ENOENT 缓存残留 / typert 133 / 网络断），ENOENT 归属 unknown 已论证。引入项目首个单测（Node 内置 node:test，零新依赖），14 用例覆盖特征/优先级/回归/容错。CodeRabbit 两轮闭环：分类器分层判定（tail 决定性 + milestoneLog 兜底），最终 registry 尝试决定分类。

@@ -1,6 +1,6 @@
 ---
 name: dsh-install
-description: "dsh_install 工具手册（源码 tools/dsh-install.js + tools/lib/install.js 能力层核对）。触发场景：安装 DeepSeek Harness（DSH）依赖（action=install，按插件声明版本 pnpm install --prod 到插件根 node_modules——dsh-pkg 已退役，版本严格锁插件声明无 version/tag 逃生门；registry 兜底 + 自动运行级重验 + autoStart）、检测依赖完整性（action=verify，运行级冒烟只读）、dsh_session 报「DSH 包未就绪」、DSHana 标签页不可用/依赖缺失、安装卡片（/card/dep 实时 pnpm 日志）、安装进行中重复调用返回状态。需要安装或验证 DSH 前先读本技能。"
+description: "dsh_install 工具手册（源码 tools/dsh-install.js + tools/lib/install.js 能力层核对）。触发场景：安装 DeepSeek Harness（DSH）依赖（action=install，按插件声明版本 pnpm install --prod 到插件根 node_modules——dsh-pkg 已退役，版本严格锁插件声明无 version/tag 逃生门；registry 兜底 + 自动运行级重验 + autoStart）、检测依赖完整性（action=verify，静态核对只读，无子进程）、dsh_session 报「DSH 包未就绪」、DSHana 标签页不可用/依赖缺失、安装卡片（/card/dep 实时 pnpm 日志）、安装进行中重复调用返回状态。需要安装或验证 DSH 前先读本技能。"
 ---
 
 # dsh_install 工具手册
@@ -13,15 +13,15 @@ description: "dsh_install 工具手册（源码 tools/dsh-install.js + tools/lib
 
 | 参数 | 类型 | 语义 |
 |---|---|---|
-| `action` | string | `install`（默认）= 安装依赖（按插件声明版本 pnpm install --prod 到插件根 node_modules，官方源失败自动重试 npmmirror + 自动运行级重验 + autoStart；已装版本与声明一致时跳过）；`verify` = 只检测依赖完整性（node cliBin --version 运行级冒烟，能跑 = 依赖图完整，只读不改动） |
+| `action` | string | `install`（默认）= 安装依赖（按插件声明版本 pnpm install --prod 到插件根 node_modules，官方源失败自动重试 npmmirror + 自动运行级重验 + autoStart；已装版本与声明一致时跳过）；`verify` = 只检测依赖完整性（静态核对：cliBin 常规文件 + 磁盘版本 === 插件声明，秒回无子进程，只读不改动） |
 | `wait` | boolean | `false`（默认）= 异步：install 立即返回 + 渲染安装卡片（实时 pnpm 日志），完成后宿主唤醒、结果后台送达；`true` = 同步：等安装跑完直接返回（pnpm install 可能耗时数分钟，阻塞当前回合） |
 | `autoStart` | boolean | install 完成后是否自动启动 web host（默认 true：web host 未运行时经 g.startWebHost 拉起；失败不阻断结果上报）。verify 忽略 |
 
 ## 行为（源码核实）
 
-**install**：① 并发防护——依赖安装中（`g.deps.status === "installing"` 或 `"running"`）重复调用返回 `{ ok:false, state:'installing' }` 不重复执行；② `g.installDeps(cfg)`（版本单一事实源 = 插件根 package.json 的 dependencies）：部署目标 = **插件根**（pnpm install --prod 按插件根声明拉取到插件 node_modules，无部署声明副本）→ **幂等检查**（cliBin 存在且已装版本 === 声明版本 → 跳过安装直接运行级重验，verifyDepsSmoke 失败走重装）→ 停 web host（`closeProcess`，Windows 文件锁前提）→ **旧依赖清理**（删 `package-lock.json` / `pnpm-lock.yaml` / 扁平 `node_modules`；旧数据目录 dsh-pkg 整体删除）→ node 代理脚本（数据目录 `pnpm-proxy/`，指向解析后的 node 执行体——默认宿主 electron node；配置 `nodejsPath` 时用自定义系统 node，PATH 首部指向代理目录让 koffi/node-pty 的 install script 找到 node）→ `pnpm install --prod --reporter=ndjson`（按插件根声明拉取，官方源失败自动重试 `--registry=https://registry.npmmirror.com`）→ 校验 cliBin → 清缓存强制运行级重验（`verifyDepsSmoke`，`g.deps.result` 刷新）；③ 完成后 autoStart（默认 true）：`g.web.ready` 已就绪跳过（返回 null）/ 未起经 `g.startWebHost(ctx.config, dataDir)` 拉起（成功 true / 失败 false，**失败不阻断结果上报**）→ `{ ok:true, state:'installed', cliBin, version?, autoStart?, skipped? }`。
+**install**：① 并发防护——依赖安装中（`g.deps.status === "installing"` 或 `"running"`）重复调用返回 `{ ok:false, state:'installing' }` 不重复执行；② `g.installDeps(cfg)`（版本单一事实源 = 插件根 package.json 的 dependencies）：部署目标 = **插件根**（pnpm install --prod 按插件根声明拉取到插件 node_modules，无部署声明副本）→ **幂等检查**（cliBin 存在且已装版本 === 声明版本 → 跳过安装直接静态核对，verifyDepsSmoke 失败走重装）→ 停 web host（`closeProcess`，Windows 文件锁前提）→ **旧依赖清理**（删 `package-lock.json` / `pnpm-lock.yaml` / 扁平 `node_modules`；旧数据目录 dsh-pkg 与 pnpm-proxy 残留删除）→ node 代理脚本（插件根 node.cmd，与部署物同目录——指向解析后的 node 执行体：默认宿主 electron node；配置 `nodejsPath` 时用自定义系统 node；PATH 首部指向代理目录让 koffi/node-pty 的 install script 找到 node）→ `pnpm install --prod --reporter=ndjson`（按插件根声明拉取，官方源失败自动重试 `--registry=https://registry.npmmirror.com`）→ 校验 cliBin → 强制静态核对（`verifyDepsSmoke`，`g.deps.result` 刷新）；③ 完成后 autoStart（默认 true）：`g.web.ready` 已就绪跳过（返回 null）/ 未起经 `g.startWebHost(ctx.config, dataDir)` 拉起（成功 true / 失败 false，**失败不阻断结果上报**）→ `{ ok:true, state:'installed', cliBin, version?, autoStart?, skipped? }`。
 
-**verify**：`g.verifyDeps(cfg)`（node cliBin --version 冒烟，10s 超时，结果缓存 `g.deps.result`）→ `{ verified, version, error? }`。
+**verify**：`g.verifyDeps(cfg)`（静态核对：cliBin 为常规文件 + 磁盘版本 === 插件声明，秒回无子进程，结果缓存 `g.deps.result`；pnpm 引导检查并行独立子项）→ `{ verified, version, error? }`。
 
 **异步模式**：`install` 默认异步——立即返回 + 渲染**安装卡片**（`/card/dep`，见下节），经宿主 deferred 通道注册唤醒（taskId 统一 `dsh_install_*` 前缀；meta.type 统一 `"dsh-install"`），后台完成/失败后宿主唤醒带回结果。
 
@@ -44,8 +44,8 @@ description: "dsh_install 工具手册（源码 tools/dsh-install.js + tools/lib
 
 ## 使用场景
 
-- **依赖缺失**：dsh_session create 报「DSH 包未就绪：...bin.js 不存在」、DSHana 标签页不可用（t1 依赖 ✗）→ `dsh_install(action="install")` 或 `dsh_install()`（默认 install）
-- **验证依赖完整性**：deps 卡片「存在但依赖不完整：ERR_MODULE_NOT_FOUND」→ `dsh_install(action="verify")` 复检，或直接重装
+- **依赖缺失**：dsh_session create 报「DSH 包未就绪：...bin.js 不存在」、DSHana 标签页停在 booting/需要处理 → `dsh_install(action="install")` 或 `dsh_install()`（默认 install；自动链通常已自愈，工具为 Agent 显式通道）
+- **验证依赖完整性**：boot-state 的 deps.status=error / 页面 action-needed 显示依赖问题 → `dsh_install(action="verify")` 复检，或直接重装
 - **装即用**：默认 autoStart=true，安装完成自动拉起 web host
 
 ## 示例
@@ -59,6 +59,6 @@ dsh_install(action="verify")               # 只检测依赖完整性
 
 ## 关联
 
-- 安装进度/日志也可在 DSHana 标签页 deps 卡片查看（同一份 `g.deps.log`）。
-- 装完调一次 `dsh_session(action="create")` 触发任务；web host 未自动启动时可在 DSHana 标签页点「手动启动 web host」。
-- 依赖部署细节见 dsh-hanako 技能「依赖自主部署」。
+- 安装进度/日志与自动链同源（`g.deps.log` 尾环 / 会话日志 `[pnpm]` 行）；Agent 显式安装后由 `autoStart`/自动链拉起 web host。
+- 装完调一次 `dsh_session(action="create")` 触发任务验证；DSHana 标签页自动收敛 ready 直嵌 Web UI（页面无手动按钮）。
+- 依赖生命周期与自动链/错误分类现状见 dsh-hanako 技能「启动自动链」。

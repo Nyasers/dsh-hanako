@@ -42,8 +42,8 @@ import {
   textFromMessageBlocks,
 } from "./lib/protocol.js";
 // 生命周期能力（web host 拉起）——本模块只做任务提交，对单例/web host 的依赖经
-// app/lifecycle.js 转发（lifecycle.js 顶层 mountLifecycle 已把 closeProcess / collectDiagnostics /
-// updateDsh / startWebHost / installDeps / verifyDeps / checkDshUpdate 挂到 globalThis 单例）。
+// app/lifecycle.js 转发（lifecycle.js 顶层 mountLifecycle 已把 closeProcess / updateDsh /
+// startWebHost / installDeps / verifyDeps / checkDshUpdate 挂到 globalThis 单例）。
 // config.json 引导已退役（vX，migrate 体系删除）：配置读取侧 resolve* 缺省回退兜底。
 // 与 lifecycle.js 同属 index.js 单 bundle 收敛入口的静态 import 链。
 import { ensureWebHost } from "../lifecycle.js";

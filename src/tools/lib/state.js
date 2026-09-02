@@ -15,7 +15,7 @@
 // 单例纪律（与旧 dsh-run.js getSingleton 完全一致）：globalThis.__dshHanako 跨模块
 // 共享，index.js 卸载清理时读取；旧对象可能缺新字段（热更新后旧 globalThis 对象仍在）
 // 逐字段兜底。函数挂载（g.closeProcess / g.installDeps / g.verifyDeps /
-// g.checkDshUpdate / g.updateDsh / g.startWebHost / g.collectDiagnostics）由各定义模块
+// g.checkDshUpdate / g.updateDsh / g.startWebHost）由各定义模块
 // 在自己文件内显式赋值（本模块是叶子，避免与 dsh-run.js 循环依赖）。
 //
 // 分组状态（v0.24 状态收敛：单例平铺字段重构为分组结构化）——旧平铺字段
@@ -29,7 +29,7 @@
 //     update 任一进行中另一动作拒绝；tools/dsh-install.js 同步段检查/置位、操作完成
 //     释放；能力层守卫 g.deps.status / g.update.status 保留为 webui 路由等其他调用
 //     路径双保险；verify/check 不占用）
-//   g.boot   = { phase, attempt, nextRetryAt, errorClass, lastError, timer? }
+//   g.boot   = { phase, attempt, nextRetryAt, errorClass, guidance, lastError, timer? }
 //     启动自动链状态机（T2 spec：dsh-deps-zero-intervention 新增设计 2；index.js onload
 //     维护：ensure-deps/waiting/booting/ready + 失败退避重试，见 index.js 自动链注释）——
 //     本函数只做兜底初始化，不驱动状态（与 g.update/g.deps 同款热更新兼容语义）
@@ -193,6 +193,9 @@ export function getSingleton() {
   //   errorClass   最近失败分类（install 六类 network/macos-signature/native-toolchain/
   //                declaration/environment/unknown；boot 升级缓存残留另归 restart-needed；
   //                成功收敛/从未失败 = null）
+  //   guidance     最近失败的用户指引文案（index.js handleFailure 随失败落：六类经
+  //                ERROR_CLASS_GUIDANCE、restart-needed 等不可恢复类亦带文案；T3 快照端点/
+  //                壳页 action-needed 渲染用；成功收敛/从未失败 = null）
   //   lastError    最近失败可读文本（截断；成功收敛/从未失败 = null）
   //   timer        后台退避 setTimeout 句柄（index.js 维护：调度置位、到点/卸载/收敛清理；
   //                句柄不跨会话有效——卸载即清，重载后新 onload 重新调度）
@@ -203,6 +206,7 @@ export function getSingleton() {
   if (g.boot.attempt === undefined) g.boot.attempt = 0;
   if (g.boot.nextRetryAt === undefined) g.boot.nextRetryAt = null;
   if (g.boot.errorClass === undefined) g.boot.errorClass = null;
+  if (g.boot.guidance === undefined) g.boot.guidance = null;
   if (g.boot.lastError === undefined) g.boot.lastError = null;
   if (!g.check || typeof g.check !== "object") g.check = {};
   if (g.check.status === undefined) g.check.status = "idle";

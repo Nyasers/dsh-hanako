@@ -10,7 +10,6 @@
 // 本模块承载（逐字迁移自 dsh-run.js，逻辑零改动）：
 //   web host 拉起    ensureWebHost（进程内 boot dsh + 端口就绪等待，幂等）+ startWebHostFromPlugin（挂 g.startWebHost）
 //   关闭回收         closeProcess（先清 provider/update watch，再 kill 子进程）
-//   连接失败自检     collectWebDiagnostics + buildDepsDiagCheck + buildProcessDiagCheck + pickProcessFix
 //   更新 DSH         updateDsh（停 host → 装依赖 → 起 host → 读版本，结果走内存态 g.update）
 //   watch           ensureProviderPushWatch（provider 热跟随 watch）
 //   provider 路由     detectHostProviderPaths / readJsonFile / mapModel / readHostConfig / buildProviderRoutes
@@ -19,7 +18,7 @@
 //                    本模块经 runMigrations 统一调度（startWebHostFromPlugin 调 config-schema；
 //                    junction 收敛同样迁入 migrate.js，ensureWebHost 调 junction-converge）
 //   web host 日志     logTs / appendLog / logFileStamp / newWebLogPath（兜底实现）
-// 单例挂载（globalThis.__dshHanako，经 getSingleton()）：g.closeProcess / g.collectDiagnostics /
+// 单例挂载（globalThis.__dshHanako，经 getSingleton()）：g.closeProcess /
 // g.updateDsh / g.startWebHost / g.installDeps / g.verifyDeps / g.checkDshUpdate 均在本模块顶层完成
 // （installDeps/verifyDeps/checkDshUpdate 直接引用 lib/install.js & lib/check.js）；g.runMigrations
 // 由 src/migrate.js 顶层挂载（本模块 import 时即挂好）。routes/webui.js、index.js、tools/dsh-*.js
@@ -34,8 +33,8 @@
 //
 // 语义不变：ensureWebHost 重复调用幂等；web host 进程随插件 onload/卸载生命周期拉起/回收
 // （index.js register 回收调用 g.closeProcess）；providerPushCleanup / updateWatchCleanup 清理时机与
-// 拆分前一致；updateDsh 流程（停 host→装依赖→起 host→读版本）保持完整；collectWebDiagnostics 输出的
-// checks 结构（t1 依赖 / t2 进程）令 routes/webui.js 渲染不变。
+// 拆分前一致；updateDsh 流程（停 host→装依赖→起 host→读版本）保持完整。（T5：旧诊断壳
+// checks 结构已随 collectWebDiagnostics 家族退役，自举状态出口 = GET /webui/boot-state）
 import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
@@ -54,10 +53,6 @@ import {
   rmSync,
   rmdirSync,
   readdirSync,
-  statSync,
-  openSync,
-  readSync,
-  closeSync,
 } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
@@ -72,7 +67,6 @@ import {
   resolveDshPkgDir,
   installDepsFromPlugin,
   verifyDepsSmoke,
-  readDshInstalledVersion,
 } from "./tools/lib/install.js";
 import { connectBus, closeBus, setBusConfigProvider } from "./lib/bus.js";
 
@@ -684,8 +678,8 @@ export async function ensureWebHost(cfg) {
     g.web = null;
   }
   // 新启动尝试开始：作废旧退出记录（webLastExit 只反映「最近一次进程退出」；本次尝试
-  // 失败会更新 webLastError，诊断应走启动失败分支而非旧退出分支——否则 lastExit 遮蔽
-  // 当前失败，pickProcessFix 指引丢失。CodeRabbit PR #53）
+  // 失败会更新 webLastError，boot-state 应反映启动失败而非旧退出——否则 lastExit 遮蔽
+  // 当前失败，自举页误示进程退出。CodeRabbit PR #53）
   g.webLastExit = null;
   if (!cfg.dshPkgDir) cfg.dshPkgDir = resolveDshPkgDir(cfg);
 
@@ -1097,8 +1091,8 @@ getSingleton().startWebHost = async function startWebHostFromPlugin(
     const logPath = g.web?.logPath || g.webLastExit?.logPath || null;
     if (logPath) g.webLastLogPath = logPath;
     g.webLastErrorAt = new Date().toISOString();
-    // web host 启动失败：通知壳页就绪事件流推诊断（routes/webui.js 注册回调，
-    // 诊断对象由 readDiagnostics 收集；无订阅者 no-op）
+    // web host 启动失败：通知壳页事件流刷新自举状态（routes/webui.js 注册回调，推
+    // diag-changed 信号 → 壳页刷新 /webui/boot-state 呈现 waiting；无订阅者 no-op）
     if (typeof g.notifyWebStartFailed === "function") {
       try {
         g.notifyWebStartFailed();
@@ -1112,373 +1106,16 @@ getSingleton().startWebHost = async function startWebHostFromPlugin(
 
 // installDepsFromPlugin / verifyDepsSmoke 已提取到 lib/install.js（本文件顶部
 // import），这里显式挂单例（getSingleton 本体在 lib/state.js 不再逐函数赋值；mountSingleton
-// 与 lib 侧挂载保持同款幂等语义）。routes/webui.js 经 g.installDeps / g.verifyDeps 调用。
+// 与 lib 侧挂载保持同款幂等语义）。tools/dsh-install.js（Agent）与 index.js 自动链经
+// g.installDeps / g.verifyDeps 调用（/webui 手动路由已随 T5 退役）。
 getSingleton().installDeps = installDepsFromPlugin;
 getSingleton().verifyDeps = verifyDepsSmoke;
-// ---- 连接失败自检（插件页 web host 未就绪时的诊断数据源）----
-// 供 routes/webui.js 使用（经单例 globalThis.__dshHanako.collectDiagnostics 挂载，
-// 不静态 import 本模块——Hana 带 ?t= 加载 tools，静态 import 会命中 Node ESM 固定
-// URL 缓存读到旧模块，见文件头注释；与 index.js 经单例取 closeProcess 同一套纪律）。
-// web host 未就绪时逐项检查：① dsh 依赖（resolveDshPkgDir + cliBin 存在性）② DSH 进程状态（单例 web /
-// webLastError / stderr 尾部）。只回布尔与截断文本；单例/字段缺失（冷启动、
-// web 从未拉起）全部容错，本函数永不抛异常。
-export function collectWebDiagnostics(cfg = {}) {
-  const out = {
-    port: Number(cfg.webPort) || 3080,
-    checks: [],
-  };
-  try {
-    // 数据目录解析链：显式传入 → 单例记录（onload/工具已写入）→ 从 web.dshHome 反推
-    const g = getSingleton();
-    const dataDir =
-      cfg.dataDir ||
-      g.dataDir ||
-      (g.web?.dshHome ? dirname(g.web.dshHome) : "");
-    const diagCfg = { ...cfg, dataDir };
-    // 不再自动触发运行级检测（去掉 maybeTriggerDepsSmoke）——检测改为「进标签页
-    // 自动一次 + 手动「检测依赖」按钮」，经 GET /webui/verify-deps 路由驱动；g.deps.result
-    // 只存最近一次检测结果供诊断展示（不随 3s 轮询重复 spawn）。
-    out.checks.push(buildDepsDiagCheck(g, diagCfg));
-    out.checks.push(buildProcessDiagCheck(g, out));
-  } catch (e) {
-    // 顶层兜底：诊断读取本身异常时回退成「未知」项，接口不抛
-    out.checks.push({
-      key: "unknown",
-      name: "自检异常",
-      ok: false,
-      detail: String(e?.message || e).slice(0, 400),
-      fix: "请查看 Hana 日志或重启 Hana 后重试",
-    });
-  }
-  return out;
-}
-
-/** ① dsh 依赖：cliBin 存在性（resolveDshPkgDir 同款：数据目录 dsh-pkg 优先，插件根兑底）
- * v0.8.6: 叠加部署状态——g.deps.status（installing 进行中）/ g.deps.error（上次失败）/ g.deps.log
- * v0.8.7: 叠加运行级完整性验证——g.deps.result（verifyDepsSmoke 缓存 { ok, version, error, stderr, at, running }）。
- * v0.24: 单例分组结构化——g.deps = { status, result, error, time, log }、g.update =
- * { status, result, error, time, log }、g.check = { status, result, error, time, log }
- * （旧平铺字段全废；update-result.json 退役，updateResult 改内存态组合）。
- * v0.13.0: 叠加版本/检查/更新状态——version（当前版本）、check（最近一次 checkDshUpdate
- * 缓存：latest/updateAvailable/at/error）、checking/updating（进行中）、updateResult
- * （内存态：g.update.status + g.update.result.version）——deps 卡片版本行 + 「检查更新」
- * 「更新 DSH」按钮数据源。
- * ok 判定升级：存在 且（未验证/验证中视为暂通过，验证过必须通过）——文件存在 ≠ 依赖完整。 */
-function buildDepsDiagCheck(g, cfg) {
-  const pkgDir = resolveDshPkgDir(cfg);
-  const cliBin = join(
-    pkgDir,
-    "node_modules",
-    "@deepseek-ai",
-    "dsh",
-    "lib",
-    "bin.js",
-  );
-  // 候选位置全列出，未命中时讲清「查了哪些位置」（resolveDshPkgDir 只回命中/兑底那一个）
-  const candidates = [];
-  if (cfg.dataDir) candidates.push(join(cfg.dataDir, "dsh-pkg"));
-  candidates.push(PLUGIN_ROOT);
-  const checked = [
-    ...new Set(
-      candidates.map((p) =>
-        join(p, "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js"),
-      ),
-    ),
-  ];
-  const installed = existsSync(cliBin);
-  // 部署状态（installDeps 写入单例分组 g.deps；只回非敏感布尔与截断文本）
-  const installing = g.deps.status === "installing";
-  const installError = String(g.deps.error || "").slice(0, 300);
-  const installLog = String(g.deps.log || "").slice(-800);
-  const installAt = g.deps.time || null; // 最近一次 npm i 输出时间（实时进度）
-  // 依赖核对状态（verifyDepsSmoke 静态核对缓存于 g.deps.result；非敏感：布尔/版本号/截断错误文本）
-  const smoke = g.deps.result || null;
-  const verifyRunning = Boolean(smoke?.running);
-  const verified = installed && smoke ? Boolean(smoke.ok) : null; // null = 未安装/未验证过（暂通过）
-  const verifyError =
-    smoke && !smoke.ok && !smoke.running
-      ? String(smoke.error || smoke.stderr || "").slice(0, 400)
-      : null;
-  const verifyVersion = smoke?.version ?? null;
-  const verifyAt = smoke?.at ?? null;
-  // pnpm 引导状态（独立子项，不进 ok 判定）：透出 verifyDepsSmoke 的 pnpm 检查结果
-  // （pnpmReady/pnpmVersion/pnpmError；smoke 未生成过 → checked=false，前端不渲染该行）。
-  // 仅 DSHana 标签页 deps 卡片展示（settings「检查与更新 DSH」卡片不展示 pnpm 状态——
-  // 用户决策：远端版本查询已改 HTTP 直查，settings 侧不关心 pnpm 引导）。
-  const pnpmChecked = Boolean(smoke);
-  const pnpmReady = Boolean(smoke?.pnpmReady);
-  const pnpmVersion = smoke?.pnpmVersion || null;
-  const pnpmError = smoke?.pnpmError
-    ? String(smoke.pnpmError).slice(0, 300)
-    : null;
-  // 当前版本（核对缓存优先，无则直读 dsh 包 package.json）+ 版本检查
-  // 状态（g.check.result 缓存：最近一次 checkDshUpdate 结果）+ 更新状态（g.update.status /
-  // g.update.error + 内存态 updateResult，v0.24 起不再读 update-result.json）。
-  // 只回非敏感布尔/版本号/截断文本。
-  const currentVersion =
-    (smoke && !smoke.running && smoke.ok ? smoke.version : null) ||
-    readDshInstalledVersion(cfg) ||
-    null;
-  const checkResult = g.check.result || null;
-  const checking = g.check.status === "running";
-  const updating = g.update.status === "running";
-  const updateError = String(g.update.error || "").slice(0, 300);
-  // 更新结果内存态组合（v0.24：update-result.json 退役，不再读文件；状态 + 终态版本 +
-  // 错误 + 时间，version 更新终态优先、依赖验证缓存兜底）
-  // 状态值域映射：g.update.status（idle/running/ok/error）→ 诊断对外契约值
-  // （done/updating/error；webui-shell.jinja2 按 state === "done" 渲染完成文案）
-  const updateState =
-    { ok: "done", running: "updating" }[g.update.status] || g.update.status;
-  const updateResult = {
-    state: updateState,
-    version: g.update.result?.version || g.deps.result?.version || null,
-    error: g.update.error || null,
-    at: g.update.time || null,
-  };
-  // ok：存在 且（未验证/验证中暂通过；验证过必须通过）——验证失败 → ok=false
-  const ok = installed && (!smoke || smoke.ok || smoke.running);
-  const check = {
-    key: "deps",
-    name: "DSH 依赖安装",
-    ok,
-    installed,
-    installing,
-    verified,
-    verifyRunning,
-    verifyError,
-    verifyVersion,
-    verifyAt,
-    installError: installError || null,
-    installLog: installLog || null,
-    installAt,
-    pkgDir,
-    cliBin,
-    // 版本/检查/更新状态（deps 卡片版本行 + 检查更新/更新 DSH 按钮）
-    version: currentVersion,
-    check: {
-      latest: checkResult?.latestVersion ?? null,
-      updateAvailable: Boolean(checkResult?.updateAvailable),
-      at: checkResult?.at || null,
-      error: String(checkResult?.error || "").slice(0, 300) || null,
-    },
-    checking,
-    updating,
-    updateError: updateError || null,
-    updateResult,
-    // pnpm 引导状态（独立子项，不进 ok 判定；见上方 pnpmChecked 注释）
-    pnpmChecked,
-    pnpmReady,
-    pnpmVersion,
-    pnpmError,
-    detail: "",
-    fix: "",
-  };
-  if (installing) {
-    // 安装中（含重装场景 installed 仍可能为 true）优先——实时进度
-    // installLog 尾部由前端 .diag-progress 展示（随轮询刷新）
-    check.detail = "正在安装依赖…（进度见下方）";
-    check.fix = "";
-  } else if (!installed) {
-    // 未安装：保持现有文案
-    check.detail =
-      "未找到 DSH 包：" +
-      cliBin +
-      " 不存在" +
-      (checked.length > 1 ? "（已检查 " + checked.join("、") + "）" : "");
-    if (installError) check.detail += "\n[上次安装失败] " + installError;
-    check.fix =
-      "依赖缺失：点击本卡片「安装依赖」按钮自动按插件声明安装依赖（完成后自动核对）；或确认插件目录 node_modules 解压完整";
-  } else if (!smoke) {
-    // 未检测过（进标签页自动检测一次 / 手动「检测依赖」；ok 暂算 installed）
-    check.detail = "DSH 包已就绪，点击「检测依赖」核对完整性";
-  } else if (verifyRunning) {
-    // 检测进行中（静态核对瞬时完成，此分支实际罕见；保留兼容 running 语义）
-    check.detail = "正在检测依赖…";
-  } else if (!smoke.ok) {
-    // 存在但核对失败（cliBin 缺失 / 版本与声明不一致，error 为原因）
-    check.detail =
-      "DSH 包核对失败：" +
-      (verifyError || smoke.error || "未知原因（版本与声明不一致？）");
-    check.fix =
-      "点击本卡片「重新安装依赖」按钮重新按插件声明安装（完成后自动核对）";
-  } else {
-    // 存在 + 核对通过（静态：磁盘版本 === 插件声明）——能跑与否由 boot 进程内裁决
-    check.detail =
-      "DSH 包已就绪（与插件声明一致，版本 v" +
-      (currentVersion || smoke?.version || "?") +
-      "）：" +
-      cliBin;
-  }
-  return check;
-}
-
-/** ② DSH 进程：单例 web 状态（child/exitCode/ready/stderr 尾部）+ webLastError/webLastErrorAt + webLastExit
- * v0.8.5: webLastExit 为单例持久退出记录（进程被外部杀掉时 g.web 已摘除，凭它区分
- * 「已退出」而非误报「尚未启动」）；只在 ensureWebHost 成功拉起新进程（ready）时清掉。 */
-// 会话日志尾部读取（诊断滚动区数据源）：错误行/堆栈本来就逐行写进会话日志文件
-// （emitLog 行规范化，见文件头「统一日志」）——单一事实源 = 日志文件，不为 UI 在
-// 内存另存副本（实装 2026-09-02 指示）。失败态诊断读尾部 ≤maxBytes 供界面滚动渲染：
-// openSync + readSync 只读尾部（不整文件读入）；路径缺失/读失败静默返回 ""（无滚动区）。
-function readLogTail(logPath, maxBytes) {
-  try {
-    if (!logPath || !existsSync(logPath)) return "";
-    const st = statSync(logPath);
-    if (!st || st.size <= 0) return "";
-    const len = Math.min(st.size, maxBytes || 16384);
-    const fd = openSync(logPath, "r");
-    try {
-      const buf = Buffer.alloc(len);
-      readSync(fd, buf, 0, len, st.size - len);
-      return buf.toString("utf8");
-    } finally {
-      closeSync(fd);
-    }
-  } catch {
-    return "";
-  }
-}
-
-function buildProcessDiagCheck(g, out) {
-  const web = g.web || null;
-  const child = web?.child || null;
-  // T7b 进程内形态：无子进程——「存活」= boot 完成且未 shutdown（disposed 标记）
-  const inproc = web?.processMode === "inproc";
-  const lastExit = g.webLastExit || null; // 持久退出记录：{ code, signal, at, stderr, logPath } | null
-  const started = Boolean(web || g.webLastError || lastExit);
-  const alive = inproc
-    ? Boolean(web && !web.disposed)
-    : Boolean(child && child.exitCode === null);
-  const ready = Boolean(web?.ready);
-  const exitCode = inproc ? null : child?.exitCode ?? lastExit?.code ?? null;
-  const stderr = String(web?.stderr || lastExit?.stderr || "").slice(-800); // stderr 尾部截断 ≤800
-  const lastError = String(g.webLastError || "").slice(-800);
-  // 完整错误原文（不截断，供修复指引匹配）：存储端已限 message≤1500 + stderr≤800（见
-  // startWebHostFromPlugin catch）。匹配不依赖截断窗口——长错误被 slice(-800) 截尾会丢
-  // 掉首行的错误特征（错误码/路径在头部），实装验证 2026-09-02 曾因此落兑底文案误导。
-  const lastErrorFull = String(g.webLastError || "");
-  const lastErrorAt = g.webLastErrorAt || "";
-  // 本次会话日志路径（当前 web / 退出记录 / 失败记录，三级兜底）
-  const logPath = web?.logPath || lastExit?.logPath || g.webLastLogPath || null;
-  const check = {
-    key: "process",
-    name: "DSH 进程状态",
-    ok: started && ready && alive,
-    started,
-    alive,
-    ready,
-    exitCode,
-    stderr,
-    lastError,
-    lastErrorAt,
-    logPath, // 完整日志路径（界面展示「本次会话日志」）
-    lastExit, // 结构化退出记录（非敏感），供前端/调试
-    detail: "",
-    fix: "",
-  };
-  const port = out.port;
-  if (!started) {
-    // 从未启动：无 web / webLastError / webLastExit（冷启动或从未拉起过）
-    check.detail =
-      "web host 尚未启动（插件加载即拉起，可能仍在初始化，或从未成功启动过）";
-    check.fix =
-      "稍候自动重试；若持续未就绪，可点击本卡片「手动启动 web host」按钮重新拉起，或检查上方依赖项";
-  } else if (ready && alive) {
-    // 已就绪但探测未命中（端口短暂不可达等）：仍提示重试
-    check.detail =
-      (inproc ? "进程内 boot 已就绪，但端口 " : "进程运行中且已就绪，但端口 ") +
-      port +
-      " 探测未命中（可能短暂不可达）";
-    check.fix = "稍候自动重试；若持续未就绪，检查端口是否被其他程序占用";
-  } else if (alive) {
-    check.detail =
-      (inproc
-        ? "进程内 boot 完成，端口 " + port + " 尚未就绪"
-        : "进程运行中，端口 " + port + " 尚未就绪") +
-      (stderr ? "\n[stderr 尾部] " + stderr : "");
-    check.fix =
-      "正在启动，请稍候自动重试；若长时间未就绪，检查端口是否被占用，或重启 Hana";
-  } else if (lastExit) {
-    // 进程曾运行后退出/被外部杀掉：展示持久退出记录（g.web 已摘除，stderr 从 lastExit 取）。
-    // code/signal 可能为 null（Windows 杀进程无 signal、信号杀进程无 code）：只列非空项
-    const codeTxt =
-      lastExit.code !== null && lastExit.code !== undefined
-        ? "code=" + lastExit.code
-        : null;
-    const sigTxt =
-      lastExit.signal !== null && lastExit.signal !== undefined
-        ? "signal=" + lastExit.signal
-        : null;
-    const exitTxt =
-      codeTxt || sigTxt
-        ? [codeTxt, sigTxt].filter(Boolean).join(" ")
-        : "code=? signal=?";
-    check.detail =
-      "进程已退出（" +
-      exitTxt +
-      "，时间 " +
-      lastExit.at +
-      "）" +
-      (lastExit.stderr ? "\n[stderr 尾部] " + lastExit.stderr : "");
-    // 进程退出现场：日志尾部滚动查看（stderr 展示截断 ≤800，全文在会话日志）
-    check.errLog = readLogTail(logPath, 16384);
-    check.fix = "点击本卡片「手动启动 web host」按钮重新拉起，或重启 Hana";
-  } else {
-    // 启动失败（webLastError）：detail 摘要取错误首行（错误码在头部，一眼可读）；
-    // errLog = 会话日志尾部（错误行与堆栈本来逐行写进日志，滚动区直接显示日志，不为
-    // UI 另存内存副本）；完整日志路径 logPath 已展示，可跳全文。
-    // depsOk 传入 pickProcessFix：升级缓存残留判定需依赖「当前可用」为前提——取本次诊断
-    // deps 项的 ok（= installed && 无明确验证失败，见 buildDepsDiagCheck），而非 verified：
-    // verified（installed && smoke.ok）在 verify 进行中会被瞬时置 false（running 窗口
-    // smoke 重置为 ok:false），此时 boot 失败 ENOENT 会误落兑底；ok 含当前 installed 硬
-    // 条件（包被移除不判残留，CodeRabbit PR #51）且 running/未验证暂通过不误杀
-    const errHead = (lastErrorFull.split("\n")[0] || lastError || "").slice(0, 300);
-    check.detail = lastErrorFull || lastError
-      ? "启动失败：" + errHead
-      : "进程已退出（code=" +
-        (exitCode ?? "?") +
-        "）" +
-        (stderr ? "\n[stderr 尾部] " + stderr : "");
-    check.errLog = readLogTail(logPath, 16384);
-    check.fix = pickProcessFix(
-      lastErrorFull || lastError,
-      stderr,
-      port,
-      out.checks.find((c) => c.key === "deps")?.ok === true,
-    );
-  }
-  return check;
-}
-
-/** 进程失败修复指引：按失败原因内容匹配（依赖 / 升级缓存残留 / 端口占用），兜底通用建议。
- * 同时匹配 webLastError 与 stderr 尾部——端口占用等错误常只出现在 stderr（进程退出时
- * webLastError 可能未携带 stderr 尾部，见「进程已退出」分支）。
- * depsOk：依赖是否当前可用（调用方取本次诊断 deps 项 ok = installed && 无明确验证失败）
- * ——升级缓存残留判定以此为门控，见下方注释。 */
-function pickProcessFix(lastError, stderr, port, depsOk) {
-  const text = (lastError || "") + "\n" + (stderr || "");
-  // 跨 dsh 版本升级缓存残留（spec「升级 dsh = 装新插件包 + 重启宿主」既定流程，无豁免层）：
-  // 宿主进程内 ESM import 缓存 key 跨版本稳定，热加载新插件后仍命中旧 dsh 模块，boot 读
-  // 已删旧 .pnpm 路径 ENOENT。特征 = 依赖当前可用（depsOk）+ 错误含 ENOENT/no
-  // such file/Cannot find + 路径指向 .pnpm/@deepseek-ai+dsh@（真实样本 2026-09-02：alpha.10
-  // 热加载 boot ENOENT 旧 .pnpm 目录）。depsOk 门控必须：安装不完整/依赖图缺失同样
-  // 报 ENOENT + .pnpm 路径，那种情况重启不愈（磁盘仍坏），只给重启提示会误导——依赖
-  // 明确不可用时落下方依赖分支（自动补齐）。注意门控用 ok 而非 verified：verified 在
-  // verify running 窗口被瞬时置 false，会把升级残留误落兑底（实装 2026-09-02 复现）。
-  if (
-    depsOk === true &&
-    /(?:ENOENT|no such file|cannot find)/i.test(text) &&
-    /\.pnpm[\\/]@deepseek-ai\+dsh@/i.test(text)
-  ) {
-    return "检测到 dsh 已跨版本升级，当前 Hana 进程仍持有升级前的旧模块缓存：请重启 Hana 加载新版本（dsh 升级后需重启为既定流程，无需其它操作）";
-  }
-  if (/dsh 包未就绪|DSH 包未就绪|cliBin|npm i/i.test(text)) {
-    return "依赖未就绪：自动安装链会按插件声明补齐并核对，完成后自动重试启动 web host；若持续失败请查看上方依赖诊断详情";
-  }
-  if (/EADDRINUSE|address already in use|占用|bind/i.test(text)) {
-    return "检查端口 " + port + " 是否被占用（释放后重启 Hana）";
-  }
-  return "检查上方依赖项；仍失败请重启 Hana 后重试";
-}
+// ---- 连接失败自检展示层退役（T5 spec：dsh-deps-zero-intervention）----
+// 旧「诊断壳 checks 结构」（collectWebDiagnostics / buildDepsDiagCheck /
+// buildProcessDiagCheck / pickProcessFix / readLogTail，t1 依赖 + t2 进程卡片）已随
+// Bootstrap 自举壳页（T4）退役：浏览器壳页只消费 /webui/boot-state（T3 单一状态出口，
+// routes/webui.js readBootState——g.boot 状态机 + g.deps errorClass/guidance + g.web 就绪）。
+// 日志诊断保留 = 会话日志文件（g.logPath，含 install/boot 全程里程碑），不再生成 UI checks。
 
 export async function closeProcess() {
   const g = getSingleton();
@@ -1520,13 +1157,12 @@ export async function closeProcess() {
   }
 }
 // ---- 单例挂载（原 tools/dsh-run.js 的 mountSingleton 迁入本模块；g.startWebHost 已在上方
-// startWebHostFromPlugin 处单独赋值，这里只挂其余生命周期能力——closeProcess / collectDiagnostics /
+// startWebHostFromPlugin 处单独赋值，这里只挂其余生命周期能力——closeProcess /
 // updateDsh / installDeps / verifyDeps / checkDshUpdate）。routes/webui.js、index.js、tools/dsh-*.js 均经
 // globalThis 单例调用，不静态 import 本模块（见文件头「分发形态」）。
 const mountLifecycle = () => {
   const g = getSingleton();
   g.closeProcess = closeProcess;
-  g.collectDiagnostics = collectWebDiagnostics;
   g.installDeps = installDepsFromPlugin;
   g.verifyDeps = verifyDepsSmoke;
   return g;
