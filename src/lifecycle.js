@@ -1385,36 +1385,48 @@ function buildProcessDiagCheck(g, out) {
       (lastExit.stderr ? "\n[stderr 尾部] " + lastExit.stderr : "");
     check.fix = "点击本卡片「手动启动 web host」按钮重新拉起，或重启 Hana";
   } else {
-    // 启动失败（webLastError）：展示失败原因（其已含 stderr 尾部）+ 修复指引
+    // 启动失败（webLastError）：展示失败原因（其已含 stderr 尾部）+ 修复指引。
+    // depsVerified 传入 pickProcessFix：升级缓存残留判定需依赖运行级验证通过为前提
+    // （CodeRabbit：安装不完整也报 ENOENT，只提示重启会留下坏安装；见函数内注释）
     check.detail = lastError
       ? "启动失败：" + lastError
       : "进程已退出（code=" +
         (exitCode ?? "?") +
         "）" +
         (stderr ? "\n[stderr 尾部] " + stderr : "");
-    check.fix = pickProcessFix(lastError, stderr, port);
+    check.fix = pickProcessFix(
+      lastError,
+      stderr,
+      port,
+      g.deps?.result?.ok === true,
+    );
   }
   return check;
 }
 
 /** 进程失败修复指引：按失败原因内容匹配（依赖 / 升级缓存残留 / 端口占用），兜底通用建议。
  * 同时匹配 webLastError 与 stderr 尾部——端口占用等错误常只出现在 stderr（进程退出时
- * webLastError 可能未携带 stderr 尾部，见「进程已退出」分支）。 */
-function pickProcessFix(lastError, stderr, port) {
+ * webLastError 可能未携带 stderr 尾部，见「进程已退出」分支）。
+ * depsVerified：依赖运行级验证是否通过（调用方从 g.deps.result.ok 取）——升级缓存残留
+ * 判定以此为门控，见下方注释。 */
+function pickProcessFix(lastError, stderr, port, depsVerified) {
   const text = (lastError || "") + "\n" + (stderr || "");
   // 跨 dsh 版本升级缓存残留（spec「升级 dsh = 装新插件包 + 重启宿主」既定流程，无豁免层）：
   // 宿主进程内 ESM import 缓存 key 跨版本稳定，热加载新插件后仍命中旧 dsh 模块，boot 读
-  // 已删旧 .pnpm 路径 ENOENT。特征 = 错误含 ENOENT/no such file/Cannot find 且路径指向
-  // .pnpm/@deepseek-ai+dsh@（真实样本 2026-09-02：alpha.10 热加载 boot ENOENT 旧 .pnpm 目录）。
-  // 重启即愈——提示说人话，不给「检查依赖项/重装」误导（依赖其实已就绪）。
+  // 已删旧 .pnpm 路径 ENOENT。特征 = 依赖已验证就绪（depsVerified）+ 错误含 ENOENT/no
+  // such file/Cannot find + 路径指向 .pnpm/@deepseek-ai+dsh@（真实样本 2026-09-02：alpha.10
+  // 热加载 boot ENOENT 旧 .pnpm 目录）。depsVerified 门控必须：安装不完整/依赖图缺失同样
+  // 报 ENOENT + .pnpm 路径，那种情况重启不愈（磁盘仍坏），只给重启提示会误导——验证不
+  // 过时落下方依赖分支（自动补齐）。
   if (
+    depsVerified === true &&
     /(?:ENOENT|no such file|cannot find)/i.test(text) &&
     /\.pnpm[\\/]@deepseek-ai\+dsh@/i.test(text)
   ) {
     return "检测到 dsh 已跨版本升级，当前 Hana 进程仍持有升级前的旧模块缓存：请重启 Hana 加载新版本（dsh 升级后需重启为既定流程，无需其它操作）";
   }
   if (/dsh 包未就绪|DSH 包未就绪|cliBin|npm i/i.test(text)) {
-    return "按上方「DSH 依赖安装」项修复（依赖自动按插件声明安装并验证，完成后自动重试启动 web host）";
+    return "依赖未就绪：自动安装链会按插件声明补齐并运行级验证，完成后自动重试启动 web host；若持续失败请查看上方依赖诊断详情";
   }
   if (/EADDRINUSE|address already in use|占用|bind/i.test(text)) {
     return "检查端口 " + port + " 是否被占用（释放后重启 Hana）";
