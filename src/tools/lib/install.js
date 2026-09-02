@@ -15,7 +15,6 @@
 // 容错纪律：函数内部失败返回 { ok:false, error } 结构不抛出（调用方按需降级）；
 // 日志/写入失败静默（不阻断主流程）。注释风格保持宿主侧（中文/双引号/分号）。
 
-import { spawn } from "node:child_process";
 import {
   readFileSync,
   existsSync,
@@ -500,8 +499,9 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir, opts = {}) {
       declaredVersion &&
       installedVersion === declaredVersion
     ) {
-      // 幂等跳过前必须运行级重验（CodeRabbit：cliBin 存在 ≠ 依赖图完整——声明版本一致
-      // 但运行时包缺失时不能报「已安装成功」；smoke 失败 fall through 走重装流程）。
+      // 幂等跳过前经 verifyDepsSmoke 确认（去 spawn 2026-09-02 后为静态核对：cliBin +
+      // 磁盘版本与声明一致——与上方幂等条件同源，实为 result/pnpm 状态刷新 + pnpm 引导
+      // 自愈检查；核对不过 fall through 走重装流程）。
       const smoke = await verifyDepsSmoke(cfg, { force: true });
       if (smoke && smoke.ok) {
         milestone("已安装 dsh@" + installedVersion + "（与声明一致），跳过安装");
@@ -710,8 +710,8 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir, opts = {}) {
     }
     g.deps.error = null;
     milestone("[完成] " + cliBin);
-    // 部署成功后强制运行级重验（清旧缓存，await 刷新——安装流程本身就是等待场景）；
-    // verifyDepsSmoke 会把 g.deps.result 刷新为最新 smoke（含 status running→ok/error）
+    // 部署成功后强制静态核对（刷新 result/pnpm 状态——安装流程本身就是等待场景）；
+    // verifyDepsSmoke 会把 g.deps.result 刷新为最新核对结果（含 status → ok/error）
     g.deps.result = null;
     await verifyDepsSmoke(cfg, { force: true });
     // 安装链路终态 ok（终态保留；verify 若失败其详情在 g.deps.result，不影响安装结论）——
@@ -756,23 +756,24 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir, opts = {}) {
   }
 }
 
-// ---- 依赖运行级完整性验证（deps 存在性之外的加载冒烟）----
-// dsh 是 cordis 生态，模块图挂大量 peer 依赖（dsh-agent/dsh-llm-deepseek/dsh-tool-* 等）：
-// pnpm add 中断 / install script 失败未回滚 / --omit=peer 误用都会造成「入口文件在、依赖缺」
-// 的假就绪，运行时才抛 ERR_MODULE_NOT_FOUND。文件存在 ≠ 依赖完整。
-// 可靠检测 = 运行级验证「node <cliBin> --version」：node 沿 import 图加载整个 cordis 模块树，
-// 任何依赖缺失都会抛错且退出码非 0（技能文档「部署后验证 node lib/bin.js --version 应输出
-// 0.1.0-rc.6」同款逻辑）。能跑 = 依赖图完整。
-// 防并发/防轮询风暴：结果缓存到单例分组 g.deps.result = { ok, version, error, stderr, at,
-// running, pnpm* }（v0.24 状态收敛：旧 g.depsSmoke 平铺字段并入 g.deps.result 复合对象）；
-// running 标志映射进 g.deps.status === "running"，进行中直接返回当前缓存不重复 spawn
-// （spawn 一次 --version 数百 ms，3s 轮询 × 每次 spawn 不可接受，必须缓存 + running 标志）。
-// 触发时机：进标签页自动一次 +
-// 手动「检测依赖」按钮（经 GET /webui/verify-deps 驱动）/ installDeps 部署成功后强制重验。
-// v0.18.2: 叠加 pnpm 引导检查（独立子项）——与 dsh 冒烟并行调 ensurePnpm（幂等：缓存
-// 完整直接返回，缺失/损坏自动重新下载自愈），结果记 pnpmReady / pnpmVersion / pnpmError。
-// 不进 smoke.ok 的 dsh 依赖就绪判定（web host 启动不依赖 pnpm，patch 已降级）；仅作
-// deps 卡片「pnpm 引导：就绪/未就绪」独立展示行。
+// ---- 依赖完整性核对（静态：存在性 + 版本与声明一致；去 spawn 2026-09-02）----
+// 历史：v0.8.7 起为运行级冒烟（spawn node cliBin --version 验依赖图可加载）。退役理由：
+// ① 冒烟 spawn 独立进程、绕开宿主 ESM 缓存，验的是「干净进程可加载」——与真实故障
+//    （进程内缓存命中旧版、boot 读已删 .pnpm 路径）不同路：验过 ≠ 能跑，实装验证多次
+//    出现「验证通过（依赖绿）+ boot 失败 ENOENT（升级残留）」的两张皮；
+// ② 磁盘完整性由 pnpm install 退出 0 保证（事务性；历史假就绪均来自 pnpm 异常中断，
+//    现已被 install 失败路径 + errorClass 分类捕获）；可运行性由 boot（进程内同路，
+//    命中缓存与否如实反映）裁决——运行级验证夹在中间无独立价值，spawn 面收敛只留
+//    pnpm install（D6：诊断/工具不 import cordis/pnpm）。
+// 现职责：静态核对 cliBin 存在 + 磁盘版本 === 插件声明（秒回，无子进程、无 running
+// 窗口）。pnpm 引导检查保留（ensurePnpm 幂等自愈，文件下载/校验不 spawn）。
+// 结果缓存到单例分组 g.deps.result = { ok, version, error, at, running, pnpm* }（
+// v0.24 状态收敛：旧 g.depsSmoke 平铺字段并入）；防并发守卫保留（兼容 running/installing
+// 语义，静态后 running 窗口消失）。
+// 触发时机：进标签页自动一次 + 手动「检测依赖」按钮（GET /webui/verify-deps）/ installDeps
+// 部署成功后强制重验（opts.force）。
+// pnpm 引导状态（pnpmReady/pnpmVersion/pnpmError）为独立子项，不进 ok 判定（web host
+// 启动不依赖 pnpm）；仅作 deps 卡片「pnpm 引导：就绪/未就绪」独立展示行。
 export async function verifyDepsSmoke(cfg, opts = {}) {
   const g = getSingleton();
   // 防并发：验证进行中直接返回当前缓存（不重复 spawn）——running 标志映射进 g.deps.status
@@ -827,8 +828,7 @@ export async function verifyDepsSmoke(cfg, opts = {}) {
   g.deps.result = smoke;
   g.deps.status = "running";
   notifyDepsChanged();
-  // pnpm 引导检查（与 dsh 运行级验证并行，互不拖累）：verifyDepsSmoke 虽是运行级
-  // 只读检测，但 pnpm 检查允许自愈——ensurePnpm 幂等：缓存完整（sha256 一致）直接
+  // pnpm 引导检查（与静态核对并行，互不拖累）：pnpm 检查允许自愈——ensurePnpm 幂等：缓存完整（sha256 一致）直接
   // 返回（快速路径），缺失/损坏自动重新下载（网络操作无副作用）。dataDir 显式传入
   // （与 installDepsFromPlugin 同约定，见 pnpm.js resolveDataDir；patch 渲染已不再
   // 依赖 pnpm——v0.18.2 起版本检查改 HTTP 直查 npm registry）。
@@ -849,60 +849,41 @@ export async function verifyDepsSmoke(cfg, opts = {}) {
     }
   })();
   try {
+    // 静态核对（去 spawn）：cliBin 存在 + 磁盘版本 === 插件声明。磁盘完整性由 pnpm
+    // install 保证、可运行性由 boot 裁决（见函数头注释），这里只核对「装没装对」。
     if (!existsSync(cliBin)) throw new Error("cliBin 不存在：" + cliBin);
-    slog("开始（cliBin=" + cliBin + "）");
-    // spawn node cliBin --version，10s 超时兜底（child.kill）；capture stdout+stderr
-    // node 执行体每次 spawn 前解析（自定义 nodejsPath 或默认 Electron node）
-    const child = spawn(resolveNodeExec(diagCfg), [cliBin, "--version"], {
-      cwd: dirname(cliBin),
-      stdio: ["ignore", "pipe", "pipe"],
-      env: resolveNodeExecEnv(diagCfg),
-      windowsHide: true,
-    });
-    let out = "";
-    let err = "";
-    child.stdout.on("data", (d) => {
-      out = (out + String(d)).slice(-800);
-    });
-    child.stderr.on("data", (d) => {
-      err = (err + String(d)).slice(-800);
-    });
-    const timer = setTimeout(() => {
-      try {
-        child.kill();
-      } catch {
-        /* 已退出 */
-      }
-    }, 10000);
-    const code = await new Promise((res) => child.once("close", res));
-    clearTimeout(timer);
-    const stdout = out.trim();
-    // 提取完整版本（含 -rc.x 预发布后缀）：旧正则只抓 major.minor.patch，
-    // 把 0.1.1-rc.1 截断成 0.1.1，与最新版 0.1.1-rc.2 比较时被当作「正式版已最新」，
-    // 导致 rc 版永远判不到可更新（回归过两次，勿再截断）
-    const version =
-      (stdout.match(/^\s*(\d+\.\d+\.\d+(?:-[\w.]+)?)/) || [])[1] || null;
-    if (code === 0 && version) {
-      smoke.ok = true;
-      smoke.version = version;
-      smoke.error = "";
-      smoke.stderr = err.slice(-400);
-      slog("通过（version=" + version + "）");
+    slog("静态核对（cliBin=" + cliBin + "）");
+    const declared = readDeclaredDshVersion();
+    const installed = readDshInstalledVersion(diagCfg);
+    if (!declared)
+      throw new Error(
+        "插件声明缺少合法 dsh 版本（dependencies 未声明或非法）",
+      );
+    if (!installed) throw new Error("dsh 包版本读取失败：" + cliBin);
+    // 声明若是合法 dist-tag（非 semver 形态）则无法版本对账——存在即视为一致（安装按
+    // 声明拉取由 install 保证）；固定版本声明（现役形态）做严格比对
+    const declaredIsSemver = /^\d+\.\d+\.\d+(?:-[\w.]+)?$/.test(declared);
+    if (declaredIsSemver && installed !== declared) {
+      smoke.error =
+        "磁盘 dsh@" +
+        installed +
+        " ≠ 插件声明 " +
+        declared +
+        "（需重新安装依赖）";
+      slog("不一致（磁盘 " + installed + " ≠ 声明 " + declared + "）");
     } else {
-      // 真实错误（ERR_MODULE_NOT_FOUND 等）截断 ≤400 存入 error
-      smoke.ok = false;
-      smoke.error = String(err || out || "退出码 " + code).slice(0, 400);
-      smoke.stderr = String(err || out).slice(-400);
-      slog("失败（exit=" + code + "）：" + String(smoke.error).slice(0, 200));
+      smoke.ok = true;
+      smoke.version = installed;
+      slog("通过（version=" + installed + ", 与声明一致）");
     }
   } catch (e) {
     smoke.ok = false;
     smoke.error = String(e?.message || e).slice(0, 400);
     slog("异常：" + String(smoke.error).slice(0, 200));
   } finally {
-    // 等 pnpm 检查收尾（自愈下载可能比 dsh 冒烟慢；pnpmTask 内部已 catch，不抛）。
-    // 若只 await dsh 冒烟，冷启动首次 verify 会带着 pnpmReady=false 返回，前端展示
-    // 「未就绪」误导——自愈路径（删缓存后 verify）须等下载完成再定格结果。
+    // 等 pnpm 检查收尾（自愈下载可能比静态核对慢；pnpmTask 内部已 catch，不抛）。
+    // 若不等它，首次 verify 会带着 pnpmReady=false 返回，前端展示「未就绪」误导——
+    // 自愈路径（删缓存后 verify）须等下载完成再定格结果。
     await pnpmTask;
     smoke.at = new Date().toISOString();
     smoke.running = false;

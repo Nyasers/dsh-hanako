@@ -471,8 +471,9 @@ export function ensureDshanaProfile(cfg) {
 // dsh-pkg/ 优先（Agent npm i @deepseek-ai/dsh 部署的轻量分发形态），插件安装目录
 // node_modules 兑底（现役 zip 自带形态）。DSH_HOME 恒在数据目录。
 // 唯一形态 = 宿主进程内 runProfile() boot dshana（webserver 保留在进程内 bind 端口）。
-// 诊断/安装面仍保留 spawn（verifyDepsSmoke 冒烟 + pnpm install 子进程——D6 解耦：
-// 诊断与工具包不 import cordis/pnpm，见 lib/install.js / lib/pnpm.js）。
+// 子进程面收敛（2026-09-02 去 spawn）：仅 pnpm install 保留子进程（D6 解耦——安装需
+// 独立进程跑 pnpm；依赖完整性验证已静态化（见 lib/install.js verifyDepsSmoke），运行
+// 级裁决由进程内 boot 承担）。
 
 // ---- T7b 进程内 boot：dsh 模块动态定位（解耦 D6）----
 // dsh 包位置 = 插件 node_modules（vY T7d：dsh-pkg 独立安装区已退役，依赖收进插件
@@ -1278,24 +1279,24 @@ function buildDepsDiagCheck(g, cfg) {
       (checked.length > 1 ? "（已检查 " + checked.join("、") + "）" : "");
     if (installError) check.detail += "\n[上次安装失败] " + installError;
     check.fix =
-      "依赖缺失：点击本卡片「安装依赖」按钮自动按插件声明安装依赖（完成后自动运行级验证）；或确认插件目录 node_modules 解压完整";
+      "依赖缺失：点击本卡片「安装依赖」按钮自动按插件声明安装依赖（完成后自动核对）；或确认插件目录 node_modules 解压完整";
   } else if (!smoke) {
     // 未检测过（进标签页自动检测一次 / 手动「检测依赖」；ok 暂算 installed）
-    check.detail = "DSH 包已就绪，点击「检测依赖」验证依赖完整性";
+    check.detail = "DSH 包已就绪，点击「检测依赖」核对完整性";
   } else if (verifyRunning) {
-    // 检测进行中：ok 暂 true，结果由检测接口返回后刷新
-    check.detail = "正在检测依赖完整性…";
+    // 检测进行中（静态核对瞬时完成，此分支实际罕见；保留兼容 running 语义）
+    check.detail = "正在检测依赖…";
   } else if (!smoke.ok) {
-    // 存在但验证失败：依赖图不完整（ERR_MODULE_NOT_FOUND 等真实错误）
+    // 存在但核对失败（cliBin 缺失 / 版本与声明不一致，error 为原因）
     check.detail =
-      "DSH 包存在但依赖不完整：" +
-      (verifyError ? "\n" + verifyError : "运行级验证失败");
+      "DSH 包核对失败：" +
+      (verifyError || smoke.error || "未知原因（版本与声明不一致？）");
     check.fix =
-      "点击本卡片「重新安装依赖」按钮重新按插件声明安装（完成后自动运行级验证）";
+      "点击本卡片「重新安装依赖」按钮重新按插件声明安装（完成后自动核对）";
   } else {
-    // 存在 + 验证通过：能跑 = 依赖图完整
+    // 存在 + 核对通过（静态：磁盘版本 === 插件声明）——能跑与否由 boot 进程内裁决
     check.detail =
-      "DSH 包已就绪（运行级验证通过，版本 v" +
+      "DSH 包已就绪（与插件声明一致，版本 v" +
       (currentVersion || smoke?.version || "?") +
       "）：" +
       cliBin;
@@ -1430,7 +1431,7 @@ function pickProcessFix(lastError, stderr, port, depsOk) {
     return "检测到 dsh 已跨版本升级，当前 Hana 进程仍持有升级前的旧模块缓存：请重启 Hana 加载新版本（dsh 升级后需重启为既定流程，无需其它操作）";
   }
   if (/dsh 包未就绪|DSH 包未就绪|cliBin|npm i/i.test(text)) {
-    return "依赖未就绪：自动安装链会按插件声明补齐并运行级验证，完成后自动重试启动 web host；若持续失败请查看上方依赖诊断详情";
+    return "依赖未就绪：自动安装链会按插件声明补齐并核对，完成后自动重试启动 web host；若持续失败请查看上方依赖诊断详情";
   }
   if (/EADDRINUSE|address already in use|占用|bind/i.test(text)) {
     return "检查端口 " + port + " 是否被占用（释放后重启 Hana）";
