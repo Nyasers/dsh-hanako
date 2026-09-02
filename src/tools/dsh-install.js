@@ -7,11 +7,12 @@
 // g.installDeps / g.verifyDeps 调用）的 Agent 入口：
 //   action=install（默认）：按插件根 package.json 声明版本 pnpm install --prod（
 //     dsh-pkg 退役——依赖装进插件根 node_modules；registry 官方源失败自动重试
-//     npmmirror + 自动运行级重验）→ 完成后 autoStart（默认 true：
+//     npmmirror + 自动静态核对）→ 完成后 autoStart（默认 true：
 //     web host 未起时经 g.startWebHost 拉起，失败不阻断结果上报；已起跳过）→
 //     { installed: true, version, autoStart 结果 }。
-//   action=verify：检测依赖完整性（g.verifyDeps：node cliBin --version 冒烟，能跑 =
-//     依赖图完整）→ { verified, version, error? }。
+//   action=verify：检测依赖完整性（g.verifyDeps 静态核对：cliBin 存在 + 磁盘版本 === 插件
+//     声明，秒回无子进程——去 spawn 2026-09-02，运行级裁决由 boot 进程内承担）→ { verified,
+//     version, error? }。
 // 默认异步：立即返回 + 渲染「安装卡片」（/card/dep，见 routes/card.js /ops/dep-stream，
 // 数据源 = 宿主单例 g.depTasks + g.deps.log 实时日志），完成/失败经宿主 deferred
 // 通道唤醒 Agent 带回结果；wait=true 同步等待直接返回。
@@ -37,7 +38,7 @@ function pkgTargetText() {
 
 function buildVerifyText(r) {
   if (r?.ok) {
-    return "DSH 依赖检测：通过（能跑 = 依赖图完整），版本 v" + (r.version || "?") + "。";
+    return "DSH 依赖检测：通过（磁盘版本与插件声明一致），版本 v" + (r.version || "?") + "。";
   }
   return "DSH 依赖检测：失败" + (r?.error ? "（" + r.error + "）" : "") + "。可执行 dsh_install(action='install') 安装依赖，或查看 DSHana 标签页 deps 卡片。";
 }
@@ -61,8 +62,8 @@ function buildInstallText(r) {
 export const name = "dsh_install";
 
 export const description =
-  "安装/验证 DeepSeek Harness（DSH）依赖两合一：action=install（默认）按插件声明版本 pnpm install --prod（dsh-pkg 退役——依赖装进插件根 node_modules，无 version/tag 逃生门；registry 兜底 + 自动运行级重验 + autoStart 拉起 web host，渲染安装卡片）；" +
-  "action=verify 只检测依赖完整性（运行级冒烟，只读）。" +
+  "安装/验证 DeepSeek Harness（DSH）依赖两合一：action=install（默认）按插件声明版本 pnpm install --prod（dsh-pkg 退役——依赖装进插件根 node_modules，无 version/tag 逃生门；registry 兜底 + 自动静态核对 + autoStart 拉起 web host，渲染安装卡片）；" +
+  "action=verify 只做静态完整性核对（cliBin 存在 + 磁盘版本与声明一致，只读秒回）。" +
   "版本严格锁插件 package.json 声明（更新 dsh = 更新插件发版，无独立升级通道）。" +
   "适用场景：dsh_session create 报「DSH 包未就绪」、DSHana 标签页依赖缺失。" +
   "默认异步：后台执行 + 完成回调，wait=true 同步；安装进行中重复调用返回状态不重复执行。" +
@@ -75,7 +76,7 @@ export const parameters = {
       type: "string",
       enum: ["install", "verify"],
       description:
-        "install=安装依赖（默认，按插件声明版本 pnpm install --prod 到插件 node_modules，registry 兜底 + 自动重验 + autoStart）；verify=只检测依赖完整性（运行级冒烟，只读）",
+        "install=安装依赖（默认，按插件声明版本 pnpm install --prod 到插件 node_modules，registry 兜底 + 自动核对 + autoStart）；verify=只做静态完整性核对（cliBin + 版本 vs 声明，只读）",
     },
     wait: {
       type: "boolean",
@@ -268,7 +269,7 @@ async function doExecute(input, ctx) {
     content: [
       {
         type: "text",
-        text: "DSH 依赖安装已在后台执行（" + pkgTargetText() + "，registry 兜底 + 自动运行级重验），完成后后台消息带回结果；进度与实时日志见上方安装卡片",
+        text: "DSH 依赖安装已在后台执行（" + pkgTargetText() + "，registry 兜底 + 自动静态核对），完成后后台消息带回结果；进度与实时日志见上方安装卡片",
       },
     ],
     details: {

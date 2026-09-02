@@ -268,7 +268,7 @@ export default class DshHanakoPlugin {
               "hana",
               r.skipped
                 ? "依赖已就绪（与声明一致，跳过安装）"
-                : "依赖安装完成（pnpm install --prod，registry 兜底 + 运行级重验）",
+                : "依赖安装完成（pnpm install --prod，registry 兜底 + 自动核对）",
             );
           } else if (r && r.state === "installing") {
             // 并发窗口：他人路径（dsh_install 工具/标签页）正在安装，等其落终态
