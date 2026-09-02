@@ -345,8 +345,8 @@
           });
         }
         function hanaApiUrl(path) {
-          var base = String(api || "").replace(//+$/, "");
-          var p = String(path || "").replace(/^/+/, "");
+          var base = String(api || "").replace(/\/+$/, "");
+          var p = String(path || "").replace(/^\/+/, "");
           return location.origin + base + "/" + p;
         }
         return {
@@ -579,13 +579,16 @@
       }
       function startRetryClock() {
         if (retryClock) { clearInterval(retryClock); retryClock = null; }
-        if (!boot || boot.nextRetryAt == null) return;
+        var bb0 = boot && boot.boot ? boot.boot : null;
+        if (!bb0 || bb0.nextRetryAt == null) return;
         var el = document.getElementById("retryAtText");
         if (!el) return;
         retryRefreshed = false;
         function tick() {
-          if (!boot || boot.nextRetryAt == null) return;
-          var left = boot.nextRetryAt - Date.now();
+          var bb = boot && boot.boot ? boot.boot : null;
+          if (!bb || bb.nextRetryAt == null) return;
+          var at = bb.nextRetryAt;
+          var left = at - Date.now();
           if (left <= 0) {
             el.textContent = "（时间到，正在自动重试…）";
             if (!retryRefreshed) {
@@ -594,9 +597,8 @@
             }
             return;
           }
-          var bb = boot.boot || {};
           var n = bb.attempt || 0;
-          el.textContent = fmtClock(boot.nextRetryAt) + "（约 " + fmtDelay(left) + " 后，第 " + (n + 1) + " 次）";
+          el.textContent = fmtClock(at) + "（约 " + fmtDelay(left) + " 后，第 " + (n + 1) + " 次）";
         }
         tick();
         retryClock = setInterval(tick, 1000);
