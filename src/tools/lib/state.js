@@ -170,6 +170,10 @@ export function getSingleton() {
   if (g.deps.status === undefined) g.deps.status = "idle";
   if (g.deps.result === undefined) g.deps.result = null;
   if (g.deps.error === undefined) g.deps.error = null;
+  // T1 错误分类（spec：dsh-deps-zero-intervention）：install 失败后存 { errorClass,
+  // guidance } 对象（见 lib/errclass.js 模块头）；默认 null = 无失败分类（成功/从未
+  // 失败/新一次安装尝试中）。热更新兼容：旧 globalThis 对象缺该字段时兜底。
+  if (g.deps.errorClass === undefined) g.deps.errorClass = null;
   if (g.deps.time === undefined) g.deps.time = null;
   if (g.deps.log === undefined) g.deps.log = "";
   // 共享依赖操作互斥（vX）：tools/dsh-install.js 的 install/update 动作共用——任一
