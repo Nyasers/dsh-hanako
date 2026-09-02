@@ -192,7 +192,13 @@ export default class DshHanakoPlugin {
         );
       }
     }
+    // 卸载/重载标记：runStartupAutoChain 可能挂起数十秒至数分钟（等待挂载/等并发安装/
+    // 安装本身），期间插件可能被卸载/重载。卸载清理（closeProcess）执行后自动链若继续
+    // 会重新拉起 web host，残留悬挂服务；此标记在清理回调置位，自动链在依赖安装前与
+    // startWebHost 前各查一次（CodeRabbit），卸载即放弃。
+    let unloaded = false;
     this.register(() => {
+      unloaded = true;
       if (g && typeof g.closeProcess === "function") {
         Promise.resolve(g.closeProcess()).catch(() => {});
       }
@@ -243,6 +249,8 @@ export default class DshHanakoPlugin {
     // 随首次工具调用启动）。依赖安装段 catch 全部错误不抛出（记日志），web host
     // 启动段双参 .then 吞掉 reject，本函数不向外抛——waitMount 链永不因启动失败炸。
     const runStartupAutoChain = async () => {
+      // 插件已卸载/重载（清理回调已置位）：放弃自动链，不再装依赖/起 host
+      if (unloaded) return;
       // 启动前依赖自动安装（与 startWebHost 同一后台链，先后执行）
       try {
         if (typeof g.installDeps !== "function") {
@@ -289,6 +297,12 @@ export default class DshHanakoPlugin {
           "启动前依赖自动安装异常：" + (e?.message || String(e)),
         );
       }
+      // 依赖工作（含并发等待/长安装）期间可能已卸载：清理回调已回收 web host，
+      // 这里不再启动（否则卸载后残留悬挂服务）。
+      if (unloaded) {
+        g.appendLog?.("hana", "插件已卸载/重载，跳过 web host 启动");
+        return;
+      }
       // fire-and-forget：不 await 端口就绪（避免 ensureWebHost 60s 等拖住宿主启动）。
       // startWebHostFromPlugin 内部已 try/catch 记 webLastError 返回布尔，这里双兜底。
       await Promise.resolve(g.startWebHost(config, dataDir)).then(
@@ -319,6 +333,8 @@ export default class DshHanakoPlugin {
       if (initial) return true;
       const deadline = Date.now() + 60000;
       while (Date.now() < deadline) {
+        // 卸载/重载：放弃等待（runStartupAutoChain 入口同样拦截，这里提前退出免空转）
+        if (unloaded) return false;
         await new Promise((r) => setTimeout(r, 1000));
         if (g && typeof g.startWebHost === "function") return true;
       }
@@ -337,6 +353,7 @@ export default class DshHanakoPlugin {
         }
         const ready = await ensureMounted(mounted);
         if (!ready) {
+          if (unloaded) return; // 卸载/重载：静默放弃（不误报"未加载"）
           log.warn(
             "[dsh-hanako] 60s 内工具模块仍未加载，DSH web host 将随首次工具调用启动",
           );
