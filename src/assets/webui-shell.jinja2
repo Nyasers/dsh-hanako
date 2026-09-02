@@ -175,6 +175,13 @@
       overflow: auto
     }
 
+    /* 进程错误全文滚动区（诊断第一手材料不截断——错误首行特征与完整堆栈需可读，实装 2026-09-02） */
+    .diag-errorlog {
+      max-height: 200px;
+      color: var(--danger, #A03028);
+      background: var(--accent-light, rgba(83, 125, 150, 0.08))
+    }
+
     .diag-progress-time {
       font-size: 11px;
       color: var(--text-muted, #6B6158);
@@ -463,6 +470,7 @@
           + (d.key === "deps" && d.version ? '<div class="diag-detail">' + escHtml(versionLine(d)) + '</div>' : "") // deps 版本行（当前已装版本；最新版本/可更新状态见设置页「检查与更新 DSH」卡片）
           + (d.key === "deps" && d.pnpmChecked ? '<div class="diag-detail">' + escHtml(pnpmLine(d)) + '</div>' : "") // deps 卡片 pnpm 引导状态行（独立子项，不进依赖就绪判定）
           + (d.detail ? '<div class="diag-detail">' + escHtml(d.detail) + '</div>' : "")
+          + (d.key === "process" && d.errLog ? '<pre class="diag-progress diag-errorlog">' + escHtml(d.errLog) + '</pre>' : "") // 进程错误全文滚动区（不截断：错误首行特征可诊断，实装 2026-09-02）
           + (d.key === "deps" && d.installing ? progressHtml(d) : "") // 安装实时进度
           + (d.key === "deps" && d.updating ? updateProgressHtml(d) : "") // 更新进度/结果（更新由设置页触发，web host 停机期间被动展示）
           + (d.key === "process" && d.logPath ? '<div class="diag-logpath">本次会话日志：' + escHtml(d.logPath) + '</div>' : "") // 时间戳会话日志路径件路径

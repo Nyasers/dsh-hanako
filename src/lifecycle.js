@@ -54,6 +54,10 @@ import {
   rmSync,
   rmdirSync,
   readdirSync,
+  statSync,
+  openSync,
+  readSync,
+  closeSync,
 } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
@@ -678,6 +682,10 @@ export async function ensureWebHost(cfg) {
     }
     g.web = null;
   }
+  // 新启动尝试开始：作废旧退出记录（webLastExit 只反映「最近一次进程退出」；本次尝试
+  // 失败会更新 webLastError，诊断应走启动失败分支而非旧退出分支——否则 lastExit 遮蔽
+  // 当前失败，pickProcessFix 指引丢失。CodeRabbit PR #53）
+  g.webLastExit = null;
   if (!cfg.dshPkgDir) cfg.dshPkgDir = resolveDshPkgDir(cfg);
 
   const pkgDir = cfg.dshPkgDir;
@@ -1306,6 +1314,29 @@ function buildDepsDiagCheck(g, cfg) {
 /** ② DSH 进程：单例 web 状态（child/exitCode/ready/stderr 尾部）+ webLastError/webLastErrorAt + webLastExit
  * v0.8.5: webLastExit 为单例持久退出记录（进程被外部杀掉时 g.web 已摘除，凭它区分
  * 「已退出」而非误报「尚未启动」）；只在 ensureWebHost 成功拉起新进程（ready）时清掉。 */
+// 会话日志尾部读取（诊断滚动区数据源）：错误行/堆栈本来就逐行写进会话日志文件
+// （emitLog 行规范化，见文件头「统一日志」）——单一事实源 = 日志文件，不为 UI 在
+// 内存另存副本（实装 2026-09-02 指示）。失败态诊断读尾部 ≤maxBytes 供界面滚动渲染：
+// openSync + readSync 只读尾部（不整文件读入）；路径缺失/读失败静默返回 ""（无滚动区）。
+function readLogTail(logPath, maxBytes) {
+  try {
+    if (!logPath || !existsSync(logPath)) return "";
+    const st = statSync(logPath);
+    if (!st || st.size <= 0) return "";
+    const len = Math.min(st.size, maxBytes || 16384);
+    const fd = openSync(logPath, "r");
+    try {
+      const buf = Buffer.alloc(len);
+      readSync(fd, buf, 0, len, st.size - len);
+      return buf.toString("utf8");
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return "";
+  }
+}
+
 function buildProcessDiagCheck(g, out) {
   const web = g.web || null;
   const child = web?.child || null;
@@ -1320,6 +1351,10 @@ function buildProcessDiagCheck(g, out) {
   const exitCode = inproc ? null : child?.exitCode ?? lastExit?.code ?? null;
   const stderr = String(web?.stderr || lastExit?.stderr || "").slice(-800); // stderr 尾部截断 ≤800
   const lastError = String(g.webLastError || "").slice(-800);
+  // 完整错误原文（不截断，供修复指引匹配）：存储端已限 message≤1500 + stderr≤800（见
+  // startWebHostFromPlugin catch）。匹配不依赖截断窗口——长错误被 slice(-800) 截尾会丢
+  // 掉首行的错误特征（错误码/路径在头部），实装验证 2026-09-02 曾因此落兑底文案误导。
+  const lastErrorFull = String(g.webLastError || "");
   const lastErrorAt = g.webLastErrorAt || "";
   // 本次会话日志路径（当前 web / 退出记录 / 失败记录，三级兜底）
   const logPath = web?.logPath || lastExit?.logPath || g.webLastLogPath || null;
@@ -1383,22 +1418,28 @@ function buildProcessDiagCheck(g, out) {
       lastExit.at +
       "）" +
       (lastExit.stderr ? "\n[stderr 尾部] " + lastExit.stderr : "");
+    // 进程退出现场：日志尾部滚动查看（stderr 展示截断 ≤800，全文在会话日志）
+    check.errLog = readLogTail(logPath, 16384);
     check.fix = "点击本卡片「手动启动 web host」按钮重新拉起，或重启 Hana";
   } else {
-    // 启动失败（webLastError）：展示失败原因（其已含 stderr 尾部）+ 修复指引。
+    // 启动失败（webLastError）：detail 摘要取错误首行（错误码在头部，一眼可读）；
+    // errLog = 会话日志尾部（错误行与堆栈本来逐行写进日志，滚动区直接显示日志，不为
+    // UI 另存内存副本）；完整日志路径 logPath 已展示，可跳全文。
     // depsOk 传入 pickProcessFix：升级缓存残留判定需依赖「当前可用」为前提——取本次诊断
     // deps 项的 ok（= installed && 无明确验证失败，见 buildDepsDiagCheck），而非 verified：
     // verified（installed && smoke.ok）在 verify 进行中会被瞬时置 false（running 窗口
     // smoke 重置为 ok:false），此时 boot 失败 ENOENT 会误落兑底；ok 含当前 installed 硬
     // 条件（包被移除不判残留，CodeRabbit PR #51）且 running/未验证暂通过不误杀
-    check.detail = lastError
-      ? "启动失败：" + lastError
+    const errHead = (lastErrorFull.split("\n")[0] || lastError || "").slice(0, 300);
+    check.detail = lastErrorFull || lastError
+      ? "启动失败：" + errHead
       : "进程已退出（code=" +
         (exitCode ?? "?") +
         "）" +
         (stderr ? "\n[stderr 尾部] " + stderr : "");
+    check.errLog = readLogTail(logPath, 16384);
     check.fix = pickProcessFix(
-      lastError,
+      lastErrorFull || lastError,
       stderr,
       port,
       out.checks.find((c) => c.key === "deps")?.ok === true,
