@@ -225,6 +225,9 @@ function submitTask(
     // 故 resume 分支先 session.list 查目标会话已有 cwd（忽略用户传入的 cwd——resume 语义即沿用会话）。
     // agentPreset 无值不传（缺省走 web host 默认，Web UI 可调）
     let createPayload;
+    // 生效 cwd（宿主 task 注册元数据用）：create = 用户显式传的 cwd；resume =
+    // 会话已有 cwd（send 不传 cwd 时由 session.list 查回）。resume 分支赋值。
+    let effectiveCwd = String(cwd ?? "").trim();
     if (resumeSessionId) {
       const list = await callUnaryBus("session.list", {
         projections: ["id", "cwd"],
@@ -241,6 +244,7 @@ function submitTask(
         throw new Error(
           `目标会话 ${resumeSessionId} 无 cwd 且无可用回退 cwd，无法 resume`,
         );
+      effectiveCwd = resumeCwd;
       createPayload = {
         sessionId: resumeSessionId,
         cwd: resumeCwd,
@@ -441,9 +445,6 @@ function submitTask(
                     approval.status = "answered";
                     approval.outcome = "rejected";
                     approval.answeredAt = new Date().toISOString();
-                    if (typeof approval._resume === "function") {
-                      approval._resume();
-                    }
                     // 宿主 task 终态同步（自动超时拒绝）
                     try {
                       await getSingleton().bus?.request?.("task:complete", {
@@ -455,6 +456,17 @@ function submitTask(
                     }
                   } catch {
                     /* 超时拒绝失败静默（任务侧自行感知/终局） */
+                  } finally {
+                    // 无论应答成功与否都恢复执行超时：应答失败也恢复计时，
+                    // 让正常超时路径兑底取消（否则审批等待的暂停永不恢复，
+                    // 事件流可无限等待）
+                    if (typeof approval._resume === "function") {
+                      try {
+                        approval._resume();
+                      } catch {
+                        /* 恢复失败不影响 */
+                      }
+                    }
                   }
                 }, ats * 1000);
                 timer.unref?.();
@@ -567,7 +579,7 @@ function submitTask(
           sessionId,
           meta: {
             rpcId: taskRpcId,
-            cwd,
+            cwd: effectiveCwd,
             task: taskText.slice(0, 200),
             kind: "dsh-session",
           },

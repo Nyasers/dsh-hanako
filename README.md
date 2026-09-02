@@ -8,7 +8,7 @@
 
 2. **打开 DSHana 标签页自装**：插件加载后自动进程内 boot，若未就绪则显示诊断列表。点击 deps 卡片的「安装依赖」——页面自动完成部署（pnpm install --prod 按插件声明装进插件 node_modules，运行级验证），无需 Agent 介入。完成后去 t2 点「手动启动 web host」即可。**也可让 Agent 调 `dsh_install` 工具**（异步默认，渲染安装卡片显示实时 pnpm 日志，安装完成自动拉起 web host；`dsh_install(action="verify")` 只检测依赖完整性）。
 
-3. **验证**：装完让 Agent 跑一次 `dsh_session(action="create")` 最小试任务验证，卡片不报 web host 错误即安装成功。
+3. **验证**：装完让 Agent 跑一次 `dsh_session(action="create", task="…", cwd="<项目沙箱目录>")` 最小试任务验证，卡片不报 web host 错误即安装成功。
 
 **无需配置 API Key / 模型**：DSH 凭据由 @dsh-hanako/provider 插件直读 Hana 宿主 `provider-catalog.json`，模型跟随宿主 `models.json`。任务模型默认 = DSH 默认模型（`settings.yaml` 的 `agent-default-model`），可在 **DSH 设置页「DSHana 设置」分页**直接配置（页头下方「默认模型」卡片：Provider/模型/思考强度三级联动，保存即生效）；同分页的 **「DSH 版本」卡片**显示本地 DSH 版本（版本严格锁插件声明——更新 DSH = 更新插件发版）。`dsh_session` 工具参数 `provider` / `model` / `reasoningEffort` 可显式覆盖。
 

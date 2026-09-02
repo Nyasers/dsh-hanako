@@ -4,7 +4,7 @@
 
 ## 架构总览（进程内 boot）
 
-```
+```text
 Hana 宿主进程
   ├─ 插件 bundle（dist/index.js，零 @deepseek-ai 静态依赖——D6 解耦）
   │    └─ 运行时 import dsh-pkg? 不——插件根 node_modules/@deepseek-ai/dsh/lib/profile-boot-*.js

@@ -1,6 +1,6 @@
 ---
 name: dsh-hanako
-description: "dsh-hanako 插件（把 DeepSeek Harness 接进 Hana 的进程外 subagent 执行器）的配置辅助与使用指南。触发场景：dsh-hanako 刚装好需要配置依赖/模型、依赖缺失需要安装（DSHana 标签页自装 / Agent 用 dsh_install 工具 / 手动 pnpm install）、标签页自检/自愈（安装依赖/手动启动/检测依赖/检查更新/更新 DSH）、web host 起不来（先看标签页自检 t1/t2）、DSH 任务失败排查、审批怎么应答、dsh_run/dsh_install/dsh_approve/dsh_cancel/dsh_session 怎么用（dsh_install 为 install/verify/check/update 四合一，vX 起合并原 dsh_update）、默认模型怎么配（DSH 设置页「DSHana 设置」分页，provider/model/思考三级联动）、DSH 版本检查与更新（dsh_install 工具 action=check/update / 设置页 DSH 版本块 / 标签页 deps 卡片）、安装/升级卡片（dsh_install 异步渲染 /card/dep 实时日志）、DeepSeek Harness 相关。遇到 dsh-hanako 相关需求优先读本技能再动手。"
+description: "dsh-hanako 插件（把 DeepSeek Harness 接进 Hana 的进程内嵌 subagent 执行器）的配置辅助与使用指南。触发场景：dsh-hanako 刚装好需要配置依赖/模型、依赖缺失需要安装（DSHana 标签页自装 / Agent 用 dsh_install 工具 / 手动 pnpm install）、标签页自检/自愈（安装依赖/手动启动/检测依赖/检查更新/更新 DSH）、web host 起不来（先看标签页自检 t1/t2）、DSH 任务失败排查、审批怎么应答、dsh_run/dsh_install/dsh_approve/dsh_cancel/dsh_session 怎么用（dsh_install 为 install/verify/check/update 四合一，vX 起合并原 dsh_update）、默认模型怎么配（DSH 设置页「DSHana 设置」分页，provider/model/思考三级联动）、DSH 版本检查与更新（dsh_install 工具 action=check/update / 设置页 DSH 版本块 / 标签页 deps 卡片）、安装/升级卡片（dsh_install 异步渲染 /card/dep 实时日志）、DeepSeek Harness 相关。遇到 dsh-hanako 相关需求优先读本技能再动手。"
 ---
 
 # dsh-hanako 配置辅助与使用指南
@@ -53,7 +53,7 @@ $node = <本机 node.exe 绝对路径，如 C:\Program Files\nodejs\node.exe>
 ## 配置完成后验证
 
 1. 打开 DSHana 标签页看自检（t1 依赖 / t2 进程，每项 ✓/✗ + 修复指引），按序修：t1 ✗ → deps 卡片「安装依赖/重新安装依赖」；t2 ✗ → 点「手动启动 web host」
-2. 跑最小试任务，cwd 显式传项目沙箱目录：`dsh_session(task="用文件写入工具在沙箱工作目录内创建 hello.txt，内容 hi，然后读回确认", cwd="<项目沙箱目录>"）`，异步提交后主动结束回合等待回调
+2. 跑最小试任务，cwd 显式传项目沙箱目录：`dsh_session(action="create", task="用文件写入工具在沙箱工作目录内创建 hello.txt，内容 hi，然后读回确认", cwd="<项目沙箱目录>")`，异步提交后主动结束回合等待回调
 3. 卡片不报 web host 错误 → 起来；完成后看摘要；浏览器开 http://127.0.0.1:3080 可见会话（可选）
 4. 失败按排错表定位
 
@@ -133,6 +133,6 @@ DSH 请求越界权限时任务挂起，插件经 deferred 发 dsh-approval 通�
 - 主题跟随：system 跟随宿主，light/dark 原生；宿主切 Hana 主题后壳页接 `hana.theme.changed` 广播**实时跟随**（无需重开），切 DSH 偏好也**实时生效**（经 `/api/events.host` WS 订阅 `settings/document-updated` 的 `ui-theme` 变更）
 - bash 在 Windows 可能 E_ACCESSDENIED（DSH 沙箱限制）；文件工具正常，Windows 优先用
 - wait=true 同步模式无审批通知（只能 Web UI 或超时）；长任务建议异步
-- 越界权限默认走审批：deferred 通知 → dsh_approve 应答；30s 超时自动拒绝
+- 越界权限默认走审批：deferred 通知 → dsh_approve 应答；`approvalTimeoutSec` 内无人应答自动拒绝（未配置时回落 0 = 禁用自动拒绝，不自动拒）
 - 任务默认新建会话；传 sessionId 复用（resume）
 - 会话/账本在插件数据目录 dsh-home/，不碰 ~/.DSH

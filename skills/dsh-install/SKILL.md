@@ -1,6 +1,6 @@
 ---
 name: dsh-install
-description: "dsh_install 工具手册（源码 tools/dsh-install.js + tools/lib/install.js 能力层核对）。触发场景：安装 DeepSeek Harness（DSH）依赖（action=install，按插件声明版本 pnpm install --prod 到插件根 node_modules——dsh-pkg 已退役，版本严格锁插件声明无 version/tag 逃生门；registry 兜底 + 自动运行级重验 + autoStart）、检测依赖完整性（action=verify，运行级冒烟只读）、dsh_run 报「DSH 包未就绪」、DSHana 标签页不可用/依赖缺失、安装卡片（/card/dep 实时 pnpm 日志）、安装进行中重复调用返回状态。需要安装或验证 DSH 前先读本技能。"
+description: "dsh_install 工具手册（源码 tools/dsh-install.js + tools/lib/install.js 能力层核对）。触发场景：安装 DeepSeek Harness（DSH）依赖（action=install，按插件声明版本 pnpm install --prod 到插件根 node_modules——dsh-pkg 已退役，版本严格锁插件声明无 version/tag 逃生门；registry 兜底 + 自动运行级重验 + autoStart）、检测依赖完整性（action=verify，运行级冒烟只读）、dsh_session 报「DSH 包未就绪」、DSHana 标签页不可用/依赖缺失、安装卡片（/card/dep 实时 pnpm 日志）、安装进行中重复调用返回状态。需要安装或验证 DSH 前先读本技能。"
 ---
 
 # dsh_install 工具手册

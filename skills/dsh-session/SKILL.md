@@ -33,7 +33,7 @@ DSH 会话全生命周期工具（合并原 `dsh_run` / `dsh_cancel` 能力）�
 - 提交链路：`session.create`（新建：`{cwd, agentPreset?}`）→ 记 sessionId + cwd → `selectModel`（仅显式传 provider/model/effort 时；model-unavailable 报错降级不带 effort 重试）→ `session.prompt`（mode=queue，立即 accepted）→ 经总线 events 频道事件循环（bus 插件订阅 `$events` 转发）→ 终态
 - 事件流（DSH 0.1.2）：事件不直连 remote.mux——`@dsh-hanako/bus` 在 DSH 进程内订阅 `$events` 并经总线转发（ready/emit/waterfall）。`api-session/status false` 即任务终态；`api-session/error` 记失败兜底；waterfall 帧已回投 next
 - **终态映射**：`api-session/status [sid, false]` → `end_turn`（无 error 时）；出现过 `api-session/error` → `error`；流结束无终态帧兜底 `end_turn`
-- 超时：任务超时（timeout 秒）会终止并报错；审批挂起不暂停计时
+- 超时：任务超时（timeout 秒）会终止并报错；审批挂起暂停计时（审批等待是外部决策，不计入执行超时，应答后恢复）
 - 卡片：`/card/op?sessionId=…&rpcId=…`（实时日志/进度，插件重启后可恢复）
 
 ## action=send：续已有会话发消息（原 dsh_run resume）
