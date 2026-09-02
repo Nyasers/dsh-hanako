@@ -342,6 +342,7 @@ export default class DshHanakoPlugin {
       g.boot.attempt = 0;
       g.boot.nextRetryAt = null;
       g.boot.errorClass = null;
+      g.boot.guidance = null;
       g.boot.lastError = null;
     };
     // 读最近 install 失败分类（T1 落 g.deps.errorClass = { errorClass, guidance }；
@@ -380,6 +381,10 @@ export default class DshHanakoPlugin {
       // 通知纪律：同一失败原因（阶段+类别+错误首行）只主动通知一次；后续重试只打进度日志
       const notifyKey = stage + ":" + klass + ":" + head;
       const guide = guidance || ERROR_CLASS_GUIDANCE[klass] || "";
+      // T3：失败决策的指引文案随失败状态落 g.boot.guidance（快照端点/壳页 action-needed
+      // 渲染数据源——六类 + restart-needed 均有文案，页面不猜；成功收敛时随失败记录一并
+      // 清空，见 convergeReady；重试期间保留最近一次失败文案，与 errorClass/lastError 同生命周期）
+      g.boot.guidance = guide || null;
       if (notifyKey !== lastNotifiedKey) {
         lastNotifiedKey = notifyKey;
         g.appendLog?.(

@@ -10,6 +10,10 @@
 //                         壳页订阅此流实现事件化（挂载/诊断刷新/偏好跟随全事件驱动）。
 //   GET /webui/health     纯诊断 GET 端点：返回 readDiagnostics 自检结果 + web host 状态
 //                         （probeHost 逻辑仅诊断路径使用；事件化后仅兑底/手动刷新）
+//   GET /webui/boot-state  自举状态快照（T3 spec：dsh-deps-zero-intervention）——单一状态出口：
+//                         g.boot 状态机 + g.deps（含 T1 errorClass/guidance）+ g.web 就绪收敛成
+//                         { phase, ready, deps, boot, web } 三段 JSON，三态可渲染；T4 Bootstrap
+//                         壳页只消费它，不再各自拼装诊断（事件驱动刷新仍走 /webui/events）
 //   POST /webui/start        手动启动 web host（process 卡片「手动启动」按钮；ready/starting/触发启动三态）
 //   POST /webui/install-deps 自动安装 dsh 依赖（deps 卡片「安装依赖」按钮；installing/触发安装）
 //   GET  /webui/verify-deps  依赖完整性静态核对（cliBin + 磁盘版本 vs 声明；进标签页自动一次 + 手动「检测依赖」按钮）
@@ -114,6 +118,115 @@ function busReady() {
     );
   } catch {
     return false;
+  }
+}
+
+/** 自举状态快照（T3 spec：dsh-deps-zero-intervention，见文件头「GET /webui/boot-state」）。
+ * 单一状态出口：把启动自动链状态机 g.boot + 依赖部署/核对状态 g.deps（含 T1 失败分类
+ * errorClass/guidance）+ web host 就绪态（g.web / g.webLastError / 总线）收敛成确定性
+ * JSON，T4 Bootstrap 壳页只消费它（不再各自拼装诊断）。纯只读聚合：不 spawn、不探测、
+ * 不 import 能力模块；单例缺失（冷启动窗口）/ 字段缺省逐层兜底为显式空值（null/""），
+ * 本函数永不以异常终结（读单例缺字段即空值，页面不猜）。
+ *
+ * 返回结构（值域与缺省语义）：
+ *   phase     状态机阶段 ensure-deps|waiting|booting|ready（g.boot.phase；未跑过 = ensure-deps）
+ *   ready     web host 就绪 = g.web.ready（boot 收敛）或总线已连接（busReady，与 /webui
+ *             渲染同源判定）；停机/重启窗口由 /webui/events pending/ready 事件驱动页面翻转
+ *   deps      { status, errorClass, guidance, error, version, logTail }
+ *               status     g.deps.status：idle|installing|running|ok|error
+ *               errorClass install 失败分类（g.deps.errorClass.errorClass；成功/从未失败 = null）
+ *               guidance   errorClass 随附人话（g.deps.errorClass.guidance；仅分类非空时非空）
+ *               error      最近失败可读文本（g.deps.error，前缀 ≤800；成功/从未失败 = null）
+ *               version    已装 dsh 版本（g.deps.result.version；未验证 = null）
+ *               logTail    依赖日志尾（g.deps.log 尾部 ≤800，复用现有诊断截断约定；空 = null）
+ *   boot      { attempt, nextRetryAt, errorClass, guidance, lastError }
+ *               attempt     连续失败尝试计数（g.boot.attempt；收敛归零，未失败 = 0）
+ *               nextRetryAt 下次自动重试时刻（epoch ms；不可恢复停等 = null = 不自动重试）
+ *               errorClass  最近失败分类（g.boot.errorClass；成功收敛/从未失败 = null）
+ *               guidance    最近失败指引文案（index.js handleFailure 随失败落 g.boot.guidance；
+ *                           六类 + restart-needed 均有文案；成功收敛/从未失败 = null）
+ *               lastError   最近失败可读文本（g.boot.lastError；成功收敛/从未失败 = null）
+ *   web       { ready, lastError }
+ *               ready      web host boot 收敛标志（g.web.ready === true）
+ *               lastError  web host 最近失败文本（g.webLastError 展示尾部 ≤800，与诊断同约定；
+ *                           从未失败 = null；恢复就绪后可能残留上次失败，页面以顶层 ready 为准）
+ *
+ * 三态渲染语义（字段组合即定态，无歧义；T4 壳页按此分支）：
+ *   ready         顶层 ready = true（web host 就绪 → iframe 直嵌）
+ *   action-needed boot.phase === "waiting" && boot.errorClass 非空 &&（deps.guidance 或
+ *                 boot.guidance）非空——失败已分类且指引齐备（用户有可读操作/自动续跑说明）
+ *   booting       其余（phase ensure-deps/booting、deps.status installing/running 进行中、
+ *                 waiting 但失败信息不全等过渡/未知态 → 阶段时间线 + 重试信息） */
+function readBootState() {
+  // 兜底快照（字段齐、全显式空值）：单例整体缺失或聚合异常时接口仍回完整结构，页面不猜
+  const fallback = () => ({
+    phase: null,
+    ready: false,
+    timestamp: Date.now(),
+    deps: {
+      status: null,
+      errorClass: null,
+      guidance: null,
+      error: null,
+      version: null,
+      logTail: null,
+    },
+    boot: {
+      attempt: null,
+      nextRetryAt: null,
+      errorClass: null,
+      guidance: null,
+      lastError: null,
+    },
+    web: { ready: false, lastError: null },
+  });
+  try {
+    const g = globalThis.__dshHanako;
+    if (!g || typeof g !== "object") return fallback();
+    const boot = (g.boot && typeof g.boot === "object" && g.boot) || {};
+    const deps = (g.deps && typeof g.deps === "object" && g.deps) || {};
+    // T1 分类记录形态 { errorClass, guidance }（install.js 失败路径落；缺省 null）
+    const ec =
+      deps.errorClass && typeof deps.errorClass === "object" ? deps.errorClass : null;
+    // 依赖核对缓存（verifyDepsSmoke 落 g.deps.result = { ok, version, error, at, ... }）
+    const smoke =
+      deps.result && typeof deps.result === "object" ? deps.result : null;
+    const s = (v) => (typeof v === "string" && v ? v : null); // 可读字符串安全取值
+    const tail = (v, n) => {
+      // 截断约定：展示用文本一律取尾 ≤800（与 buildDepsDiagCheck/Process 诊断同款）
+      const t = s(v);
+      return t ? t.slice(-(n || 800)) : null;
+    };
+    const num = (v) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+    const webReady = !!(g.web && g.web.ready === true);
+    const depsError = s(deps.error);
+    return {
+      phase: s(boot.phase),
+      ready: webReady || busReady(),
+      timestamp: Date.now(),
+      deps: {
+        status: s(deps.status),
+        errorClass: s(ec && ec.errorClass),
+        guidance: s(ec && ec.guidance),
+        error: depsError ? depsError.slice(0, 800) : null,
+        version: s(smoke && smoke.version),
+        logTail: tail(deps.log, 800),
+      },
+      boot: {
+        attempt: num(boot.attempt) ?? 0,
+        nextRetryAt: num(boot.nextRetryAt),
+        errorClass: s(boot.errorClass),
+        guidance: s(boot.guidance),
+        lastError: s(boot.lastError),
+      },
+      web: {
+        ready: webReady,
+        lastError: tail(g.webLastError, 800),
+      },
+    };
+  } catch {
+    // 聚合兜底（防御；正常路径各字段已逐层空值化，理论不可达）
+    return fallback();
   }
 }
 
@@ -378,6 +491,14 @@ export default function registerWebuiRoutes(app, ctx) {
     };
     body.diagnostics = readDiagnostics(ctx, cfg, port);
     return c.json(body);
+  });
+
+  // 自举状态快照（T3 spec：dsh-deps-zero-intervention）——Bootstrap 壳页唯一数据源：
+  // 返回 readBootState() 聚合的单一状态出口（phase/deps/boot/web 三段 + ready），页面只
+  // 消费它、不各自拼装诊断。纯只读同步聚合（无 spawn/探测），永不抛（见 readBootState）；
+  // 三态渲染语义（ready → action-needed → booting）见 readBootState 注释，字段齐备无歧义。
+  app.get("/webui/boot-state", (c) => {
+    return c.json(readBootState());
   });
 
   // 手动启动 web host（process 卡片「手动启动」按钮调用）：读单例按当前状态返回——
