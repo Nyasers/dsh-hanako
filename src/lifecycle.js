@@ -541,9 +541,12 @@ async function loadInprocDsh(pkgDir) {
   //       probe-inproc 验证过的定位方式）。
   //    resolve/枚举结果统一再 realpath 一次（.pnpm 哈希目录），与上方 dsh 同款缓存指纹
   //    （app-boot 自身也随 dsh 版本换哈希目录，symlink 路径 import 会命中宿主进程内旧缓存）。
+  //    createRequire 基准用原始 symlink 路径（dshPkgLink）而非 realpath 目标：从 .pnpm
+  //    深处向上解析不一定能找到 dsh-app-boot（该包仅在 pkgDir/node_modules 链暴露时
+  //    realpath 解析失败），symlink 路径沿顶层 node_modules 链必然命中（CodeRabbit）。
   let appBootEntry = null;
   try {
-    const dshRequire = createRequire(join(dshPkg, "package.json"));
+    const dshRequire = createRequire(join(dshPkgLink, "package.json"));
     appBootEntry = dshRequire.resolve("@deepseek-ai/dsh-app-boot");
   } catch {
     // 回退 .pnpm 枚举
