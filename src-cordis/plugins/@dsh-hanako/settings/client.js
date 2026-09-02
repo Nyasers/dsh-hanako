@@ -494,9 +494,9 @@ window.__ModuleLoader__.load({
             const v = d && d.ok && d.value ? d.value : null;
             if (v) {
               setLocalVersion(v.localVersion);
-              if (v.error) {
-                setStatusBoth(t("checkFailed") + v.error, "err");
-              } else if (v.localVersion === null) {
+              // 后端只回 { localVersion, updateAvailable:false }，无 error 字段；
+              // readLocalVersion 可能返回 null/undefined/""，统一按未安装处理
+              if (!v.localVersion) {
                 setStatusBoth(t("localMissing"), "err");
               }
               // 正常（本地已装）：状态行保持空——版本值已在信息行展示
