@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.0.0-alpha.6（2026-09-02）
+
+- **删除 defaultCwd 配置**（PR #41）：cwd 改为 `dsh_session create` 每次调用必传显式指定，无配置回退；`send`（resume）沿用会话已有 cwd，不传 cwd 自动从 `session.list` 查询继承。`manifest.json` 删除 `defaultCwd` 设置项，`config.js` 移除 `resolveDefaultCwd` 函数。
+- **interlude 插话语义修正**：实测 interlude 型 deferred 在回合结束时才落地，不能预插入时间线；`wake.js` 注释/对应 SKILL 口径统一（保留唤醒语义，不承诺回合内插话）；`registerDeferredWake` 统一带 `interlude: true` 标记（预置宿主插话能力，后续宿主演进自动继承）。
+- **bus 翻译器修复**：`session.list` 参数名映射 `_request`（DSH 0.1.2 上游 `session/*` 大多声明 `request`，仅 `session/list` 用 `_request`，统一包 `request` 被网关 `arguments-invalid` 拒绝，导致 resume 查询会话 cwd 时提交失败）。
+- **lockfile 同步**：`@deepseek-ai/dsh` 版本 `0.1.2-alpha.3` → `0.1.2-alpha.4`；`pnpm-workspace.yaml` 补 `minimumReleaseAgeExclude`（214 个 dsh 0.1.2-alpha.4 包，通过 supply-chain 检查）。
+- **pack 打包 lockfile**：固定版本语义下 `pnpm-lock.yaml` 随包分发（`pack.mjs` `staticItems` 纳入）。
+- **CodeRabbit review 修复**：自动超时拒绝失败后 `finally` 恢复执行超时（否则 `catch` 吞错后 `_resume()` 不调，审批等待超时暂停永不恢复）；resume 时 `task:register meta.cwd` 存实际会话目录（非空串）；8 条文档 Minor 修正（前提描述、进程边界、字段名、示例等）。
+
 ## v1.0.0-alpha.5（2026-09-02）
 
 - **T7b 步骤 5：spawn 分支整体退役**（PR #40 之一）：删 bootSpawn（child_process.spawn + --expose-internals）+ WEB_PROCESS_MODE 逃生开关；ensureWebHost 唯一形态 = 进程内 runProfile；waitWebReady 去 spawn 快速失败分支；closeProcess 唯一 dispose 路径。保留：verifyDepsSmoke 冒烟 + pnpm install 子进程（D6 解耦设计）。
