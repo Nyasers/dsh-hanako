@@ -676,6 +676,46 @@ function probeBusReady(port, timeoutMs = 3000) {
   });
 }
 
+// ---- CJS 模块缓存清理（dsh 升级免重启第二层：require 解析缓存穿透）----
+// realpath（ESM module map 换 key）穿透后，dsh 运行时内部经 CJS require 链
+// （createRequire / require.resolve）的缓存仍是旧版：Module._pathCache（解析结果缓存）与
+// require.cache（已加载 CJS 模块）的 key 含 profiles/node_modules 等跨版本稳定路径，命中
+// 旧 .pnpm 哈希 → readFileSync ENOENT（实测：dsh 升级后热重载，typert-loader 133
+// contributor 注册失败，全部指向已删除的旧版 .pnpm 目录）。CJS 缓存 Node 提供删除 API
+// （与 ESM 无 API 相对）：每次 boot 前定向清理 dsh 树相关条目（插件根 node_modules /
+// dsh-home 下），require 链下次解析重新走磁盘、命中当前 .pnpm 哈希目录。
+// 全清 _pathCache 亦可（纯解析结果缓存，无模块实例，重建零风险）；此处定向删含插件
+// 路径的条目，克制不扰宿主其他模块的缓存。清理失败不阻断（残留仅致下次升级热重载跑
+// 旧解析路径，重启兑底）。
+function clearDshRequireCaches(pkgDir, dataDir) {
+  try {
+    const mod = createRequire(import.meta.url)("module");
+    const hits = [String(pkgDir || ""), join(String(dataDir || ""), "dsh-home")]
+      .filter(Boolean)
+      .map((p) => p.toLowerCase());
+    if (hits.length === 0) return;
+    // Module._pathCache：key = 内部解析缓存键，value = 解析出的绝对路径；
+    // 命中插件根 / dsh-home 的条目删除（key 与 value 都查，覆盖两种形态）
+    const pc = mod._pathCache;
+    if (pc && typeof pc === "object") {
+      for (const key of Object.keys(pc)) {
+        const probe = String(key) + "\n" + String(pc[key] || "");
+        if (hits.some((p) => probe.toLowerCase().includes(p))) delete pc[key];
+      }
+    }
+    // require.cache（Module._cache）：删除插件根与 dsh-home 下已加载的 CJS 模块
+    // （模块实例随引用释放；dsh 旧 ctx 已 dispose，此处清除后下次 require 全新加载）
+    const cache = mod._cache;
+    if (cache && typeof cache === "object") {
+      for (const key of Object.keys(cache)) {
+        if (hits.some((p) => key.toLowerCase().includes(p))) delete cache[key];
+      }
+    }
+  } catch {
+    /* 缓存清理失败不阻断 boot */
+  }
+}
+
 export async function ensureWebHost(cfg) {
   const g = getSingleton();
   if (g.web?.ready) return g.web;
@@ -696,6 +736,10 @@ export async function ensureWebHost(cfg) {
     g.web = null;
   }
   if (!cfg.dshPkgDir) cfg.dshPkgDir = resolveDshPkgDir(cfg);
+
+  // CJS require 缓存定向清理（dsh 升级免重启第二层）：见 clearDshRequireCaches 定义注释。
+  // 放 dshPkgDir 解析后、boot 前——每次拉起都清，首次空转无害；boot 失败重试同样幂等。
+  clearDshRequireCaches(cfg.dshPkgDir, cfg.dataDir);
 
   const pkgDir = cfg.dshPkgDir;
   const dshHome = join(cfg.dataDir, "dsh-home");
