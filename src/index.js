@@ -241,6 +241,8 @@ export default class DshHanakoPlugin {
         if (st !== "installing" && st !== "running") return true;
         if (Date.now() > deadline) return false;
         await new Promise((r) => setTimeout(r, 2000));
+        // 等待期间卸载/重载：提前退出免空转（调用方在打日志前同样拦截，见下）
+        if (unloaded) return false;
       }
     };
     // 启动自动链：依赖安装（幂等，见上方注释）→ web host 启动。installDeps 与
@@ -275,6 +277,8 @@ export default class DshHanakoPlugin {
               "依赖安装已在其他路径进行中，等待完成后再启动 web host…",
             );
             const settled = await waitDepsSettled();
+            // 等待期间卸载/重载：静默退出，不打「超时/继续尝试启动」误导日志
+            if (unloaded) return;
             const st = g.deps && g.deps.status;
             g.appendLog?.(
               "hana",
@@ -342,6 +346,9 @@ export default class DshHanakoPlugin {
     };
     waitMount
       .then(async (mounted) => {
+        // 入口守卫：waitMount 探测期间已卸载/重载（含探测返回 false 的卸载场景），
+        // 静默放弃整个启动链——不打日志、不延后等待、不启动（CodeRabbit）
+        if (unloaded) return;
         if (!mounted) {
           log.warn(
             "[dsh-hanako] 1s 内未等到工具模块加载，转入后台等待挂载后自动补跑启动链",
