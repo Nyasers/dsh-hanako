@@ -423,11 +423,18 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir, opts = {}) {
   const declaredVersion = readDeclaredDshVersion();
   // 声明注入面校验（保留）：声明来自插件根 package.json（单一事实源），仅允许严格
   // SemVer 或合法 dist-tag——"npm:evil@1.0.0" / "github:user/repo" 等非法声明直接拒绝。
+  // 终态发布：声明非法视为部署失败，置 error 并通知（壳页事件驱动刷新诊断，UI 不
+  // 卡在 installing 禁用态）。
   if (declaredVersion === null) {
+    g.deps.error =
+      "插件声明缺少合法 @deepseek-ai/dsh 版本（dependencies 未声明或非法）";
+    g.deps.status = "error";
+    g.deps.time = new Date().toISOString();
+    notifyDepsChanged();
     return {
       ok: false,
       state: "error",
-      error: "插件声明缺少合法 @deepseek-ai/dsh 版本（dependencies 未声明或非法）",
+      error: g.deps.error,
     };
   }
   // 子进程 node 解析（每次部署解析一次；wrapper 与 pnpm add 用同一解析结果——自定义

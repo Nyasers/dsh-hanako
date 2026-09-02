@@ -333,8 +333,10 @@ export default function registerWebuiRoutes(app, ctx) {
           }
         };
         if (busReady()) {
+          // 流保持常驻：壳页就绪态也订阅（theme-pref / diag-changed / 重启窗口的
+          // pending → ready 周期全依赖它）；ready 事件作首帧信号（就绪态壳页已
+          // readyReceived，收到即忽略，随后流挂起等后续事件）。
           send({ type: "ready" });
-          close();
           return;
         }
         send({ type: "pending" });

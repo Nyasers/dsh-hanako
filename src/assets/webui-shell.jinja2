@@ -799,10 +799,14 @@
     var readyTimer = null;
     var streamAbort = null;
     var readyReceived = false;
+    // 只清超时与安装 tick（不 abort 事件流——流常驻，attach 重挂载时不能杀流；
+    // 流的终止只在页面卸载 abortEventStream）
     function clearReadyTimers() {
       if (readyTimer) { clearTimeout(readyTimer); readyTimer = null; }
-      if (streamAbort) { try { streamAbort.abort(); } catch (e) { /* 已关闭 */ } streamAbort = null; }
       stopInstallTick();
+    }
+    function abortEventStream() {
+      if (streamAbort) { try { streamAbort.abort(); } catch (e) { /* 已关闭 */ } streamAbort = null; }
     }
     function mountReady() {
       if (readyReceived) return;
@@ -855,6 +859,7 @@
             scheduleReopen();
             return null;
           }
+          streamRetries = 0; // 成功建立响应体：连续失败计数归零（有界重试只作用于连续失败）
           var reader = r.body.getReader();
           var decoder = new TextDecoder();
           var buf = "";
@@ -879,7 +884,22 @@
                 try { ev = JSON.parse(dataLine); } catch (e2) { continue; }
                 if (!ev || typeof ev.type !== "string") continue;
                 if (ev.type === "ready") { if (!readyReceived) mountReady(); }
-                else if (ev.type === "pending") { if (!readyReceived) showLoading(); pushPanel(); }
+                else if (ev.type === "pending") {
+                  // web host 停机/重启窗口：退回未就绪态——清 readyReceived（重启完成
+                  // 后再次 ready 会经 mountReady 重挂 iframe），事件流保持常驻收 ready。
+                  // 重挂 30s 兜底（ready 事件缺失时引导看诊断）。
+                  if (readyReceived) {
+                    readyReceived = false;
+                    stopInstallTick();
+                    showLoading();
+                    if (!readyTimer) {
+                      readyTimer = setTimeout(function () {
+                        if (!readyReceived) loadDiagnosticsNow();
+                      }, 30000);
+                    }
+                  }
+                  pushPanel();
+                }
                 else if (ev.type === "diagnostics") { if (!readyReceived) showDiagnostics(ev.diagnostics); }
                 else if (ev.type === "theme-pref") { sendPrefTo(frame && frame.contentWindow, ev); }
                 else if (ev.type === "diag-changed") { refreshDiag(); }
@@ -934,6 +954,7 @@
     }
     window.addEventListener("beforeunload", function () {
       clearReadyTimers();
+      abortEventStream();
     });
     // 主题桥——dsh 页面（跨源 iframe）postMessage 索取 Hana 主题，
     // 这里回传主题 id（location.search hana-theme）+ 实时变量值（hana-css 已
@@ -1064,9 +1085,12 @@
       }, 30000);
     } else {
       // 就绪态（服务端渲染即已连接）：统一走 attach 挂载（src 由壳页 JS 设置——
-      // 直嵌根路径，无 BFF 代理/凭据透传（vY：pluginSurfaceSession 仅用于 hana.api.fetch 调用））
+      // 直嵌根路径，无 BFF 代理/凭据透传（vY：pluginSurfaceSession 仅用于 hana.api.fetch 调用）），
+      // 并订阅常驻事件流——theme-pref / diag-changed / 重启窗口的 pending → ready
+      // 周期在就绪态同样生效，全部依赖这条流。
       readyReceived = true;
       attach();
+      openReadyStream();
     }
     syncPanelFromDiag(initDiag); // 初始面板状态（readyReceived 已就位，避免初始错推「未就绪」）
 }) ();
