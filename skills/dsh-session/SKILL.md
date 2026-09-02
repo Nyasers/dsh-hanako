@@ -29,7 +29,7 @@ DSH 会话全生命周期工具（合并原 `dsh_run` / `dsh_cancel` 能力）�
 - **不允许传 sessionId**（新建；续会话用 send）
 - **task + cwd 必填**（defaultCwd 配置已删除，无回退）
 - **任务发起后主动结束当前回合**：create/send 固定异步提交，提交后 Agent 应立即 return（结束回复），让宿主通过 deferred 投递回调（任务完成/审批挂起/失败）。审批通知走 interlude 型 deferred，但 interlude 同样在回合结束时才落地（实测不能在结束回合前插入时间线），不结束回合同样收不到。
-- 固定异步：立即返回 `{ content: "任务已提交给 DSH（rpcId: xxx）…", details: { DSH: { rpcId, status: "running", cwd }, card: { route: "/card/op?sessionId=…&rpcId=…&timeoutMs=…" } } }`；deferred 注册 taskId=任务 rpcId（type=dsh-run，失败也唤醒），完成后宿主投递 `<hana-background-result>`
+- 固定异步：立即返回 `{ content: [{ type: "text", text: "任务已提交给 DSH（rpcId: xxx）…" }], details: { dsh: { rpcId, status: "running", cwd }, card: { route: "/card/op?sessionId=…&rpcId=…&timeoutMs=…" } } }`；deferred 注册 taskId=任务 rpcId（type=dsh-run，失败也唤醒），完成后宿主投递 `<hana-background-result>`
 - 提交链路：`session.create`（新建：`{cwd, agentPreset?}`）→ 记 sessionId + cwd → `selectModel`（仅显式传 provider/model/effort 时；model-unavailable 报错降级不带 effort 重试）→ `session.prompt`（mode=queue，立即 accepted）→ 经总线 events 频道事件循环（bus 插件订阅 `$events` 转发）→ 终态
 - 事件流（DSH 0.1.2）：事件不直连 remote.mux——`@dsh-hanako/bus` 在 DSH 进程内订阅 `$events` 并经总线转发（ready/emit/waterfall）。`api-session/status false` 即任务终态；`api-session/error` 记失败兜底；waterfall 帧已回投 next
 - **终态映射**：`api-session/status [sid, false]` → `end_turn`（无 error 时）；出现过 `api-session/error` → `error`；流结束无终态帧兜底 `end_turn`
