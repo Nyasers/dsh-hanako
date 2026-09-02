@@ -385,6 +385,19 @@ export function readDshInstalledVersion(cfg) {
 // 单一事实源），不再回退配置基线 resolveDshTag（保留仅作旧版兼容兜底）。
 // 解耦（D6）：工具包/生命周期自身不 import pnpm 或 cordis 运行时——pnpm 经运行时引导
 // （ensurePnpm 下载单文件）；诊断经 spawn subprocess + HTTP 直查，不加载 cordis。
+// 通知宿主侧 deps 状态翻转（routes/webui.js 挂的 g.notifyDepsChanged → 壳页一次性
+// 刷新诊断，事件驱动替代面板周期 tick）。通知失败不阻断部署/验证主流程。
+function notifyDepsChanged() {
+  const g = getSingleton();
+  if (g && typeof g.notifyDepsChanged === "function") {
+    try {
+      g.notifyDepsChanged();
+    } catch {
+      /* 通知失败不阻断 */
+    }
+  }
+}
+
 export async function installDepsFromPlugin(ctxConfig, ctxDataDir, opts = {}) {
   const g = getSingleton();
   // 部署中并发调用直接返回（路由侧也会先查 g.deps.status，这里是直调兜底）。
@@ -410,11 +423,18 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir, opts = {}) {
   const declaredVersion = readDeclaredDshVersion();
   // 声明注入面校验（保留）：声明来自插件根 package.json（单一事实源），仅允许严格
   // SemVer 或合法 dist-tag——"npm:evil@1.0.0" / "github:user/repo" 等非法声明直接拒绝。
+  // 终态发布：声明非法视为部署失败，置 error 并通知（壳页事件驱动刷新诊断，UI 不
+  // 卡在 installing 禁用态）。
   if (declaredVersion === null) {
+    g.deps.error =
+      "插件声明缺少合法 @deepseek-ai/dsh 版本（dependencies 未声明或非法）";
+    g.deps.status = "error";
+    g.deps.time = new Date().toISOString();
+    notifyDepsChanged();
     return {
       ok: false,
       state: "error",
-      error: "插件声明缺少合法 @deepseek-ai/dsh 版本（dependencies 未声明或非法）",
+      error: g.deps.error,
     };
   }
   // 子进程 node 解析（每次部署解析一次；wrapper 与 pnpm add 用同一解析结果——自定义
@@ -427,6 +447,7 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir, opts = {}) {
   g.deps.error = null;
   g.deps.time = new Date().toISOString();
   g.deps.log = "";
+  notifyDepsChanged();
   // 统一日志通道（见文件头）：同一份文本进内存尾环（≤DEPS_LOG_CAP，实时）+ 会话日志
   // 文件（src=pnpm 原始输出 / src=hana 里程碑）。每次写入刷新 g.deps.time（前端
   // installing 态显示「更新于 HH:MM:SS」、3s 轮询 health 随诊断刷新 log 尾部）。
@@ -472,6 +493,7 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir, opts = {}) {
         g.deps.error = null;
         g.deps.result = smoke;
         g.deps.status = "ok";
+        notifyDepsChanged();
         return { ok: true, state: "installed", cliBin, skipped: true };
       }
       milestone(
@@ -481,6 +503,13 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir, opts = {}) {
           ((smoke && (smoke.error || smoke.stderr)) || "verify 失败") +
           "），走重装流程",
       );
+      // verifyDepsSmoke 的终态（error）是独立入口语义；此处嵌套于 install 流程——
+      // 重装仍进行中，恢复 installing 外层锁，守卫保持拦截并发 install（否则 verify
+      // 失败后到安装完成的窗口内第二次 install 请求可进入，两个 pnpm install 同时
+      // 删/建 node_modules）。恢复后补一次通知：verify 失败已推 error（壳页可能显示
+      // 错误与重装按钮），需告知状态已回到 installing，避免壳页停留错误展示诱导重复操作。
+      g.deps.status = "installing";
+      notifyDepsChanged();
     }
     // 1.6 部署前停 web host：后续要删旧 node_modules，Windows 上被运行中进程加载的原生
     //    模块（koffi/node-pty 的 .node）会锁文件，rmSync 直接失败（EBUSY/EPERM）。
@@ -638,12 +667,17 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir, opts = {}) {
     // verifyDepsSmoke 会把 g.deps.result 刷新为最新 smoke（含 status running→ok/error）
     g.deps.result = null;
     await verifyDepsSmoke(cfg, { force: true });
-    // 安装链路终态 ok（终态保留；verify 若失败其详情在 g.deps.result，不影响安装结论）
+    // 安装链路终态 ok（终态保留；verify 若失败其详情在 g.deps.result，不影响安装结论）——
+    // 成功终态清 error：verifyDepsSmoke 失败路径可能已写入 g.deps.error，不带矛盾状态
+    // （status ok + error 非空）进事件驱动诊断。
     g.deps.status = "ok";
+    g.deps.error = null;
+    notifyDepsChanged();
     return { ok: true, state: "installed", cliBin };
   } catch (e) {
     g.deps.error = String(e?.message || e).slice(0, 1500);
     g.deps.status = "error";
+    notifyDepsChanged();
     milestone("[失败] " + g.deps.error);
     return { ok: false, state: "error", error: g.deps.error };
   }
@@ -719,6 +753,7 @@ export async function verifyDepsSmoke(cfg, opts = {}) {
   // 结果缓存（g.deps.result 复合对象整体引用）+ 验证进行中状态
   g.deps.result = smoke;
   g.deps.status = "running";
+  notifyDepsChanged();
   // pnpm 引导检查（与 dsh 运行级验证并行，互不拖累）：verifyDepsSmoke 虽是运行级
   // 只读检测，但 pnpm 检查允许自愈——ensurePnpm 幂等：缓存完整（sha256 一致）直接
   // 返回（快速路径），缺失/损坏自动重新下载（网络操作无副作用）。dataDir 显式传入
@@ -801,8 +836,11 @@ export async function verifyDepsSmoke(cfg, opts = {}) {
     // 验证链路终态（ok/error 保留；下次 verify 入口才回到 running）——注意 install 内部
     // 调用本函数后还会把 g.deps.status 置 ok（安装结论优先，verify 详情在 g.deps.result）
     g.deps.status = smoke.ok ? "ok" : "error";
-    // error 字段与验证结果同步（ok → 清空；失败 → smoke.error，供诊断展示）
+    // error 字段与验证结果同步（ok → 清空；失败 → smoke.error，供诊断展示）——
+    // 先写 error 再通知：notifyDepsChanged 同步调订阅者，若在其前发出则订阅者读到
+    // 的终态缺 error（状态与错误不一致的诊断帧）。
     g.deps.error = smoke.ok ? "" : smoke.error;
+    notifyDepsChanged();
   }
   return smoke;
 }

@@ -4,11 +4,12 @@
 // routes/webui.js — dsh-hanako 插件页：contributes.cards（realization:page）内嵌 dsh Web UI
 //   GET /webui            插件页（iframe 嵌 http://127.0.0.1:<port>/，含就绪事件化/主题注入/失败自检；
 //                         壳页另接入功能面板 functionPanel（hana.panel 推送状态/操作，见 webui-shell））
-//   GET /webui/events     就绪事件流（SSE 式 chunked）：bus ready → 推 ready 事件；web host
-//                         启动失败 → 推 diagnostics 事件；web host 停机 → 推 pending 事件。
-//                         壳页订阅此流实现「就绪事件化挂载」（替代旧 3s health 轮询）。
+//   GET /webui/events     就绪事件流（SSE 式 chunked，常驻）：bus ready → 推 ready；
+//                         启动失败 → 推 diagnostics；停机 → 推 pending；deps 状态翻转
+//                         → 推 diag-changed；DSH 主题偏好变更 → 推 theme-pref。
+//                         壳页订阅此流实现事件化（挂载/诊断刷新/偏好跟随全事件驱动）。
 //   GET /webui/health     纯诊断 GET 端点：返回 readDiagnostics 自检结果 + web host 状态
-//                         （probeHost 逻辑仅诊断路径使用；不再有「就绪轮询」语义）
+//                         （probeHost 逻辑仅诊断路径使用；事件化后仅兑底/手动刷新）
 //   POST /webui/start        手动启动 web host（process 卡片「手动启动」按钮；ready/starting/触发启动三态）
 //   POST /webui/install-deps 自动安装 dsh 依赖（deps 卡片「安装依赖」按钮；installing/触发安装）
 //   GET  /webui/verify-deps  运行级依赖检测（node cliBin --version；进标签页自动一次 + 手动「检测依赖」按钮）
@@ -43,6 +44,11 @@ import { render as webuiShellHtml } from "../assets/webui-shell.jinja2";
 // 多个壳页 tab 可同时订阅；Set 保存，流关闭时移除。notifyWebStartFailed 每次模块加载
 // 都重新赋值（闭包指向当前模块的 Set，见下方挂钩处），不设一次性守卫。
 const webStartFailedListeners = new Set();
+
+// ---- deps 状态翻转通知订阅者（tools/lib/install.js 调 g.notifyDepsChanged）----
+// 与 webStartFailedListeners 同模式：安装/检测进入与终态时通知壳页一次性刷新诊断
+// （事件驱动替代面板 5s 周期 tick；安装中进度滚动由壳页 installing 态 tick 承担）。
+const depsChangedListeners = new Set();
 
 function esc(v) {
   return String(v)
@@ -192,19 +198,25 @@ export default function registerWebuiRoutes(app, ctx) {
     );
   });
 
-  // 就绪事件流（GET /webui/events，SSE 式 chunked）——壳页就绪事件化的宿主推送通道：
-  //   · 打开时已 ready（bus 已连接）→ 立即推 ready 事件并关闭；
+  // 就绪事件流（GET /webui/events，SSE 式 chunked）——壳页事件化的宿主推送通道
+  // （就绪/诊断/主题偏好/deps 状态，全部事件驱动，替代周期轮询）：
+  //   · 打开时已 ready（bus 已连接）→ 立即推 ready 事件并关闭（壳页就绪态不开流）；
   //   · 未 ready → 先推 pending 事件（壳页保持加载态），挂起等待：
-  //       - bus.ready（本机事件，hello-ok 到达）→ 推 ready 事件并关闭；
+  //       - bus.ready（本机事件，hello-ok 到达）→ 推 ready 事件（流保持常驻）；
   //       - bus.disconnect（web host 停机/重启窗口）→ 推 pending 事件（壳页退回加载态）；
-  //       - web host 启动失败（lifecycle notifyWebStartFailed）→ 推 diagnostics 事件
-  //         （诊断对象由 readDiagnostics 收集；壳页直接显示自检），随后关闭。
-  // 事件格式：SSE data: JSON，{ type: "ready" | "pending" | "diagnostics", diagnostics? }。
+  //       - web host 启动失败（lifecycle notifyWebStartFailed）→ 推 diagnostics 事件；
+  //       - deps 状态翻转（install.js notifyDepsChanged）→ 推 diag-changed 事件；
+  //       - DSH 设置变更（bridge $events 转发 settings/document-updated 的 ui-theme）
+  //         → 推 theme-pref 事件（壳页转告注入脚本重读偏好，替代 3s 轮询 describe）。
+  // ready 后流保持常驻：重启窗口的 pending → ready 周期、主题偏好与 deps 变更继续推送。
+  // 事件格式：SSE data: JSON，{ type: "ready" | "pending" | "diagnostics" |
+  // "diag-changed" | "theme-pref", diagnostics? }。
   // 实现与 routes/card.js 的 /ops/dep-stream 同构（ReadableStream + c.body）；客户端
   // 断开（ReadableStream cancel）时清理订阅与挂钩，不泄漏。
   app.get("/webui/events", (c) => {
     let unsubs = [];
     let onStartFailed = null;
+    let onDepsChanged = null;
     const stream = new ReadableStream({
       start(controller) {
         const enc = new TextEncoder();
@@ -231,6 +243,7 @@ export default function registerWebuiRoutes(app, ctx) {
           }
           unsubs.length = 0;
           if (onStartFailed) webStartFailedListeners.delete(onStartFailed);
+          if (onDepsChanged) depsChangedListeners.delete(onDepsChanged);
           try {
             controller.close();
           } catch {
@@ -246,20 +259,48 @@ export default function registerWebuiRoutes(app, ctx) {
             diagnostics: readDiagnostics(ctx, cfg, port),
           });
         };
-        // 订阅总线本机事件（bus.ready / bus.disconnect）
+        // deps 状态翻转（安装/检测进入与终态）→ 推 diag-changed 事件：壳页收到后
+        // 一次性刷新诊断（事件驱动替代面板 5s 周期 tick；install.js 状态翻转点调用
+        // g.notifyDepsChanged）。
+        onDepsChanged = () => {
+          if (closed) return;
+          send({ type: "diag-changed" });
+        };
+        // 订阅总线本机事件（bus.ready / bus.disconnect / events 转发）
         const g = globalThis.__dshHanako;
         if (g && g.dshanaBus && typeof g.dshanaBus.on === "function") {
           unsubs.push(
             g.dshanaBus.on("bus.ready", () => {
               if (closed) return;
+              // 流常驻：ready 后不关流——后续事件（theme-pref / diag-changed /
+              // 重启窗口的 pending → ready）继续推送，壳页事件驱动刷新
               send({ type: "ready" });
-              close();
             }),
           );
           unsubs.push(
             g.dshanaBus.on("bus.disconnect", () => {
               if (closed) return;
               send({ type: "pending" });
+            }),
+          );
+          // DSH 设置变更转发（bridge $events 订阅 → 总线 events 频道 → 这里过滤）：
+          // settings/document-updated 的 ui-theme 命名空间 = 主题偏好变更，推给壳页
+          // 转告注入脚本重读偏好（事件驱动替代 3s 轮询 settings/describe）。
+          unsubs.push(
+            g.dshanaBus.on("events", (frame) => {
+              if (closed) return;
+              if (!frame || frame.type !== "emit") return;
+              if (
+                frame.event === "settings/document-updated" &&
+                Array.isArray(frame.args) &&
+                frame.args[0] === "ui-theme"
+              ) {
+                send({
+                  type: "theme-pref",
+                  ns: "ui-theme",
+                  revision: frame.args[1] ?? null,
+                });
+              }
             }),
           );
         }
@@ -271,6 +312,7 @@ export default function registerWebuiRoutes(app, ctx) {
         // 每次赋值覆盖为新模块的 Set，与新加载的模块实例保持一致（lifecycle 经单例调用，
         // 幂等无害）。
         webStartFailedListeners.add(onStartFailed);
+        depsChangedListeners.add(onDepsChanged);
         const hookG = globalThis.__dshHanako || (globalThis.__dshHanako = {});
         hookG.notifyWebStartFailed = () => {
           for (const fn of [...webStartFailedListeners]) {
@@ -281,9 +323,20 @@ export default function registerWebuiRoutes(app, ctx) {
             }
           }
         };
+        hookG.notifyDepsChanged = () => {
+          for (const fn of [...depsChangedListeners]) {
+            try {
+              fn();
+            } catch {
+              /* 通知失败不阻断 */
+            }
+          }
+        };
         if (busReady()) {
+          // 流保持常驻：壳页就绪态也订阅（theme-pref / diag-changed / 重启窗口的
+          // pending → ready 周期全依赖它）；ready 事件作首帧信号（就绪态壳页已
+          // readyReceived，收到即忽略，随后流挂起等后续事件）。
           send({ type: "ready" });
-          close();
           return;
         }
         send({ type: "pending" });
@@ -299,6 +352,7 @@ export default function registerWebuiRoutes(app, ctx) {
         }
         unsubs.length = 0;
         if (onStartFailed) webStartFailedListeners.delete(onStartFailed);
+        if (onDepsChanged) depsChangedListeners.delete(onDepsChanged);
       },
     });
     return c.body(stream, 200, {
@@ -309,11 +363,11 @@ export default function registerWebuiRoutes(app, ctx) {
     });
   });
 
-  // 纯诊断 GET 端点（v0.22.1+ 收缩）：返回 readDiagnostics 自检结果 + web host 状态
-  // （probeHost 探测 ok + 总线连接状态）。壳页不再轮询此端点做挂载（就绪事件化——
-  // 挂载由 /webui/events ready 事件/父窗口 postMessage ready 驱动）；此处仅作
-  // 30s 超时兜底「查看诊断」与手动刷新的诊断数据源。就绪时也带 diagnostics（低频
-  // 兜底探测需感知 deps 更新/安装进行中状态）。diagnostics 为 null 时下一轮补上。
+  // 纯诊断 GET 端点（v0.22.1+ 收缩，vZ 事件化后仅剩兜底）：返回 readDiagnostics 自检
+  // 结果 + web host 状态（probeHost 探测 ok + 总线连接状态）。壳页不再轮询此端点——
+  // 挂载由 /webui/events ready 事件驱动，诊断刷新由 diag-changed 事件驱动；此处仅作
+  // 30s 超时兑底「查看诊断」、手动刷新与事件驱动 refreshDiag 的数据源。
+  // diagnostics 为 null 时事件到达会再补上（refreshDiag 每次查询都重新收集）。
   app.get("/webui/health", async (c) => {
     const ready = busReady() || (await probeHost(port, ctx.log));
     const body = {
