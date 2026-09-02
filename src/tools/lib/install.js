@@ -19,7 +19,6 @@ import { spawn } from "node:child_process";
 import {
   readFileSync,
   existsSync,
-  mkdirSync,
   writeFileSync,
   copyFileSync,
   rmSync,
@@ -529,21 +528,34 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir, opts = {}) {
     if (!existsSync(srcWs))
       throw new Error("插件根缺少 pnpm-workspace.yaml：" + srcWs);
     milestone("部署清单：插件根 package.json（声明）+" + srcWs);
-    // 3. 创建 node 代理（数据目录，不污染插件根）；pnpm 入口 = 运行时引导
+    // 3. 创建 node 代理（插件根，与部署物同目录）；pnpm 入口 = 运行时引导
     //    （lib/pnpm.js ensurePnpm 下载单文件 pnpm.mjs 到数据目录 pnpm-dist/）。
-    //    PATH 首部指向代理目录——install script（koffi/node-pty 等 build）能找到宿主 node。
-    const proxyDir = join(dataDir, "pnpm-proxy");
-    mkdirSync(proxyDir, { recursive: true });
+    //    代理与 pnpm run 的 PATH 前缀同源绑定 pkgDir（见下）——install script
+    //    （koffi/node-pty 等 build）经 cmd 起子进程 node 时命中代理 → 转发到解析后的
+    //    node 执行体（nodejsPath 或宿主 electron node）。历史教训（T7d 过渡期）：代理
+    //    写数据目录 pnpm-proxy 而 PATH 仍指插件根，cmd 找不到 node，install script 全挂
+    //    （ELIFECYCLE 'node' is not recognized，全新安装必现）；代理随部署走、与 PATH
+    //    同目录即无漂移可能。清理段只删 node_modules/lock，pnpm 不碰 node_modules 外
+    //    文件，代理每次安装幂等重建、不受影响。
+    const legacyProxy = join(dataDir, "pnpm-proxy");
+    if (existsSync(legacyProxy)) {
+      try {
+        rmSync(legacyProxy, { recursive: true, force: true });
+        milestone("[兼容] 旧数据目录 pnpm-proxy 已删除（代理改随插件根部署）");
+      } catch (e) {
+        milestone("[兼容] 旧 pnpm-proxy 删除失败（可手动清理）：" + (e?.message || e));
+      }
+    }
     if (IS_WIN) {
-      const script = join(proxyDir, "node.cmd");
+      const script = join(pkgDir, "node.cmd");
       const content = `@"${nodeExec}" %*\n`;
       writeFileSync(script, content);
     } else {
-      const script = join(proxyDir, "node");
+      const script = join(pkgDir, "node");
       const content = `#!/bin/sh\nexec "${nodeExec}" "$@"\n`;
       writeFileSync(script, content, { mode: 0o755 });
     }
-    milestone("node 代理就绪：" + proxyDir);
+    milestone("node 代理就绪：" + pkgDir);
     // pnpm 不再内置（zip 摘除 node_modules/pnpm）：运行时下载 pnpm-{version} 单文件
     // pnpm.mjs 到数据目录 pnpm-dist/（缓存独立于 dsh-pkg）。引导失败（网络/校验）与
     // 旧「pnpm.cjs 不存在」语义区分：抛可读错误（含两个 CDN 提示），由外层 catch 记入
@@ -627,6 +639,11 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir, opts = {}) {
         cwd: pkgDir,
         env: {
           ...nodeEnv,
+          // PATH 首部 = pkgDir（插件根）：node 代理（node.cmd/node）与部署物同目录、
+          // 同源绑定（见上方「创建 node 代理」）——install script（koffi/node-pty 等
+          // build）经 cmd 起子进程 node 时命中代理，转发到解析后的 node 执行体
+          // （nodejsPath 或宿主 electron node）。代理目录与 PATH 前缀为同一常量，
+          // 不存在漂移可能（T7d 过渡期代理在数据目录而 PATH 指插件根，曾致全挂）。
           PATH: pkgDir + delimiter + (process.env.PATH || ""),
         },
         onStdout: makePipe(buffers.out),
