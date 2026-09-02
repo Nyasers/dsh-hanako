@@ -21,21 +21,10 @@
 //      无 api 字段，vY T7b 后 connection 由 @dsh-hanako/api-bridge 的 client 载体提供）；
 //      当前默认回显（POST /api/hana-settings.read）；保存
 //      （POST /api/hana-settings.save）→ agentDefaultModel 服务写 settings.yaml。
-//   ② DSH 版本卡片：@deepseek-ai/dsh 版本检查与更新（v0.18.1 起检查改 **dsh 侧直查**——
-//      后端 HTTP 直查 npm registry（fetch https://registry.npmjs.org/@deepseek-ai/dsh/latest
-//      的 JSON version 字段，pnpm view 语义等价；官方源失败重试 npmmirror，15s 超时，
-//      v0.18.2 起不再 spawn pnpm），不再经宿主桥接；更新经 **dshana.bus 消息总线**
-//      （@dsh-hanako/bridge 提供 dshanaBus 服务）发 update.request 直投宿主执行——
-//      挂载时自动调一次 POST /api/hana-settings.check-version
-//      （本地版本后端直读 dsh-pkg package.json 零延迟；远端版本后端 HTTP 直查，慢时
-//      返回 pending 由前端轮询兜底），显示本地/最新版本与状态；「检查更新」手动刷新；
-//      「更新到最新」（仅 updateAvailable 时可用，两段式确认）→ POST
-//      /api/hana-settings.request-update 经总线直投宿主（v0.22.1 起替代写更新请求文件
-//      与 /child/post 反向信道，均已退役；bus 未就绪返回「消息总线未连接」），宿主
-//      npm i latest + 重启 web host（web host 重启窗口流断开视为仍在更新）；更新期间
-//      订阅 GET /api/hana-settings.update-stream 事件流（v0.22.1+ 事件驱动，替代旧 2s
-//      轮询 update-status）直到 done/error；事件缺失时手动刷新（update-status 一次性
-//      查询兜底：事件缓存优先；v0.24 起 update-result.json 退役，无文件兜底），计时器/流卸载时清理。
+//   ② DSH 版本卡片：纯展示——T7d 起 dsh 版本严格锁插件声明（更新 dsh = 更新插件
+//      发版），无远端检查/更新。挂载时 POST /api/hana-settings.check-version 一次
+//      （后端只回 localVersion：本地版本直读 dsh-pkg package.json，零延迟）即显示，
+//      无按钮无轮询。
 // 样式用 dsw CSS 变量（--dsw-alias-*），对齐设置面板原生观感（hs-* 类，设置中心：
 // 页头品牌区 + 圆角分组卡片 + 卡片头分隔线 + 版本信息面板；hs 前缀 = hana-settings，
 // 替代改名前的 hdm（hana-default-model）标识）。
@@ -146,11 +135,12 @@ window.__ModuleLoader__.load({
       unknown: "未知错误",
       // ---- DSH 版本卡片 ----
       versionTitle: "DSH 版本",
-      versionSub:
-        "@deepseek-ai/dsh 版本严格锁插件声明（T7d：更新 dsh = 更新插件发版，无独立检查/更新通道）",
+      versionSub: "DSH 版本随插件发版锁定，升级 DSH 请安装新版插件",
       versionLocal: "本地版本",
       versionNone: "未安装",
-      updateNote: "更新 dsh = 更新插件版本（插件发版时随声明重装）",
+      checking: "检查中…",
+      checkFailed: "版本检查失败：",
+      localMissing: "DSH 未安装（请先在 DSHana 标签页安装依赖）",
     };
     const en = {
       nav: "DSHana Settings",
@@ -172,23 +162,13 @@ window.__ModuleLoader__.load({
       // ---- DSH version card ----
       versionTitle: "DSH Version",
       versionSub:
-        "@deepseek-ai/dsh version is locked to the plugin declaration (T7d: updating dsh = shipping a new plugin version; no standalone check/update channel)",
+        "DSH version is locked to the plugin release. Upgrade the plugin to upgrade DSH",
       versionLocal: "Local version",
       versionNone: "not installed",
-      updateNote: "Updating dsh = shipping a new plugin version (reinstalled from the declaration on release)",
+      checking: "Checking…",
+      checkFailed: "Version check failed: ",
       localMissing:
         "DSH is not installed locally (install it from the DSHana tab first)",
-      update: "Update to latest",
-      updateConfirm:
-        "Updating will restart DSHana and interrupt running tasks. Continue?",
-      updateConfirmShort: "Click again to confirm",
-      updatingMsg:
-        "Updating… (DSHana will restart, running tasks will be interrupted)",
-      updateDone: "Update complete v",
-      restartNote: ". Please restart DSHana for full effect",
-      updateFailed: "Update failed: ",
-      updateTimeout:
-        "Update timed out: web host unreachable for too long, check the DSHana tab diagnostics",
     };
 
     // ---- 默认模型卡片：三级联动表单（设置中心分组卡片一）----
@@ -487,23 +467,10 @@ window.__ModuleLoader__.load({
       });
     }
 
-    // ---- DSH 版本卡片：@deepseek-ai/dsh 版本检查与更新（设置中心分组卡片二）----
-    // v0.18.1 起检查改 **dsh 侧直查**：本分页 POST /api/hana-settings.check-version，
-    // 后端 HTTP 直查 npm registry（fetch https://registry.npmjs.org/@deepseek-ai/dsh/latest
-    // 的 JSON version 字段，pnpm view 语义等价；官方源失败重试 npmmirror，15s 超时，
-    // v0.18.2 起不再 spawn pnpm）→ 返回 { localVersion, latestVersion,
-    // updateAvailable, error? }；本地版本后端直读 dsh-pkg package.json（零延迟，
-    // 挂载即显示）。不再写 update-request.json / 读 check-result.json（v0.18.1 起
-    // 废弃宿主桥接——resources.watch 链路不可靠曾致检查永不完成）。
-    // 返回 value 形状：{ localVersion, latestVersion?, updateAvailable?, error? } 或
-    // { state:'pending', localVersion }（后端 HTTP 查询慢时前端轮询兜底——保留 pending
-    // 分支，applyCheck 语义不变）。
-    // 挂载时自动检查一次：先拿到本地版本即时显示，pending 则每 1.5s 轮询
-    // check-version 直至结果（CHECK_POLL_MAX 次上限，防查询慢/异常时无限轮询）。
-    // 「更新到最新」→ request-update（宿主经总线受理后 npm i latest + 重启 web host）→
-    // 订阅 /api/hana-settings.update-stream 事件流（v0.22.1+ 事件驱动，替代旧 2s 轮询
-    // update-status）直到 done/error；流不可用/事件缺失时手动刷新（update-status 一次性
-    // 查询兜底）。web host 重启窗口流断开：保持「更新中…」，回来后事件/刷新拿到终态。
+    // ---- DSH 版本卡片（设置中心分组卡片二）：纯展示——本地版本 + 更新说明 ----
+    // T7d 起 check-version 只回 localVersion（dsh 版本严格锁插件声明，无远端检查/更新）：
+    // 挂载时 POST /api/hana-settings.check-version 一次即显示，无按钮无轮询；状态行仅
+    // 在异常（未安装/读取失败）时出现。
     const CHECK_POLL_INTERVAL_MS = 1500;
     const CHECK_POLL_MAX = 12;
     function DshVersionBlock(props) {
@@ -570,14 +537,9 @@ window.__ModuleLoader__.load({
             setStatusBoth(t("checkFailed") + v.error, "err");
           } else if (v.localVersion === null) {
             setStatusBoth(t("localMissing"), "err");
-          } else if (v.updateAvailable === true) {
-            setStatusBoth(
-              t("updateAvailableMsg") + (v.latestVersion || "?"),
-              "ok",
-            );
-          } else {
-            setStatusBoth(t("upToDate"), "ok");
           }
+          // 正常（本地已装）：状态行保持空——版本值已在信息行展示，T7d 后无
+          // 远端比较/更新，不再显示「已是最新」等多余状态文案
           return "done";
         }
         setStatusBoth(
@@ -825,7 +787,7 @@ window.__ModuleLoader__.load({
               jsx_runtime.jsxs("div", {
                 className: "hs-info",
                 children: [
-                  jsx_runtime.jsxs("div", {
+                  jsx_runtime.jsx("div", {
                     className: "hs-info-row",
                     children: [
                       jsx_runtime.jsx("span", {
@@ -837,10 +799,6 @@ window.__ModuleLoader__.load({
                         children: localVersion || t("versionNone"),
                       }),
                     ],
-                  }),
-                  jsx_runtime.jsx("div", {
-                    className: "hs-note",
-                    children: t("updateNote"),
                   }),
                 ],
               }),
