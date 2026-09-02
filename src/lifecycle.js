@@ -38,7 +38,6 @@
 // checks 结构（t1 依赖 / t2 进程）令 routes/webui.js 渲染不变。
 import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
-import { pathToFileURL } from "node:url";
 // dsh profile 名解析（vX：dshana profile 路线，boot --profile 用配置；config.js 内联进 bundle）
 import { resolveProfileName } from "./tools/lib/config.js";
 import {
@@ -483,27 +482,26 @@ export function ensureDshanaProfile(cfg) {
 // 解析，比枚举 .pnpm 目录稳（不依赖 pnpm 内部布局）。
 // 返回 { profileBoot, bootEntry, appBoot, appBootEntry }：profileBoot 提供 runProfile，
 // appBoot 提供 loadLayeredEnv。
-// 注意：动态 import 必须带 webpackIgnore 注释（rspack 兼容 webpack 语义）——源码里的
-// import(expr) 会被 rspack 编译成自身 chunk runtime（s(<id>)(url)），对运行时绝对路径
-// file:// URL 不适用（实机验证：dsh 包无可用 profile-boot 模块）；webpackIgnore 告诉
-// bundler 完全不要处理该 import，保留原生 import() 调用，且不丢静态语义。
-async function loadInprocDsh(pkgDir) {
+// 加载方式 = CJS require（Node ≥22.12 支持 require(esm)：dsh 入口为 ESM 但静态图同步
+// 可加载、无顶层 await，实测 runProfile/loadLayeredEnv 可直接访问）。选 require 而非
+// import 的原因：CJS require 的模块缓存 key = realpath（含 .pnpm 哈希目录），dsh 升级
+// 哈希变 → 旧 key 自动失效、下次 require 即加载新版——天然穿透宿主进程内缓存，无需
+// 指纹/清理手段；而 ESM 动态 import 的缓存 key = 提供的 URL（symlink 顶层路径跨版本
+// 稳定，曾致升级后热重载命中旧 dsh 模块，boot 读已删除的旧 .pnpm 路径报 ENOENT）。
+// require 对运行时绝对路径无 rspack 静态分析问题（import(expr) 需 webpackIgnore 规避，
+// require 调用原样保留）。
+function loadInprocDsh(pkgDir) {
   const dshPkgLink = join(pkgDir, "node_modules", "@deepseek-ai", "dsh");
   if (!existsSync(join(dshPkgLink, "package.json"))) {
     throw new Error(
       `DSH 包未就绪：${dshPkgLink} 不存在。请在 DSHana 标签页执行「安装依赖」（pnpm install 按声明拉取到 dsh-pkg），或手动在插件数据目录 dsh-pkg 执行 pnpm install`,
     );
   }
-  // realpath 指纹化（升级缓存穿透）：dshPkgLink 是 pnpm symlink（顶层
-  // node_modules/@deepseek-ai/dsh），路径跨版本稳定；Node ESM 缓存按 import URL 为 key，
-  // 动态 import 不经 realpath 归一（实机验证：宿主进程内依赖升级后热重载，同 URL 命中
-  // 旧版 dsh 模块——重启宿主才恢复，曾致升级后 boot 跑旧代码读已删除的旧 .pnpm 路径
-  // 报 ENOENT）。realpath 后 URL 指向 .pnpm/@deepseek-ai+dsh@<ver>_<hash>，含版本指纹：
-  // dsh 升级 → 哈希变 → URL 变 → 缓存天然失效，无需重启宿主。子 chunk 相对 import 基于
-  // realpath URL 解析，全树同指纹，一并穿透。
-  const dshPkg = realpathSync(dshPkgLink);
-  const libDir = join(dshPkg, "lib");
-  // ① profile-boot：枚举 lib 下 profile-boot-*.js，逐个 import 试 runProfile
+  // createRequire 基准 = dsh 包（symlink 路径，沿插件根 node_modules 链解析 app-boot；
+  // 加载候选为绝对路径时基准不影响）。libDir 用 symlink 路径可读，cache key 恒 realpath。
+  const dshReq = createRequire(join(dshPkgLink, "package.json"));
+  const libDir = join(dshPkgLink, "lib");
+  // ① profile-boot：枚举 lib 下 profile-boot-*.js，逐个 require 试 runProfile
   let profileBoot = null;
   let bootEntry = null;
   let tried = 0;
@@ -513,8 +511,8 @@ async function loadInprocDsh(pkgDir) {
       const abs = join(libDir, f);
       tried += 1;
       try {
-        const m = await import(/* webpackIgnore: true */ pathToFileURL(abs).href);
-        if (typeof m.runProfile === "function") {
+        const m = dshReq(abs);
+        if (m && typeof m.runProfile === "function") {
           profileBoot = m;
           bootEntry = abs;
           break;
@@ -534,20 +532,15 @@ async function loadInprocDsh(pkgDir) {
     );
   }
   // ② app-boot 定位（双保险）：
-  //    a) createRequire 从 dsh 包视角解析（标准 pnpm 布局：dsh 的依赖在 .pnpm 节点同级
-  //       node_modules，Node 沿父目录链能找到）；
-  //    b) 失败回退 .pnpm 虚拟存储枚举（手工/自定义链接树布局下 createRequire 的 realpath
-  //       解析不可靠——实测 symlink 路径向上只到顶层 node_modules，找不到间接依赖；
-  //       probe-inproc 验证过的定位方式）。
-  //    resolve/枚举结果统一再 realpath 一次（.pnpm 哈希目录），与上方 dsh 同款缓存指纹
-  //    （app-boot 自身也随 dsh 版本换哈希目录，symlink 路径 import 会命中宿主进程内旧缓存）。
-  //    createRequire 基准用原始 symlink 路径（dshPkgLink）而非 realpath 目标：从 .pnpm
-  //    深处向上解析不一定能找到 dsh-app-boot（该包仅在 pkgDir/node_modules 链暴露时
-  //    realpath 解析失败），symlink 路径沿顶层 node_modules 链必然命中（CodeRabbit）。
+  //    a) createRequire 从 dsh 包（symlink）视角解析（标准 pnpm 布局：沿插件根
+  //       node_modules 链，CodeRabbit 核过——realpath 基准从 .pnpm 深处向上可能找不到，
+  //       symlink 基准必然命中）；
+  //    b) 失败回退 .pnpm 虚拟存储枚举（手工/自定义链接树布局兑底）。
+  //    resolve/枚举结果直接 require：cache key 为 realpath（.pnpm 哈希目录），随 dsh
+  //    版本自动失效，无需显式 realpath 指纹。
   let appBootEntry = null;
   try {
-    const dshRequire = createRequire(join(dshPkgLink, "package.json"));
-    appBootEntry = dshRequire.resolve("@deepseek-ai/dsh-app-boot");
+    appBootEntry = dshReq.resolve("@deepseek-ai/dsh-app-boot");
   } catch {
     // 回退 .pnpm 枚举
     appBootEntry = null;
@@ -582,12 +575,7 @@ async function loadInprocDsh(pkgDir) {
       `无法解析 @deepseek-ai/dsh-app-boot（dsh 依赖缺失？createRequire 与 .pnpm 枚举均未命中）`,
     );
   }
-  try {
-    appBootEntry = realpathSync(appBootEntry);
-  } catch {
-    /* realpath 失败（边缘）：保留原路径，import 时按原样解析 */
-  }
-  const appBoot = await import(/* webpackIgnore: true */ pathToFileURL(appBootEntry).href);
+  const appBoot = dshReq(appBootEntry);
   if (typeof appBoot.loadLayeredEnv !== "function") {
     throw new Error(
       `@deepseek-ai/dsh-app-boot 缺 loadLayeredEnv 导出（${appBootEntry}）`,
@@ -676,17 +664,15 @@ function probeBusReady(port, timeoutMs = 3000) {
   });
 }
 
-// ---- CJS 模块缓存清理（dsh 升级免重启第二层：require 解析缓存穿透）----
-// realpath（ESM module map 换 key）穿透后，dsh 运行时内部经 CJS require 链
-// （createRequire / require.resolve）的缓存仍是旧版：Module._pathCache（解析结果缓存）与
-// require.cache（已加载 CJS 模块）的 key 含 profiles/node_modules 等跨版本稳定路径，命中
-// 旧 .pnpm 哈希 → readFileSync ENOENT（实测：dsh 升级后热重载，typert-loader 133
-// contributor 注册失败，全部指向已删除的旧版 .pnpm 目录）。CJS 缓存 Node 提供删除 API
-// （与 ESM 无 API 相对）：每次 boot 前定向清理 dsh 树相关条目（插件根 node_modules /
-// dsh-home 下），require 链下次解析重新走磁盘、命中当前 .pnpm 哈希目录。
-// 全清 _pathCache 亦可（纯解析结果缓存，无模块实例，重建零风险）；此处定向删含插件
-// 路径的条目，克制不扰宿主其他模块的缓存。清理失败不阻断（残留仅致下次升级热重载跑
-// 旧解析路径，重启兑底）。
+// ---- CJS 模块缓存清理（防御兜底：require 解析残留穿透）----
+// loadInprocDsh 改 require 加载后，dsh 树主穿透靠 require 的 realpath cache key（升级哈希
+// 变 → 旧 key 自动失效）。此处清理为防御兜底：覆盖 dsh 树内其他 CJS 依赖（symlink 路径
+// 解析 / 宿主 preserve-symlinks 边缘 / 历史残留），定向删除 Module._pathCache 与
+// require.cache 中含插件根 node_modules / dsh-home 的条目，require 链下次解析重新走磁盘、
+// 命中当前 .pnpm 哈希目录（实测曾致：升级热重载后 require.resolve 命中旧 .pnpm 路径，
+// readFileSync ENOENT）。全清 _pathCache 亦可（纯解析结果缓存，无模块实例，重建零风险）；
+// 此处定向删含插件路径的条目，克制不扰宿主其他模块缓存。清理失败不阻断（残留仅致下次
+// 升级热重载跑旧解析路径，重启兑底）。
 function clearDshRequireCaches(pkgDir, dataDir) {
   try {
     const mod = createRequire(import.meta.url)("module");
