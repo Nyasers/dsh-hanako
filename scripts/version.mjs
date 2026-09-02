@@ -28,7 +28,7 @@
 //   prerelease（别名 pre）有 prerelease → 递增末段序号（1.0.0-alpha.1 → 1.0.0-alpha.2，
 //              保留原 preid；末段非数字时追加 .0，1.0.0-alpha → 1.0.0-alpha.0）；
 //              无 → x.y.(z+1)-0（npm 默认行为）
-//   <完整 semver> 显式版本号（含 prerelease / build metadata；build 剥离不保留）
+//   <完整 semver> 显式版本号（含 prerelease；build 由本脚本自动附 dsh-<依赖> 段）
 // 严格 SemVer（node-semver 校验同款）：核心组件与数字 prerelease 标识符必须
 // 0|[1-9]\d*（无前导零——01.0.0 / 1.0.0-alpha.01 非法）；非数字标识符须含至少一个
 // 字母或连字符（alpha/beta/rc 等）；build metadata 标识符不受前导零限制（SemVer §10）。
@@ -65,13 +65,17 @@ const write = (p, data) => {
   fs.writeFileSync(path.join(ROOT, p), JSON.stringify(data, null, 2) + "\n", "utf8");
 };
 
-// ---- npm semver 解析/格式化（零依赖；build metadata 解析但剥离不保留）----
+// ---- npm semver 解析/格式化（零依赖；build metadata 保留，恒承载 dsh 依赖段）----
 // 完整格式：major.minor.patch[-prerelease][+build]；prerelease 标识由
 // [0-9A-Za-z-]+ 组成、点分隔；build 同构、点分隔。严格化（node-semver 校验同款）：
 // 核心组件 0|[1-9]\d*（无前导零）；数字 prerelease 标识符同样禁止前导零（parseSemver
 // 内校验）；非数字标识符须含字母或连字符；build 标识符不受前导零限制（SemVer §10）。
+// 版本规则（预览期 2026-09-03 定稿）：build metadata 保留且恒为 dsh 依赖段
+// `dsh-<dependencies.@deepseek-ai/dsh>`（由本脚本从 package.json 自动计算，不接受自定义
+// build——版本号一眼可见跑在哪个 dsh 上，防手误漂移）；bump 子命令：功能改动 bump beta
+// 号、bug 修复 pre 递增（-hotfix.N）、`dsh` 子命令只刷新 build 段（主体不变）。
 const SEMVER_RE =
-  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
 
 function parseSemver(v) {
   const s = String(v || "").trim();
@@ -93,21 +97,45 @@ function parseSemver(v) {
     minor: Number(m[2]),
     patch: Number(m[3]),
     pre,
+    build: m[5] ? m[5].split(".") : null, // build 保留（恒为 dsh 段，见上方版本规则）
   };
 }
 
 function formatSemver(s) {
   return (
     s.major + "." + s.minor + "." + s.patch +
-    (s.pre && s.pre.length ? "-" + s.pre.join(".") : "")
+    (s.pre && s.pre.length ? "-" + s.pre.join(".") : "") +
+    (s.build && s.build.length ? "+" + s.build.join(".") : "")
   );
 }
 
-// 计算新版本：current 必须是合法 semver；arg 为子命令或显式版本号。
-// 显式版本号非法/子命令解析失败返回 null（调用方报错退出）。
+// 读当前 dsh 依赖声明（package.json dependencies.@deepseek-ai/dsh；版本规则 build 段来源）
+function readDshDep() {
+  const pkg = read("package.json");
+  const v = pkg?.dependencies?.["@deepseek-ai/dsh"];
+  return typeof v === "string" && v ? v : null;
+}
+
+// dsh build 段："dsh-" + 依赖版本（依赖版本含 . → build 多标识符，合法）
+function dshBuild() {
+  const dep = readDshDep();
+  if (!dep) {
+    console.error("[version] package.json 缺少 @deepseek-ai/dsh 依赖声明，无法计算 build 段");
+    process.exit(1);
+  }
+  return "dsh-" + dep;
+}
+
+// 计算新版本主体：current 必须是合法 semver；arg 为子命令或显式版本号。
+// build 段不在此层计算（由 main 统一刷新为 dsh 段，见 dshBuild）——本层清输入 build、
+// 只算 major/minor/patch/prerelease 主体；显式版本号/子命令解析失败返回 null。
 function calcNewVersion(current, arg) {
   const v = parseSemver(current);
   if (!v) return null;
+  v.build = null; // build 由 main 统一按依赖计算，不信任输入（防手误漂移）
+  // dsh：只刷新 build 段（主体不变）——依赖升级（如 dsh 0.1.2-alpha.5 → .6）时用，
+  // 不 bump hotfix/pre（版本规则 2026-09-03：主体不动只更新 dsh 版本）
+  if (arg === "dsh") return formatSemver(v);
   if (arg === "patch" || arg === "minor" || arg === "major" || arg === "prerelease" || arg === "pre") {
     if (arg === "patch") {
       if (v.pre && v.pre.length) v.pre = null; // 有 prerelease → 毕业（patch 不递增）
@@ -147,9 +175,11 @@ function calcNewVersion(current, arg) {
     }
     return formatSemver(v);
   }
-  // 显式版本号：接受完整 semver（含 prerelease / build metadata）；剥离 build 保留
+  // 显式版本号：接受完整 semver 主体（含 prerelease；build 由 main 重算为 dsh 段）
   const ev = parseSemver(arg);
-  return ev ? formatSemver(ev) : null;
+  if (!ev) return null;
+  ev.build = null;
+  return formatSemver(ev);
 }
 
 function run(cmd, desc) {
@@ -173,19 +203,22 @@ function main() {
     console.error("[version] 当前版本不是合法 semver: " + current);
     process.exit(1);
   }
-  const next = calcNewVersion(current, versionArg);
+  const nextBase = calcNewVersion(current, versionArg);
 
-  console.log("[version] 当前 " + current + " -> 新版本 " + next + (dryRun ? "（dry-run，不落盘）" : ""));
-  if (next === null) {
-    console.error("[version] 无效版本参数: " + versionArg + "（支持 patch|minor|major|prerelease|pre 或完整 semver，如 1.0.0-beta.0）");
+  if (nextBase === null) {
+    console.error("[version] 无效版本参数: " + versionArg + "（支持 patch|minor|major|prerelease|pre|dsh 或完整 semver，如 1.0.0-beta.0）");
     process.exit(1);
   }
+  // build 段统一刷新为 dsh 依赖段（版本规则 2026-09-03：build 恒 = dsh-<dependencies>）
+  const next = nextBase + "+" + dshBuild();
+
+  console.log("[version] 当前 " + current + " -> 新版本 " + next + (dryRun ? "（dry-run，不落盘）" : ""));
   if (next === current) {
     console.error("[version] 版本号未变化");
     process.exit(1);
   }
   if (!SEMVER_RE.test(next)) {
-    console.error("[version] 无效版本号: " + next + "（须为合法 semver，如 1.0.0 / 1.0.0-alpha.1）");
+    console.error("[version] 无效版本号: " + next + "（须为合法 semver，如 1.0.0 / 1.0.0-beta.2-hotfix.1+dsh-0.1.2-alpha.5）");
     process.exit(1);
   }
 
