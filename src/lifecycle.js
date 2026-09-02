@@ -488,13 +488,21 @@ export function ensureDshanaProfile(cfg) {
 // file:// URL 不适用（实机验证：dsh 包无可用 profile-boot 模块）；webpackIgnore 告诉
 // bundler 完全不要处理该 import，保留原生 import() 调用，且不丢静态语义。
 async function loadInprocDsh(pkgDir) {
-  const dshPkg = join(pkgDir, "node_modules", "@deepseek-ai", "dsh");
-  const libDir = join(dshPkg, "lib");
-  if (!existsSync(join(dshPkg, "package.json"))) {
+  const dshPkgLink = join(pkgDir, "node_modules", "@deepseek-ai", "dsh");
+  if (!existsSync(join(dshPkgLink, "package.json"))) {
     throw new Error(
-      `DSH 包未就绪：${dshPkg} 不存在。请在 DSHana 标签页执行「安装依赖」（pnpm install 按声明拉取到 dsh-pkg），或手动在插件数据目录 dsh-pkg 执行 pnpm install`,
+      `DSH 包未就绪：${dshPkgLink} 不存在。请在 DSHana 标签页执行「安装依赖」（pnpm install 按声明拉取到 dsh-pkg），或手动在插件数据目录 dsh-pkg 执行 pnpm install`,
     );
   }
+  // realpath 指纹化（升级缓存穿透）：dshPkgLink 是 pnpm symlink（顶层
+  // node_modules/@deepseek-ai/dsh），路径跨版本稳定；Node ESM 缓存按 import URL 为 key，
+  // 动态 import 不经 realpath 归一（实机验证：宿主进程内依赖升级后热重载，同 URL 命中
+  // 旧版 dsh 模块——重启宿主才恢复，曾致升级后 boot 跑旧代码读已删除的旧 .pnpm 路径
+  // 报 ENOENT）。realpath 后 URL 指向 .pnpm/@deepseek-ai+dsh@<ver>_<hash>，含版本指纹：
+  // dsh 升级 → 哈希变 → URL 变 → 缓存天然失效，无需重启宿主。子 chunk 相对 import 基于
+  // realpath URL 解析，全树同指纹，一并穿透。
+  const dshPkg = realpathSync(dshPkgLink);
+  const libDir = join(dshPkg, "lib");
   // ① profile-boot：枚举 lib 下 profile-boot-*.js，逐个 import 试 runProfile
   let profileBoot = null;
   let bootEntry = null;
@@ -531,6 +539,8 @@ async function loadInprocDsh(pkgDir) {
   //    b) 失败回退 .pnpm 虚拟存储枚举（手工/自定义链接树布局下 createRequire 的 realpath
   //       解析不可靠——实测 symlink 路径向上只到顶层 node_modules，找不到间接依赖；
   //       probe-inproc 验证过的定位方式）。
+  //    resolve/枚举结果统一再 realpath 一次（.pnpm 哈希目录），与上方 dsh 同款缓存指纹
+  //    （app-boot 自身也随 dsh 版本换哈希目录，symlink 路径 import 会命中宿主进程内旧缓存）。
   let appBootEntry = null;
   try {
     const dshRequire = createRequire(join(dshPkg, "package.json"));
@@ -568,6 +578,11 @@ async function loadInprocDsh(pkgDir) {
     throw new Error(
       `无法解析 @deepseek-ai/dsh-app-boot（dsh 依赖缺失？createRequire 与 .pnpm 枚举均未命中）`,
     );
+  }
+  try {
+    appBootEntry = realpathSync(appBootEntry);
+  } catch {
+    /* realpath 失败（边缘）：保留原路径，import 时按原样解析 */
   }
   const appBoot = await import(/* webpackIgnore: true */ pathToFileURL(appBootEntry).href);
   if (typeof appBoot.loadLayeredEnv !== "function") {
