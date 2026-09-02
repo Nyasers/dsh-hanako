@@ -39,6 +39,7 @@ async function registerDeferredWake({
       meta: {
         type,
         label: String(label || ""),
+        interlude: true,
         deliveryIntent: "trigger_parent_turn",
         notifyAgentOnFailure: true,
       },
