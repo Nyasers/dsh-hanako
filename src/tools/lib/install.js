@@ -56,199 +56,27 @@ import {
 // 旧「命令完成后一次性 g.appendLog("pnpm", out)」废弃——pnpm 输出逐 chunk 实时写。
 const DEPS_LOG_CAP = 8000;
 
-// ---- pnpm ndjson 进度/错误解析（--reporter=ndjson 结构化事件流 → 可读文本）----
-// pnpm 11.24.0 的 ndjson reporter（bole 序列化到 stdout）：每行一个 JSON 对象，
-// level 为字符串（debug/info/warn/error），name 标识事件类型：
-//   pnpm:fetching-progress  { packageId, downloaded, size, status }   包下载进度
-//   pnpm:progress           { packageId, status: resolved/fetched/found_in_store }  解析/取包状态
-//   pnpm:stage              { stage: resolution_started/done | importing_started/done | (exec) }  安装阶段
-//   pnpm:root               { added/removed: { name, version } }     逐包链接（添加/移除）
-//   pnpm:stats              { added, removed }                       汇总计数
-//   pnpm:lifecycle          { stage(脚本名), depPath, wd, line?, exitCode? }  build script 进度
-//   pnpm / pnpm:global      { message, err? }                        info/warn/error（含致命错误）
-// 解析策略：JSON 行按事件类型转可读进度行（下载进度、阶段中文描述、错误提取 message/err，
-// 不把原始 JSON 整行灌进展示日志）；非 JSON 行原样透传（pnpm 也可能输出裸文本，不丢信息）；
-// 未识别且无 message 的事件行跳过（完整原始流保留在 out，供失败时错误提取）。
-const PNPM_STAGE_DESC = {
-  resolution_started: "依赖解析开始",
-  resolution_done: "依赖解析完成",
-  importing_started: "依赖导入开始",
-  importing_done: "依赖导入完成",
-  "(exec)": "执行脚本",
-};
+// ---- pnpm 原生文本直通（ndjson reporter 去除 2026-09-03，用户定稿）----
+// 展示消费的是文本日志（emitLog：内存尾环 ≤DEPS_LOG_CAP + 会话日志 src=pnpm），
+// ndjson 结构化层从未被真正解析利用——原 pnpmNdjsonLineToText / pnpmErrText /
+// PNPM_STAGE_DESC / firstStr / firstNum / countKeys 一整套 JSON 事件 → 可读行
+// 转换白付复杂度，整体删除。pnpm 侧 buildPnpmInstallArgs 去掉 --reporter=ndjson
+// 后输出原生文本：makePipe 只保留行规范化 \r\n/\r → \n、跨 chunk 行重组
+// （pending）、逐行 emitLog，原生文本直通（仍逐行 src=pnpm 进日志通道）；各流独立
+// capped tail（≤65536）与失败错误提取（pnpmErrorTail，≤300 语义）保留，见下方。
 
-// 取对象首个存在的字符串字段值（防御不同 pnpm 版本字段差异）
-function firstStr(obj, keys) {
-  for (const k of keys) {
-    const v = obj[k];
-    if (typeof v === "string" && v) return v;
-  }
-  return null;
-}
-
-// 取对象首个存在的数字字段值（同 firstStr，数字形态）
-function firstNum(obj, keys) {
-  for (const k of keys) {
-    const v = obj[k];
-    if (typeof v === "number" && Number.isFinite(v)) return v;
-  }
-  return null;
-}
-
-// 对象键计数（peer-dependency-issues 汇总用）
-function countKeys(v) {
-  return v && typeof v === "object" ? Object.keys(v).length : 0;
-}
-
-// 从单个 ndjson 日志对象提取可读错误文本（err.message 优先、回退 message、err.code）
-function pnpmErrText(obj) {
-  const err = obj && typeof obj.err === "object" && obj.err ? obj.err : null;
-  const code = err && typeof err.code === "string" && err.code ? err.code : "";
-  let msg = err && typeof err.message === "string" && err.message ? err.message : "";
-  if (!msg && typeof obj.message === "string") msg = obj.message;
-  if (!msg) return code || null;
-  // err.message 通常不含 code 前缀（PnpmError.message 只有详情）；已含则不重复拼
-  return code && msg.indexOf(code) !== 0 ? code + " " + msg : msg;
-}
-
-// 逐行转换：JSON 事件行 → 可读进度行；非 JSON 行原样透传（不丢信息）
-// sizes：fetching-progress 的包大小记录表（started 事件记 size，in_progress 事件用）
-function pnpmNdjsonLineToText(line, sizes) {
-  let obj;
-  try {
-    obj = JSON.parse(line);
-  } catch {
-    return line; // 非 JSON 行原样透传
-  }
-  if (!obj || typeof obj !== "object") return line;
-  const name = typeof obj.name === "string" ? obj.name : "";
-  const level = typeof obj.level === "string" ? obj.level : "";
-  // 错误/警告：提取可读文本（message/err），不要把原始 JSON 整行抛给用户
-  if (level === "error" || name === "pnpm:error") {
-    const m = pnpmErrText(obj);
-    return m ? "[pnpm] 错误：" + m : line;
-  }
-  if (level === "warn") {
-    const m = typeof obj.message === "string" && obj.message ? obj.message : pnpmErrText(obj);
-    return m ? "[pnpm] 警告：" + m : line;
-  }
-  switch (name) {
-    case "pnpm:fetching-progress": {
-      // 字段双兼容：11.24.0 用 packageId/downloaded/size；其它版本可能用 package/fetched/total
-      const pkg = firstStr(obj, ["packageId", "package"]);
-      if (pkg == null) return line;
-      const sizeNow = firstNum(obj, ["size", "total"]);
-      if (sizeNow != null && sizes) sizes.set(pkg, sizeNow); // started 事件带包总字节
-      const fetched = firstNum(obj, ["downloaded", "fetched"]);
-      const total = fetched != null && sizeNow == null ? (sizes ? sizes.get(pkg) : null) : sizeNow;
-      if (fetched == null || total == null || total <= 0) {
-        return "[pnpm] 下载 " + pkg + " …";
-      }
-      const pct = Math.min(100, Math.round((fetched / total) * 100));
-      return "[pnpm] 下载 " + pkg + " " + fetched + "/" + total + " (" + pct + "%)";
-    }
-    case "pnpm:progress": {
-      const pkg = firstStr(obj, ["packageId"]);
-      if (pkg == null) return line;
-      const st = typeof obj.status === "string" ? obj.status : "";
-      const desc =
-        st === "resolved"
-          ? "已解析"
-          : st === "fetched"
-            ? "已下载"
-            : st === "found_in_store"
-              ? "命中缓存"
-              : st || "处理";
-      return "[pnpm] " + desc + " " + pkg;
-    }
-    case "pnpm:stage": {
-      const st = typeof obj.stage === "string" ? obj.stage : "";
-      if (!st) return line;
-      return "[pnpm] " + (PNPM_STAGE_DESC[st] || st);
-    }
-    case "pnpm:root": {
-      const added = obj.added;
-      const removed = obj.removed;
-      if (added && typeof added.name === "string") {
-        return "[pnpm] 添加 " + added.name + (added.version != null ? "@" + added.version : "");
-      }
-      if (removed && typeof removed.name === "string") {
-        return "[pnpm] 移除 " + removed.name + (removed.version != null ? "@" + removed.version : "");
-      }
-      return line;
-    }
-    case "pnpm:stats": {
-      const parts = [];
-      if (typeof obj.added === "number") parts.push("新增 " + obj.added + " 个包");
-      if (typeof obj.removed === "number") parts.push("移除 " + obj.removed + " 个包");
-      return parts.length ? "[pnpm] " + parts.join("，") : line;
-    }
-    case "pnpm:lifecycle": {
-      const stage = typeof obj.stage === "string" ? obj.stage : "";
-      const depPath = typeof obj.depPath === "string" ? obj.depPath : "";
-      const scriptLine = typeof obj.line === "string" ? obj.line : "";
-      const exitCode = typeof obj.exitCode === "number" ? obj.exitCode : null;
-      const where = depPath ? "（" + depPath + "）" : "";
-      if (scriptLine) return "[pnpm] " + (depPath ? depPath + " " : "") + scriptLine;
-      if (exitCode != null) return "[pnpm] 脚本结束 " + (stage || "?") + where + " exit=" + exitCode;
-      return "[pnpm] 执行脚本 " + (stage || "?") + where;
-    }
-    case "pnpm:summary":
-      return "[pnpm] 包链接完成，开始执行构建脚本…";
-    case "pnpm:deprecation": {
-      const pkgName = firstStr(obj, ["pkgName"]);
-      const ver = typeof obj.pkgVersion === "string" ? obj.pkgVersion : "";
-      const depMsg = typeof obj.deprecated === "string" ? obj.deprecated : "";
-      const what = pkgName ? pkgName + (ver ? "@" + ver : "") : "某包";
-      return "[pnpm] 弃用告警：" + what + (depMsg ? "：" + depMsg : "");
-    }
-    case "pnpm:peer-dependency-issues": {
-      const byProject = obj.issuesByProjects;
-      if (!byProject || typeof byProject !== "object") return line;
-      let missing = 0;
-      let bad = 0;
-      let conflicts = 0;
-      for (const issues of Object.values(byProject)) {
-        if (!issues || typeof issues !== "object") continue;
-        missing += countKeys(issues.missing);
-        bad += countKeys(issues.bad);
-        if (Array.isArray(issues.conflicts)) conflicts += issues.conflicts.length;
-      }
-      const parts = [];
-      if (missing) parts.push("缺少 " + missing + " 个 peer 依赖");
-      if (bad) parts.push(bad + " 个版本不符");
-      if (conflicts) parts.push(conflicts + " 处冲突");
-      return parts.length ? "[pnpm] peer 依赖告警：" + parts.join("，") : "[pnpm] peer 依赖告警";
-    }
-    case "pnpm:link": {
-      // 文件链接事件（pnpm 11.24.0：linkLogger.debug({ target, link })，字段
-      // target=store 实际位置、link=落位路径）：两字段齐备才格式化输出链接日志；
-      // 任一缺失视为不完整事件，原行透传保留原始信息供诊断。
-      const link = typeof obj.link === "string" && obj.link ? obj.link : "";
-      const target = typeof obj.target === "string" && obj.target ? obj.target : "";
-      if (!link || !target) return line;
-      return "[pnpm] 链接 " + link + " ← " + target;
-    }
-    default: {
-      // 其它事件（scope/summary/context 等）：有 message 透传 message，否则跳过
-      const m = typeof obj.message === "string" && obj.message ? obj.message : "";
-      return m ? "[pnpm] " + m : "";
-    }
-  }
-}
-
-// 失败错误提取：stdout/stderr 各自的 capped tail 独立逐行转可读文本（JSON 错误行提取
-// message/err，不把原始 JSON 整行抛给用户；两流独立解析，避免跨流拼接部分 NDJSON
-// 记录），最终 ≤300 字符（旧实现 out.slice(-300) 语义保持）。
+// 失败错误提取：失败时对 stdout/stderr 各自 capped tail 的尾部文本直接截取
+// （pnpm 原生文本，无结构化解析层——ndjson 解析链已删除），最终 ≤300 字符
+// （旧实现 out.slice(-300) 语义保持）。
 function pnpmErrorTail(stdoutTail, stderrTail) {
-  const parse = (tail) => {
+  const take = (tail) => {
     if (!tail) return "";
     const lines = tail.split("\n").filter((s) => s.length > 0).slice(-10);
-    return lines.map((ln) => pnpmNdjsonLineToText(ln)).filter((s) => s.length > 0).join("\n");
+    return lines.join("\n");
   };
   // stdout 在前、stderr 在后：join 后 slice(-300) 取末尾窗口，stderr（错误/警告优先级高）
-  // 落在截断窗口内不被挤出；stdout 的 ndjson 进度/结构化错误在前段作上下文。
-  const parts = [parse(stdoutTail), parse(stderrTail)].filter((s) => s.length > 0);
+  // 落在截断窗口内不被挤出；stdout 的进度文本在前段作上下文。
+  const parts = [take(stdoutTail), take(stderrTail)].filter((s) => s.length > 0);
   return parts.join("\n").slice(-300) || "无输出";
 }
 
@@ -371,8 +199,9 @@ export function readDshInstalledVersion(cfg) {
 // （升级安装会清插件目录 node_modules，数据目录随插件生命周期保留；不部署到插件根），
 // 把声明 package.json + 插件根的 pnpm-workspace.yaml（allowBuilds 白名单）写入 pkgDir，
 // 并创建指向宿主 electron node 的代理脚本，然后经 lib/pnpm.js 的 buildPnpmInstallArgs 执行
-// pnpm install --reporter=ndjson（按声明 package.json 的 dependencies 拉取，结构化安装进度
-// 事件流 → 可读进度行，见下）。不再走 pnpm add @spec 动态安装（T7a 起版本由插件根 package.json
+// pnpm install --prod（按声明 package.json 的 dependencies 拉取，原生文本输出逐行
+// 直通日志通道，见文件头「依赖安装日志通道」）。不再走 pnpm add @spec 动态安装（T7a
+// 起版本由插件根 package.json
 // 的 dependencies 声明，单一事实源，固定版本随插件发版）。
 // 关键：PATH 首部指向 pkgDir——代理脚本（node.cmd/node）将子进程 node 请求转发到宿主 electron node，
 // koffi/node-pty 的 install script 经 cmd 起子进程 node 时就能找到宿主 electron node。
@@ -624,20 +453,17 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir, opts = {}) {
     milestone("安装目标：pnpm install --prod（按插件根声明 " + declaredVersion + "）");
     const run = async (registry) => {
       // stdout/stderr 各持独立跨 chunk 行缓冲（pending 行重组 + tail 错误提取）：两条
-      // 管道的 chunk 边界互不相关，共用一个缓冲会把不同流的片段拼成一行，破坏 ndjson
-      // 行重组（JSON.parse 失败 → 降级为脏文本透传）；错误提取也按流独立解析
-      // （pnpmErrorTail(stdoutTail, stderrTail)），避免跨流拼接部分 NDJSON 记录。
+      // 管道的 chunk 边界互不相关，各流独立重组，避免把不同流的片段拼成一行；错误
+      // 提取也按流独立解析（pnpmErrorTail(stdoutTail, stderrTail)，stdout 在前）。
       // makePipe 工厂按流各自创建回调。
       const buffers = {
         out: { pending: "", tail: "" },
         err: { pending: "", tail: "" },
       };
-      const pkgSizes = new Map(); // fetching-progress 包大小记录（started 事件记 size）
-      // pnpm ndjson 输出逐 chunk 实时进统一日志通道（emitLog：内存尾环 ≤DEPS_LOG_CAP
-      // + 会话日志 src=pnpm 实时写，行规范化 \r\n/\r → \n）；每行先做 ndjson 解析转
-      // 可读进度行（JSON 事件 → "[pnpm] …"，非 JSON 行原样透传，见上方解析区）——取代
-      // 旧 --loglevel=http 非结构化输出直写。每次 data 刷新 depsInstallAt——前端 3s 轮询
-      // health 随诊断刷新 installLog 尾部，呈现实时进度
+      // pnpm 原生文本输出逐 chunk 实时进统一日志通道（emitLog：内存尾环 ≤DEPS_LOG_CAP
+      // + 会话日志 src=pnpm 实时写，行规范化 \r\n/\r → \n）——ndjson 解析层已去除，
+      // 原生文本直接逐行透传。每次 data 刷新 depsInstallAt——前端 3s 轮询 health 随
+      // 诊断刷新 installLog 尾部，呈现实时进度
       const makePipe = (buf) => (d) => {
         const text = String(d).replace(/\r\n/g, "\n").replace(/\r/g, "\n");
         buf.tail = (buf.tail + text).slice(-65536); // 各流独立 capped tail（错误提取用）
@@ -645,12 +471,11 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir, opts = {}) {
         buf.pending = lines.pop() ?? ""; // 末段可能是不完整行，留到下个 chunk
         for (const line of lines) {
           if (line === "") continue;
-          const readable = pnpmNdjsonLineToText(line, pkgSizes);
-          if (readable !== "") emitLog(readable + "\n", "pnpm");
+          emitLog(line + "\n", "pnpm"); // 原生文本直通（行规范化已在上面做）
         }
       };
-      // 参数构造收敛 lib/pnpm.js buildPnpmInstallArgs（含 --reporter=ndjson；按声明
-      // 安装，registry 兜底意图由调用方只传 URL）
+      // 参数构造收敛 lib/pnpm.js buildPnpmInstallArgs（无 --reporter=ndjson，pnpm
+      // 原生文本输出；按声明安装，registry 兜底意图由调用方只传 URL）
       const r = await runPnpm(buildPnpmInstallArgs({ registry }), {
         pnpmCli,
         cwd: pkgDir,
@@ -668,10 +493,7 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir, opts = {}) {
       });
       // 收尾 flush：两条管道各自的残留半行分别处理（互不拼接，见 buffers 注释）
       for (const buf of [buffers.out, buffers.err]) {
-        if (buf.pending) {
-          const readable = pnpmNdjsonLineToText(buf.pending, pkgSizes);
-          if (readable !== "") emitLog(readable + "\n", "pnpm");
-        }
+        if (buf.pending) emitLog(buf.pending + "\n", "pnpm");
       }
       if (r.code !== 0) {
         // T1：失败信号结构化——message 保持原可读文本形态（日志/诊断兼容），原始

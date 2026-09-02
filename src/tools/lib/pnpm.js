@@ -359,8 +359,9 @@ export async function runPnpm(args, opts = {}) {
 // 安装语义从「pnpm add @deepseek-ai/dsh@<spec>（版本基线 dshTag，外部可独立升级）」转为
 // 「pnpm install（按声明拉取，版本随插件发版）」——dsh 从外部可升级运行时依赖变为插件
 // 不可分割组成。故本函数废弃 add 形态，改为 buildPnpmInstallArgs：不拼包名/spec，只
-// 声明 install + --reporter=ndjson（结构化安装进度事件流，供 install.js 逐行解析转可读
-// 进度行）；registry 兜底意图由调用方只传 URL。
+// 声明 install（pnpm 原生文本输出——ndjson reporter 已去除 2026-09-03，用户定稿：
+// 结构化事件层未被消费方解析利用，去掉后原生文本由 lib/install.js 逐行直通日志
+// 通道）；registry 兜底意图由调用方只传 URL。
 // ⚠️ 本函数保持纯拼接不做校验——声明版本合法性（严格 SemVer 或合法 dist-tag，见
 // isValidPkgSpec）由调用方负责：installDepsFromPlugin 读取插件根 package.json 的
 // dependencies 后校验（注入面收口，防 "npm:evil@1.0.0" / "github:user/repo" /
@@ -370,7 +371,7 @@ export const DSH_PACKAGE = "@deepseek-ai/dsh";
 export function buildPnpmInstallArgs({ registry } = {}) {
   // --prod：只装运行时 dependencies（插件根 package.json 有 rspack 等 devDeps 构建树，
   // 运行时不需要；dsh + cordis 在 dependencies，T7d 起部署目标 = 插件根）。
-  const args = ["install", "--prod", "--reporter=ndjson"];
+  const args = ["install", "--prod"]; // 原生文本输出（ndjson reporter 已去除）
   if (typeof registry === "string" && registry) {
     args.push("--registry=" + registry);
   }
