@@ -3,8 +3,8 @@
 //
 // tools/lib/config.js — dsh-hanako 配置解析共用模块（lib 提取）
 // 从 tools/dsh-run.js 剥离的纯解析/零状态函数：默认模型/预设（settings.yaml 行级）、
-// reasoningEffort、审批超时、defaultCwd（config.json / 配置快照）。全部零宿主状态
-// （不碰 globalThis 单例，只读文件/参数），dsh-run.js 静态 import。
+// reasoningEffort、审批超时。全部零宿主状态（不碰 globalThis 单例，只读文件/参数），
+// dsh-run.js 静态 import。cwd 无配置回退（defaultCwd 已删除）：create 必传显式指定。
 //
 // 归类说明：新建独立 config.js 而非并入 lib/state.js——state.js 已承载"单例 + 环境
 // 常量"一条职责，本模块是"运行期配置文件解析"另一条职责（全只读、无状态）；若并进
@@ -137,23 +137,6 @@ export function resolveDefaultTimeoutSec(cfg) {
   const old = msToSec(Number(cfg.defaultTimeoutMs));
   if (old !== null && old > 0) return old;
   return 600; // 快照缺失/非数字/0：600s（10 分钟，与旧 `|| 600000` 兜底语义一致）
-}
-
-// defaultCwd 解析（「配置单一事实源」哲学，补齐直读兜底）：优先直读
-// dataDir/config.json 的 global.defaultCwd（设置界面改动即时生效；Agent 直改文件同样生效），
-// 无则回退配置快照/空。工具显式传 cwd 时在 doExecute 内优先，不受影响。
-export function resolveDefaultCwd(cfg) {
-  try {
-    const cf = join(cfg.dataDir, "config.json");
-    if (existsSync(cf)) {
-      const j = JSON.parse(readFileSync(cf, "utf8"));
-      const d = j?.global?.defaultCwd;
-      if (typeof d === "string" && d.trim()) return d.trim();
-    }
-  } catch {
-    /* 读配置失败忽略 */
-  }
-  return String(cfg.defaultCwd || "");
 }
 
 // dshTag 解析（DSH 更新基线 dist-tag，vX 起）：优先直读 dataDir/config.json 的

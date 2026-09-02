@@ -40,12 +40,6 @@
           "default": 3080,
           "title": "DSH WebUI 端口"
         },
-        "defaultCwd": {
-          "type": "string",
-          "default": "",
-          "title": "默认工作目录",
-          "description": "默认可写工作区目录"
-        },
         "approvalTimeoutSec": {
           "type": "number",
           "default": 30,

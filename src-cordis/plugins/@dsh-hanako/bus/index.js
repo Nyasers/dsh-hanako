@@ -106,6 +106,10 @@ let credAuthed = false
 // 换发进行中 Promise（单飞，CodeRabbit）：并发 translateRpcRequest 共享一次换发，
 // 避免缓存未命中时多请求同时 ?token= 并互相覆盖 authCookie；完成后清空。
 let authCookieInflight = null
+// 事件流客户端 id（$events 流 ready 帧的 clientId，模块级）：审批等瀑布帧应答
+// （$events/result）需要它定位事件流——宿主侧无 launchToken 源无从得知，由
+// 本总线事件流持有（apply 的 evtConnect ready 回调赋值）。
+let evtClientId = ''
 
 /** 自环 RPC 鉴权 cookie（dsh 0.1.2+ /api/* 需浏览器 cookie，无则 401）。
  * launchToken 经 GET /?token= 换发 signed cookie（authorizeIndex 流程，本机回环）；
@@ -189,19 +193,39 @@ export async function translateRpcRequest(req, port, reply) {
       return
     }
     if (method === 'respond') {
-      // 审批应答：/api/respond 要 client-response 信封（rpcId 路由 web host pending 表），
-      // 响应是 rpcReceipt { accepted } 而非 ServerResponse——与 Unary 响应结构不同，
-      // 单独构造信封/解析；value 原样回投 { accepted }，宿主侧校验 j.accepted 语义不变
-      // （与直连 HTTP 完全一致）。
-      const envelope = { type: 'client-response', ...(req.payload || {}) }
-      const res = await fetch(base + '/api/respond', {
+      // 审批应答（dsh 0.1.2 瀑布帧）：$events/result 通道。client-response 信封
+      // （respondRpcId + /api/respond）是旧 bridge 直连协议的残留假设，dsh 0.1.2
+      // 无 /api/respond 端点；真实应答 = RemoteEventResult（clientId + eventId +
+      // outcome），自环调 /api/$events/result。宿主侧 payload：{ eventId, outcome }
+      // （审批 approvalId 即瀑布帧 eventId；outcome 为 { kind: 'result', value }），
+      // clientId 由本总线事件流补齐（宿主无 launchToken 源，无从得知）。
+      const p = req.payload || {}
+      const args = {
+        clientId: evtClientId,
+        eventId: p.eventId,
+        outcome: p.outcome,
+      }
+      const res = await fetch(base + '/api/$events/result', {
         method: 'POST',
         headers,
-        body: JSON.stringify(envelope),
+        body: JSON.stringify({
+          type: 'client-request',
+          rpcId: reqId,
+          method: '$events/result',
+          payload: { args },
+        }),
       })
-      if (!res.ok) throw new Error('/api/respond HTTP ' + res.status)
+      if (!res.ok) throw new Error('/api/$events/result HTTP ' + res.status)
       const j = await res.json()
-      reply({ reqId, ok: true, value: j && typeof j === 'object' ? j : {} })
+      // ServerResponse：{ type, rpcId, result: { ok, value } }——ok:true 即应答被接受
+      // （value 可能为 undefined）。result.ok 优先，退化兼容直接 ok 的旧形态。
+      const accepted =
+        j && typeof j === 'object'
+          ? j.result && typeof j.result === 'object'
+            ? j.result.ok === true
+            : j.ok === true
+          : false
+      reply({ reqId, ok: true, value: { accepted } })
       return
     }
     // Unary：client-request 信封，响应 ServerResponse（rpcId 回显 + result.ok/value
@@ -210,12 +234,17 @@ export async function translateRpcRequest(req, port, reply) {
     // 宿主侧传 "session.create" 点号格式——翻译时转换（0.1.1 无斜杠拆分，同路径兼容）。
     const endpoint = method.includes('.') ? method.replace(/\./g, '/') : method
     // vX（dsh 0.1.2）：Remote payload 要求 { args: <参数名>: <参数> }（typert
-    // Remote descriptor 的参数名；session/* 均声明为 request）。rpcId 注入
-    // request.requestId（0.1.2 create 用它写 jsonl data.source.rpcId，与宿主
+    // Remote descriptor 的参数名）。session/* 大多声明为 request，但 session/list
+    // 的 descriptor 参数名是 _request（dsh-api-session-controller 上游不一致，实测
+    // 0.1.2-alpha.4：其他 session 方法 request、仅 session/list 用 _request）——
+    // 统一包 request 会被网关 arguments-invalid 拒绝，故按实际参数名映射。rpcId
+    // 注入 requestId（0.1.2 create 用它写 jsonl data.source.rpcId，与宿主
     // 定位键对齐）。非 session/* 的 method 暂以裸 args 透传（respond 走特殊分支）。
     const isSession = method.startsWith('session.') || method.startsWith('session/')
+    const isSessionList =
+      method === 'session.list' || method === 'session/list'
     const args = isSession
-      ? { request: { ...(req.payload || {}), requestId: reqId } }
+      ? { [isSessionList ? '_request' : 'request']: { ...(req.payload || {}), requestId: reqId } }
       : req.payload
     const res = await fetch(base + '/api/' + endpoint, {
       method: 'POST',
@@ -492,7 +521,6 @@ export function apply(ctx, config) {
         // bridge 回投 next 后照转（宿主审批应答适配后续接入）。 ----
         const evtPort = httpCtx.webServer?.port ?? 3080
         let evtWs = null
-        let evtClientId = ''
         let evtRetry = 0
         let evtRetryTimer = null
         let evtDisposed = false
@@ -548,8 +576,18 @@ export function apply(ctx, config) {
                 return
               }
               if (value.type === 'waterfall') {
-                // 回投 next（宿主只读不处理，否则服务端挂起；fire-and-forget）
-                if (evtClientId && typeof value.eventId === 'string') {
+                // 瀑布帧应答策略：approval/request 由宿主 Agent 应答（dsh_approve
+                // 经总线 respond 回投 result，网关 settle 放行），必须保持 pending
+                // 等待——抢先回投 next 会让网关 settle 掉 eventId（唯一 client 应答
+                // 后 deliveries 清空），Agent 的 result 应答找不到 pending 被静默
+                // 丢弃，审批永远无法放行、任务挂死。其余瀑布事件
+                // （user-questions/request 等）宿主只读不处理，回投 next 防服务端
+                // 挂起（fire-and-forget；失败不影响——服务端超时自愈）。
+                if (
+                  value.event !== 'approval/request' &&
+                  evtClientId &&
+                  typeof value.eventId === 'string'
+                ) {
                   try {
                     fetch('http://127.0.0.1:' + evtPort + '/api/$events/result', {
                       method: 'POST',

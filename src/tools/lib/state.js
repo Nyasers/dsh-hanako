@@ -45,8 +45,7 @@ export const IS_WIN = process.platform === "win32";
 // 会触发签名校验失败（Electron 的 node 二进制非标准 node 签名，pnpm 校验不通过）。
 // 本次提供可选配置 nodejsPath（manifest 配置项）：配置了非空且 existsSync 校验通过的系统
 // node 绝对路径 → 子进程改用自定义 node；否则回退 process.execPath（行为与旧静态常量一致）。
-// 动态解析（取代静态常量 ELECTRON_NODE / ELECTRON_NODE_ENV）：与 resolveDefaultCwd 即时
-// 生效哲学一致——每次 spawn 前解析，运行期改 config.json 的 global.nodejsPath 立即对
+// 动态解析（取代静态常量 ELECTRON_NODE / ELECTRON_NODE_ENV）：每次 spawn 前解析，运行期改 config.json 的 global.nodejsPath 立即对
 // 下一次子进程生效（设置界面改动无需重启）。
 // opts 约定（与 lib/config.js resolve* 同款）：{ dataDir?, nodejsPath? }——dataDir 用于
 // 直读 dataDir/config.json（优先，单一事实源）；nodejsPath 为配置快照兜底（manifest

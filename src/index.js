@@ -33,6 +33,9 @@ import * as dshApprove from "./tools/dsh-approve.js";
 // T7e 工具收敛：dsh-run / dsh-cancel 并入 dsh-session（create/send/cancel 分支），
 // 不再作为独立工具注册；dsh-session.js 内部 import 复用它们的 execute 实现。
 import * as dshSession from "./tools/dsh-session.js";
+// 宿主 task 体系接入（handler.abort → dsh session.cancel）：取消链路收归宿主 task
+// 协议（task:abort → handler.abort → session.cancel），dsh_cancel 不再直连取消
+import { callUnaryBus } from "./tools/lib/protocol.js";
 // 路由工厂（默认导出）
 import registerWebuiRoutes from "./routes/webui.js";
 import registerCardRoutes from "./routes/card.js";
@@ -119,6 +122,43 @@ export default class DshHanakoPlugin {
 
     if (this.ctx?.bus && !g.bus) {
       g.bus = this.ctx.bus;
+    }
+
+    // ---- 宿主 task 体系接入（vX）：注册 dsh 任务 handler，取消链路收归宿主 task 协议 ----
+    // dsh_session 提交的任务注册宿主 task（type: 'dsh' / 'dsh-approval'，taskId = dsh
+    // sessionId）；宿主 task:abort / task:cancel 触发本 handler.abort → 转 dsh
+    // session.cancel（Unary RPC 经总线 rpc.request 投递）。abort 回调运行时 web host
+    // 必已就绪（任务运行中才可能被取消），callUnaryBus 取单例端口；取消失败静默，
+    // 由任务终态兜底。宿主 Agent 侧开放 task 工具后，dsh_cancel 工具退役（当前保留，
+    // 内部改走 task:abort）。
+    const cancelByTask = (taskId) => {
+      const sid = String(taskId || "").trim();
+      if (!sid) return;
+      Promise.resolve(callUnaryBus("session.cancel", { sessionId: sid })).catch(
+        () => {
+          /* 取消失败静默（任务终态兜底） */
+        },
+      );
+    };
+    if (this.ctx?.bus && typeof this.ctx.bus.request === "function") {
+      for (const type of ["dsh", "dsh-approval"]) {
+        this.ctx.bus
+          .request("task:register-handler", { type, abort: cancelByTask })
+          .then(
+            (r) => {
+              g.appendLog?.(
+                "hana",
+                `task handler 注册:${type}（${r && r.ok ? "ok" : "failed"}）`,
+              );
+            },
+            (e) => {
+              g.appendLog?.(
+                "hana",
+                `task handler 注册失败:${type}（${(e && e.message) || e}）`,
+              );
+            },
+          );
+      }
     }
     // resources/network 供 dsh-run.js 宿主侧 provider 跟随 push 链路使用（存在才存，
     // 与 bus 同模式；旧宿主版本可能无此服务，缺失时 dsh-run.js 降级不阻断）

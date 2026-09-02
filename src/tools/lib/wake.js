@@ -39,6 +39,7 @@ async function registerDeferredWake({
       meta: {
         type,
         label: String(label || ""),
+        interlude: true,
         deliveryIntent: "trigger_parent_turn",
         notifyAgentOnFailure: true,
       },
@@ -97,6 +98,12 @@ function abnormalWakeResult({ err, loc, taskRpcId }) {
 // rpcId = 任务 rpcId（prompt 提交产生的 RPC id，与 jsonl data.source.rpcId 同值；
 // 区别于审批帧的 respondRpcId——那是 server-request 信封自己的 RPC id，respond 路由用）。
 // 容错纪律同任务回调：通知失败不影响任务，审批仍可在 dsh Web UI 人工处理。
+//
+// 投递形态（宿主 0.814.0+ interlude 插话式 deferred）：meta.interlude=true 时宿主走
+// pre_reply_interlude 插话队列。实测（2026-09）：interlude 同样不能在 Agent 结束回合前
+// 插入时间线——消息在回合收尾时才落地，不会在回合进行中送达。故审批通知与任务回调
+// 一样，Agent 必须先结束当前回合才能收到；interlude + deliveryIntent=trigger_parent_turn
+// 组合只保留「唤醒语义 + 回帖时间线」，不提供回合内插话。
 async function notifyApprovalWake({ bus, sessionPath, rpcId, approval, task }) {
   if (!bus?.request || !sessionPath) return;
   const taskId = `${rpcId}::approval::${approval.approvalId}`;
@@ -107,6 +114,8 @@ async function notifyApprovalWake({ bus, sessionPath, rpcId, approval, task }) {
       meta: {
         type: "dsh-approval",
         label: `DSH 审批: ${approval.toolName || "tool"}`,
+        interlude: true,
+        deliveryIntent: "trigger_parent_turn",
       },
     });
     await bus.request("deferred:resolve", {

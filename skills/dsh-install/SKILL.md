@@ -1,11 +1,11 @@
 ---
 name: dsh-install
-description: "dsh_install 工具手册（源码 tools/dsh-install.js + tools/lib/install.js 能力层核对）。触发场景：安装 DeepSeek Harness（dsh）依赖（action=install，按插件声明版本 pnpm install --prod 到插件根 node_modules——dsh-pkg 已退役，版本严格锁插件声明无 version/tag 逃生门；registry 兜底 + 自动运行级重验 + autoStart）、检测依赖完整性（action=verify，运行级冒烟只读）、dsh_run 报「dsh 包未就绪」、DSHana 标签页不可用/依赖缺失、安装卡片（/card/dep 实时 pnpm 日志）、安装进行中重复调用返回状态。需要安装或验证 dsh 前先读本技能。"
+description: "dsh_install 工具手册（源码 tools/dsh-install.js + tools/lib/install.js 能力层核对）。触发场景：安装 DeepSeek Harness（DSH）依赖（action=install，按插件声明版本 pnpm install --prod 到插件根 node_modules——dsh-pkg 已退役，版本严格锁插件声明无 version/tag 逃生门；registry 兜底 + 自动运行级重验 + autoStart）、检测依赖完整性（action=verify，运行级冒烟只读）、dsh_session 报「DSH 包未就绪」、DSHana 标签页不可用/依赖缺失、安装卡片（/card/dep 实时 pnpm 日志）、安装进行中重复调用返回状态。需要安装或验证 DSH 前先读本技能。"
 ---
 
 # dsh_install 工具手册
 
-安装/验证 DeepSeek Harness（dsh）依赖（更新 dsh = 更新插件发版，无独立检查/更新通道）。权限 `external_side_effect`（external_api）。实现 `tools/dsh-install.js`，宿主能力层 `tools/lib/install.js`（`installDepsFromPlugin` / `verifyDepsSmoke`），经单例 `g.installDeps` / `g.verifyDeps` 调用，不静态 import。
+安装/验证 DeepSeek Harness（DSH）依赖（更新 DSH = 更新插件发版，无独立检查/更新通道）。权限 `external_side_effect`（external_api）。实现 `tools/dsh-install.js`，宿主能力层 `tools/lib/install.js`（`installDepsFromPlugin` / `verifyDepsSmoke`），经单例 `g.installDeps` / `g.verifyDeps` 调用，不静态 import。
 
 ## 参数契约
 
@@ -37,14 +37,14 @@ description: "dsh_install 工具手册（源码 tools/dsh-install.js + tools/lib
 
 ## 返回
 
-- **install 同步（wait=true）**：`DSH 依赖安装完成：vX…，web host 已自动启动` / `DSH 依赖安装失败：…`，details `{ dsh: { action:'install', ok, state, version?, autoStart?, error? } }`
-- **install 异步（默认）**：立即返回「已在后台执行」，details `{ dsh: { action:'install', state:'installing', taskId }, card: { route:'/card/dep?taskId=…' } }`
-- **verify**：`DSH 依赖检测：通过，版本 vX` / `DSH 依赖检测：失败（…）`，details `{ dsh: { action:'verify', verified, version, error } }`
-- **安装中重复调用**：`DSH 依赖安装已在执行中…`，details `{ dsh: { action:'install', state:'installing' } }`
+- **install 同步（wait=true）**：`DSH 依赖安装完成：vX…，web host 已自动启动` / `DSH 依赖安装失败：…`，details `{ DSH: { action:'install', ok, state, version?, autoStart?, error? } }`
+- **install 异步（默认）**：立即返回「已在后台执行」，details `{ DSH: { action:'install', state:'installing', taskId }, card: { route:'/card/dep?taskId=…' } }`
+- **verify**：`DSH 依赖检测：通过，版本 vX` / `DSH 依赖检测：失败（…）`，details `{ DSH: { action:'verify', verified, version, error } }`
+- **安装中重复调用**：`DSH 依赖安装已在执行中…`，details `{ DSH: { action:'install', state:'installing' } }`
 
 ## 使用场景
 
-- **依赖缺失**：dsh_session create 报「dsh 包未就绪：...bin.js 不存在」、DSHana 标签页不可用（t1 依赖 ✗）→ `dsh_install(action="install")` 或 `dsh_install()`（默认 install）
+- **依赖缺失**：dsh_session create 报「DSH 包未就绪：...bin.js 不存在」、DSHana 标签页不可用（t1 依赖 ✗）→ `dsh_install(action="install")` 或 `dsh_install()`（默认 install）
 - **验证依赖完整性**：deps 卡片「存在但依赖不完整：ERR_MODULE_NOT_FOUND」→ `dsh_install(action="verify")` 复检，或直接重装
 - **装即用**：默认 autoStart=true，安装完成自动拉起 web host
 
