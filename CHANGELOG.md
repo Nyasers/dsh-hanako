@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.0.0-alpha.10（2026-09-02）
+
+- **loadInprocDsh 动态 import 先 realpath，穿透宿主进程内 ESM 缓存**（PR #48）：修复依赖升级后不重启宿主仅热重载插件时，boot 跑宿主进程内缓存的旧版 dsh（错误栈指向已删除的旧 .pnpm 哈希路径 ENOENT，曾误判为 profiles/node_modules 断链与上游 heal bug）。根因：动态 import 用 pnpm symlink 顶层路径（跨版本稳定），Node ESM 缓存按 URL 命中旧版。修复：dsh 入口与 app-boot 先 realpathSync 再 import——URL 指向 .pnpm/@deepseek-ai+dsh@<ver>_<hash> 含版本指纹，dsh 升级即哈希变、URL 变、缓存天然失效；createRequire 基准保持 symlink 路径（解析可靠性，CodeRabbit）。思路同源 hana-remote-dev 壳方案（读盘执行绕缓存）的 ESM 适配版。
+
 ## v1.0.0-alpha.9（2026-09-02）
 
 - **node 代理改回插件根部署**（PR #46）：修复 koffi 等原生依赖 install script 找不到 node（`ELIFECYCLE: 'node' is not recognized`，全新安装必现）。根因是 T7d 过渡期漂移——部署目标 dsh-pkg → 插件根时 node 代理被单独写去数据目录 pnpm-proxy，而 pnpm run 的 PATH 首部仍指插件根；代理改回随部署目录走（写插件根），与 PATH 前缀同源绑定同一常量，此类漂移结构上不再可能。兼容清理旧 pnpm-proxy 残留；`.gitignore` 忽略运行期 `/node.cmd`、`/node`。
