@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.0.0-beta.2-hotfix.1+dsh-0.1.2-alpha.5（2026-09-03）
+
+- **去除 pnpm ndjson reporter**（PR #57）：pnpm 安装改原生文本输出——ndjson 解析层（PNPM_STAGE_DESC / pnpmNdjsonLineToText 等六函数 + makePipe 逐行 JSON 转换）实际未驱动任何结构化展示（Bootstrap 壳页直显文本日志），白付复杂度，整体移除（−211 行）。行规范化/跨 chunk 重组/emitLog/tail 语义保留；失败错误提取 pnpmErrorTail 改原生文本尾部直取（每流各限 ≤300）。T1 错误分类链路输入形态不变（特征码在原生文本同样命中）。
+- **version.mjs 预览期版本规则**（PR #58）：build metadata 由剥离改为保留，且**恒承载 dsh 依赖段**（`+dsh-<dependencies.@deepseek-ai/dsh>`，脚本自动计算不接受自定义，版本号一眼可见跑在哪个 dsh）。bump 语义：功能改动 bump β 号、bug 修复 `-hotfix.N`、新增 `dsh` 子命令（主体不动只刷新 build 段——只跟 dsh 依赖升级时不占 hotfix）。背景：GitHub prerelease 字典序把 alpha.10 排到 alpha.6 前，改 beta 并减少 bump 级别。
+
 ## v1.0.0-beta.2（2026-09-02）
 
 - **自动链状态机化 T2**（PR #55，spec：dsh-deps-zero-intervention）：一次性启动链升级为持久状态机，状态存单例 `g.boot`——phase 流转 ensure-deps（依赖幂等安装，失败按 errorClass 决策）→ waiting（退避等下一尝试 / 不可恢复停等条件变化）→ booting（startWebHost）→ ready（收敛）。可恢复失败（network/environment/unknown/native-toolchain）后台退避重试 30s→2m→10m→30m（cap，插件生命周期内持续）；不可恢复类（macos-signature/declaration/restart-needed）停等 + 通知一次，macos-signature 挂 config.json watch（保存即自动续跑）；同一失败原因只通知一次。卸载/重载安全（unloaded 标记覆盖全部异步边界 + 清退避定时/config watch）。
