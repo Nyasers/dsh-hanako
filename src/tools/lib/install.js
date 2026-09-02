@@ -665,8 +665,11 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir, opts = {}) {
     // verifyDepsSmoke 会把 g.deps.result 刷新为最新 smoke（含 status running→ok/error）
     g.deps.result = null;
     await verifyDepsSmoke(cfg, { force: true });
-    // 安装链路终态 ok（终态保留；verify 若失败其详情在 g.deps.result，不影响安装结论）
+    // 安装链路终态 ok（终态保留；verify 若失败其详情在 g.deps.result，不影响安装结论）——
+    // 成功终态清 error：verifyDepsSmoke 失败路径可能已写入 g.deps.error，不带矛盾状态
+    // （status ok + error 非空）进事件驱动诊断。
     g.deps.status = "ok";
+    g.deps.error = null;
     notifyDepsChanged();
     return { ok: true, state: "installed", cliBin };
   } catch (e) {
