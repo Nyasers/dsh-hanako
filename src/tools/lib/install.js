@@ -40,6 +40,12 @@ import {
   buildPnpmInstallArgs,
   isValidPkgSpec,
 } from "./pnpm.js";
+// T1 错误分类器（spec：dsh-deps-zero-intervention）：install 失败路径对失败信号归类，
+// 产出 errorClass + guidance 存 g.deps.errorClass（纯函数，见 errclass.js 模块头）
+import {
+  classifyInstallError,
+  ERROR_CLASS_GUIDANCE,
+} from "./errclass.js";
 
 // ---- 依赖安装日志通道（统一）----
 // installDepsFromPlugin 内部 emitLog(s, src)：同一份文本同时进
@@ -429,6 +435,13 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir, opts = {}) {
       "插件声明缺少合法 @deepseek-ai/dsh 版本（dependencies 未声明或非法）";
     g.deps.status = "error";
     g.deps.time = new Date().toISOString();
+    // T1：声明非法属 declaration（不可恢复 → 停 + 上报），与 catch 失败路径同一产出
+    // 形态（{ errorClass, guidance } 对象，见 errclass.js 模块头）——status=error 时
+    // errorClass 不落空，诊断展示/调度器可依赖。
+    g.deps.errorClass = {
+      errorClass: "declaration",
+      guidance: ERROR_CLASS_GUIDANCE.declaration,
+    };
     notifyDepsChanged();
     return {
       ok: false,
@@ -444,6 +457,9 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir, opts = {}) {
   const nodeEnv = resolveNodeExecEnv({ dataDir, nodejsPath: cfg.nodejsPath });
   g.deps.status = "installing";
   g.deps.error = null;
+  // T1：新一次安装尝试清空上次失败的分类（errorClass 只反映最近一次 install 失败，
+  // 与 error 同生命周期；成功路径/新入口不残留旧分类误导诊断展示）
+  g.deps.errorClass = null;
   g.deps.time = new Date().toISOString();
   g.deps.log = "";
   notifyDepsChanged();
@@ -656,10 +672,24 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir, opts = {}) {
           if (readable !== "") emitLog(readable + "\n", "pnpm");
         }
       }
-      if (r.code !== 0)
-        throw new Error(
-          "pnpm install 失败 " + DSH_PACKAGE + "（exit " + r.code + "）：" + pnpmErrorTail(buffers.out.tail, buffers.err.tail),
+      if (r.code !== 0) {
+        // T1：失败信号结构化——message 保持原可读文本形态（日志/诊断兼容），原始
+        // stdout/stderr 尾 + 退出码附在 Error 上随 throw 上行，外层 catch 组分类信号
+        // （classifyInstallError）时能拿到完整特征（pnpm 原始输出中的错误码/错误文本，
+        // 不止 pnpmErrorTail 裁过的 ≤300 字摘要）。
+        const installErr = new Error(
+          "pnpm install 失败 " +
+            DSH_PACKAGE +
+            "（exit " +
+            r.code +
+            "）：" +
+            pnpmErrorTail(buffers.out.tail, buffers.err.tail),
         );
+        installErr.exitCode = r.code;
+        installErr.stdoutTail = buffers.out.tail;
+        installErr.stderrTail = buffers.err.tail;
+        throw installErr;
+      }
       return buffers.out.tail; // 无消费者（run 返回值未使用）；保持 string 返回语义
     };
     try {
@@ -692,6 +722,28 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir, opts = {}) {
     notifyDepsChanged();
     return { ok: true, state: "installed", cliBin };
   } catch (e) {
+    // T1 错误分类接入：失败路径对失败信号归类，产出 errorClass + guidance 存
+    // g.deps.errorClass（{ errorClass, guidance } 对象，见 errclass.js 模块头；g.deps.error
+    // 原样保留 = 可读错误文本，分类是它之上的结构化附加）。信号来源：
+    //   ① 本函数内部 throw 已附原始 stdout/stderr 尾 + 退出码（见上方 run() 结构化 throw）；
+    //   ② 其它 throw 点（pnpm 引导失败等）只有 message——message 即含错误特征文本
+    //      （如 ENOTFOUND/ETIMEDOUT），并入 milestoneLog 一并喂分类器；
+    //   ③ g.deps.log 尾（里程碑 + pnpm 实时输出）作 milestoneLog 兜底上下文。
+    // 分类器纯函数永不抛，这里直接调用不需再包 try（分类失败不可能，最坏 unknown）。
+    const errObj = e instanceof Error ? e : null;
+    const classified = classifyInstallError({
+      exitCode:
+        errObj && typeof errObj.exitCode === "number" ? errObj.exitCode : null,
+      stdoutTail:
+        errObj && typeof errObj.stdoutTail === "string" ? errObj.stdoutTail : "",
+      stderrTail:
+        errObj && typeof errObj.stderrTail === "string" ? errObj.stderrTail : "",
+      // e 非 Error（或 message 形态）时文本特征主要落在 message：并入 milestoneLog
+      // （分类器按文本特征归类，message 携带的错误码/错误文本与原始尾同效）
+      milestoneLog:
+        String(e?.message || e) + "\n" + String(g.deps.log || ""),
+    });
+    g.deps.errorClass = classified;
     g.deps.error = String(e?.message || e).slice(0, 1500);
     g.deps.status = "error";
     notifyDepsChanged();
