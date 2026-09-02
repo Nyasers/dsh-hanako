@@ -1386,10 +1386,11 @@ function buildProcessDiagCheck(g, out) {
     check.fix = "点击本卡片「手动启动 web host」按钮重新拉起，或重启 Hana";
   } else {
     // 启动失败（webLastError）：展示失败原因（其已含 stderr 尾部）+ 修复指引。
-    // depsVerified 传入 pickProcessFix：升级缓存残留判定需依赖「当前已装 + 运行级验证
-    // 通过」为前提——取本次诊断 deps 项的 verified（= installed && smoke.ok，见
-    // buildDepsDiagCheck），而非 g.deps.result.ok 裸缓存（缓存不证明 cliBin 当前仍在，
-    // 包被移除/路径变化后仍可能误判升级残留；CodeRabbit PR #51）
+    // depsOk 传入 pickProcessFix：升级缓存残留判定需依赖「当前可用」为前提——取本次诊断
+    // deps 项的 ok（= installed && 无明确验证失败，见 buildDepsDiagCheck），而非 verified：
+    // verified（installed && smoke.ok）在 verify 进行中会被瞬时置 false（running 窗口
+    // smoke 重置为 ok:false），此时 boot 失败 ENOENT 会误落兑底；ok 含当前 installed 硬
+    // 条件（包被移除不判残留，CodeRabbit PR #51）且 running/未验证暂通过不误杀
     check.detail = lastError
       ? "启动失败：" + lastError
       : "进程已退出（code=" +
@@ -1400,7 +1401,7 @@ function buildProcessDiagCheck(g, out) {
       lastError,
       stderr,
       port,
-      out.checks.find((c) => c.key === "deps")?.verified === true,
+      out.checks.find((c) => c.key === "deps")?.ok === true,
     );
   }
   return check;
@@ -1409,19 +1410,20 @@ function buildProcessDiagCheck(g, out) {
 /** 进程失败修复指引：按失败原因内容匹配（依赖 / 升级缓存残留 / 端口占用），兜底通用建议。
  * 同时匹配 webLastError 与 stderr 尾部——端口占用等错误常只出现在 stderr（进程退出时
  * webLastError 可能未携带 stderr 尾部，见「进程已退出」分支）。
- * depsVerified：依赖运行级验证是否通过（调用方从 g.deps.result.ok 取）——升级缓存残留
- * 判定以此为门控，见下方注释。 */
-function pickProcessFix(lastError, stderr, port, depsVerified) {
+ * depsOk：依赖是否当前可用（调用方取本次诊断 deps 项 ok = installed && 无明确验证失败）
+ * ——升级缓存残留判定以此为门控，见下方注释。 */
+function pickProcessFix(lastError, stderr, port, depsOk) {
   const text = (lastError || "") + "\n" + (stderr || "");
   // 跨 dsh 版本升级缓存残留（spec「升级 dsh = 装新插件包 + 重启宿主」既定流程，无豁免层）：
   // 宿主进程内 ESM import 缓存 key 跨版本稳定，热加载新插件后仍命中旧 dsh 模块，boot 读
-  // 已删旧 .pnpm 路径 ENOENT。特征 = 依赖已验证就绪（depsVerified）+ 错误含 ENOENT/no
+  // 已删旧 .pnpm 路径 ENOENT。特征 = 依赖当前可用（depsOk）+ 错误含 ENOENT/no
   // such file/Cannot find + 路径指向 .pnpm/@deepseek-ai+dsh@（真实样本 2026-09-02：alpha.10
-  // 热加载 boot ENOENT 旧 .pnpm 目录）。depsVerified 门控必须：安装不完整/依赖图缺失同样
-  // 报 ENOENT + .pnpm 路径，那种情况重启不愈（磁盘仍坏），只给重启提示会误导——验证不
-  // 过时落下方依赖分支（自动补齐）。
+  // 热加载 boot ENOENT 旧 .pnpm 目录）。depsOk 门控必须：安装不完整/依赖图缺失同样
+  // 报 ENOENT + .pnpm 路径，那种情况重启不愈（磁盘仍坏），只给重启提示会误导——依赖
+  // 明确不可用时落下方依赖分支（自动补齐）。注意门控用 ok 而非 verified：verified 在
+  // verify running 窗口被瞬时置 false，会把升级残留误落兑底（实装 2026-09-02 复现）。
   if (
-    depsVerified === true &&
+    depsOk === true &&
     /(?:ENOENT|no such file|cannot find)/i.test(text) &&
     /\.pnpm[\\/]@deepseek-ai\+dsh@/i.test(text)
   ) {
