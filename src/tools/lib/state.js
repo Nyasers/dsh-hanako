@@ -29,6 +29,10 @@
 //     update 任一进行中另一动作拒绝；tools/dsh-install.js 同步段检查/置位、操作完成
 //     释放；能力层守卫 g.deps.status / g.update.status 保留为 webui 路由等其他调用
 //     路径双保险；verify/check 不占用）
+//   g.boot   = { phase, attempt, nextRetryAt, errorClass, lastError, timer? }
+//     启动自动链状态机（T2 spec：dsh-deps-zero-intervention 新增设计 2；index.js onload
+//     维护：ensure-deps/waiting/booting/ready + 失败退避重试，见 index.js 自动链注释）——
+//     本函数只做兜底初始化，不驱动状态（与 g.update/g.deps 同款热更新兼容语义）
 // status 值域统一：idle / running(installing) / ok / error，由各链路定义模块在状态
 // 变化点显式维护。g.update.log 定义为 getter 投影 g.deps.log（updateDsh 内部走
 // installDepsFromPlugin 写同一日志尾环，同源实时可见，不复制字符串）。
@@ -180,6 +184,26 @@ export function getSingleton() {
   // 进行中另一动作拒绝（install ↔ update 互斥）；null = 无进行中依赖操作。热更新
   // 兼容：旧 globalThis 对象可能缺该字段，逐字段兜底为 null。
   if (g.depBusy === undefined) g.depBusy = null;
+  // T2 启动自动链状态机（spec：dsh-deps-zero-intervention 新增设计 2）——g.boot 兜底初始化。
+  // index.js 把启动自动链（旧一次性链）状态机化后的持久状态（index.js 经 globalThis 访问
+  // 本对象，见文件头「非 bundle 侧」纪律；本函数只兜底字段不驱动）：
+  //   phase        值域 ensure-deps | waiting | booting | ready（流转见 index.js 自动链注释）
+  //   attempt      连续失败尝试计数（可恢复退避取档用；收敛 ready 时归零）
+  //   nextRetryAt  下次自动重试时刻（Date.now() ms；停等类 = null = 不自动重试，等条件变化）
+  //   errorClass   最近失败分类（install 六类 network/macos-signature/native-toolchain/
+  //                declaration/environment/unknown；boot 升级缓存残留另归 restart-needed；
+  //                成功收敛/从未失败 = null）
+  //   lastError    最近失败可读文本（截断；成功收敛/从未失败 = null）
+  //   timer        后台退避 setTimeout 句柄（index.js 维护：调度置位、到点/卸载/收敛清理；
+  //                句柄不跨会话有效——卸载即清，重载后新 onload 重新调度）
+  // 热更新兼容同款（见「分组状态」注释）：旧 globalThis 对象缺该对象/字段时逐个兜底，
+  // 不重置已存在的运行期值（终态跨热更新可见，下次自动链入口才覆盖）。
+  if (!g.boot || typeof g.boot !== "object") g.boot = {};
+  if (g.boot.phase === undefined) g.boot.phase = "ensure-deps";
+  if (g.boot.attempt === undefined) g.boot.attempt = 0;
+  if (g.boot.nextRetryAt === undefined) g.boot.nextRetryAt = null;
+  if (g.boot.errorClass === undefined) g.boot.errorClass = null;
+  if (g.boot.lastError === undefined) g.boot.lastError = null;
   if (!g.check || typeof g.check !== "object") g.check = {};
   if (g.check.status === undefined) g.check.status = "idle";
   if (g.check.result === undefined) g.check.result = null;
