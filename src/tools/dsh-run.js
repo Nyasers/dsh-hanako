@@ -71,7 +71,7 @@ function readSessionProjection(dataDir, sessionId) {
 }
 
 // ---- 本地审批应答（自动放行/超时拒绝共用；信封构造同 tools/dsh-approve.js，不 import 避免模块耦合）----
-h// dsh 0.1.2 瀑布帧应答：$events/result 通道（clientId 由总线补齐，宿主无 launchToken 源）——
+// dsh 0.1.2 瀑布帧应答：$events/result 通道（clientId 由总线补齐，宿主无 launchToken 源）——
 // 应答 = RemoteEventResult { clientId, eventId, outcome }，outcome = { kind: 'result', value }。
 // callUnaryBus("respond") 经总线 rpc.request 投递 → bus 翻译器自环调 /api/$events/result，
 // 回投 { accepted }（ConnectionRpcResult.ok 转译）；成功返回 true，失败抛错由调用方决定。
