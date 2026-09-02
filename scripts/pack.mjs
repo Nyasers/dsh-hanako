@@ -49,6 +49,7 @@ const staticItems = [
   "package.json",
   "manifest.json",
   "pnpm-workspace.yaml",
+  "pnpm-lock.yaml",
   "skills",
 ];
 const distDir = join(ROOT, "dist");
