@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.0.0-beta.1（2026-09-02）
+
+- **依赖零干预 T1：错误分类器**（PR #50，spec：dsh-deps-zero-intervention）：新增 `src/tools/lib/errclass.js` 纯函数 `classifyInstallError`——install 失败从「只看 exit 1」升级为六类 errorClass（network / macos-signature / native-toolchain / declaration / environment / unknown）+ 一句中文 guidance，匹配优先级从具体到一般。`run()` 失败结构化 throw（message 可读、原始 stdout/stderr 尾 + 退出码附 Error）；外层 catch 归类存 `g.deps.errorClass`；声明非法分支同步产出 declaration；新尝试起点清旧分类。回归样本四类全收（koffi ELIFECYCLE / ENOENT 缓存残留 / typert 133 / 网络断），ENOENT 归属 unknown 已论证。引入项目首个单测（Node 内置 node:test，零新依赖），14 用例覆盖特征/优先级/回归/容错。CodeRabbit 两轮闭环：分类器分层判定（tail 决定性 + milestoneLog 兜底），最终 registry 尝试决定分类。
+- **boot 失败提示识别跨 dsh 版本升级需重启**（PR #51/#52）：实装验证发现升级缓存残留（进程内 ESM 缓存命中旧 dsh，boot 读已删 .pnpm 路径 ENOENT）只落兑底文案。pickProcessFix 新增检测分支：依赖可用（deps.ok 门控，含当前 installed 态）且错误含 ENOENT + `.pnpm/@deepseek-ai+dsh@` 路径 → 「检测到跨版本升级，请重启 Hana」；清理诊断/报错中已退役 dsh-pkg 手动安装引导文案。门控数据源两轮修正：verified（verify running 瞬时态会误杀）→ deps.ok。
+- **诊断错误滚动全文 + 修复指引匹配不截断**（PR #53）：诊断卡错误区改为会话日志尾部滚动视图（`readLogTail` 只读 ≤16KiB，日志文件单一来源，不为 UI 另存内存副本）；`pickProcessFix` 匹配用完整 webLastError（截断窗口会丢错误首行特征——实装验证根因）；启动新尝试作废旧退出记录（lastExit 不再遮蔽当前启动失败的修复指引）。
+- **verify 去 spawn：静态核对取代运行级冒烟**（PR #54）：`verifyDepsSmoke` 不再 spawn `node cliBin --version`——冒烟绕宿主 ESM 缓存验「干净进程可加载」，与真实故障（缓存命中旧版）不同路，验过 ≠ 能跑。退化为静态核对（cliBin 存在且为常规文件 + 磁盘版本 === 插件声明，秒回无子进程）；磁盘完整性由 pnpm install（唯一保留的子进程）保证，可运行性由 boot（进程内同路）裁决；diagnosis running 瞬时窗口根除。子进程面收敛：spawn 只留 pnpm install。
+
 ## v1.0.0-alpha.9（2026-09-02）
 
 - **node 代理改回插件根部署**（PR #46）：修复 koffi 等原生依赖 install script 找不到 node（`ELIFECYCLE: 'node' is not recognized`，全新安装必现）。根因是 T7d 过渡期漂移——部署目标 dsh-pkg → 插件根时 node 代理被单独写去数据目录 pnpm-proxy，而 pnpm run 的 PATH 首部仍指插件根；代理改回随部署目录走（写插件根），与 PATH 前缀同源绑定同一常量，此类漂移结构上不再可能。兼容清理旧 pnpm-proxy 残留；`.gitignore` 忽略运行期 `/node.cmd`、`/node`。
