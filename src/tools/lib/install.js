@@ -503,6 +503,11 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir, opts = {}) {
           ((smoke && (smoke.error || smoke.stderr)) || "verify 失败") +
           "），走重装流程",
       );
+      // verifyDepsSmoke 的终态（error）是独立入口语义；此处嵌套于 install 流程——
+      // 重装仍进行中，恢复 installing 外层锁，守卫保持拦截并发 install（否则 verify
+      // 失败后到安装完成的窗口内第二次 install 请求可进入，两个 pnpm install 同时
+      // 删/建 node_modules）。
+      g.deps.status = "installing";
     }
     // 1.6 部署前停 web host：后续要删旧 node_modules，Windows 上被运行中进程加载的原生
     //    模块（koffi/node-pty 的 .node）会锁文件，rmSync 直接失败（EBUSY/EPERM）。
