@@ -28,7 +28,7 @@
 // （hana.api.fetch / hana.panel.*，与 SDK 同协议 hana.plugin.ui v1），浏览器侧 fetch 一律
 // 走 hana.api.fetch（自动带 pluginSurfaceSession 头），面板内容经 hana.panel.set 推送）。
 //
-// 连接失败自检：web host 未就绪时逐项检查 ① dsh 依赖（存在性 + 运行级验证）
+// 连接失败自检：web host 未就绪时逐项检查 ① dsh 依赖（存在性 + 版本与声明核对）
 // ② DSH 进程状态（t1/t2，见 lifecycle.js collectWebDiagnostics），明确指出哪一项坏了、
 // 为什么、怎么修。诊断由服务端收集（Node 侧才能读 config.json、进程单例与 fs 状态；
 // 浏览器 iframe 读不到插件进程）——收集函数挂在 globalThis 单例（tools/dsh-run.js 的

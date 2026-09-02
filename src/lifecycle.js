@@ -1183,7 +1183,7 @@ function buildDepsDiagCheck(g, cfg) {
   const installError = String(g.deps.error || "").slice(0, 300);
   const installLog = String(g.deps.log || "").slice(-800);
   const installAt = g.deps.time || null; // 最近一次 npm i 输出时间（实时进度）
-  // 运行级验证状态（verifyDepsSmoke 缓存于 g.deps.result；非敏感：布尔/版本号/截断错误文本）
+  // 依赖核对状态（verifyDepsSmoke 静态核对缓存于 g.deps.result；非敏感：布尔/版本号/截断错误文本）
   const smoke = g.deps.result || null;
   const verifyRunning = Boolean(smoke?.running);
   const verified = installed && smoke ? Boolean(smoke.ok) : null; // null = 未安装/未验证过（暂通过）
@@ -1203,7 +1203,7 @@ function buildDepsDiagCheck(g, cfg) {
   const pnpmError = smoke?.pnpmError
     ? String(smoke.pnpmError).slice(0, 300)
     : null;
-  // 当前版本（运行级验证缓存优先，无则直读 dsh-pkg package.json）+ 版本检查
+  // 当前版本（核对缓存优先，无则直读 dsh 包 package.json）+ 版本检查
   // 状态（g.check.result 缓存：最近一次 checkDshUpdate 结果）+ 更新状态（g.update.status /
   // g.update.error + 内存态 updateResult，v0.24 起不再读 update-result.json）。
   // 只回非敏感布尔/版本号/截断文本。

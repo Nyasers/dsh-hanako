@@ -6,7 +6,7 @@
 // + semver 比较辅助（parseSemver / compareSemver）+ 本地版本直读（readDshInstalledVersion）。
 // 状态经 lib/state.js 的 getSingleton 访问分组对象 g.deps = { status, result, error,
 // time, log }（v0.24 状态收敛：旧平铺 g.depsInstalling/g.depsInstallLog/g.depsSmoke 等
-// 全废；status 值域 idle/installing/ok/error，result = 运行级验证缓存复合对象，log =
+// 全废；status 值域 idle/installing/ok/error，result = 依赖核对缓存复合对象，log =
 // 内存尾环字符串，time = 最近一次 npm i 输出时间）。
 // 消费方：dsh-run.js（updateDsh / buildDepsDiagCheck 等组合）、lib/check.js
 // （checkDshUpdate 依赖 verifyDepsSmoke 缓存 + 本地版本直读）、tools/dsh-install.js
@@ -21,6 +21,7 @@ import {
   writeFileSync,
   copyFileSync,
   rmSync,
+  statSync,
 } from "node:fs";
 import { join, dirname, delimiter } from "node:path";
 import {
@@ -849,9 +850,18 @@ export async function verifyDepsSmoke(cfg, opts = {}) {
     }
   })();
   try {
-    // 静态核对（去 spawn）：cliBin 存在 + 磁盘版本 === 插件声明。磁盘完整性由 pnpm
-    // install 保证、可运行性由 boot 裁决（见函数头注释），这里只核对「装没装对」。
-    if (!existsSync(cliBin)) throw new Error("cliBin 不存在：" + cliBin);
+    // 静态核对（去 spawn）：cliBin 存在且为常规文件 + 磁盘版本 === 插件声明。磁盘完整
+    // 性由 pnpm install 保证、可运行性由 boot 裁决（见函数头注释），这里只核对「装没装
+    // 对」。cliBin 必须是常规文件（existsSync 对目录也返回 true——目录损坏时核对不能过，
+    // 否则幂等跳过不修复、boot 加载路径失败。CodeRabbit PR #54）
+    let cliStat = null;
+    try {
+      cliStat = statSync(cliBin);
+    } catch {
+      /* 不存在/不可读 */
+    }
+    if (!cliStat || !cliStat.isFile())
+      throw new Error("cliBin 不存在或非文件：" + cliBin);
     slog("静态核对（cliBin=" + cliBin + "）");
     const declared = readDeclaredDshVersion();
     const installed = readDshInstalledVersion(diagCfg);
