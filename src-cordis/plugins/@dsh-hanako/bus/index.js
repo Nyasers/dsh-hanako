@@ -234,12 +234,17 @@ export async function translateRpcRequest(req, port, reply) {
     // 宿主侧传 "session.create" 点号格式——翻译时转换（0.1.1 无斜杠拆分，同路径兼容）。
     const endpoint = method.includes('.') ? method.replace(/\./g, '/') : method
     // vX（dsh 0.1.2）：Remote payload 要求 { args: <参数名>: <参数> }（typert
-    // Remote descriptor 的参数名；session/* 均声明为 request）。rpcId 注入
-    // request.requestId（0.1.2 create 用它写 jsonl data.source.rpcId，与宿主
+    // Remote descriptor 的参数名）。session/* 大多声明为 request，但 session/list
+    // 的 descriptor 参数名是 _request（dsh-api-session-controller 上游不一致，实测
+    // 0.1.2-alpha.4：其他 session 方法 request、仅 session/list 用 _request）——
+    // 统一包 request 会被网关 arguments-invalid 拒绝，故按实际参数名映射。rpcId
+    // 注入 requestId（0.1.2 create 用它写 jsonl data.source.rpcId，与宿主
     // 定位键对齐）。非 session/* 的 method 暂以裸 args 透传（respond 走特殊分支）。
     const isSession = method.startsWith('session.') || method.startsWith('session/')
+    const isSessionList =
+      method === 'session.list' || method === 'session/list'
     const args = isSession
-      ? { request: { ...(req.payload || {}), requestId: reqId } }
+      ? { [isSessionList ? '_request' : 'request']: { ...(req.payload || {}), requestId: reqId } }
       : req.payload
     const res = await fetch(base + '/api/' + endpoint, {
       method: 'POST',
