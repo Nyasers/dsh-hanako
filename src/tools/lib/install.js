@@ -836,9 +836,11 @@ export async function verifyDepsSmoke(cfg, opts = {}) {
     // 验证链路终态（ok/error 保留；下次 verify 入口才回到 running）——注意 install 内部
     // 调用本函数后还会把 g.deps.status 置 ok（安装结论优先，verify 详情在 g.deps.result）
     g.deps.status = smoke.ok ? "ok" : "error";
-    notifyDepsChanged();
-    // error 字段与验证结果同步（ok → 清空；失败 → smoke.error，供诊断展示）
+    // error 字段与验证结果同步（ok → 清空；失败 → smoke.error，供诊断展示）——
+    // 先写 error 再通知：notifyDepsChanged 同步调订阅者，若在其前发出则订阅者读到
+    // 的终态缺 error（状态与错误不一致的诊断帧）。
     g.deps.error = smoke.ok ? "" : smoke.error;
+    notifyDepsChanged();
   }
   return smoke;
 }
