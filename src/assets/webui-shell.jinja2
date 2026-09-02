@@ -280,7 +280,8 @@
   {{= it.iframe }}
   <script>
     // 自举壳页运行时：数据源 = GET /webui/boot-state（T3 单一状态出口）+ /webui/events
-    // 事件流（ready/pending/diagnostics/diag-changed/theme-pref 驱动刷新）。页面只消费
+    // 事件流（ready/pending/diag-changed/theme-pref 驱动刷新；diag-changed = 自举状态
+    // 变化信号：deps 翻转或 web host 启动失败）。页面只消费
     // 快照三段（phase/deps/boot/web），不拼装诊断；三态判定见 viewOf()。无任何手动操作
     // 入口（按钮全退役）；原始日志/错误折叠「详情」仅信息展示。
     window.parent.postMessage({ type: "ready" }, "*");
@@ -695,11 +696,10 @@
                     } else {
                       refreshBoot();
                     }
-                  } else if (ev.type === "diagnostics") {
-                    if (!readyReceived) refreshBoot();
                   } else if (ev.type === "theme-pref") {
                     sendPrefTo(frame && frame.contentWindow, ev);
                   } else if (ev.type === "diag-changed") {
+                    // 自举状态变化信号（deps 翻转 / web host 启动失败）：刷新快照（进度/终态/errorClass/waiting）
                     refreshBoot();
                   }
                 }

@@ -8,7 +8,7 @@
 // time, log }（v0.24 状态收敛：旧平铺 g.depsInstalling/g.depsInstallLog/g.depsSmoke 等
 // 全废；status 值域 idle/installing/ok/error，result = 依赖核对缓存复合对象，log =
 // 内存尾环字符串，time = 最近一次 npm i 输出时间）。
-// 消费方：dsh-run.js（updateDsh / buildDepsDiagCheck 等组合）、lib/check.js
+// 消费方：dsh-run.js（updateDsh 编排）、lib/check.js（checkDshUpdate 读本地版本）
 // （checkDshUpdate 依赖 verifyDepsSmoke 缓存 + 本地版本直读）、tools/dsh-install.js
 // （经单例 g.installDeps / g.verifyDeps 调用）。
 //
@@ -771,7 +771,7 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir, opts = {}) {
 // 结果缓存到单例分组 g.deps.result = { ok, version, error, at, running, pnpm* }（
 // v0.24 状态收敛：旧 g.depsSmoke 平铺字段并入）；防并发守卫保留（兼容 running/installing
 // 语义，静态后 running 窗口消失）。
-// 触发时机：进标签页自动一次 + 手动「检测依赖」按钮（GET /webui/verify-deps）/ installDeps
+// 触发时机：dsh_install 工具 action=verify（Agent 只读排查，标签页手动按钮已随诊断壳退役）/ installDeps
 // 部署成功后强制重验（opts.force）。
 // pnpm 引导状态（pnpmReady/pnpmVersion/pnpmError）为独立子项，不进 ok 判定（web host
 // 启动不依赖 pnpm）；仅作 deps 卡片「pnpm 引导：就绪/未就绪」独立展示行。

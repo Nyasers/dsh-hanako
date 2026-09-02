@@ -6,32 +6,29 @@
 //                         Bootstrap 三态自举页（booting/action-needed/ready，见 webui-shell 头注释；
 //                         数据源 = GET /webui/boot-state + /webui/events 事件流；
 //                         功能面板 functionPanel 仅 status 常驻，无操作段）
-//   GET /webui/events     就绪事件流（SSE 式 chunked，常驻）：bus ready → 推 ready；
-//                         启动失败 → 推 diagnostics；停机 → 推 pending；deps 状态翻转
-//                         → 推 diag-changed；DSH 主题偏好变更 → 推 theme-pref。
-//                         壳页订阅此流实现事件化（挂载/诊断刷新/偏好跟随全事件驱动）。
-//   GET /webui/health     纯诊断 GET 端点：返回 readDiagnostics 自检结果 + web host 状态
-//                         （probeHost 逻辑仅诊断路径使用；事件化后仅兑底/手动刷新）
 //   GET /webui/boot-state  自举状态快照（T3 spec：dsh-deps-zero-intervention）——单一状态出口：
 //                         g.boot 状态机 + g.deps（含 T1 errorClass/guidance）+ g.web 就绪收敛成
-//                         { phase, ready, deps, boot, web } 三段 JSON，三态可渲染；T4 Bootstrap
+//                         { phase, ready, deps, boot, web } 三段 JSON，三态可渲染；Bootstrap
 //                         壳页只消费它，不再各自拼装诊断（事件驱动刷新仍走 /webui/events）
-//   POST /webui/start        手动启动 web host（process 卡片「手动启动」按钮；ready/starting/触发启动三态）
-//   POST /webui/install-deps 自动安装 dsh 依赖（deps 卡片「安装依赖」按钮；installing/触发安装）
-//   GET  /webui/verify-deps  依赖完整性静态核对（cliBin + 磁盘版本 vs 声明；进标签页自动一次 + 手动「检测依赖」按钮）
-//   GET  /webui/check-update 版本检查（经宿主能力层 g.checkDshUpdate；deps 卡片「检查更新」
-//                            按钮已移除——版本管理归设置页「检查与更新 DSH」卡片 + dsh_install 工具，路由保留）
+//   GET /webui/events     就绪事件流（SSE 式 chunked，常驻）：bus ready → 推 ready；
+//                         停机/重启 → 推 pending；web host 启动失败与 deps 状态翻转
+//                         → 推 diag-changed（信号，壳页刷新 boot-state）；DSH 主题偏好
+//                         变更 → 推 theme-pref。壳页订阅此流实现事件化（挂载/自举状态
+//                         刷新/偏好跟随全事件驱动）。
+//   GET  /webui/check-update 版本检查（经宿主能力层 g.checkDshUpdate；按钮已移除——版本
+//                            管理归设置页「检查与更新 DSH」卡片 + dsh_install 工具，路由保留）
 //   POST /webui/update-dsh   更新 DSH（经宿主能力层 g.updateDsh，异步触发，更新会重启
-//                            web host、正在执行的任务中断；deps 卡片「更新 DSH」按钮已移除，
-//                            入口归设置页 dsh_install 工具，路由保留）
+//                            web host、正在执行的任务中断；按钮已移除，入口归设置页
+//                            dsh_install 工具，路由保留）
+//   （T5 退役：/webui/health 与 /webui/start、/webui/install-deps、/webui/verify-deps
+//   已删除——壳页无手动入口，install/verify/start 通道收敛为自动链 + dsh_install 工具）
 //
 // 机制：与 routes/card.js 同构——宿主把 app 挂在 /api/plugins/<pluginId> 命名空间下，
 // 这里注册相对路径。渲染前按总线连接状态（g.dshanaBus.status().connected）判定 ready：已连接
 // 直接渲染 iframe；未连接渲染 Bootstrap 三态自举页（T4 spec：dsh-deps-zero-intervention——
 // 壳页数据源 = 首帧内嵌 /webui/boot-state 快照（readBootState）+ /webui/events 事件流：
-// bus ready → ready 事件挂载 iframe；bus.disconnect → pending；web host 启动失败 →
-// diagnostics 事件；deps 状态翻转 → diag-changed 事件——后两者壳页只当作「刷新快照」
-// 信号，不再消费旧 diagnostics checks 结构（浏览器侧 t1/t2 诊断展示已退役）。
+// bus ready → ready 事件挂载 iframe；bus.disconnect → pending；web host 启动失败与
+// deps 状态翻转 → diag-changed 信号（壳页刷新 boot-state），无其它载荷。
 // 脚本首行 postMessage ready 是宿主原始握手（参照 PLUGINS.md；插件 bundle 不含
 // @hana/plugin-sdk，不依赖它——壳页内置最小 hana 桥（hana.api.fetch / hana.panel.*，与
 // SDK 同协议 hana.plugin.ui v1），浏览器侧 fetch 一律走 hana.api.fetch（自动带
@@ -39,9 +36,10 @@
 //
 // 自举状态快照（T3）：服务端把启动自动链状态机 g.boot + 依赖状态 g.deps（含 errorClass/
 // guidance）+ g.web 就绪收敛成单一状态出口（GET /webui/boot-state，见 readBootState），
-// 壳页只消费它做三态渲染，不再各自拼装诊断。旧连接失败自检（collectWebDiagnostics 的
-// checks 结构）仍由 /webui/health 与 /webui/events diagnostics 事件在服务端收集
-// （浏览器壳页不再展示；T5 将废弃其展示层，收集函数保留作日志诊断）。
+// 壳页只消费它做三态渲染，不再各自拼装诊断。T5 起旧连接失败自检展示层
+// （collectWebDiagnostics / buildDepsDiagCheck / buildProcessDiagCheck / pickProcessFix /
+// readLogTail 及 readDiagnostics/probeHost 与 /webui/health）整体退役删除——日志诊断
+// 保留会话日志文件，浏览器侧不再有 checks 结构消费方。
 
 // 插件页 HTML 壳（构建期 template-loader 经 doT 编译为自包含渲染函数，运行时零依赖）
 import { render as webuiShellHtml } from "../assets/webui-shell.jinja2";
@@ -62,50 +60,6 @@ function esc(v) {
     .replace(/"/g, "&quot;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
-}
-
-/** 探测 dsh web host 是否就绪（host.describe RPC，1.5s 超时；任何失败视为未就绪）。
- * 仅诊断路径使用（/webui/health 与 /webui/events 的初始判定）；/webui 渲染不再探测——
- * 就绪判定改总线连接状态（g.dshanaBus.status().connected，就绪事件化）。 */
-async function probeHost(port, log) {
-  try {
-    const res = await fetch(`http://127.0.0.1:${port}/api/host.describe`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        type: "client-request",
-        rpcId: "probe",
-        method: "host.describe",
-        payload: {},
-      }),
-      signal: AbortSignal.timeout(1500),
-    });
-    return res.ok;
-  } catch (e) {
-    log?.warn?.(
-      `[dsh-hanako] probeHost 失败（port ${port}）：${e?.message || e}`,
-    );
-    return false;
-  }
-}
-
-/** 读连接失败自检（服务端收集：config.json + 单例 + fs；经单例调用 tools 的收集函数）。
- * 工具模块未加载（冷启动窗口）时返回 null，页面先渲染占位，诊断路径刷新后填充。
- * 只回布尔与截断文本（不返回凭据）；stderr 尾部在收集端已截断 ≤800。 */
-function readDiagnostics(ctx, cfg, port) {
-  const g = globalThis.__dshHanako;
-  if (g && typeof g.collectDiagnostics === "function") {
-    try {
-      return g.collectDiagnostics({ dataDir: ctx?.dataDir, webPort: port });
-    } catch (e) {
-      ctx.log?.warn?.(
-        "[dsh-hanako] 收集连接自检失败:",
-        e?.message || String(e),
-      );
-      return null;
-    }
-  }
-  return null;
 }
 
 /** 总线连接状态（就绪事件化的 ready 判定）：bus 已连接（hello 完成）= web host 就绪。 */
@@ -195,7 +149,7 @@ function readBootState() {
       deps.result && typeof deps.result === "object" ? deps.result : null;
     const s = (v) => (typeof v === "string" && v ? v : null); // 可读字符串安全取值
     const tail = (v, n) => {
-      // 截断约定：展示用文本一律取尾 ≤800（与 buildDepsDiagCheck/Process 诊断同款）
+      // 截断约定：展示用文本一律取尾 ≤800（沿旧诊断壳同款约定）
       const t = s(v);
       return t ? t.slice(-(n || 800)) : null;
     };
@@ -317,18 +271,19 @@ export default function registerWebuiRoutes(app, ctx) {
   });
 
   // 就绪事件流（GET /webui/events，SSE 式 chunked）——壳页事件化的宿主推送通道
-  // （就绪/诊断/主题偏好/deps 状态，全部事件驱动，替代周期轮询）：
-  //   · 打开时已 ready（bus 已连接）→ 立即推 ready 事件并关闭（壳页就绪态不开流）；
-  //   · 未 ready → 先推 pending 事件（壳页保持加载态），挂起等待：
-  //       - bus.ready（本机事件，hello-ok 到达）→ 推 ready 事件（流保持常驻）；
-  //       - bus.disconnect（web host 停机/重启窗口）→ 推 pending 事件（壳页退回加载态）；
-  //       - web host 启动失败（lifecycle notifyWebStartFailed）→ 推 diagnostics 事件；
-  //       - deps 状态翻转（install.js notifyDepsChanged）→ 推 diag-changed 事件；
+  // （就绪/停机/自举状态变化/主题偏好，全部事件驱动；壳页收到后刷新 /webui/boot-state
+  // 或转推 iframe，见 webui-shell.jinja2 事件处理）：
+  //   · 打开时已 ready（bus 已连接）→ 立即推 ready 事件（流保持常驻）；
+  //   · 未 ready → 先推 pending 事件（壳页保持自举页），挂起等待：
+  //       - bus.ready（本机事件，hello-ok 到达）→ 推 ready 事件（壳页挂载 iframe）；
+  //       - bus.disconnect（web host 停机/重启窗口）→ 推 pending 事件（壳页退回自举页）；
+  //       - web host 启动失败（lifecycle notifyWebStartFailed）→ 推 diag-changed 信号
+  //         （壳页刷新 boot-state 呈现 waiting——不再携带旧 diagnostics checks 载荷）；
+  //       - deps 状态翻转（install.js notifyDepsChanged）→ 推 diag-changed 信号；
   //       - DSH 设置变更（bridge $events 转发 settings/document-updated 的 ui-theme）
   //         → 推 theme-pref 事件（壳页转告注入脚本重读偏好，替代 3s 轮询 describe）。
-  // ready 后流保持常驻：重启窗口的 pending → ready 周期、主题偏好与 deps 变更继续推送。
-  // 事件格式：SSE data: JSON，{ type: "ready" | "pending" | "diagnostics" |
-  // "diag-changed" | "theme-pref", diagnostics? }。
+  // ready 后流保持常驻：重启窗口的 pending → ready 周期、主题偏好与自举状态变化继续推送。
+  // 事件格式：SSE data: JSON，{ type: "ready" | "pending" | "diag-changed" | "theme-pref" }。
   // 实现与 routes/card.js 的 /ops/dep-stream 同构（ReadableStream + c.body）；客户端
   // 断开（ReadableStream cancel）时清理订阅与挂钩，不泄漏。
   app.get("/webui/events", (c) => {
@@ -368,17 +323,15 @@ export default function registerWebuiRoutes(app, ctx) {
             /* 已关 */
           }
         };
-        // web host 启动失败 → 推诊断事件（诊断对象由 readDiagnostics 收集）；
-        // 不关闭流——用户修复（手动启动/装依赖）后 bus.ready 仍可推 ready 事件挂载
+        // web host 启动失败 → 推 diag-changed 信号（不携带载荷；壳页收到后刷新
+        // /webui/boot-state 呈现 waiting——T5 起不再收集旧 diagnostics checks）。
+        // 不关闭流——自动链续跑成功后 bus.ready 仍可推 ready 事件挂载
         onStartFailed = () => {
           if (closed) return;
-          send({
-            type: "diagnostics",
-            diagnostics: readDiagnostics(ctx, cfg, port),
-          });
+          send({ type: "diag-changed" });
         };
-        // deps 状态翻转（安装/检测进入与终态）→ 推 diag-changed 事件：壳页收到后
-        // 一次性刷新诊断（事件驱动替代面板 5s 周期 tick；install.js 状态翻转点调用
+        // deps 状态翻转（安装/检测进入与终态）→ 推 diag-changed 信号：壳页收到后
+        // 刷新 /webui/boot-state（进度/终态/errorClass；install.js 状态翻转点调用
         // g.notifyDepsChanged）。
         onDepsChanged = () => {
           if (closed) return;
@@ -481,126 +434,13 @@ export default function registerWebuiRoutes(app, ctx) {
     });
   });
 
-  // 纯诊断 GET 端点（v0.22.1+ 收缩，vZ 事件化后仅剩兜底）：返回 readDiagnostics 自检
-  // 结果 + web host 状态（probeHost 探测 ok + 总线连接状态）。壳页不再轮询此端点——
-  // 挂载由 /webui/events ready 事件驱动，诊断刷新由 diag-changed 事件驱动；此处仅作
-  // 30s 超时兑底「查看诊断」、手动刷新与事件驱动 refreshDiag 的数据源。
-  // diagnostics 为 null 时事件到达会再补上（refreshDiag 每次查询都重新收集）。
-  app.get("/webui/health", async (c) => {
-    const ready = busReady() || (await probeHost(port, ctx.log));
-    const body = {
-      ok: ready,
-      port,
-      timestamp: Date.now(),
-      busConnected: busReady(),
-    };
-    body.diagnostics = readDiagnostics(ctx, cfg, port);
-    return c.json(body);
-  });
-
   // 自举状态快照（T3 spec：dsh-deps-zero-intervention）——Bootstrap 壳页唯一数据源：
   // 返回 readBootState() 聚合的单一状态出口（phase/deps/boot/web 三段 + ready），页面只
   // 消费它、不各自拼装诊断。纯只读同步聚合（无 spawn/探测），永不抛（见 readBootState）；
   // 三态渲染语义（ready → action-needed → booting）见 readBootState 注释，字段齐备无歧义。
+  // T5 起 /webui/start、/webui/install-deps、/webui/verify-deps、/webui/health 已退役
+  // （壳页无手动入口；install/verify 通道收敛为 dsh_install 工具 + 自动链能力层）。
   app.get("/webui/boot-state", (c) => {
     return c.json(readBootState());
-  });
-
-  // 手动启动 web host（process 卡片「手动启动」按钮调用）：读单例按当前状态返回——
-  // 已就绪 → ready；启动中（readyPromise 挂起）→ starting；否则异步触发
-  // g.startWebHost(ctx.config, dataDir)（不 await 其就绪，页面靠就绪事件流检测）→ starting。
-  // 单例缺失/无函数/异常一律容错回 {ok:false}，本路由不抛异常。
-  app.post("/webui/start", (c) => {
-    const g = globalThis.__dshHanako;
-    try {
-      if (!g || typeof g.startWebHost !== "function") {
-        return c.json({ ok: false, error: "插件工具模块未加载，稍后重试" });
-      }
-      if (g.web?.ready) return c.json({ ok: true, state: "ready" });
-      if (g.web?.readyPromise) return c.json({ ok: true, state: "starting" });
-      // 异步触发（startWebHostFromPlugin 内部已 try/catch 记 webLastError 返回布尔；
-      // 这里再 .catch 兜底——路由不等待就绪、不抛异常）。dataDir 缺省用单例记录值，
-      // 避免路由 ctx 无 dataDir 时误落 PLUGIN_ROOT/data。
-      Promise.resolve(
-        g.startWebHost(ctx.config, ctx.dataDir || g.dataDir),
-      ).catch(() => {});
-      return c.json({ ok: true, state: "starting" });
-    } catch (e) {
-      ctx.log?.warn?.(
-        "[dsh-hanako] 手动启动 web host 失败:",
-        e?.message || String(e),
-      );
-      return c.json({ ok: false, error: "启动请求失败，请稍后重试" });
-    }
-  });
-
-  // 自动安装 dsh 依赖（deps 卡片「安装依赖」按钮调用）：读单例按状态返回——
-  // 部署中（g.deps.status === "installing"）→ {ok:true,state:"installing"}；否则异步触发
-  // g.installDeps(ctx.config, dataDir)（不 await 其完成，页面靠诊断刷新）→ installing。
-  // 单例缺失/无函数/异常一律容错回 {ok:false}，本路由不抛异常。
-  app.post("/webui/install-deps", (c) => {
-    const g = globalThis.__dshHanako;
-    try {
-      if (!g || typeof g.installDeps !== "function") {
-        return c.json({ ok: false, error: "插件工具模块未加载，稍后重试" });
-      }
-      // installing+running 都是「依赖操作进行中」（install 内部重验期间 status 短暂为
-      // running），此时重复 install 直接返回状态不重复触发（与能力层内部守卫一致）
-      if (
-        g.deps.status === "installing" ||
-        g.deps.status === "running"
-      )
-        return c.json({ ok: true, state: "installing" });
-      // 异步触发（installDepsFromPlugin 内部已 try/catch 记 g.deps.error 返回结果；
-      // 这里再 .catch 兜底——路由不等待完成、不抛异常）。dataDir 缺省用单例记录值。
-      Promise.resolve(
-        g.installDeps(ctx.config, ctx.dataDir || g.dataDir),
-      ).catch(() => {});
-      return c.json({ ok: true, state: "installing" });
-    } catch (e) {
-      ctx.log?.warn?.(
-        "[dsh-hanako] 自动安装依赖失败:",
-        e?.message || String(e),
-      );
-      return c.json({ ok: false, error: "安装请求失败，请稍后重试" });
-    }
-  });
-
-  // 静态完整性核对（deps 卡片「检测依赖」按钮 + 进标签页自动一次；GET 只读，去 spawn
-  // 2026-09-02：无子进程秒回）：核对中/安装中 → {ok:true,running:true}；否则 await
-  // verifyDepsSmoke(cfg)（cliBin 存在 + 磁盘版本 === 插件声明；pnpm 引导检查并行）→
-  // {ok:true, verified, version, error, running:false, pnpmReady, pnpmVersion, pnpmError}。
-  // pnpm 引导状态为独立子项（不进 verified 判定）：未就绪时 pnpmError 为原因，自愈
-  // 路径（缺缓存自动重下）恢复就绪。结果写入 g.deps.result，前端随后经 health 读取
-  // 诊断刷新 deps 卡片。单例缺失/无函数/异常一律容错回 {ok:false}。
-  app.get("/webui/verify-deps", async (c) => {
-    const g = globalThis.__dshHanako;
-    try {
-      if (!g || typeof g.verifyDeps !== "function") {
-        return c.json({ ok: false, error: "插件工具模块未加载，稍后重试" });
-      }
-      if (g.deps.status === "running" || g.deps.status === "installing")
-        return c.json({ ok: true, running: true });
-      const smoke = await g.verifyDeps({
-        dataDir: ctx.dataDir || g.dataDir,
-        webPort: port,
-      });
-      return c.json({
-        ok: true,
-        running: false,
-        verified: smoke.ok,
-        version: smoke.version,
-        error: smoke.error || null,
-        pnpmReady: smoke.pnpmReady === true,
-        pnpmVersion: smoke.pnpmVersion || null,
-        pnpmError: smoke.pnpmError || null,
-      });
-    } catch (e) {
-      ctx.log?.warn?.(
-        "[dsh-hanako] 依赖核对失败:",
-        e?.message || String(e),
-      );
-      return c.json({ ok: false, error: "检测请求失败，请稍后重试" });
-    }
   });
 }

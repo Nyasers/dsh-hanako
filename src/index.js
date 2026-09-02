@@ -18,8 +18,8 @@
 //     web host boot → ready，失败按 errorClass 退避重试或停等待条件，见 onload 内自动链注释）
 //  4. 插件卸载/重载时回收常驻 web host 子进程。
 // 单例挂在 globalThis.__dshHanako（tools/dsh-run.js 的 rspack bundle 内联 app/lifecycle.js，
-// mountLifecycle 挂 closeProcess/collectDiagnostics/updateDsh/startWebHost/installDeps/verifyDeps/
-// checkDshUpdate）。本文件为 bundle 收敛入口：静态 import 全部插件模块（单 bundle 内无模块缓存问题）。
+// mountLifecycle 挂 closeProcess/updateDsh/startWebHost/installDeps/verifyDeps/checkDshUpdate）。
+// 本文件为 bundle 收敛入口：静态 import 全部插件模块（单 bundle 内无模块缓存问题）。
 import { existsSync, mkdirSync, appendFileSync, watch } from "node:fs";
 import { join, dirname } from "node:path";
 // 日志生命周期（vX 起独立于 migrate 体系）：旧日志归档压缩 + 时间戳日志文件命名
@@ -227,7 +227,7 @@ export default class DshHanakoPlugin {
     // 链（30s→2m→10m→30m cap，插件生命周期内持续）到点自动重新评估；③ 停等类中配置引导
     // 类（macos-signature：nodejsPath 配置）→ fs.watch config.json 变化即重新评估（设置保存
     // 后自动续跑）；④ 宿主重启/插件重载 → 新 onload 重新评估（g.web?.ready 快速路径收敛）。
-    // 手动/工具路径（dsh_install autoStart、/webui/start、诊断卡按钮）与状态机并存：
+    // 手动/工具路径（dsh_install 工具 autoStart）与状态机并存：
     // installDepsFromPlugin 的 installing/running 守卫 + ensureWebHost 的 readyPromise 幂等
     // ——他人路径先装/先起时状态机让路（等落终态或直接收敛），互不冲突。
     //
@@ -250,7 +250,7 @@ export default class DshHanakoPlugin {
     ]);
     // 停等类中「配置变化即可续跑」的子集（挂 config.json watch；其余停等类只等重载/重启）
     const CONFIG_CONTINUE_CLASSES = new Set(["macos-signature"]);
-    // boot 升级缓存残留特征（与 lifecycle.js pickProcessFix 判定同源）：跨 dsh 版本升级后
+    // boot 升级缓存残留特征（原诊断修复指引判定同源，T5 随诊断壳退役，特征正则沿用）：跨 dsh 版本升级后
     // 宿主进程仍持旧模块缓存，boot 读已删 .pnpm 路径必败——重启宿主前重试无意义，归
     // restart-needed 停等
     const ENOENT_TEXT_RE = /(?:ENOENT|no such file|cannot find)/i;

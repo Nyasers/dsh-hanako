@@ -15,7 +15,7 @@
 // 单例纪律（与旧 dsh-run.js getSingleton 完全一致）：globalThis.__dshHanako 跨模块
 // 共享，index.js 卸载清理时读取；旧对象可能缺新字段（热更新后旧 globalThis 对象仍在）
 // 逐字段兜底。函数挂载（g.closeProcess / g.installDeps / g.verifyDeps /
-// g.checkDshUpdate / g.updateDsh / g.startWebHost / g.collectDiagnostics）由各定义模块
+// g.checkDshUpdate / g.updateDsh / g.startWebHost）由各定义模块
 // 在自己文件内显式赋值（本模块是叶子，避免与 dsh-run.js 循环依赖）。
 //
 // 分组状态（v0.24 状态收敛：单例平铺字段重构为分组结构化）——旧平铺字段
