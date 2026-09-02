@@ -34,6 +34,17 @@
 //   ⑤ declaration——ERR_PNPM_* / 404 / peer 冲突 / 非法 spec / 版本不存在；
 //   ⑥ unknown——兜底（含 ENOENT，理由见下）。
 //
+// 分层判定语义（CodeRabbit PR #50 修复）：决定性信号与上下文分离——
+//   stderrTail + stdoutTail 拼成 decisive 文本，按上方优先级完整判定一遍；decisive
+//   无任何命中时，才把 milestoneLog 并入（decisive + milestoneLog 拼全文）按同一
+//   优先级兜底再判定一遍（两层共用 classifyText）。理由：install.js run() 的结构化
+//   throw 保证 stderrTail/stdoutTail = 最后一次 registry 尝试（官方源 → npmmirror）
+//   的原始输出，决定性；若与 milestoneLog（历史上下文，可能含前次尝试特征）直接
+//   拼接，前次尝试的 ENOTFOUND 等会污染最终分类（决定性 declaration 被 network 抢
+//   判）。milestoneLog 只作兜底上下文——非 run() 的其它 throw 点（pnpm 引导失败等）
+//   只有 message 形态（经 install.js catch 落入 milestoneLog），decisive 为空时仍可
+//   命中特征；但它不覆盖决定性信号。
+//
 // ENOENT 归属说明（回归样本②③）：ENOENT（文件/目录不存在）不在特征表内，本模块落
 // unknown 而非 environment——environment 三特征是权限/空间/锁（用户可操作的本地状态），
 // 而样本②「升级后旧 .pnpm 路径 ENOENT 缓存残留」、样本③「dsh 树内部 require.resolve
@@ -145,17 +156,9 @@ function environmentKind(text) {
   return null;
 }
 
-// 分类入口：结构化信号 → { errorClass, guidance }（纯函数，永不抛，见模块头）
-export function classifyInstallError(input) {
-  // 容错：input 非对象 / 字段缺省按空串处理（不抛异常）
-  const s = input && typeof input === "object" ? input : {};
-  const text = [
-    typeof s.stderrTail === "string" ? s.stderrTail : "",
-    typeof s.stdoutTail === "string" ? s.stdoutTail : "",
-    typeof s.milestoneLog === "string" ? s.milestoneLog : "",
-  ]
-    .filter((x) => x !== "")
-    .join("\n");
+// 单层全文判定（决定性文本与兜底全文共用同一优先级顺序，见模块头「分层判定语义」）；
+// 命中返回 { errorClass, guidance }，未命中返回 null（由调用方决定兜底或 unknown）
+function classifyText(text) {
   if (anyMatch(NETWORK_PATTERNS, text))
     return result("network", ERROR_CLASS_GUIDANCE.network);
   if (anyMatch(MACOS_SIGNATURE_PATTERNS, text))
@@ -169,5 +172,29 @@ export function classifyInstallError(input) {
     return result("native-toolchain", ERROR_CLASS_GUIDANCE["native-toolchain"]);
   if (anyMatch(DECLARATION_PATTERNS, text))
     return result("declaration", ERROR_CLASS_GUIDANCE.declaration);
-  return result("unknown", ERROR_CLASS_GUIDANCE.unknown);
+  return null;
+}
+
+// 分类入口：结构化信号 → { errorClass, guidance }（纯函数，永不抛，见模块头）
+// 分层判定：① decisive（stderrTail + stdoutTail）按优先级完整跑一遍——最后一次失败
+// 尝试的输出决定分类；② decisive 无任何命中时 milestoneLog 并入兜底（decisive +
+// milestoneLog 拼全文，同优先级），不覆盖决定性信号；两层都未命中 → unknown。
+export function classifyInstallError(input) {
+  // 容错：input 非对象 / 字段缺省按空串处理（不抛异常）
+  const s = input && typeof input === "object" ? input : {};
+  const decisive = [
+    typeof s.stderrTail === "string" ? s.stderrTail : "",
+    typeof s.stdoutTail === "string" ? s.stdoutTail : "",
+  ]
+    .filter((x) => x !== "")
+    .join("\n");
+  const firstPass = classifyText(decisive);
+  if (firstPass) return firstPass;
+  // decisive 无命中 → milestoneLog 兜底并入（decisive 为空串时 full = milestoneLog 本身）
+  const milestoneText =
+    typeof s.milestoneLog === "string" ? s.milestoneLog : "";
+  const full = milestoneText
+    ? [decisive, milestoneText].filter((x) => x !== "").join("\n")
+    : decisive;
+  return classifyText(full) || result("unknown", ERROR_CLASS_GUIDANCE.unknown);
 }

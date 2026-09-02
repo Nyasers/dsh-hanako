@@ -110,6 +110,46 @@ test("network：特征信号落在 stdoutTail / milestoneLog 也能命中（字�
   assert.equal(viaMilestone.errorClass, "network");
 });
 
+test("分层判定：决定性 tail 决定分类，milestoneLog 历史特征不覆盖（CodeRabbit PR #50）", () => {
+  // 回归 CodeRabbit PR #50：官方源先 ENOTFOUND（network）→ npmmirror 最终
+  // ERR_PNPM_NO_MATCHING_VERSION（declaration）。决定性 tail = 最后一次尝试输出 →
+  // 必须归 declaration；milestoneLog 携带的历史 network 特征（模拟旧实现拼 g.deps.log
+  // 全文的跨尝试污染）不得抢先覆盖（network 优先级最高，旧实现会误判 network）。
+  const decisiveDecl = classifyInstallError({
+    exitCode: 1,
+    stderrTail:
+      "[pnpm] 错误：ERR_PNPM_NO_MATCHING_VERSION No matching version found for @deepseek-ai/dsh@0.1.2-alpha.9",
+    stdoutTail: "",
+    milestoneLog:
+      "[官方源失败] pnpm install 失败 … getaddrinfo ENOTFOUND registry.npmjs.org，重试 npmmirror…（前次尝试残留，不应参与最终分类）",
+  });
+  assert.equal(decisiveDecl.errorClass, "declaration");
+  assert.equal(decisiveDecl.guidance, ERROR_CLASS_GUIDANCE.declaration);
+  // 反向对照：决定性 tail 是 network、milestoneLog 残留 declaration → 仍归 network
+  const decisiveNet = classifyInstallError({
+    exitCode: 1,
+    stderrTail:
+      "pnpm install 失败 @deepseek-ai/dsh（exit 1）：getaddrinfo ENOTFOUND registry.npmjs.org",
+    stdoutTail: "",
+    milestoneLog:
+      "ERR_PNPM_NO_MATCHING_VERSION 残留（历史尝试，不应参与分类）",
+  });
+  assert.equal(decisiveNet.errorClass, "network");
+});
+
+test("分层兜底：决定性无命中时 milestoneLog 并入仍可命中（milestoneLog 兜底语义不破坏）", () => {
+  // 非 run() 的其它 throw 点（pnpm 引导失败等）只有 message → 决定性 tail 为空、
+  // message 经 milestoneLog 传入：兜底层必须仍能归出类（既有 milestone-only 用例语义）
+  const r = classifyInstallError({
+    exitCode: 1,
+    stdoutTail: "",
+    stderrTail: "",
+    milestoneLog:
+      "pnpm 引导失败（pnpm.mjs）：下载超时（60000ms）：https://unpkg.com/pnpm@11.24.0/dist/pnpm.mjs",
+  });
+  assert.equal(r.errorClass, "network");
+});
+
 test("macos-signature：codesign / code signature invalid → 引导配置 nodejsPath", () => {
   const samples = [
     [

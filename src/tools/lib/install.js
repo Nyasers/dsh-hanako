@@ -725,10 +725,15 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir, opts = {}) {
     // T1 错误分类接入：失败路径对失败信号归类，产出 errorClass + guidance 存
     // g.deps.errorClass（{ errorClass, guidance } 对象，见 errclass.js 模块头；g.deps.error
     // 原样保留 = 可读错误文本，分类是它之上的结构化附加）。信号来源：
-    //   ① 本函数内部 throw 已附原始 stdout/stderr 尾 + 退出码（见上方 run() 结构化 throw）；
+    //   ① 本函数内部 throw 已附原始 stdout/stderr 尾 + 退出码（见上方 run() 结构化
+    //      throw）——决定性信号 = 最后一次 registry 尝试（官方源 → npmmirror）的输出，
+    //      分类器按「分层判定」先只看 tail（见 errclass.js 模块头）；
     //   ② 其它 throw 点（pnpm 引导失败等）只有 message——message 即含错误特征文本
-    //      （如 ENOTFOUND/ETIMEDOUT），并入 milestoneLog 一并喂分类器；
-    //   ③ g.deps.log 尾（里程碑 + pnpm 实时输出）作 milestoneLog 兜底上下文。
+    //      （如 ENOTFOUND/ETIMEDOUT），经 milestoneLog 喂分类器（tail 为空时的兜底层）。
+    // 注意：milestoneLog 只传本次失败的 e.message，不拼接 g.deps.log 全文——g.deps.log
+    // 是两次 registry 尝试的累积输出（官方源失败的 ENOTFOUND 等仍留在日志里），拼入会
+    // 让分类器误判成前次尝试的类（CodeRabbit PR #50：决定性 declaration 被残留 network
+    // 特征抢判）；message 与 tail 同属最后一次失败，特征一致无冲突。
     // 分类器纯函数永不抛，这里直接调用不需再包 try（分类失败不可能，最坏 unknown）。
     const errObj = e instanceof Error ? e : null;
     const classified = classifyInstallError({
@@ -738,10 +743,9 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir, opts = {}) {
         errObj && typeof errObj.stdoutTail === "string" ? errObj.stdoutTail : "",
       stderrTail:
         errObj && typeof errObj.stderrTail === "string" ? errObj.stderrTail : "",
-      // e 非 Error（或 message 形态）时文本特征主要落在 message：并入 milestoneLog
-      // （分类器按文本特征归类，message 携带的错误码/错误文本与原始尾同效）
-      milestoneLog:
-        String(e?.message || e) + "\n" + String(g.deps.log || ""),
+      // e 非 Error（或 message 形态）时文本特征主要落在 message：经 milestoneLog 喂
+      // 分类器（message 携带的错误码/错误文本与同次 tail 特征一致，不冲突）
+      milestoneLog: String(e?.message || e),
     });
     g.deps.errorClass = classified;
     g.deps.error = String(e?.message || e).slice(0, 1500);
