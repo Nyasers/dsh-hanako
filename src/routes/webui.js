@@ -2,8 +2,10 @@
 // Copyright (c) 2026 Nyasers
 //
 // routes/webui.js — dsh-hanako 插件页：contributes.cards（realization:page）内嵌 dsh Web UI
-//   GET /webui            插件页（iframe 嵌 http://127.0.0.1:<port>/，含就绪事件化/主题注入/失败自检；
-//                         壳页另接入功能面板 functionPanel（hana.panel 推送状态/操作，见 webui-shell））
+//   GET /webui            插件页：ready（总线已连接）直嵌 dsh Web UI iframe；未 ready 渲染
+//                         Bootstrap 三态自举页（booting/action-needed/ready，见 webui-shell 头注释；
+//                         数据源 = GET /webui/boot-state + /webui/events 事件流；
+//                         功能面板 functionPanel 仅 status 常驻，无操作段）
 //   GET /webui/events     就绪事件流（SSE 式 chunked，常驻）：bus ready → 推 ready；
 //                         启动失败 → 推 diagnostics；停机 → 推 pending；deps 状态翻转
 //                         → 推 diag-changed；DSH 主题偏好变更 → 推 theme-pref。
@@ -25,21 +27,21 @@
 //
 // 机制：与 routes/card.js 同构——宿主把 app 挂在 /api/plugins/<pluginId> 命名空间下，
 // 这里注册相对路径。渲染前按总线连接状态（g.dshanaBus.status().connected）判定 ready：已连接
-// 直接渲染 iframe；未连接渲染加载态（壳页订阅 /webui/events 就绪事件流，bus ready 后宿主
-// 推 ready 事件 → 壳页动态挂载 iframe——v0.22.1+ 就绪事件化，替代旧「服务端 probeHost +
-// 浏览器 3s 轮询 /webui/health 挂载」链路）。脚本首行 postMessage ready 是宿主原始握手
-// （参照 PLUGINS.md；插件 bundle 不含 @hana/plugin-sdk，不依赖它——壳页内置最小 hana 桥
-// （hana.api.fetch / hana.panel.*，与 SDK 同协议 hana.plugin.ui v1），浏览器侧 fetch 一律
-// 走 hana.api.fetch（自动带 pluginSurfaceSession 头），面板内容经 hana.panel.set 推送）。
+// 直接渲染 iframe；未连接渲染 Bootstrap 三态自举页（T4 spec：dsh-deps-zero-intervention——
+// 壳页数据源 = 首帧内嵌 /webui/boot-state 快照（readBootState）+ /webui/events 事件流：
+// bus ready → ready 事件挂载 iframe；bus.disconnect → pending；web host 启动失败 →
+// diagnostics 事件；deps 状态翻转 → diag-changed 事件——后两者壳页只当作「刷新快照」
+// 信号，不再消费旧 diagnostics checks 结构（浏览器侧 t1/t2 诊断展示已退役）。
+// 脚本首行 postMessage ready 是宿主原始握手（参照 PLUGINS.md；插件 bundle 不含
+// @hana/plugin-sdk，不依赖它——壳页内置最小 hana 桥（hana.api.fetch / hana.panel.*，与
+// SDK 同协议 hana.plugin.ui v1），浏览器侧 fetch 一律走 hana.api.fetch（自动带
+// pluginSurfaceSession 头），面板内容经 hana.panel.set 推送）。
 //
-// 连接失败自检：web host 未就绪时逐项检查 ① dsh 依赖（存在性 + 版本与声明核对）
-// ② DSH 进程状态（t1/t2，见 lifecycle.js collectWebDiagnostics），明确指出哪一项坏了、
-// 为什么、怎么修。诊断由服务端收集（Node 侧才能读 config.json、进程单例与 fs 状态；
-// 浏览器 iframe 读不到插件进程）——收集函数挂在 globalThis 单例（tools/dsh-run.js 的
-// collectDiagnostics，lifecycle.js 实现），这里经单例调用而非静态 import：Hana 以 ?t=
-// 时间戳加载 tools 模块，静态 import 会命中 Node ESM 固定 URL 缓存读到旧模块（见
-// tools/dsh-run.js 头部注释），与 index.js 经单例取 closeProcess 同一套纪律。工具模块
-// 未加载（冷启动窗口）时单例函数缺失，返回 null 由壳页诊断渲染兜底。
+// 自举状态快照（T3）：服务端把启动自动链状态机 g.boot + 依赖状态 g.deps（含 errorClass/
+// guidance）+ g.web 就绪收敛成单一状态出口（GET /webui/boot-state，见 readBootState），
+// 壳页只消费它做三态渲染，不再各自拼装诊断。旧连接失败自检（collectWebDiagnostics 的
+// checks 结构）仍由 /webui/health 与 /webui/events diagnostics 事件在服务端收集
+// （浏览器壳页不再展示；T5 将废弃其展示层，收集函数保留作日志诊断）。
 
 // 插件页 HTML 壳（构建期 template-loader 经 doT 编译为自包含渲染函数，运行时零依赖）
 import { render as webuiShellHtml } from "../assets/webui-shell.jinja2";
@@ -230,12 +232,13 @@ function readBootState() {
   }
 }
 
-/** 插件页 HTML 壳：ready=true 直接内联 iframe；否则加载态（壳页订阅就绪事件流后挂载）。
+/** 插件页 HTML 壳：ready=true 直接内联 iframe；否则渲染自举页（三态 Bootstrap 壳，
+ * 见 assets/webui-shell.jinja2 头注释；T4 spec：dsh-deps-zero-intervention）。
  * colorScheme：按宿主 hana-theme 映射的 color-scheme（dark/light）。dsh 主题为
  * system 时通过 prefers-color-scheme 解析，Chromium 会让跨源 iframe 继承父页面
  * 的 color-scheme，因此 dsh 会跟随宿主主题；dsh 内显式选了 light/dark 则不受影响。
- * diagnostics：未就绪时服务端收集的首帧自检数据（JSON 对象或 null）；浏览器端
- * 渲染进诊断区（30s 超时兜底 / 宿主推诊断事件时展示）。 */
+ * boot：未就绪时服务端取一次自举状态快照（readBootState，T3 单一状态出口）作首帧
+ * 渲染数据（JSON 对象或 null）；壳页随后以 /webui/events 事件驱动刷新本快照。 */
 function buildShell({
   ready,
   hcLink,
@@ -243,7 +246,7 @@ function buildShell({
   api,
   port,
   colorScheme,
-  diagnostics,
+  boot,
 }) {
   // dsh-frame 保持裸嵌（曾尝试显式声明 sandbox/allow 绕过宿主沙箱，实测跨源继承链
   // 下内层声明无法生效，属无效方案已回滚，见 CHANGELOG）。
@@ -252,9 +255,9 @@ function buildShell({
   // iframe src 由壳页 JS 统一设置（attach）：直嵌 @dsh-hanako/app 子插件
   // （dsh 3080 fork SPA）——同源 iframe，无需 BFF 代理/凭据透传。
   const iframe = `<iframe id="dsh-frame"></iframe>`;
-  // 嵌入首帧自检 JSON：把 </ 转义成 <\/，防诊断文本（路径/stderr）里的 </script> 提前闭合脚本
-  const initDiag = diagnostics
-    ? JSON.stringify(diagnostics).replace(/<\//g, "<\\/")
+  // 嵌入首帧自举状态快照 JSON：把 </ 转义成 <\/，防快照文本（路径/错误）里的 </script> 提前闭合脚本
+  const initBoot = boot
+    ? JSON.stringify(boot).replace(/<\//g, "<\\/")
     : "null";
   // HTML 模板来自 src/assets/webui-shell.jinja2（asset/source 内联，占位符保留）；
   // 渲染函数由 template-loader 在构建期生成（doT），scope 直接作 it 传入。
@@ -266,7 +269,7 @@ function buildShell({
     ready,
     iframe,
     api,
-    initDiag,
+    initBoot,
     port,
   });
 }
@@ -278,26 +281,28 @@ export default function registerWebuiRoutes(app, ctx) {
     ctx && typeof ctx.config === "object" && ctx.config ? ctx.config : {};
   const port = Number(cfg.webPort) || 3080;
 
-  // 插件页：按总线连接状态判定就绪——已连接直接渲染 iframe；未连接渲染加载态（壳页
-  // 订阅 /webui/events 就绪事件流，bus ready 后宿主推 ready 事件动态挂载）。不再服务端
-  // probeHost（就绪事件化，probeHost 仅诊断路径使用）。未就绪时服务端同步收集一次自检
-  // （首屏即渲染，诊断路径刷新）；就绪不收集保持轻量。
-  // 壳页不再注入任何脚本/横幅：web host 状态与诊断由壳页 JS 订阅 /webui/events
-  // 事件流驱动（就绪事件化），SPA 全部资源由 @dsh-hanako/app 子插件
+  // 插件页：按总线连接状态判定就绪——已连接直接渲染 iframe；未连接渲染 Bootstrap
+  // 自举页（三态：booting/action-needed/ready，壳页订阅 /webui/events 事件流 + 刷新
+  // /webui/boot-state 驱动）。不再服务端 probeHost（就绪事件化，probeHost 仅诊断路径
+  // 使用）。未就绪时服务端同步取一次自举状态快照（readBootState，首屏即渲染三态）；
+  // 就绪不取保持轻量。
+  // 壳页不再注入任何脚本/横幅：自举状态与事件由壳页 JS 订阅 /webui/events + 读
+  // /webui/boot-state（T3 单一状态出口），SPA 全部资源由 @dsh-hanako/app 子插件
   // （dsh 3080）iframe 同源直嵌提供，无浏览器端劫持/改写。
 
   app.get("/webui", async (c) => {
     // 壳页：iframe 直嵌 @dsh-hanako/app 子插件（dsh 3080）serve 的 fork SPA——
     // iframe 内同源（资源/API/SSE/WS 全由子插件提供，免鉴权，无劫持无 token/PSS）；
-    // 宿主只做页面壳：就绪事件化 / 诊断 / 主题与剪贴板桥（全部在壳页 JS 里）。
+    // 宿主只做页面壳：就绪事件化 / 自举状态 / 主题与剪贴板桥（全部在壳页 JS 里）。
     const ready = busReady();
     const hc = c.req.query("hana-css") || "";
     const th = c.req.query("hana-theme") || "inherit";
     const hcLink = hc ? `<link rel="stylesheet" href="${esc(hc)}">` : "";
     // 宿主深色主题（midnight/dark 等）→ iframe 内 prefers-color-scheme dark，dsh 的 system 跟随宿主
     const colorScheme = /midnight|dark/i.test(th) ? "dark" : "light";
-    // 未就绪时服务端同步收集一次自检（首屏即渲染，诊断/超时兜底再刷新）；就绪不收集保持轻量
-    const diagnostics = ready ? null : readDiagnostics(ctx, cfg, port);
+    // 未就绪时服务端同步取一次自举状态快照（首屏即渲染三态；随后事件流/30s 兜底再刷新）；
+    // 就绪不取保持轻量（壳页直接挂载 iframe，快照只在 pending/diag-changed 时按需拉取）
+    const boot = ready ? null : readBootState();
     return c.html(
       buildShell({
         ready,
@@ -306,7 +311,7 @@ export default function registerWebuiRoutes(app, ctx) {
         api: base,
         port,
         colorScheme,
-        diagnostics,
+        boot,
       }),
     );
   });

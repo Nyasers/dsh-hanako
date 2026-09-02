@@ -8,6 +8,11 @@
   <title>DSHana</title>
   {{= it.hcLink }}
   <style>
+    /* Bootstrap 自举壳页（T4 spec：dsh-deps-zero-intervention，webui-bootstrap.md）。
+     * 三态：booting（自举中：阶段时间线 + 实时日志 + 重试信息）/ action-needed（等待用户：
+     * errorClass 人话 + 自动续跑/停等说明 + 原始错误折叠）/ ready（iframe 直嵌 dsh Web UI）。
+     * 页面无任何可点的启动/安装入口（手动入口退役的 UI 面，路由退役见 T5）。
+     * 主题全部走宿主 hana CSS 变量（hcLink 注入），fallback 纸张风色值，明暗随宿主主题。 */
     html,
     body {
       height: 100%;
@@ -15,24 +20,23 @@
     }
 
     html {
-      color-scheme: {
-          {
-          =it.colorScheme
-        }
-      }
+      color-scheme: {{= it.colorScheme }}
     }
 
     iframe#dsh-frame {
       width: 100%;
       height: 100%;
       border: 0;
+      display: none;
+      background: transparent
+    }
+
+    body[data-view="ready"] iframe#dsh-frame {
       display: block
     }
 
-    /* 诊断区全部改用宿主 hana 主题 CSS 变量（hcLink 注入样式表定义，变量清单见
- * 下方主题桥 postMessage 的 vars）；fallback 用纸张风色值，明暗随宿主主题，不再用
- * 硬编码色板与 prefers-color-scheme media query。 */
-    #dsh-pending {
+    /* 自举舞台：非 ready 时全屏覆盖（booting / action-needed 共用） */
+    #dsh-stage {
       position: fixed;
       inset: 0;
       display: none;
@@ -47,120 +51,146 @@
       overflow: auto
     }
 
-    body[data-pending="1"] #dsh-pending {
+    body:not([data-view="ready"]) #dsh-stage {
       display: flex
     }
 
-    body[data-pending="1"] iframe#dsh-frame {
-      display: none
-    }
-
-    .diag-box {
+    .boot-panel {
       max-width: 680px;
       width: 100%
     }
 
-    .diag-title {
+    .view-title {
       font-size: 18px;
       font-weight: 600;
       margin: 0 0 6px
     }
 
-    .diag-sub {
+    .view-sub {
       font-size: 13px;
       color: var(--text-muted, #6B6158);
       margin: 0 0 14px
     }
 
-    .diag-list {
-      list-style: none;
-      margin: 0 0 10px;
-      padding: 0;
+    .view-head {
       display: flex;
-      flex-direction: column;
-      gap: 10px
+      align-items: center;
+      gap: 8px
     }
 
-    .diag-item {
-      display: flex;
-      gap: 10px;
-      align-items: flex-start;
+    .view-head .view-title {
+      margin: 0
+    }
+
+    /* 轻量旋转指示（纯色，无渐变/阴影） */
+    .spin {
+      width: 14px;
+      height: 14px;
+      flex: none;
+      border: 2px solid var(--border, #D8CFBE);
+      border-top-color: var(--accent, #537D96);
+      border-radius: 50%;
+      animation: dsh-spin 0.9s linear infinite
+    }
+
+    @keyframes dsh-spin {
+      to {
+        transform: rotate(360deg)
+      }
+    }
+
+    .card {
       border: 1px solid var(--border, #D8CFBE);
       border-radius: 8px;
       background: var(--bg-card, #FBF7EE);
-      padding: 10px 12px
+      padding: 12px 14px;
+      margin: 0 0 10px
     }
 
-    .diag-mark {
-      font-size: 16px;
-      line-height: 20px;
-      width: 20px;
-      text-align: center;
-      flex: none
-    }
-
-    .diag-item.ok .diag-mark {
-      color: var(--green, #4A6B4A)
-    }
-
-    .diag-item.bad .diag-mark {
-      color: var(--danger, #8B2C1F)
-    }
-
-    .diag-body {
-      min-width: 0;
-      flex: 1
-    }
-
-    .diag-name {
-      font-weight: 600;
-      margin-bottom: 4px
-    }
-
-    .diag-detail {
-      white-space: pre-wrap;
-      word-break: break-all;
-      color: var(--text-light, #4A433C);
-      margin-bottom: 4px
-    }
-
-    .diag-fix {
-      color: var(--accent, #537D96);
-      background: var(--accent-light, rgba(83, 125, 150, 0.08));
-      border-radius: 4px;
-      padding: 6px 8px
-    }
-
-    .diag-btn {
-      font-family: inherit;
+    .card-label {
       font-size: 13px;
-      color: var(--accent, #537D96);
+      font-weight: 600;
+      margin: 0 0 8px
+    }
+
+    /* 阶段时间线（ensure-deps → booting → ready） */
+    .timeline {
+      list-style: none;
+      margin: 0;
+      padding: 0
+    }
+
+    .timeline li {
+      position: relative;
+      display: flex;
+      gap: 10px;
+      padding: 0 0 16px
+    }
+
+    .timeline li:last-child {
+      padding-bottom: 0
+    }
+
+    .timeline li::before {
+      content: "";
+      position: absolute;
+      left: 7px;
+      top: 20px;
+      bottom: 2px;
+      width: 1px;
+      background: var(--border, #D8CFBE)
+    }
+
+    .timeline li:last-child::before {
+      display: none
+    }
+
+    .tl-dot {
+      width: 14px;
+      height: 14px;
+      margin-top: 2px;
+      flex: none;
+      border-radius: 50%;
+      border: 2px solid var(--border, #D8CFBE);
       background: var(--bg-card, #FBF7EE);
-      border: 1px solid var(--accent, #537D96);
-      border-radius: 6px;
-      padding: 6px 12px;
-      margin-top: 6px;
-      cursor: pointer
+      box-sizing: border-box
     }
 
-    .diag-btn:hover:not(:disabled) {
-      color: var(--accent-hover, #3F6179);
-      border-color: var(--accent-hover, #3F6179)
+    .timeline li.done .tl-dot {
+      border-color: var(--green, #4A6B4A);
+      background: var(--green, #4A6B4A)
     }
 
-    .diag-btn:disabled {
-      color: var(--text-muted, #6B6158);
-      border-color: var(--border, #D8CFBE);
-      cursor: default
+    .timeline li.current .tl-dot {
+      border-color: var(--accent, #537D96);
+      background: var(--accent-light, rgba(83, 125, 150, 0.08))
     }
 
-    .diag-btn-msg {
-      display: block;
+    .tl-body {
+      min-width: 0
+    }
+
+    .tl-name {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text, #2A2622)
+    }
+
+    .tl-desc {
       font-size: 12px;
-      color: var(--danger, #8B2C1F);
-      margin-top: 4px
+      color: var(--text-light, #4A433C)
     }
 
+    .timeline li.done .tl-name,
+    .timeline li.done .tl-desc {
+      color: var(--text-muted, #6B6158)
+    }
+
+    .timeline li.current .tl-name {
+      color: var(--accent, #537D96)
+    }
+
+    /* 实时日志/原始错误滚动区（复用诊断进度样式） */
     .diag-progress {
       white-space: pre-wrap;
       word-break: break-all;
@@ -169,112 +199,112 @@
       color: var(--text-light, #4A433C);
       background: var(--accent-light, rgba(83, 125, 150, 0.08));
       border-radius: 4px;
-      padding: 6px 8px;
-      margin-bottom: 4px;
-      max-height: 120px;
+      padding: 8px 10px;
+      margin: 0;
+      max-height: 140px;
       overflow: auto
     }
 
-    /* 进程错误全文滚动区（诊断第一手材料不截断——错误首行特征与完整堆栈需可读，实装 2026-09-02） */
-    .diag-errorlog {
-      max-height: 200px;
-      color: var(--danger, #A03028);
-      background: var(--accent-light, rgba(83, 125, 150, 0.08))
+    .muted {
+      font-size: 12px;
+      color: var(--text-muted, #6B6158)
     }
 
-    .diag-progress-time {
-      font-size: 11px;
-      color: var(--text-muted, #6B6158);
-      margin-bottom: 4px
-    }
-
-    .diag-logpath {
-      font-family: ui-monospace, SFMono-Regular, Consolas, "Courier New", monospace;
+    .meta-line {
       font-size: 12px;
       color: var(--text-muted, #6B6158);
-      word-break: break-all;
-      margin-top: 4px
+      margin: 2px 0 0
     }
 
-    .diag-retry {
+    /* action-needed：问题人话指引 */
+    .guide {
+      border: 1px solid var(--border, #D8CFBE);
+      border-left: 3px solid var(--accent, #537D96);
+      border-radius: 6px;
+      background: var(--bg-card, #FBF7EE);
+      padding: 10px 12px;
       font-size: 13px;
-      color: var(--text-muted, #6B6158);
-      text-align: center
+      color: var(--text, #2A2622);
+      white-space: pre-wrap;
+      word-break: break-word;
+      margin: 0 0 10px
+    }
+
+    .guide-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--accent, #537D96);
+      margin: 0 0 6px
+    }
+
+    /* 自动续跑/停等说明 */
+    .note {
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-size: 12px;
+      margin: 0 0 10px
+    }
+
+    .note.auto {
+      background: var(--accent-light, rgba(83, 125, 150, 0.08));
+      color: var(--text-light, #4A433C)
+    }
+
+    .note.stop {
+      background: rgba(139, 44, 31, 0.08);
+      color: var(--danger, #8B2C1F)
+    }
+
+    /* 原始错误折叠（info disclosure，非操作入口） */
+    details.raw-details {
+      font-size: 12px;
+      color: var(--text-muted, #6B6158)
+    }
+
+    details.raw-details summary {
+      cursor: pointer;
+      color: var(--accent, #537D96)
+    }
+
+    details.raw-details .diag-progress {
+      margin-top: 8px;
+      max-height: 220px
     }
   </style>
 </head>
 
-<body data-hana-theme="{{= it.esc(it.theme) }}" data-surface="card" data-pending="{{= it.ready ? " 0" : "1" }}">
-  <div id="dsh-pending">
-    <div class="diag-box" id="loading-box">
-      <div class="diag-title">正在启动 DSH web host…</div>
-      <div class="diag-sub">等待 DSH 就绪（就绪后自动进入 DSH Web UI）</div>
-      <div class="diag-retry">正在连接…</div>
-    </div>
-    <div class="diag-box" id="diag-box" style="display:none">
-      <div class="diag-title">DSH web host 未就绪</div>
-      <div class="diag-sub">连接失败自检（就绪后自动进入；可「查看诊断」或刷新页面重试）</div>
-      <ul class="diag-list" id="diag-list"></ul>
-      <div class="diag-retry" id="diag-retry"></div>
-    </div>
+<body data-hana-theme="{{= it.esc(it.theme) }}" data-surface="card" data-view="{{= it.ready ? "ready" : "booting" }}">
+  <div id="dsh-stage">
+    <div class="boot-panel" id="boot-panel"></div>
   </div>
   {{= it.iframe }}
   <script>
+    // 自举壳页运行时：数据源 = GET /webui/boot-state（T3 单一状态出口）+ /webui/events
+    // 事件流（ready/pending/diagnostics/diag-changed/theme-pref 驱动刷新）。页面只消费
+    // 快照三段（phase/deps/boot/web），不拼装诊断；三态判定见 viewOf()。无任何手动操作
+    // 入口（按钮全退役）；原始日志/错误折叠「详情」仅信息展示。
     window.parent.postMessage({ type: "ready" }, "*");
     (function () {
-      var api = {{= JSON.stringify(it.api)
-    }};
-    var panelPort = {{= JSON.stringify(it.port) }};
-    var initDiag = {{= it.initDiag }};
-    var frame = document.getElementById("dsh-frame");
-    // dsh WebUI 剪贴板桥——dsh 前端复制被宿主插件 iframe 权限链拦截时
-    // （navigator.clipboard 抛 NotAllowedError，跨源继承 deny，详见 CHANGELOG），
-    // dsh 页面（跨源 iframe）postMessage 到这里，壳页面经宿主 capability clipboard.writeText
-    // 写剪贴板（参照 hana-remote-dev 卡片实现；manifest ui.hostCapabilities 声明后宿主才放行）。
-    // 宿主主窗口上下文执行 navigator.clipboard，不受插件 iframe Permissions-Policy 链限制。
-    var HOST_ORIGIN = "*";
-    var cbSeq = 0;
-    function hostRequest(type, payload) {
-      var id = "dsh-cb-" + (++cbSeq);
-      return new Promise(function (resolve, reject) {
-        var timer = setTimeout(function () { cleanup(); reject(new Error("host 请求超时: " + type)); }, 8000);
-        function onMsg(e) {
-          if (e.source !== window.parent) return;
-          var m = e.data;
-          if (!m || m.id !== id || m.type !== type) return;
-          cleanup();
-          if (m.kind === "response") resolve(m.payload);
-          else if (m.kind === "error") reject(new Error((m.error && m.error.message) || "host error"));
-        }
-        function cleanup() {
-          window.removeEventListener("message", onMsg);
-          clearTimeout(timer);
-        }
-        window.addEventListener("message", onMsg);
-        window.parent.postMessage(
-          { protocol: "hana.plugin.ui", version: 1, id: id, kind: "request", type: type, payload: payload },
-          HOST_ORIGIN
-        );
-      });
-    }
-    // ---- hana 桥（卡片表面宿主协议；与 @hana/plugin-sdk 同构：hana.plugin.ui v1）----
-    // 壳页为自包含单文件（构建期 doT 编译、零运行时依赖），不引入 SDK 包；这里按
-    // 协议手写最小实现：api.url/api.fetch（自动带 pluginSurfaceSession 头，替代旧
-    // surfaceHeaders 手动拼接）+ panel.set/onEvent/onRefresh（功能面板内容推送与
-    // 交互回传）。宿主未注入 window.hana 时用本实现；面板不可用时优雅降级不影响页面。
-    var hana = window.hana || (function () {
-      var hseq = 1000;
-      function hanaRequest(type, payload, timeoutMs) {
-        var id = "hana-" + (++hseq);
+      var api = {{= JSON.stringify(it.api) }};
+      var panelPort = {{= JSON.stringify(it.port) }};
+      var initBoot = {{= it.initBoot }};
+      var frame = document.getElementById("dsh-frame");
+      var boot = null; // 最近一次 /webui/boot-state 快照
+      var readyReceived = false;
+      // ---- 剪贴板桥（dsh iframe 复制请求 → 宿主 capability；见下 __dshCopy 监听）----
+      var HOST_ORIGIN = "*";
+      var cbSeq = 0;
+      function hostRequest(type, payload) {
+        var id = "dsh-cb-" + (++cbSeq);
         return new Promise(function (resolve, reject) {
-          var timer = setTimeout(function () { cleanup(); reject(new Error("hana 请求超时: " + type)); }, timeoutMs || 8000);
+          var timer = setTimeout(function () { cleanup(); reject(new Error("host 请求超时: " + type)); }, 8000);
           function onMsg(e) {
             if (e.source !== window.parent) return;
             var m = e.data;
             if (!m || m.id !== id || m.type !== type) return;
             cleanup();
             if (m.kind === "response") resolve(m.payload);
-            else if (m.kind === "error") reject(new Error((m.error && m.error.message) || "hana error"));
+            else if (m.kind === "error") reject(new Error((m.error && m.error.message) || "host error"));
           }
           function cleanup() {
             window.removeEventListener("message", onMsg);
@@ -287,821 +317,528 @@
           );
         });
       }
-      var panelListeners = { event: [], refresh: [] };
+      // ---- hana 桥（最小实现：api.url/api.fetch + panel.set）----
+      var hana = window.hana || (function () {
+        var hseq = 1000;
+        function hanaRequest(type, payload, timeoutMs) {
+          var id = "hana-" + (++hseq);
+          return new Promise(function (resolve, reject) {
+            var timer = setTimeout(function () { cleanup(); reject(new Error("hana 请求超时: " + type)); }, timeoutMs || 8000);
+            function onMsg(e) {
+              if (e.source !== window.parent) return;
+              var m = e.data;
+              if (!m || m.id !== id || m.type !== type) return;
+              cleanup();
+              if (m.kind === "response") resolve(m.payload);
+              else if (m.kind === "error") reject(new Error((m.error && m.error.message) || "hana error"));
+            }
+            function cleanup() {
+              window.removeEventListener("message", onMsg);
+              clearTimeout(timer);
+            }
+            window.addEventListener("message", onMsg);
+            window.parent.postMessage(
+              { protocol: "hana.plugin.ui", version: 1, id: id, kind: "request", type: type, payload: payload },
+              HOST_ORIGIN
+            );
+          });
+        }
+        function hanaApiUrl(path) {
+          var base = String(api || "").replace(//+$/, "");
+          var p = String(path || "").replace(/^/+/, "");
+          return location.origin + base + "/" + p;
+        }
+        return {
+          api: {
+            url: hanaApiUrl,
+            fetch: function (path, init) {
+              var params = new URLSearchParams(location.search);
+              var sess = params.get("pluginSurfaceSession");
+              var headers = new Headers((init && init.headers) || {});
+              if (sess) headers.set("X-Hana-Plugin-Surface-Session", sess);
+              return fetch(hanaApiUrl(path), Object.assign({}, init || {}, { headers: headers }));
+            },
+          },
+          panel: {
+            set: function (props) {
+              // 面板不可用（宿主无 functionPanel / 未响应）时静默降级
+              return hanaRequest("hana.panel.set", props, 4000).catch(function () { return { accepted: 0, dropped: [] }; });
+            },
+          },
+        };
+      })();
+      // ---- 功能面板（status 常驻；actions 段已退役——T4 无手动入口）----
+      function panelStatusView() {
+        var st = { word: "未就绪", tone: "danger", delta: "自动进行中" };
+        if (!boot) return st;
+        if (boot.ready) { st.word = "运行中"; st.tone = "success"; st.delta = "端口 " + panelPort; return st; }
+        if (viewOf(boot) === "action") { st.word = "需要处理"; st.delta = "自举暂停"; return st; }
+        var d = boot.deps || {};
+        if (d.status === "installing" || d.status === "running") { st.word = "自举中"; st.tone = "warning"; st.delta = "依赖安装/核对"; return st; }
+        if (boot.phase === "booting") { st.word = "自举中"; st.tone = "warning"; st.delta = "启动 Web Host"; return st; }
+        st.word = "自举中"; st.tone = "warning";
+        return st;
+      }
+      function pushPanel() {
+        try {
+          if (!hana || !hana.panel || !hana.panel.set) return;
+          var st = panelStatusView();
+          hana.panel.set({
+            sections: [
+              { kind: "status", id: "dshana-status", label: "DSH web host", value: st.word, delta: st.delta, deltaTone: st.tone },
+            ],
+            refresh: { intervalMs: 30000 },
+          }).catch(function () { /* 面板不可用静默降级 */ });
+        } catch (err) { /* 面板不可用静默降级 */ }
+      }
+      // 监听 dsh iframe（跨源）发来的复制请求 → 宿主能力 → 回执
       window.addEventListener("message", function (e) {
-        if (e.source !== window.parent) return;
         var m = e.data;
-        if (!m || m.protocol !== "hana.plugin.ui" || m.kind !== "event") return;
-        if (m.type === "hana.panel.event" && m.payload && typeof m.payload === "object") {
-          var ev = m.payload;
-          if (typeof ev.sectionId === "string" && (ev.kind === "select" || ev.kind === "action" || ev.kind === "toggle")) {
-            for (var i = 0; i < panelListeners.event.length; i++) { try { panelListeners.event[i](ev); } catch (err) { /* 面板回调异常忽略 */ } }
-          }
-        } else if (m.type === "hana.panel.refresh") {
-          for (var j = 0; j < panelListeners.refresh.length; j++) { try { panelListeners.refresh[j](); } catch (err) { /* 刷新回调异常忽略 */ } }
+        if (!m || m.__dshCopy !== true) return;
+        if (!frame || e.source !== frame.contentWindow) return;
+        var req = m;
+        var port = e.ports && e.ports[0];
+        function ack(ok) {
+          var payload = { __dshCopyResult: { id: req.id, ok: ok } };
+          if (port) { try { port.postMessage(payload); port.close(); } catch (err) { /* port 已关闭 */ } }
+          else { try { e.source.postMessage(payload, "*"); } catch (err) { /* 忽略 */ } }
         }
+        hostRequest("clipboard.writeText", { text: req.text })
+          .then(function () { ack(true); })
+          .catch(function () { ack(false); });
       });
-      function hanaApiUrl(path) {
-        var base = String(api || "").replace(/\/+$/, "");
-        var p = String(path || "").replace(/^\/+/, "");
-        return location.origin + base + "/" + p;
+      // ---- 工具 ----
+      function escHtml(s) {
+        return String(s == null ? "" : s)
+          .replace(/&/g, "&amp;")
+          .replace(/"/g, "&quot;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
       }
-      return {
-        api: {
-          url: hanaApiUrl,
-          fetch: function (path, init) {
-            var params = new URLSearchParams(location.search);
-            var sess = params.get("pluginSurfaceSession");
-            var headers = new Headers((init && init.headers) || {});
-            if (sess) headers.set("X-Hana-Plugin-Surface-Session", sess);
-            return fetch(hanaApiUrl(path), Object.assign({}, init || {}, { headers: headers }));
-          },
-        },
-        panel: {
-          set: function (props) {
-            // 面板不可用（宿主无 functionPanel / 未响应）时静默降级：返回空结果不抛错
-            return hanaRequest("hana.panel.set", props, 4000).catch(function () { return { accepted: 0, dropped: [] }; });
-          },
-          onEvent: function (cb) { panelListeners.event.push(cb); return function () { }; },
-          onRefresh: function (cb) { panelListeners.refresh.push(cb); return function () { }; },
-        },
-      };
-    })();
-    // ---- 功能面板（functionPanel：左侧功能面板常驻状态 + 操作）----
-    // 面板内容由壳页运行时推送（hana.panel.set），宿主用内置原语渲染；页面主体仍承载
-    // 完整诊断详情（未就绪自检），面板承载常驻状态与快捷操作。宿主未注入/不支持面板时
-    // 全部静默降级（pushPanel 内部吞错），页面功能回退现状不受影响。
-    var panelDiag = initDiag || null;
-    var panelLogPath = null;
-    var panelInstalling = false;
-    var panelVerifyRunning = false;
-    var diagRefreshing = false;
-    function syncPanelFromDiag(diag) {
-      if (diag) {
-        var deps = checkByKey(diag, "deps");
-        var proc = checkByKey(diag, "process");
-        panelDiag = diag;
-        panelInstalling = !!(deps && deps.installing === true);
-        panelVerifyRunning = !!(deps && deps.verifyRunning === true);
-        panelLogPath = (proc && proc.logPath) || null;
+      function pad2(n) { return (n < 10 ? "0" : "") + n; }
+      function fmtClock(ms) {
+        var d = new Date(ms);
+        if (isNaN(d.getTime())) return "";
+        return pad2(d.getHours()) + ":" + pad2(d.getMinutes()) + ":" + pad2(d.getSeconds());
       }
-      pushPanel();
-    }
-    // 状态派生：就绪 running / 安装依赖中 installing / 启动中 starting / 未就绪 stopped
-    function panelStatus() {
-      var st = { word: "未就绪", tone: "danger" };
-      if (readyReceived) { st.word = "运行中"; st.tone = "success"; }
-      else if (panelInstalling || depsRequested) { st.word = "安装依赖中"; st.tone = "warning"; }
-      else if (startRequested) { st.word = "启动中"; st.tone = "warning"; }
-      else {
-        var proc = checkByKey(panelDiag, "process");
-        if (proc && proc.alive && !proc.ready) { st.word = "启动中"; st.tone = "warning"; }
+      function fmtDelay(ms) {
+        if (ms < 60000) return Math.round(ms / 1000) + " 秒";
+        if (ms < 3600000) return Math.round(ms / 60000) + " 分钟";
+        return Math.round(ms / 3600000) + " 小时";
       }
-      return st;
-    }
-    function fpFullPanel() {
-      var st = panelStatus();
-      var busy = st.word === "安装依赖中" || st.word === "启动中";
-      var sections = [
-        { kind: "status", id: "dshana-status", label: "DSH web host", value: st.word, delta: "端口 " + panelPort, deltaTone: st.tone },
-        { kind: "actions", id: "dshana-actions", items: [
-          { id: "start", label: "手动启动 web host", tone: "info", activation: { kind: "emit" }, disabled: busy || readyReceived },
-          { id: "install-deps", label: "安装依赖", tone: "warning", activation: { kind: "emit" }, disabled: st.word === "安装依赖中" },
-          { id: "verify-deps", label: "检测依赖", activation: { kind: "emit" }, disabled: st.word === "安装依赖中" || panelVerifyRunning },
-          { id: "copyLog", label: "复制日志路径", activation: { kind: "emit" }, disabled: !panelLogPath },
-        ] },
+      // ---- 三态判定（字段组合即定态；与 readBootState 注释同语义）----
+      //   ready         = 快照顶层 ready（web host 就绪 → iframe 直嵌）
+      //   action-needed = phase waiting && boot.errorClass 非空 &&（deps.guidance 或
+      //                   boot.guidance）非空——失败已分类且指引齐备
+      //   booting       = 其余（阶段推进/依赖操作中/失败信息不全等过渡态）
+      function viewOf(bs) {
+        if (bs && bs.ready) return "ready";
+        // 依赖操作进行中（安装/核对）一律自举中视图：实时进度优先于 waiting 的旧失败呈现
+        var ds = bs && bs.deps && bs.deps.status;
+        if (ds === "installing" || ds === "running") return "booting";
+        if (bs && bs.phase === "waiting") {
+          var k = bs.boot && bs.boot.errorClass;
+          var g = (bs.deps && bs.deps.guidance) || (bs.boot && bs.boot.guidance);
+          if (k && g) return "action";
+        }
+        return "booting";
+      }
+      function failedStageLabels(bs) {
+        var out = [];
+        if (bs.deps && bs.deps.guidance) out.push("依赖安装");
+        if (bs.boot && bs.boot.guidance) out.push("Web Host 启动");
+        if (!out.length) out.push("自动链");
+        return out.join("、");
+      }
+      function currentStage(bs) {
+        if (bs.phase === "booting") return 1;
+        return 0; // ensure-deps（默认/未跑过）；waiting 兜底另走无高亮分支
+      }
+      // ---- 渲染 ----
+      var STEPS = [
+        { name: "依赖就绪", desc: "自动检查并按插件声明安装/核对 dsh 依赖" },
+        { name: "启动 DSH Web Host", desc: "进程内启动 dsh Web UI（自动）" },
+        { name: "就绪", desc: "自动进入 DSH Web UI" },
       ];
-      if (panelLogPath) sections.push({ kind: "meta", id: "dshana-meta", text: "日志会话路径：" + panelLogPath });
-      return sections;
-    }
-    function pushPanel() {
-      try {
-        if (!hana || !hana.panel || !hana.panel.set) return;
-        hana.panel.set({ sections: fpFullPanel(), refresh: { intervalMs: 30000 } }).catch(function () { /* 面板不可用静默降级 */ });
-      } catch (err) { /* 面板不可用静默降级 */ }
-    }
-    function copyLogPath() {
-      if (!panelLogPath) return;
-      hostRequest("clipboard.writeText", { text: panelLogPath })
-        .then(function () { /* 复制成功 */ })
-        .catch(function () { /* 复制失败 */ });
-    }
-    function panelOnEvent(ev) {
-      if (!ev || ev.sectionId !== "dshana-actions" || ev.kind !== "action") return;
-      if (ev.itemId === "start") startWebHost();
-      else if (ev.itemId === "install-deps") installDeps();
-      else if (ev.itemId === "verify-deps") verifyDeps();
-      else if (ev.itemId === "copyLog") copyLogPath();
-    }
-    if (hana && hana.panel && hana.panel.onEvent) {
-      hana.panel.onEvent(panelOnEvent);
-      hana.panel.onRefresh(function () {
-        // 宿主刷新 tick（30s 兜底）：只重推内存态面板，不周期打 /webui/health——
-        // 诊断刷新改事件驱动（bus.ready/bus.disconnect/启动失败/deps 翻转经
-        // /webui/events 推 ready/pending/diagnostics/diag-changed，壳页事件到达
-        // 时 refreshDiag 一次；安装中进度由 installing 态 tick 滚动）
-        pushPanel();
-      });
-    }
-    // 监听 dsh iframe（跨源）发来的复制请求（dsh-hana-clipboard 桥 __dshCopyBridge）→
-    // 宿主能力 → 回执。回执优先走桥随消息传来的 MessagePort（e.ports[0]，桥端
-    // port1.onmessage 等它）；老桥/无 port 时 fallback window postMessage。
-    window.addEventListener("message", function (e) {
-      var m = e.data;
-      if (!m || m.__dshCopy !== true) return;
-      if (!frame || e.source !== frame.contentWindow) return;
-      var req = m;
-      var port = e.ports && e.ports[0];
-      function ack(ok) {
-        var payload = { __dshCopyResult: { id: req.id, ok: ok } };
-        if (port) { try { port.postMessage(payload); port.close(); } catch (err) { /* port 已关闭 */ } }
-        else { try { e.source.postMessage(payload, "*"); } catch (err) { /* 忽略 */ } }
+      function timelineHtml(bs) {
+        var cur = currentStage(bs);
+        var html = '<ul class="timeline">';
+        for (var i = 0; i < STEPS.length; i++) {
+          var cls = "";
+          if (cur >= 0 && i < cur) cls = " done";
+          else if (i === cur) cls = " current";
+          html += '<li class="' + cls.trim() + '"><span class="tl-dot"></span><div class="tl-body">'
+            + '<div class="tl-name">' + escHtml(STEPS[i].name) + '</div>'
+            + '<div class="tl-desc">' + escHtml(STEPS[i].desc) + '</div></div></li>';
+        }
+        return html + "</ul>";
       }
-      hostRequest("clipboard.writeText", { text: req.text })
-        .then(function () { ack(true); })
-        .catch(function () { ack(false); });
-    });
-    function attach() {
-      // 就绪（宿主 push ready 事件 / postMessage ready）：挂载/刷新 iframe，切回主视图
-      clearReadyTimers();
-      var wasPending = document.body.getAttribute("data-pending") === "1";
-      document.body.setAttribute("data-pending", "0");
-      // @dsh-hanako/app 子插件（dsh 进程内）serve 完整 fork SPA——iframe 直接嵌
-      // （同源 3080，免鉴权：资源/API/SSE/WS 全由子插件提供，无宿主代理、无劫持、
-      // 无 token/PSS 负担；跨源桥（主题/剪贴板）经 postMessage 走壳页）。
-      // vY（T7b）：dsh WebUI 由 @dsh-hanako/app serve 在根路径（registerFallback 席位），
-      // /webui/ 前缀已退役——iframe 直嵌 127.0.0.1:<port>/，不带 ?dshReload bust
-      // （index.html no-cache + assets hash 文件名，更新后自然换新，bust 多余且污染 URL）。
-      var base = "http://127.0.0.1:{{= it.port }}/";
-      // 首次挂载（src 空）或从加载/诊断态切回（更新/停机后）：强制加载当前 web host
-      // （带时间戳 bust，避免相同 src 不触发重新加载，保证更新后拿到新版本 UI）；
-      // 已挂载且非 pending（重复 ready）不重复 reload，不打断 dsh UI
-      if (wasPending || !frame.getAttribute("src")) {
-        frame.src = base;
+      function stageStatus(bs) {
+        var st = bs.deps && bs.deps.status;
+        var ph = bs.phase;
+        if (st === "installing") return { t: "正在安装 dsh 依赖", s: "按插件声明自动安装（网络/环境类问题会自动退避重试，无需手动操作）" };
+        if (st === "running") return { t: "正在核对依赖完整性", s: "核对通过后自动继续启动 DSH Web Host" };
+        if (ph === "booting") return { t: "正在启动 DSH Web Host", s: "进程内启动 dsh Web UI，就绪后自动进入" };
+        if (ph === "waiting") return { t: "自动启动暂停", s: "自动链正在等待自动重试/条件变化（见下方状态）" };
+        return { t: "正在检查依赖就绪", s: "检查通过后自动启动 DSH Web Host，全程无需手动操作" };
       }
-      startThemePush();
-      pushPanel(); // 就绪挂载后同步面板状态（运行中）
-    }
-    // 连接失败自检渲染——服务端收集的 checks 列表（每项：状态图标/检查项名/
-    // 详情/修复指引）；escHtml 兜底转义（诊断文本含路径与 stderr，需防注入）
-    function escHtml(s) {
-      return String(s == null ? "" : s)
-        .replace(/&/g, "&amp;")
-        .replace(/"/g, "&quot;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;");
-    }
-    function renderDiagList(diag) {
-      var list = document.getElementById("diag-list");
-      if (!list) return;
-      if (!diag || !diag.checks || diag.checks.length === 0) {
-        // 工具模块冷启动未加载/收集暂不可用：占位，diag-changed 事件到达时刷新
-        list.innerHTML = '<li class="diag-item"><div class="diag-body"><div class="diag-detail">正在收集自检信息…</div></div></li>';
-        return;
-      }
-      var html = "";
-      for (var i = 0; i < diag.checks.length; i++) {
-        var d = diag.checks[i];
-        var mark = d.ok ? "✓" : "✗";
-        html += '<li class="diag-item ' + (d.ok ? "ok" : "bad") + '" data-check="' + escHtml(d.key) + '">'
-          + '<span class="diag-mark">' + mark + '</span>'
-          + '<div class="diag-body">'
-          + '<div class="diag-name">' + escHtml(d.name) + '</div>'
-          + (d.key === "deps" && d.version ? '<div class="diag-detail">' + escHtml(versionLine(d)) + '</div>' : "") // deps 版本行（当前已装版本；最新版本/可更新状态见设置页「检查与更新 DSH」卡片）
-          + (d.key === "deps" && d.pnpmChecked ? '<div class="diag-detail">' + escHtml(pnpmLine(d)) + '</div>' : "") // deps 卡片 pnpm 引导状态行（独立子项，不进依赖就绪判定）
-          + (d.detail ? '<div class="diag-detail">' + escHtml(d.detail) + '</div>' : "")
-          + (d.key === "process" && d.errLog ? '<pre class="diag-progress diag-errorlog">' + escHtml(d.errLog) + '</pre>' : "") // 进程错误全文滚动区（不截断：错误首行特征可诊断，实装 2026-09-02）
-          + (d.key === "deps" && d.installing ? progressHtml(d) : "") // 安装实时进度
-          + (d.key === "deps" && d.updating ? updateProgressHtml(d) : "") // 更新进度/结果（更新由设置页触发，web host 停机期间被动展示）
-          + (d.key === "process" && d.logPath ? '<div class="diag-logpath">本次会话日志：' + escHtml(d.logPath) + '</div>' : "") // 时间戳会话日志路径件路径
-          + (d.fix ? '<div class="diag-fix">修复：' + escHtml(d.fix) + '</div>' : "")
-          + actionButtonHtml(d)
-          + '</div></li>';
-      }
-      list.innerHTML = html;
-      syncActionButtons(diag); // 按检查项状态刷新卡片内操作按钮（启动中/安装中禁用，失败/缺失可用）
-    }
-    // 操作按钮嵌入诊断卡片（data-check 定位，事件委托在列表上）——
-    // process 卡片：进程未在跑（从未启动/启动失败/已退出）→「手动启动 web host」；
-    // 启动中（alive=true 未 ready）→ 禁用「启动中…」；健康（ready+alive）不渲染按钮。
-    //   t2（依赖）未通过（deps.ok=false / installing / verifyRunning）时启动按钮
-    //   不开放——禁用 + msg「依赖未就绪，请先安装/重新安装依赖」。
-    // deps 卡片：依赖缺失 →「安装依赖」；已装 → 常驻「检测依赖」（verify-deps，检测中禁用
-    // 「检测中…」）；存在但运行级验证失败 → 另加「重新安装依赖」（install-deps action）。
-    // 门禁链：t1（依赖）未通过 → t2（进程）启动按钮锁（依赖未就绪，启动必失败）。
-    // 状态机：startRequested/depsRequested/verifyRequested 只覆盖
-    // 「请求已发出但诊断尚未反映状态」的短暂窗口，诊断确认后一律以检查项为准。
-    var startRequested = false;
-    var depsRequested = false;
-    var verifyRequested = false;
-    // 卡片内操作按钮 HTML：deps 可返回多个按钮（重新安装 + 检测）
-    function actionButtonHtml(d) {
-      if (!d) return "";
-      if (d.key === "process") {
-        // 进程健康（已就绪且在跑）不渲染；否则卡片内给「手动启动」（启动中禁用）
-        if (d.alive && d.ready) return "";
-        var running = d.alive;
-        return '<button type="button" class="diag-btn" data-action="start" data-check="process"'
-          + (running ? " disabled" : "") + '>' + (running ? "启动中…" : "手动启动 web host") + '</button>'
-          + '<span class="diag-btn-msg"></span>';
-      }
-      if (d.key === "deps") {
+      // booting 视图：阶段时间线 + 实时安装进度（logTail 滚动）+ 重试信息
+      function bootViewHtml(bs) {
+        var ph = bs.phase;
+        var st = stageStatus(bs);
+        var d = bs.deps || {};
+        var busy = d.status === "installing" || d.status === "running";
         var html = "";
-        if (!d.installed) {
-          // 缺失：安装依赖（安装中禁用）
-          html += '<button type="button" class="diag-btn" data-action="install-deps" data-check="deps"'
-            + (d.installing ? " disabled" : "") + '>' + (d.installing ? "安装中…" : "安装依赖") + '</button>';
+        html += '<div class="view-head"><span class="spin"></span><h1 class="view-title">正在启动 DSH web host…</h1></div>';
+        html += '<p class="view-sub">自举全程自动：依赖检查/安装 → 启动 → 就绪。若需你操作，页面会给出明确指引。</p>';
+        if (ph !== "waiting") {
+          html += '<div class="card"><div class="card-label">启动阶段</div>' + timelineHtml(bs)
+            + '<p class="meta-line">当前：' + escHtml(st.t) + '（' + escHtml(st.s) + '）</p></div>';
         } else {
-          // 已装：验证失败 → 重新安装依赖（同一 install-deps action）
-          if (d.verified === false && !d.verifyRunning) {
-            html += '<button type="button" class="diag-btn" data-action="install-deps" data-check="deps"'
-              + (d.installing ? " disabled" : "") + '>' + (d.installing ? "安装中…" : "重新安装依赖") + '</button>';
-          }
-          // 常驻「检测依赖」（检测中/安装中禁用）
-          if (!d.installing) {
-            html += '<button type="button" class="diag-btn" data-action="verify-deps" data-check="deps"'
-              + (d.verifyRunning ? " disabled" : "") + '>' + (d.verifyRunning ? "检测中…" : "检测依赖") + '</button>';
-          }
-          // 版本管理（检查更新/更新 DSH）归设置页「检查与更新 DSH」卡片（@dsh-hanako/settings
-          // 版本卡片 + dsh_install 工具 action=check/update）；deps 卡片只保留依赖管理（安装/检测），不再渲染版本按钮。
+          html += '<div class="card"><p class="meta-line">' + escHtml(st.t) + '：' + escHtml(st.s) + '</p></div>';
         }
-        return html ? html + '<span class="diag-btn-msg"></span>' : "";
-      }
-      return "";
-    }
-    function listBtn(check, action) {
-      var list = document.getElementById("diag-list");
-      if (!list) return null;
-      var sel = '[data-check="' + check + '"] .diag-btn';
-      if (action) sel += '[data-action="' + action + '"]';
-      return list.querySelector(sel);
-    }
-    function checkByKey(diag, key) {
-      if (diag && diag.checks) {
-        for (var i = 0; i < diag.checks.length; i++) {
-          if (diag.checks[i].key === key) return diag.checks[i];
+        if (busy || d.logTail) {
+          var label = busy ? (d.status === "installing" ? "依赖安装进度（实时）" : "依赖核对进度") : "最近依赖输出";
+          html += '<div class="card"><div class="card-label">' + label + '</div>'
+            + '<pre class="diag-progress">' + escHtml(d.logTail || "正在准备…") + '</pre></div>';
         }
+        var b = bs.boot || {};
+        var lines = [];
+        if (b.attempt > 0) lines.push("第 " + b.attempt + " 次尝试");
+        if (b.nextRetryAt != null) lines.push("将于 <span id=\"retryAtText\"></span> 自动重试");
+        else if (b.attempt > 0 && ph !== "waiting") lines.push("自动重试已在进行");
+        if (lines.length) html += '<p class="muted">' + lines.join(" · ") + '</p>';
+        html += rawDetailsHtml("原始日志/错误（详情）", rawBody(bs));
+        return html;
       }
-      return null;
-    }
-    // 安装/检测进度时间格式化（HH:MM:SS）
-    function fmtTime(iso) {
-      if (!iso) return "";
-      var t = new Date(iso);
-      if (isNaN(t.getTime())) return "";
-      var p = function (n) { return (n < 10 ? "0" : "") + n; };
-      return p(t.getHours()) + ":" + p(t.getMinutes()) + ":" + p(t.getSeconds());
-    }
-    // deps 安装中实时进度块（npm i 输出尾部 + 更新时间，随 installing 态 3s tick 滚动）
-    function progressHtml(d) {
-      var html = '<pre class="diag-progress">' + escHtml(d.installLog || "正在准备…") + '</pre>';
-      if (d.installAt) html += '<div class="diag-progress-time">更新于 ' + escHtml(fmtTime(d.installAt)) + '</div>';
-      return html;
-    }
-    // deps 版本行（只显示当前已装版本——deps 卡片不再做版本检查，checkResult 无稳定数据源；
-    // 最新版本/可更新状态归设置页「检查与更新 DSH」卡片）
-    function versionLine(d) {
-      return "当前版本 " + (d.version ? "v" + d.version : "未安装");
-    }
-    // deps 卡片 pnpm 引导状态行（独立子项：就绪/未就绪 + 原因；不并入「dsh 依赖就绪」
-    // 判定——web host 启动不依赖 pnpm，patch 已去注入。数据源 = 诊断 pnpmReady/
-    // pnpmVersion/pnpmError（verifyDepsSmoke 与 dsh 冒烟并行检查，pnpm 缺失自动重下自愈）；
-    // settings「检查与更新 DSH」卡片不展示 pnpm 状态）
-    function pnpmLine(d) {
-      if (d.pnpmReady) {
-        return "pnpm 引导：就绪" + (d.pnpmVersion ? "（v" + d.pnpmVersion + "）" : "");
-      }
-      return "pnpm 引导：未就绪" + (d.pnpmError ? "（原因：" + d.pnpmError + "）" : "");
-    }
-    // 更新进度/结果块（内存态 updateResult = g.update 状态组合，随 diag-changed 事件刷新；
-    // v0.24 update-result.json 退役）——版本管理归设置页
-    // （@dsh-hanako/settings「检查与更新 DSH」卡片 + dsh_install 工具），deps 卡片已无更新
-    // 按钮，仅在设置页触发更新（web host 停机期间）时被动展示进度。
-    function updateProgressHtml(d) {
-      var r = d.updateResult || null;
-      var text = "正在更新 DSH…（将重启 DSHana，正在执行的任务会中断）";
-      if (r && r.state === "done") text = "更新完成 v" + (r.version || "?") + (r.error ? "（web host 重启失败：" + r.error + "）" : "") + "，请重启 DSHana 使完全生效";
-      else if (r && r.state === "error") text = "更新失败：" + (r.error || "未知错误");
-      var html = '<pre class="diag-progress">' + escHtml(text) + '</pre>';
-      if (r && r.at) html += '<div class="diag-progress-time">更新于 ' + escHtml(fmtTime(r.at)) + '</div>';
-      return html;
-    }
-    function setBtnMsg(check, text) {
-      var list = document.getElementById("diag-list");
-      var el = list ? list.querySelector('[data-check="' + check + '"] .diag-btn-msg') : null;
-      if (el) el.textContent = text;
-    }
-    function syncActionButtons(diag) {
-      var proc = null, deps = null;
-      if (diag && diag.checks) {
-        for (var i = 0; i < diag.checks.length; i++) {
-          if (diag.checks[i].key === "process") proc = diag.checks[i];
-          else if (diag.checks[i].key === "deps") deps = diag.checks[i];
-        }
-      }
-      // 依赖未通过 → 启动按钮不开放（依赖未就绪，启动必失败）：
-      // deps.ok=false（未装/验证失败）、安装中（installing）、检测中（verifyRunning）均视为未通过
-      var depsBlocked = deps && (deps.ok === false || deps.installing === true || deps.verifyRunning === true);
-      var pBtn = listBtn("process");
-      if (pBtn) {
-        if (depsBlocked) {
-          // 依赖未就绪：禁用 + msg 提示原因（用户先去安装/重新安装/等待检测）
-          startRequested = false;
-          pBtn.disabled = true;
-          pBtn.textContent = "手动启动 web host";
-          setBtnMsg("process", "依赖未就绪，请先安装/重新安装依赖");
-        } else if (startRequested && !(proc && !proc.alive)) {
-          // 请求已发出：进程未确认停止（含 alive 确认中）→ 保持禁用；确认在跑则转入「启动中…」
-          if (proc && proc.alive) startRequested = false;
-          pBtn.disabled = true;
-          pBtn.textContent = proc && proc.alive ? "启动中…" : "正在启动…";
+      // action-needed 视图：errorClass 人话 + 明确操作步骤（guidance 内含）+ 自动续跑/停等说明
+      function actionViewHtml(bs) {
+        var b = bs.boot || {};
+        var d = bs.deps || {};
+        var guide = d.guidance || b.guidance || "自动链暂时无法自动推进，请稍后刷新页面查看最新状态。";
+        var html = "";
+        html += '<h1 class="view-title">DSH web host 启动需要处理</h1>';
+        html += '<p class="view-sub">自动链已暂停推进；按下方指引完成后插件会自动续跑，无需再次手动启动。</p>';
+        html += '<div class="guide"><div class="guide-label">问题与处理指引</div>' + escHtml(guide) + '</div>';
+        if (b.nextRetryAt != null) {
+          html += '<div class="note auto">自动续跑中：插件正在退避重试（第 ' + (b.attempt || 0) + ' 次失败），将于 <span id="retryAtText"></span> 自动继续，无需手动操作。</div>';
         } else {
-          startRequested = false;
-          if (proc && proc.alive) {
-            pBtn.disabled = true;
-            pBtn.textContent = "启动中…";
-          } else {
-            pBtn.disabled = false;
-            pBtn.textContent = "手动启动 web host";
-          }
+          html += '<div class="note stop">' + stopNoteText(bs) + '</div>';
         }
+        html += '<p class="meta-line">失败阶段：' + escHtml(failedStageLabels(bs)) + ' · 错误分类：' + escHtml(b.errorClass || "-")
+          + ' · 第 ' + (b.attempt || 0) + ' 次尝试</p>';
+        html += rawDetailsHtml("原始错误（详情）", rawBody(bs));
+        return html;
       }
-      var installBtn = listBtn("deps", "install-deps");
-      if (installBtn && deps) {
-        if (deps.installing) {
-          depsRequested = false;
-          installBtn.disabled = true;
-          installBtn.textContent = "安装中…";
-        } else if (depsRequested) {
-          // 请求已发出但诊断尚未确认 installing/installed：保持禁用
-          installBtn.disabled = true;
-          installBtn.textContent = "正在安装…";
-        } else {
-          depsRequested = false;
-          installBtn.disabled = false;
-          installBtn.textContent = deps.installed ? "重新安装依赖" : "安装依赖";
-        }
+      function stopNoteText(bs) {
+        var b = bs.boot || {};
+        if (b.errorClass === "restart-needed") return "自动链停等：dsh 已跨版本升级，请重启宿主（Hana）加载新版本——重启后插件自动续跑，无需其它操作";
+        return "自动链停等：插件等待条件变化（配置保存 / 网络恢复 / 插件更新等）后自动续跑，无需重复手动操作";
       }
-      var verifyBtn = listBtn("deps", "verify-deps");
-      if (verifyBtn && deps) {
-        if (deps.verifyRunning) {
-          verifyRequested = false;
-          verifyBtn.disabled = true;
-          verifyBtn.textContent = "检测中…";
-        } else if (verifyRequested) {
-          // 请求已发出但诊断尚未反映 running：保持禁用
-          verifyBtn.disabled = true;
-          verifyBtn.textContent = "正在检测…";
-        } else {
-          verifyRequested = false;
-          verifyBtn.disabled = false;
-          verifyBtn.textContent = "检测依赖";
-        }
+      // 详情折叠体（原始错误/日志；仅信息展示，非操作入口）
+      function rawBody(bs) {
+        var parts = [];
+        var b = bs.boot || {};
+        var d = bs.deps || {};
+        if (b.lastError) parts.push("[自动链错误] " + b.lastError);
+        if (d.error) parts.push("[依赖错误] " + d.error);
+        if (d.logTail) parts.push("[依赖日志尾]\n" + d.logTail);
+        return parts.length ? parts.join("\n\n") : "暂无原始输出。";
       }
-      // 「检查更新」/「更新 DSH」按钮已移除（版本管理归设置页「检查与更新 DSH」卡片 +
-      // dsh_install 工具），无对应按钮状态同步
-    }
-    function startWebHost() {
-      if (startRequested || readyReceived) return; // 幂等：已在启动中/已就绪
-      startRequested = true;
-      var btn = listBtn("process");
-      if (btn) { btn.disabled = true; btn.textContent = "正在启动…"; setBtnMsg("process", ""); }
-      pushPanel();
-      hana.api.fetch("webui/start", {
-        method: "POST",
-        signal: AbortSignal.timeout(5000),
-      })
-        .then(function (r) { return r.json(); })
-        .then(function (d) {
-          if (d && d.ok && d.state === "ready") { mountReady(); return; } // 已就绪：mountReady（置 readyReceived + attach），与其他 ready 路径一致
-          if (d && d.ok) { pushPanel(); return; } // starting：保持禁用，面板/诊断刷新检测就绪
-          // 失败：恢复按钮并提示错误
-          startRequested = false;
-          if (btn) { btn.disabled = false; btn.textContent = "手动启动 web host"; setBtnMsg("process", d && d.error ? d.error : "启动请求失败，请稍后重试"); }
-          pushPanel();
-        })
-        .catch(function () {
-          startRequested = false;
-          if (btn) { btn.disabled = false; btn.textContent = "手动启动 web host"; setBtnMsg("process", "启动请求超时或网络错误，请重试"); }
-          pushPanel();
-        });
-    }
-    function installDeps() {
-      if (depsRequested) return; // 幂等：已在安装中
-      depsRequested = true;
-      var btn = listBtn("deps");
-      if (btn) { btn.disabled = true; btn.textContent = "正在安装…"; setBtnMsg("deps", ""); }
-      pushPanel();
-      hana.api.fetch("webui/install-deps", {
-        method: "POST",
-        signal: AbortSignal.timeout(5000),
-      })
-        .then(function (r) { return r.json(); })
-        .then(function (d) {
-          if (d && d.ok) { pushPanel(); return; } // installing：保持禁用，诊断刷新（安装中/完成）
-          // 失败：恢复按钮并提示错误
-          depsRequested = false;
-          if (btn) { btn.disabled = false; btn.textContent = "安装依赖"; setBtnMsg("deps", d && d.error ? d.error : "安装请求失败，请稍后重试"); }
-          pushPanel();
-        })
-        .catch(function () {
-          depsRequested = false;
-          if (btn) { btn.disabled = false; btn.textContent = "安装依赖"; setBtnMsg("deps", "安装请求超时或网络错误，请重试"); }
-          pushPanel();
-        });
-    }
-    // 运行级依赖检测（GET /webui/verify-deps，只读）——进标签页自动一次 + 手动
-    // 「检测依赖」按钮。服务端 await 检测（≤10s），结果写入 g.depsSmoke；拿到 ok 响应后
-    // 触发一次 health 读取诊断刷新 deps 卡片（检测中显示「正在检测依赖完整性…」，结果
-    // 回来显示通过/失败）。verify 状态翻转经 notifyDepsChanged → diag-changed 事件刷新。
-    // deps 安装中进度滚动：仅 installing 态运行 3s tick（事件驱动刷新 + 安装态低频
-    // 进度兜底；安装结束 diag-changed 事件 → refreshDiag → installing=false 即停）。
-    var installTick = null;
-    function syncInstallTick(diag) {
-      var deps = checkByKey(diag, "deps");
-      var installing = !!(deps && deps.installing === true);
-      if (installing && !installTick) {
-        installTick = setInterval(function () { refreshDiag(); }, 3000);
-      } else if (!installing && installTick) {
-        clearInterval(installTick);
-        installTick = null;
+      function rawDetailsHtml(label, body) {
+        return '<details class="raw-details"><summary>' + escHtml(label) + '</summary>'
+          + '<pre class="diag-progress">' + escHtml(body) + '</pre></details>';
       }
-    }
-    function stopInstallTick() {
-      if (installTick) { clearInterval(installTick); installTick = null; }
-    }
-    function refreshDiag() {
-      // 诊断数据源（事件驱动的一次性 health 查询；不轮询、不自动挂载——挂载只由
-      // ready 事件驱动）。diagRefreshing 防并发（diag-changed 事件/手动刷新共用）。
-      if (diagRefreshing) return;
-      diagRefreshing = true;
-      hana.api.fetch("webui/health", { signal: AbortSignal.timeout(3000) })
-        .then(function (r) { return r.json(); })
-        .then(function (d) {
-          if (d && d.ok && !readyReceived) { mountReady(); return; }
-          if (d && d.diagnostics) {
-            renderDiagList(d.diagnostics);
-            syncPanelFromDiag(d.diagnostics);
-            syncInstallTick(d.diagnostics);
-          }
-        })
-        .catch(function () { })
-        .finally(function () { diagRefreshing = false; pushPanel(); });
-    }
-    function runVerifyDeps(btn) {
-      if (verifyRequested) return; // 幂等：已在检测中
-      verifyRequested = true;
-      if (btn) { btn.disabled = true; btn.textContent = "正在检测…"; setBtnMsg("deps", ""); }
-      pushPanel();
-      hana.api.fetch("webui/verify-deps", {
-        signal: AbortSignal.timeout(15000), // 服务端 await 检测 ≤10s，留足余量
-      })
-        .then(function (r) { return r.json(); })
-        .then(function (d) {
-          verifyRequested = false;
-          if (d && d.ok) {
-            // 结果已写入服务端 g.depsSmoke：刷新一次诊断（通过/失败状态进 deps 卡片）
-            refreshDiag();
+      // ---- 状态应用/重绘 ----
+      var installTick = null;
+      var retryClock = null;
+      var readyTimer = null;
+      var retryRefreshed = false;
+      function clearClocks() {
+        if (installTick) { clearInterval(installTick); installTick = null; }
+        if (retryClock) { clearInterval(retryClock); retryClock = null; }
+      }
+      function clearReadyTimer() {
+        if (readyTimer) { clearTimeout(readyTimer); readyTimer = null; }
+      }
+      function armFallbackTimer() {
+        clearReadyTimer();
+        if (readyReceived) return;
+        readyTimer = setTimeout(function () {
+          readyTimer = null;
+          if (!readyReceived) refreshBoot();
+        }, 30000);
+      }
+      function startInstallTick() {
+        if (installTick) return;
+        installTick = setInterval(function () { refreshBoot(); }, 3000);
+      }
+      function stopInstallTick() {
+        if (installTick) { clearInterval(installTick); installTick = null; }
+      }
+      function startRetryClock() {
+        if (retryClock) { clearInterval(retryClock); retryClock = null; }
+        if (!boot || boot.nextRetryAt == null) return;
+        var el = document.getElementById("retryAtText");
+        if (!el) return;
+        retryRefreshed = false;
+        function tick() {
+          if (!boot || boot.nextRetryAt == null) return;
+          var left = boot.nextRetryAt - Date.now();
+          if (left <= 0) {
+            el.textContent = "（时间到，正在自动重试…）";
+            if (!retryRefreshed) {
+              retryRefreshed = true;
+              setTimeout(function () { if (!readyReceived) refreshBoot(); }, 2500);
+            }
             return;
           }
-          var b = listBtn("deps", "verify-deps");
-          if (b) { b.disabled = false; b.textContent = "检测依赖"; }
-          setBtnMsg("deps", d && d.error ? d.error : "检测请求失败，请稍后重试");
-          pushPanel();
-        })
-        .catch(function () {
-          verifyRequested = false;
-          var b = listBtn("deps", "verify-deps");
-          if (b) { b.disabled = false; b.textContent = "检测依赖"; }
-          setBtnMsg("deps", "检测请求超时或网络错误，请重试");
-          pushPanel();
-        });
-    }
-    function verifyDeps() {
-      runVerifyDeps(listBtn("deps", "verify-deps"));
-    }
-    // 版本管理（检查更新/更新 DSH）归设置页「检查与更新 DSH」卡片（@dsh-hanako/settings
-    // 版本卡片 + dsh_install 工具），deps 卡片不再做版本检查/更新，前端 checkUpdate/
-    // updateDsh 按钮与脚本已移除；/webui/check-update、/webui/update-dsh 路由保留
-    // （dsh_install 工具等仍经后端能力层调用）。
-    // 进标签页自动检测一次（仅依赖已装时；不随轮询重复——只在这里调一次）
-    function autoVerifyDeps() {
-      var deps = checkByKey(initDiag, "deps");
-      if (!deps || !deps.installed) return; // 未装：先安装，安装成功会自动重验
-      runVerifyDeps(listBtn("deps", "verify-deps"));
-    }
-    // 事件委托：卡片按钮点击（列表 innerHTML 每轮轮询重建，监听挂在 ul 上持久）
-    function onDiagClick(e) {
-      var t = e.target;
-      var btn = t && t.closest ? t.closest(".diag-btn") : null;
-      if (!btn) return;
-      var action = btn.getAttribute("data-action");
-      if (action === "start") startWebHost();
-      else if (action === "install-deps") installDeps();
-      else if (action === "verify-deps") verifyDeps();
-    }
-    // ---- 就绪事件化（v0.22.1+）：不再 3s 轮询 health 挂载 iframe——改事件驱动：
-    // ① 宿主 push ready（/webui/events 就绪事件流 或 父窗口 postMessage ready）→ 挂载；
-    // ② 未 ready 显示加载态；30s 超时兜底 → 引导刷新/看诊断；
-    // ③ 宿主推诊断事件（web host 启动失败）→ 直接显示自检诊断。----
-    var readyTimer = null;
-    var streamAbort = null;
-    var readyReceived = false;
-    // 只清超时与安装 tick（不 abort 事件流——流常驻，attach 重挂载时不能杀流；
-    // 流的终止只在页面卸载 abortEventStream）
-    function clearReadyTimers() {
-      if (readyTimer) { clearTimeout(readyTimer); readyTimer = null; }
-      stopInstallTick();
-    }
-    function abortEventStream() {
-      if (streamAbort) { try { streamAbort.abort(); } catch (e) { /* 已关闭 */ } streamAbort = null; }
-    }
-    function mountReady() {
-      if (readyReceived) return;
-      readyReceived = true;
-      stopInstallTick();
-      attach();
-    }
-    // 显示加载态（web host 启动中/停机窗口；默认进入）
-    function showLoading() {
-      var lb = document.getElementById("loading-box");
-      var db = document.getElementById("diag-box");
-      if (lb) lb.style.display = "";
-      if (db) db.style.display = "none";
-      document.body.setAttribute("data-pending", "1");
-    }
-    var diagShown = false;
-    // 显示诊断态（30s 超时 / 宿主推诊断事件 / 手动「查看诊断」）
-    function showDiagnostics(diag) {
-      var lb = document.getElementById("loading-box");
-      var db = document.getElementById("diag-box");
-      if (lb) lb.style.display = "none";
-      if (db) db.style.display = "";
-      document.body.setAttribute("data-pending", "1");
-      renderDiagList(diag || null);
-      syncPanelFromDiag(diag || null);
-      var rt = document.getElementById("diag-retry");
-      if (rt) {
-        rt.textContent = "web host 长时间未就绪：可刷新页面重试，或按上方自检修复后重试";
+          var bb = boot.boot || {};
+          var n = bb.attempt || 0;
+          el.textContent = fmtClock(boot.nextRetryAt) + "（约 " + fmtDelay(left) + " 后，第 " + (n + 1) + " 次）";
+        }
+        tick();
+        retryClock = setInterval(tick, 1000);
       }
-      if (!diagShown) {
-        diagShown = true;
-        autoVerifyDeps(); // 进诊断态自动运行级检测一次（结果经 refreshDiag 进 deps 卡片）
+      function panelEl() { return document.getElementById("boot-panel"); }
+      function applyBoot(bs) {
+        if (!bs || typeof bs !== "object") return;
+        boot = bs;
+        var view = viewOf(bs);
+        if (view === "ready") {
+          clearClocks();
+          clearReadyTimer();
+          if (!readyReceived) { mountReady(); }
+          pushPanel();
+          return;
+        }
+        document.body.setAttribute("data-view", view);
+        var el = panelEl();
+        if (el) el.innerHTML = view === "action" ? actionViewHtml(bs) : bootViewHtml(bs);
+        var d = bs.deps || {};
+        if (d.status === "installing" || d.status === "running") startInstallTick();
+        else stopInstallTick();
+        startRetryClock();
+        armFallbackTimer();
+        pushPanel();
       }
-    }
-    // 订阅宿主就绪事件流（/webui/events；SSE 式 chunked，非轮询）。
-    // 流断开（网络/服务端关闭）时按 10s 退避重开（有界 10 次）——覆盖
-    // 「web host 启动失败后用户修复重新拉起」的 ready 到达窗口；ready 后流保持
-    // 常驻（theme-pref / diag-changed 事件持续推送），断流同样重开恢复事件接收。
-    var streamRetries = 0;
-    function openReadyStream() {
-      if (streamRetries >= 10) return;
-      var ac = new AbortController();
-      streamAbort = ac;
-      var retryTimer = null;
-      hana.api.fetch("webui/events", {
-        signal: ac.signal,
-      })
-        .then(function (r) {
-          if (!r || !r.ok || !r.body) {
-            scheduleReopen();
-            return null;
-          }
-          streamRetries = 0; // 成功建立响应体：连续失败计数归零（有界重试只作用于连续失败）
-          var reader = r.body.getReader();
-          var decoder = new TextDecoder();
-          var buf = "";
-          var pump = function () {
-            reader.read().then(function process({ done, value }) {
-              if (done) {
-                scheduleReopen();
-                return;
-              }
-              buf += decoder.decode(value, { stream: true });
-              var idx;
-              while ((idx = buf.indexOf("\n\n")) !== -1) {
-                var chunk = buf.slice(0, idx);
-                buf = buf.slice(idx + 2);
-                var dataLine = null;
-                var ls = chunk.split("\n");
-                for (var i = 0; i < ls.length; i++) {
-                  if (ls[i].indexOf("data: ") === 0) { dataLine = ls[i].slice(6); break; }
-                }
-                if (!dataLine) continue;
-                var ev;
-                try { ev = JSON.parse(dataLine); } catch (e2) { continue; }
-                if (!ev || typeof ev.type !== "string") continue;
-                if (ev.type === "ready") { if (!readyReceived) mountReady(); }
-                else if (ev.type === "pending") {
-                  // web host 停机/重启窗口：退回未就绪态——清 readyReceived（重启完成
-                  // 后再次 ready 会经 mountReady 重挂 iframe），事件流保持常驻收 ready。
-                  // 重挂 30s 兜底（ready 事件缺失时引导看诊断）。
-                  if (readyReceived) {
-                    readyReceived = false;
-                    stopInstallTick();
-                    showLoading();
-                    if (!readyTimer) {
-                      readyTimer = setTimeout(function () {
-                        if (!readyReceived) loadDiagnosticsNow();
-                      }, 30000);
-                    }
-                  }
-                  pushPanel();
-                }
-                else if (ev.type === "diagnostics") { if (!readyReceived) showDiagnostics(ev.diagnostics); }
-                else if (ev.type === "theme-pref") { sendPrefTo(frame && frame.contentWindow, ev); }
-                else if (ev.type === "diag-changed") { refreshDiag(); }
-              }
-              // 递归 read 同样附加 rejection 处理：断流重开（ready 后亦然——事件流
-              // 常驻，theme-pref/diag-changed 依赖它持续到达）
-              reader.read().then(process).catch(function () {
-                scheduleReopen();
-              });
-            }).catch(function () {
-              scheduleReopen();
-            });
-          };
-          pump();
-          return null;
-        })
-        .catch(function () {
-          scheduleReopen();
-        });
-      function scheduleReopen() {
+      var bootRefreshing = false; // 快照拉取防并发（事件风暴/安装 tick/兜底共用）
+      function refreshBoot() {
+        if (bootRefreshing) return;
+        if (!hana || !hana.api || !hana.api.fetch) return;
+        bootRefreshing = true;
+        hana.api.fetch("webui/boot-state", { signal: AbortSignal.timeout(3000) })
+          .then(function (r) { return r.json(); })
+          .then(function (d) { if (d) applyBoot(d); })
+          .catch(function () { /* 快照读取失败忽略（等下一事件/兜底） */ })
+          .finally(function () { bootRefreshing = false; });
+      }
+      function mountReady() {
+        if (readyReceived) return;
+        readyReceived = true;
+        clearClocks();
+        clearReadyTimer();
+        document.body.setAttribute("data-view", "ready");
+        attach();
+        // 事件驱动的就绪（bus ready / 父窗口握手）可能早于快照：异步拉一次对齐面板/状态
+        if (!(boot && boot.ready === true)) refreshBoot();
+      }
+      function attach() {
+        var wasPending = document.body.getAttribute("data-view") !== "ready";
+        if (wasPending || !frame.getAttribute("src")) {
+          frame.src = "http://127.0.0.1:{{= it.port }}/";
+        }
+        startThemePush();
+        pushPanel();
+      }
+      // ---- 事件流（/webui/events，SSE 式 chunked）----
+      var streamAbort = null;
+      var streamRetries = 0;
+      function abortEventStream() {
+        if (streamAbort) { try { streamAbort.abort(); } catch (e) { /* 已关闭 */ } streamAbort = null; }
+      }
+      function openReadyStream() {
         if (streamRetries >= 10) return;
-        streamRetries += 1;
-        if (retryTimer) clearTimeout(retryTimer);
-        retryTimer = setTimeout(function () {
-          retryTimer = null;
-          openReadyStream();
-        }, 10000);
+        var ac = new AbortController();
+        streamAbort = ac;
+        var retryTimer = null;
+        hana.api.fetch("webui/events", { signal: ac.signal })
+          .then(function (r) {
+            if (!r || !r.ok || !r.body) { scheduleReopen(); return null; }
+            streamRetries = 0;
+            var reader = r.body.getReader();
+            var decoder = new TextDecoder();
+            var buf = "";
+            var pump = function () {
+              reader.read().then(function process(res) {
+                if (res.done) { scheduleReopen(); return; }
+                buf += decoder.decode(res.value, { stream: true });
+                var idx;
+                while ((idx = buf.indexOf("\n\n")) !== -1) {
+                  var chunk = buf.slice(0, idx);
+                  buf = buf.slice(idx + 2);
+                  var dataLine = null;
+                  var ls = chunk.split("\n");
+                  for (var i = 0; i < ls.length; i++) {
+                    if (ls[i].indexOf("data: ") === 0) { dataLine = ls[i].slice(6); break; }
+                  }
+                  if (!dataLine) continue;
+                  var ev;
+                  try { ev = JSON.parse(dataLine); } catch (e2) { continue; }
+                  if (!ev || typeof ev.type !== "string") continue;
+                  if (ev.type === "ready") {
+                    if (!readyReceived) mountReady();
+                  } else if (ev.type === "pending") {
+                    if (readyReceived) {
+                      readyReceived = false;
+                      refreshBoot();
+                    } else {
+                      refreshBoot();
+                    }
+                  } else if (ev.type === "diagnostics") {
+                    if (!readyReceived) refreshBoot();
+                  } else if (ev.type === "theme-pref") {
+                    sendPrefTo(frame && frame.contentWindow, ev);
+                  } else if (ev.type === "diag-changed") {
+                    refreshBoot();
+                  }
+                }
+                reader.read().then(process).catch(function () { scheduleReopen(); });
+              }).catch(function () { scheduleReopen(); });
+            };
+            pump();
+            return null;
+          })
+          .catch(function () { scheduleReopen(); });
+        function scheduleReopen() {
+          if (streamRetries >= 10) return;
+          streamRetries += 1;
+          if (retryTimer) clearTimeout(retryTimer);
+          retryTimer = setTimeout(function () {
+            retryTimer = null;
+            openReadyStream();
+          }, 10000);
+        }
       }
-    }
-    // 父窗口 postMessage ready（页面桥：宿主 UI / 测试直接推「ready」）
-    window.addEventListener("message", function (e) {
-      if (readyReceived) return;
-      var m = e.data;
-      if (m && typeof m === "object") {
-        // ① 纯 { type:"ready" }（壳页自身握手同款命名）
-        if (m.type === "ready" && !m.protocol) { mountReady(); return; }
-        // ② hana.plugin.ui 事件（type: dsh.ready）
-        if (m.protocol === "hana.plugin.ui" && m.kind === "event" && m.type === "dsh.ready") { mountReady(); return; }
+      // 父窗口 postMessage ready（页面桥 / hana.plugin.ui dsh.ready）
+      window.addEventListener("message", function (e) {
+        if (readyReceived) return;
+        var m = e.data;
+        if (m && typeof m === "object") {
+          if (m.type === "ready" && !m.protocol) { mountReady(); return; }
+          if (m.protocol === "hana.plugin.ui" && m.kind === "event" && m.type === "dsh.ready") { mountReady(); return; }
+        }
+      });
+      window.addEventListener("beforeunload", function () {
+        clearClocks();
+        clearReadyTimer();
+        abortEventStream();
+      });
+      // ---- 主题桥（壳页与内层 dsh iframe 主题实时跟随；保留既有实现）----
+      function readThemeVars() {
+        var cs = getComputedStyle(document.documentElement);
+        function v(name, fb) { var x = cs.getPropertyValue(name).trim(); return x || fb; }
+        var params = new URLSearchParams(location.search);
+        return {
+          themeId: params.get("hana-theme") || "inherit",
+          vars: {
+            bg: v("--bg", "#F5EFE4"),
+            bgCard: v("--bg-card", "#FBF7EE"),
+            sidebarBg: v("--sidebar-bg", "#EFE8DB"),
+            text: v("--text", "#2A2622"),
+            textLight: v("--text-light", "#4A433C"),
+            textMuted: v("--text-muted", "#6B6158"),
+            accent: v("--accent", "#537D96"),
+            accentHover: v("--accent-hover", "#3F6179"),
+            accentLight: v("--accent-light", "rgba(83,125,150,0.08)"),
+            userBg: v("--user-bg", "rgba(83,125,150,0.08)"),
+            border: v("--border", "#D8CFBE"),
+            green: v("--green", "#4A6B4A"),
+            danger: v("--danger", "#8B2C1F"),
+            overlayStrong: v("--overlay-strong", "rgba(42,38,34,0.15)"),
+            overlayMedium: v("--overlay-medium", "rgba(42,38,34,0.08)"),
+            dropOverlayBg: v("--drop-overlay-bg", "rgba(245,239,228,0.85)"),
+          },
+        };
       }
-    });
-    function loadDiagnosticsNow() {
-      // 一次性 health 查询（诊断数据源；不轮询）——30s 超时兜底/手动「查看诊断」用。
-      // 就绪（web host 已起但 ready 信号丢失）时直接挂载；未就绪渲染自检
-      hana.api.fetch("webui/health", { signal: AbortSignal.timeout(3000) })
-        .then(function (r) { return r.json(); })
-        .then(function (d) {
-          if (d && d.ok) { mountReady(); return; }
-          if (d && d.diagnostics) showDiagnostics(d.diagnostics);
-          else showDiagnostics(null);
-        })
-        .catch(function () { showDiagnostics(null); });
-    }
-    window.addEventListener("beforeunload", function () {
-      clearReadyTimers();
-      abortEventStream();
-    });
-    // 主题桥——dsh 页面（跨源 iframe）postMessage 索取 Hana 主题，
-    // 这里回传主题 id（location.search hana-theme）+ 实时变量值（hana-css 已
-    // link，getComputedStyle 读到当前主题生效值）；注入脚本与内置表合并后覆盖。
-    function readThemeVars() {
-      var cs = getComputedStyle(document.documentElement);
-      function v(name, fb) { var x = cs.getPropertyValue(name).trim(); return x || fb; }
-      var params = new URLSearchParams(location.search);
-      return {
-        themeId: params.get("hana-theme") || "inherit",
-        vars: {
-          bg: v("--bg", "#F5EFE4"),
-          bgCard: v("--bg-card", "#FBF7EE"),
-          sidebarBg: v("--sidebar-bg", "#EFE8DB"),
-          text: v("--text", "#2A2622"),
-          textLight: v("--text-light", "#4A433C"),
-          textMuted: v("--text-muted", "#6B6158"),
-          accent: v("--accent", "#537D96"),
-          accentHover: v("--accent-hover", "#3F6179"),
-          accentLight: v("--accent-light", "rgba(83,125,150,0.08)"),
-          userBg: v("--user-bg", "rgba(83,125,150,0.08)"),
-          border: v("--border", "#D8CFBE"),
-          green: v("--green", "#4A6B4A"),
-          danger: v("--danger", "#8B2C1F"),
-          overlayStrong: v("--overlay-strong", "rgba(42,38,34,0.15)"),
-          overlayMedium: v("--overlay-medium", "rgba(42,38,34,0.08)"),
-          dropOverlayBg: v("--drop-overlay-bg", "rgba(245,239,228,0.85)"),
-        },
-      };
-    }
-    function sendThemeTo(dst) {
-      var msg = { dshHanaTheme: readThemeVars() };
-      try { dst.postMessage(msg, "*"); } catch (err) { /* 目标不可达忽略 */ }
-    }
-    function sendPrefTo(dst, ev) {
-      // DSH 主题偏好变更通知（宿主经 /webui/events 收到 settings/document-updated 的
-      // ui-theme 后转来）：只带 revision，preference 值由注入脚本收到后重读一次
-      // settings/describe（事件驱动替代 3s 轮询）。
-      if (!dst) return;
-      var msg = { dshHanaPref: { revision: ev && ev.revision != null ? ev.revision : null } };
-      try { dst.postMessage(msg, "*"); } catch (err) { /* 目标不可达忽略 */ }
-    }
-    // —— 宿主主题实时跟随（feat/theme-live）——
-    // 宿主在 iframe 握手 ready 后，用进程级 MutationObserver 盯根节点 data-theme 与
-    // 样式表，主题一变即向插件 iframe 发 hana.theme.changed 协议事件（payload 含
-    // { theme, cssUrl }）。此前壳页只在挂载时读一次主题快照，宿主切主题后壳页不
-    // 感知、仍推旧快照，需重开标签页才生效。此分支收到实时通知后：按新 cssUrl 更新
-    // 自身主题 <link>（让 getComputedStyle 读到新变量）→ 经现有 readThemeVars() 重读
-    // → sendThemeTo(frame.contentWindow) 重推内层 dsh iframe（dsh-hana-theme 幂等，
-    // 收到新 vars 即重建样式）。与下方 1.5s 定时重推 / dshHanaThemeRequest 应答并存，
-    // 互不冲突（后者留作 fallback）。
-    function hanaThemeLink() {
-      // 精确锚定宿主 hana-css（href 固定带 /theme.css），避免误换 head 里其它样式表。
-      var links = document.head.querySelectorAll('link[rel="stylesheet"]');
-      for (var i = 0; i < links.length; i++) {
-        if (links[i].href && links[i].href.indexOf("/theme.css") !== -1) return links[i];
+      function sendThemeTo(dst) {
+        var msg = { dshHanaTheme: readThemeVars() };
+        try { dst.postMessage(msg, "*"); } catch (err) { /* 目标不可达忽略 */ }
       }
-      return null;
-    }
-    function pushThemeNow() {
-      var cw = frame && frame.contentWindow;
-      if (cw) sendThemeTo(cw);
-    }
-    function applyHostThemeChange(m) {
-      var p = (m && m.payload && typeof m.payload === "object") ? m.payload : (m || {});
-      var theme = p.theme || p.themeId || "";
-      var cssUrl = p.cssUrl || "";
-      // 更新壳页自身主题标记与 color-scheme：data-hana-theme 反映实时主题，color-scheme
-      // 让壳页诊断区与跨源 dsh iframe 继承的 prefers-color-scheme 跟随宿主明暗。
-      if (theme) {
-        document.body.setAttribute("data-hana-theme", theme);
-        var csMeta = document.querySelector('meta[name="color-scheme"]');
-        if (csMeta) csMeta.setAttribute("content", /midnight|dark/i.test(theme) ? "dark" : "light");
+      function sendPrefTo(dst, ev) {
+        if (!dst) return;
+        var msg = { dshHanaPref: { revision: ev && ev.revision != null ? ev.revision : null } };
+        try { dst.postMessage(msg, "*"); } catch (err) { /* 目标不可达忽略 */ }
       }
-      if (!cssUrl) { pushThemeNow(); return; }
-      // 按新 cssUrl 更新主题 <link>：宿主挂载时已注入 hana-css link 则换 href，否则
-      // 补建一个（宿主未传 hana-css 的兜底）。需等新样式表加载完再读 getComputedStyle，
-      // 否则读到的还是旧变量。
-      var link = hanaThemeLink();
-      var done = false;
-      function settle() { if (done) return; done = true; pushThemeNow(); }
-      if (!link) {
-        link = document.createElement("link");
-        link.rel = "stylesheet";
-        link.onload = settle;
-        link.onerror = settle;
-        link.href = cssUrl;
-        document.head.appendChild(link);
-      } else {
-        link.onload = settle;
-        link.onerror = settle;
-        if (link.href !== cssUrl) link.href = cssUrl;
+      function hanaThemeLink() {
+        var links = document.head.querySelectorAll('link[rel="stylesheet"]');
+        for (var i = 0; i < links.length; i++) {
+          if (links[i].href && links[i].href.indexOf("/theme.css") !== -1) return links[i];
+        }
+        return null;
       }
-      // 兜底：跨源/缓存样式表 onload 可能不触发，300ms 后无论如何重推一次。
-      setTimeout(settle, 300);
-    }
-    window.addEventListener("message", function (e) {
-      var m = e.data;
-      if (m && m.dshHanaThemeRequest) { sendThemeTo(e.source); return; }
-      // 宿主实时主题变更（hana.plugin.ui 协议或事件名 hana.theme.changed，源自宿主父窗口）。
-      if (m && (m.type === "hana.theme.changed" || m.event === "hana.theme.changed")
+      function pushThemeNow() {
+        var cw = frame && frame.contentWindow;
+        if (cw) sendThemeTo(cw);
+      }
+      function applyHostThemeChange(m) {
+        var p = (m && m.payload && typeof m.payload === "object") ? m.payload : (m || {});
+        var theme = p.theme || p.themeId || "";
+        var cssUrl = p.cssUrl || "";
+        if (theme) {
+          document.body.setAttribute("data-hana-theme", theme);
+          var csMeta = document.querySelector('meta[name="color-scheme"]');
+          if (csMeta) csMeta.setAttribute("content", /midnight|dark/i.test(theme) ? "dark" : "light");
+        }
+        if (!cssUrl) { pushThemeNow(); return; }
+        var link = hanaThemeLink();
+        var done = false;
+        function settle() { if (done) return; done = true; pushThemeNow(); }
+        if (!link) {
+          link = document.createElement("link");
+          link.rel = "stylesheet";
+          link.onload = settle;
+          link.onerror = settle;
+          link.href = cssUrl;
+          document.head.appendChild(link);
+        } else {
+          link.onload = settle;
+          link.onerror = settle;
+          if (link.href !== cssUrl) link.href = cssUrl;
+        }
+        setTimeout(settle, 300);
+      }
+      window.addEventListener("message", function (e) {
+        var m = e.data;
+        if (m && m.dshHanaThemeRequest) { sendThemeTo(e.source); return; }
+        if (m && (m.type === "hana.theme.changed" || m.event === "hana.theme.changed")
           && e.source === window.parent) {
-        applyHostThemeChange(m);
+          applyHostThemeChange(m);
+        }
+      });
+      var activePushTimer = null;
+      function startThemePush() {
+        var cw = frame && frame.contentWindow;
+        if (!cw) return;
+        sendThemeTo(cw);
+        clearInterval(activePushTimer);
+        activePushTimer = setInterval(function () {
+          var win = frame && frame.contentWindow;
+          if (win) sendThemeTo(win);
+          else { clearInterval(activePushTimer); activePushTimer = null; }
+        }, 1500);
       }
-    });
-    var activePushTimer = null;
-    function startThemePush() {
-      var cw = frame && frame.contentWindow;
-      if (!cw) return;
-      sendThemeTo(cw);
-      clearInterval(activePushTimer);
-      activePushTimer = setInterval(function () {
-        var win = frame && frame.contentWindow;
-        if (win) sendThemeTo(win);
-        else { clearInterval(activePushTimer); activePushTimer = null; }
-      }, 1500);
-    }
-    // 就绪事件化引导：未就绪（服务端渲染即总线未连接）→ 加载态 + 订阅宿主就绪事件流
-    // + 30s 超时兜底（引导刷新/看诊断）；就绪态（服务端渲染即已连接）→ 直接进入。
-    // 诊断页按钮事件委托无条件绑定（diag-list 元素恒在，从 iframe 态退回诊断页后按钮依旧可点）
-    var diagList = document.getElementById("diag-list");
-    if (diagList) diagList.addEventListener("click", onDiagClick);
-    if (document.body.getAttribute("data-pending") === "1") {
-      showLoading(); // 未就绪：加载态（「正在启动 DSH web host…」）
-      openReadyStream(); // 订阅宿主就绪事件流（ready/pending/diagnostics 事件）
-      readyTimer = setTimeout(function () {
-        if (!readyReceived) loadDiagnosticsNow(); // 30s 未就绪：引导看诊断（可刷新/修复）
-      }, 30000);
-    } else {
-      // 就绪态（服务端渲染即已连接）：统一走 attach 挂载（src 由壳页 JS 设置——
-      // 直嵌根路径，无 BFF 代理/凭据透传（vY：pluginSurfaceSession 仅用于 hana.api.fetch 调用）），
-      // 并订阅常驻事件流——theme-pref / diag-changed / 重启窗口的 pending → ready
-      // 周期在就绪态同样生效，全部依赖这条流。
-      readyReceived = true;
-      attach();
-      openReadyStream();
-    }
-    syncPanelFromDiag(initDiag); // 初始面板状态（readyReceived 已就位，避免初始错推「未就绪」）
-}) ();
+      // ---- 初始化 ----
+      if (document.body.getAttribute("data-view") === "ready") {
+        readyReceived = true;
+        attach();
+        openReadyStream();
+      } else {
+        if (initBoot && typeof initBoot === "object") applyBoot(initBoot);
+        else refreshBoot();
+        openReadyStream();
+      }
+    })();
   </script>
 </body>
 
