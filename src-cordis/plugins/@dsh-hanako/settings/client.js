@@ -76,7 +76,7 @@ window.__ModuleLoader__.load({
       ".hs-value{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-primary,#1f2329);font-size:13px;line-height:20px}" +
       ".hs-select{flex:1;min-width:0;height:30px;padding:0 8px;border:1px solid var(--dsw-alias-border-l1,#d8d8d8);border-radius:8px;background:var(--dsw-alias-bg-base,#ffffff);color:var(--dsw-alias-label-primary,#1f2329);font-family:inherit;font-size:13px;line-height:20px}" +
       ".hs-select:focus{outline:none;border-color:var(--dsw-alias-button-primary-fill,#537d96)}" +
-      // ---- 版本信息面板（DSH 版本卡片：本地/最新版本 双行信息块）----
+      // ---- 版本信息面板（DSH 版本卡片：本地版本 信息块）----
       ".hs-info{display:flex;flex-direction:column;gap:8px;padding:10px 12px;background: var(--dsw-alias-bg-module-platform,#EFE8DB);border-radius:8px}" +
       ".hs-info-row{display:flex;align-items:center;justify-content:space-between;gap:12px}" +
       ".hs-info-label{flex:none;color:var(--dsw-alias-label-secondary,#5a5f66);font-size:12px}" +
@@ -465,7 +465,7 @@ window.__ModuleLoader__.load({
       });
     }
 
-    // ---- DSH 版本卡片（设置中心分组卡片二）：纯展示——本地版本 + 更新说明 ----
+    // ---- DSH 版本卡片（设置中心分组卡片二）：纯展示——本地版本 ----
     // T7d 起 check-version 只回 localVersion（dsh 版本严格锁插件声明，无远端检查/更新，
     // 更新 dsh = 更新插件发版）：挂载时读一次即显示，无按钮无轮询；状态行仅在
     // 异常（未安装/读取失败）时出现。
