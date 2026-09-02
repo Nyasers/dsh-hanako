@@ -1386,8 +1386,10 @@ function buildProcessDiagCheck(g, out) {
     check.fix = "点击本卡片「手动启动 web host」按钮重新拉起，或重启 Hana";
   } else {
     // 启动失败（webLastError）：展示失败原因（其已含 stderr 尾部）+ 修复指引。
-    // depsVerified 传入 pickProcessFix：升级缓存残留判定需依赖运行级验证通过为前提
-    // （CodeRabbit：安装不完整也报 ENOENT，只提示重启会留下坏安装；见函数内注释）
+    // depsVerified 传入 pickProcessFix：升级缓存残留判定需依赖「当前已装 + 运行级验证
+    // 通过」为前提——取本次诊断 deps 项的 verified（= installed && smoke.ok，见
+    // buildDepsDiagCheck），而非 g.deps.result.ok 裸缓存（缓存不证明 cliBin 当前仍在，
+    // 包被移除/路径变化后仍可能误判升级残留；CodeRabbit PR #51）
     check.detail = lastError
       ? "启动失败：" + lastError
       : "进程已退出（code=" +
@@ -1398,7 +1400,7 @@ function buildProcessDiagCheck(g, out) {
       lastError,
       stderr,
       port,
-      g.deps?.result?.ok === true,
+      out.checks.find((c) => c.key === "deps")?.verified === true,
     );
   }
   return check;
