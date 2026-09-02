@@ -65,7 +65,7 @@ DSH 设置页「DSHana 设置」分页（settings.section slot，id `dshana-sett
 
 ## 依赖部署与解耦（D6）
 
-- **pnpm 运行时引导**：`lib/pnpm.js` `ensurePnpm` 下载单文件 pnpm.mjs 到数据目录 pnpm-dist/（工具包不 import pnpm）；安装经子进程跑（`pnpm install --prod --reporter=ndjson` 到插件根）
+- **pnpm 运行时引导**：`lib/pnpm.js` `ensurePnpm` 下载单文件 pnpm.mjs 到数据目录 pnpm-dist/（工具包不 import pnpm）；安装经子进程跑（`pnpm install --prod` 到插件根，pnpm 原生文本直通日志通道——ndjson reporter 已去除 2026-09-03）
 - **诊断不 import cordis**：`verifyDepsSmoke` 静态核对（cliBin 为常规文件 + 磁盘版本 === 插件声明，无子进程秒回；磁盘完整性由 pnpm install 保证、可运行性由 boot 裁决）；`readDshInstalledVersion` 直读插件 node_modules/@deepseek-ai/dsh/package.json
 - **node 代理**：插件根 node.cmd（与部署物同目录——历史数据目录 pnpm-proxy 漂移教训，PATH 与代理同源绑定），指向解析后的 node 执行体（默认宿主 electron node，配置 nodejsPath 时用系统 node），让 koffi/node-pty 的 install script 找到宿主 node
 - **进程内 boot 解耦**：`loadInprocDsh` 运行时动态 import（webpackIgnore 保留原生 import；枚举 profile-boot-*.js 试 runProfile；app-boot 定位 createRequire + .pnpm 枚举双保险）——插件 bundle 零 @deepseek-ai 静态引用，DSH 缺失时诊断/安装引导仍可用
