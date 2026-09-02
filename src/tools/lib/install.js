@@ -385,6 +385,19 @@ export function readDshInstalledVersion(cfg) {
 // 单一事实源），不再回退配置基线 resolveDshTag（保留仅作旧版兼容兜底）。
 // 解耦（D6）：工具包/生命周期自身不 import pnpm 或 cordis 运行时——pnpm 经运行时引导
 // （ensurePnpm 下载单文件）；诊断经 spawn subprocess + HTTP 直查，不加载 cordis。
+// 通知宿主侧 deps 状态翻转（routes/webui.js 挂的 g.notifyDepsChanged → 壳页一次性
+// 刷新诊断，事件驱动替代面板周期 tick）。通知失败不阻断部署/验证主流程。
+function notifyDepsChanged() {
+  const g = getSingleton();
+  if (g && typeof g.notifyDepsChanged === "function") {
+    try {
+      g.notifyDepsChanged();
+    } catch {
+      /* 通知失败不阻断 */
+    }
+  }
+}
+
 export async function installDepsFromPlugin(ctxConfig, ctxDataDir, opts = {}) {
   const g = getSingleton();
   // 部署中并发调用直接返回（路由侧也会先查 g.deps.status，这里是直调兜底）。
@@ -427,6 +440,7 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir, opts = {}) {
   g.deps.error = null;
   g.deps.time = new Date().toISOString();
   g.deps.log = "";
+  notifyDepsChanged();
   // 统一日志通道（见文件头）：同一份文本进内存尾环（≤DEPS_LOG_CAP，实时）+ 会话日志
   // 文件（src=pnpm 原始输出 / src=hana 里程碑）。每次写入刷新 g.deps.time（前端
   // installing 态显示「更新于 HH:MM:SS」、3s 轮询 health 随诊断刷新 log 尾部）。
@@ -472,6 +486,7 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir, opts = {}) {
         g.deps.error = null;
         g.deps.result = smoke;
         g.deps.status = "ok";
+        notifyDepsChanged();
         return { ok: true, state: "installed", cliBin, skipped: true };
       }
       milestone(
@@ -640,10 +655,12 @@ export async function installDepsFromPlugin(ctxConfig, ctxDataDir, opts = {}) {
     await verifyDepsSmoke(cfg, { force: true });
     // 安装链路终态 ok（终态保留；verify 若失败其详情在 g.deps.result，不影响安装结论）
     g.deps.status = "ok";
+    notifyDepsChanged();
     return { ok: true, state: "installed", cliBin };
   } catch (e) {
     g.deps.error = String(e?.message || e).slice(0, 1500);
     g.deps.status = "error";
+    notifyDepsChanged();
     milestone("[失败] " + g.deps.error);
     return { ok: false, state: "error", error: g.deps.error };
   }
@@ -719,6 +736,7 @@ export async function verifyDepsSmoke(cfg, opts = {}) {
   // 结果缓存（g.deps.result 复合对象整体引用）+ 验证进行中状态
   g.deps.result = smoke;
   g.deps.status = "running";
+  notifyDepsChanged();
   // pnpm 引导检查（与 dsh 运行级验证并行，互不拖累）：verifyDepsSmoke 虽是运行级
   // 只读检测，但 pnpm 检查允许自愈——ensurePnpm 幂等：缓存完整（sha256 一致）直接
   // 返回（快速路径），缺失/损坏自动重新下载（网络操作无副作用）。dataDir 显式传入
@@ -801,6 +819,7 @@ export async function verifyDepsSmoke(cfg, opts = {}) {
     // 验证链路终态（ok/error 保留；下次 verify 入口才回到 running）——注意 install 内部
     // 调用本函数后还会把 g.deps.status 置 ok（安装结论优先，verify 详情在 g.deps.result）
     g.deps.status = smoke.ok ? "ok" : "error";
+    notifyDepsChanged();
     // error 字段与验证结果同步（ok → 清空；失败 → smoke.error，供诊断展示）
     g.deps.error = smoke.ok ? "" : smoke.error;
   }

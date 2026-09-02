@@ -9,9 +9,10 @@
 //     theme.css 变量生效，getComputedStyle 读到当前主题 16 个变量的渲染值。
 //     随宿主更新：宿主切主题 → dataset.theme 变 → 插件 iframe 重载 → 壳桥
 //     回传新值；宿主新增/修改主题无需插件更新（无静态主题表）。
-// 边界：dsh preference 经 settings/describe 读取（加载时一次 + 轻量轮询 3s——
-//   vY T7b 后 0.1.2 无旧 /api/events.host WS，官方主题 preference 走服务端注入 +
-//   client presenter；注入脚本轮询读偏好，system ↔ light/dark 切换即时重评）。
+// 边界：dsh preference 经 settings/describe 读取（加载时一次回读 + 变更事件驱动——
+//   vY T7b 后 0.1.2 无旧 /api/events.host WS；vZ 起事件化：宿主侧 bridge 订阅
+//   remote.mux $events 的 settings/document-updated（ui-theme）→ 总线 → /webui/events
+//   → 壳页 postMessage dshHanaPref → 注入脚本重读一次，替代早期 3s 轮询）。
 //   system → 覆盖 Hana 配色；light/dark → 完全原生。
 //
 // 机制：经 dsh-host-webserver 的 tapIndex 扩展点，向每个 index 响应注入：
@@ -204,6 +205,13 @@ const BRIDGE = `<script id="@dsh-hanako/theme-bridge">
         if (askTimer) { clearInterval(askTimer); askTimer = null; }
       }
     }
+    // DSH 主题偏好变更通知（壳页经 /webui/events 收到 settings/document-updated 的
+    // ui-theme 后 postMessage 转发，只带 revision）：重读一次 preference（事件驱动，
+    // 替代旧 3s 轮询 settings/describe——变更时才读，describe 调用量与官方
+    // startup-rpc-budget 语义一致）。
+    if (e.data && e.data.dshHanaPref) {
+      refreshPref();
+    }
   });
   // 回读一次 preference 并重跑 applyOrRemove（加载时 + 偏好变更时共用）。
   function refreshPref() {
@@ -228,14 +236,12 @@ const BRIDGE = `<script id="@dsh-hanako/theme-bridge">
       .catch(function () {});
   }
   refreshPref();
-  // 偏好实时化（vY：T7b 后 dsh 0.1.2 无 /api/events.host（旧 0.1.1 端点）——
-  // 官方主题 preference 走服务端注入 + client presenter，注入脚本无法访问 ctx.remote.$on；
-  // 改为轻量轮询 settings/describe（本地回环，3s 间隔；preference 变化时 refreshPref 内
-  // 自动重跑 applyOrRemove/maybeDropStatic——system ↔ light/dark 切换即时生效）。
-  var prefTimer = setInterval(function () {
-    if (document.hidden) return; // 标签页隐藏时不轮询
-    refreshPref();
-  }, 3000);
+  // 偏好实时化（vY→vZ：T7b 后 dsh 0.1.2 无 /api/events.host（旧 0.1.1 端点）——官方
+  // 主题 preference 走服务端注入 + client presenter，注入脚本无法访问 ctx.remote.$on；
+  // 先退化为 3s 轻量轮询 settings/describe（0.1.2→0.1.3 期间），后改事件驱动：宿主侧
+  // bridge 订阅 remote.mux $events 的 settings/document-updated（ui-theme）→ 总线
+  // events 频道 → /webui/events → 壳页 postMessage dshHanaPref → 上方 message 监听
+  // 调 refreshPref 重读一次（变更时才读，替换周期轮询）。加载时保留一次回读兑底。
   var mq = window.matchMedia && matchMedia("(prefers-color-scheme: dark)");
   if (mq && mq.addEventListener) mq.addEventListener("change", ask);
   // 竞态修复：壳页（宿主 iframe 外层）主题桥的注册可能与 dsh 页面加载不同步——脚本加载时
