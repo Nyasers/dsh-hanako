@@ -200,7 +200,7 @@ export default class DshHanakoPlugin {
 
     // 拉起 dsh web host（随插件生命周期：加载即启动，卸载即回收）——异步 fire-and-forget：
     // onload 立即返回，不 await 端口就绪（ensureWebHost 有 60s 端口就绪等待，onload 不能被拖住）。
-    // tools 模块由宿主在激活期间 import（注册工具），可能晚于本 onload；这里只做一次简短（<1s）
+    // tools 模块由宿主在激活期间 import（注册工具），可能晚于本 onload；这里先做一次简短（<1s）
     // 轮询等单例方法挂上，再触发启动；触发后不 await 其结果（fire-and-forget，内部 try/catch
     // 记 g.webLastError / g.webLastLogPath，不抛到 onload）。启动失败不阻塞加载——首次工具调用
     // （dsh_run execute 内 ensureWebHost）或 /webui/start 手动启动时仍会可靠重试。
@@ -213,6 +213,9 @@ export default class DshHanakoPlugin {
     // npmmirror）提到 web host 启动（WebUI/总线就绪点）之前：装好再拉起，首次启动即装完即用。
     // 安装可能数分钟：在后台链执行，onload 早已返回，不阻塞宿主；安装失败不阻断启动尝试
     // （依赖缺失时 startWebHost 失败记 webLastError，工具调用/标签页仍可靠重试）。
+    // 挂载探测失败（1s 内未挂上）不放弃自动链：转入后台延后等待（60s 兜底、1s 间隔），
+    // 单例方法挂上后补跑同一启动链——不让短暂探测窗口丢失「启动自动安装 + web host 自启」
+    // 承诺（否则延迟挂载的冷启动只能等工具调用才自愈）；仍未挂载才降级随工具调用启动。
     const waitMount = (async () => {
       for (let i = 0; i < 20; i++) {
         // 最多约 1s 等工具模块挂载（远小于旧的 5s 轮询与 60s 端口就绪等待）
@@ -234,89 +237,116 @@ export default class DshHanakoPlugin {
         await new Promise((r) => setTimeout(r, 2000));
       }
     };
+    // 启动自动链：依赖安装（幂等，见上方注释）→ web host 启动。installDeps 与
+    // startWebHost 在 lifecycle.js 顶层同批挂载（mountLifecycle），调用方已确认
+    // startWebHost 挂载；installDeps 缺失时单独跳过自动安装降级为现状（web host
+    // 随首次工具调用启动）。依赖安装段 catch 全部错误不抛出（记日志），web host
+    // 启动段双参 .then 吞掉 reject，本函数不向外抛——waitMount 链永不因启动失败炸。
+    const runStartupAutoChain = async () => {
+      // 启动前依赖自动安装（与 startWebHost 同一后台链，先后执行）
+      try {
+        if (typeof g.installDeps !== "function") {
+          g.appendLog?.(
+            "hana",
+            "installDeps 能力未挂载，跳过启动前依赖自动安装（随首次工具调用启动）",
+          );
+        } else {
+          g.appendLog?.("hana", "启动前依赖自动安装：检查 dsh 依赖就绪…");
+          const r = await g.installDeps(config, dataDir);
+          if (r && r.ok) {
+            g.appendLog?.(
+              "hana",
+              r.skipped
+                ? "依赖已就绪（与声明一致，跳过安装）"
+                : "依赖安装完成（pnpm install --prod，registry 兜底 + 运行级重验）",
+            );
+          } else if (r && r.state === "installing") {
+            // 并发窗口：他人路径（dsh_install 工具/标签页）正在安装，等其落终态
+            g.appendLog?.(
+              "hana",
+              "依赖安装已在其他路径进行中，等待完成后再启动 web host…",
+            );
+            const settled = await waitDepsSettled();
+            const st = g.deps && g.deps.status;
+            g.appendLog?.(
+              "hana",
+              settled
+                ? "依赖安装已结束（" + (st || "?") + "）"
+                : "依赖安装等待超时（300s），继续尝试启动 web host",
+            );
+          } else {
+            g.appendLog?.(
+              "hana",
+              "依赖自动安装未成功：" +
+                ((r && (r.error || r.state)) || "未知原因") +
+                "，继续尝试启动 web host（失败将记入诊断，可工具/标签页重试）",
+            );
+          }
+        }
+      } catch (e) {
+        g.appendLog?.(
+          "hana",
+          "启动前依赖自动安装异常：" + (e?.message || String(e)),
+        );
+      }
+      // fire-and-forget：不 await 端口就绪（避免 ensureWebHost 60s 等拖住宿主启动）。
+      // startWebHostFromPlugin 内部已 try/catch 记 webLastError 返回布尔，这里双兜底。
+      await Promise.resolve(g.startWebHost(config, dataDir)).then(
+        (ok) => {
+          log.info(
+            `[dsh-hanako] DSH web host ${ok ? "已随插件异步启动" : "启动未就绪（工具调用时将重试）"}`,
+          );
+          g.appendLog?.(
+            "hana",
+            `DSH web host 启动${ok ? "成功（已随插件异步启动）" : "未就绪（工具调用时将重试）"}`,
+          );
+        },
+        (e) => {
+          log.warn?.(
+            "[dsh-hanako] web host 启动异常:",
+            e?.message || String(e),
+          );
+          g.appendLog?.(
+            "hana",
+            `web host 启动异常：${e?.message || String(e)}`,
+          );
+        },
+      );
+    };
+    // 挂载确认：initial=true（waitMount 已挂上）直接通过；否则后台延后等待（60s 兜底、
+    // 1s 间隔）直到 startWebHost 挂载。超时返回 false（调用方降级随工具调用启动）。
+    const ensureMounted = async (initial) => {
+      if (initial) return true;
+      const deadline = Date.now() + 60000;
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 1000));
+        if (g && typeof g.startWebHost === "function") return true;
+      }
+      return false;
+    };
     waitMount
       .then(async (mounted) => {
         if (!mounted) {
           log.warn(
-            "[dsh-hanako] 1s 内未等到工具模块加载，DSH web host 将随首次工具调用启动",
+            "[dsh-hanako] 1s 内未等到工具模块加载，转入后台等待挂载后自动补跑启动链",
           );
           g.appendLog?.(
             "hana",
-            "1s 内未等到工具模块加载，DSH web host 将随首次工具调用启动",
+            "1s 内未等到工具模块加载，转入后台等待挂载（最长 60s），挂载后自动补跑依赖安装与 web host 启动",
+          );
+        }
+        const ready = await ensureMounted(mounted);
+        if (!ready) {
+          log.warn(
+            "[dsh-hanako] 60s 内工具模块仍未加载，DSH web host 将随首次工具调用启动",
+          );
+          g.appendLog?.(
+            "hana",
+            "60s 内工具模块仍未加载，DSH web host 将随首次工具调用启动",
           );
           return;
         }
-        // 启动前依赖自动安装（与 startWebHost 同一后台链，先后执行）——installDeps
-        // 与 startWebHost 在 lifecycle.js 顶层同批挂载（mountLifecycle），此处单查
-        // startWebHost 已挂即可，installDeps 缺失时单独跳过自动安装降级为现状。
-        try {
-          if (typeof g.installDeps !== "function") {
-            g.appendLog?.(
-              "hana",
-              "installDeps 能力未挂载，跳过启动前依赖自动安装（随首次工具调用启动）",
-            );
-          } else {
-            g.appendLog?.("hana", "启动前依赖自动安装：检查 dsh 依赖就绪…");
-            const r = await g.installDeps(config, dataDir);
-            if (r && r.ok) {
-              g.appendLog?.(
-                "hana",
-                r.skipped
-                  ? "依赖已就绪（与声明一致，跳过安装）"
-                  : "依赖安装完成（pnpm install --prod，registry 兜底 + 运行级重验）",
-              );
-            } else if (r && r.state === "installing") {
-              // 并发窗口：他人路径（dsh_install 工具/标签页）正在安装，等其落终态
-              g.appendLog?.(
-                "hana",
-                "依赖安装已在其他路径进行中，等待完成后再启动 web host…",
-              );
-              const settled = await waitDepsSettled();
-              const st = g.deps && g.deps.status;
-              g.appendLog?.(
-                "hana",
-                settled
-                  ? "依赖安装已结束（" + (st || "?") + "）"
-                  : "依赖安装等待超时（300s），继续尝试启动 web host",
-              );
-            } else {
-              g.appendLog?.(
-                "hana",
-                "依赖自动安装未成功：" +
-                  ((r && (r.error || r.state)) || "未知原因") +
-                  "，继续尝试启动 web host（失败将记入诊断，可工具/标签页重试）",
-              );
-            }
-          }
-        } catch (e) {
-          g.appendLog?.(
-            "hana",
-            "启动前依赖自动安装异常：" + (e?.message || String(e)),
-          );
-        }
-        // fire-and-forget：不 await 端口就绪（避免 ensureWebHost 60s 等拖住宿主启动）。
-        // startWebHostFromPlugin 内部已 try/catch 记 webLastError 返回布尔，这里双兜底。
-        Promise.resolve(g.startWebHost(config, dataDir)).then(
-          (ok) => {
-            log.info(
-              `[dsh-hanako] DSH web host ${ok ? "已随插件异步启动" : "启动未就绪（工具调用时将重试）"}`,
-            );
-            g.appendLog?.(
-              "hana",
-              `DSH web host 启动${ok ? "成功（已随插件异步启动）" : "未就绪（工具调用时将重试）"}`,
-            );
-          },
-          (e) => {
-            log.warn?.(
-              "[dsh-hanako] web host 启动异常:",
-              e?.message || String(e),
-            );
-            g.appendLog?.(
-              "hana",
-              `web host 启动异常：${e?.message || String(e)}`,
-            );
-          },
-        );
+        await runStartupAutoChain();
       })
       .catch((e) => {
         log.warn?.("[dsh-hanako] web host 启动异常:", e?.message || String(e));
