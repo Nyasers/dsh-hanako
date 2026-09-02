@@ -1,6 +1,6 @@
 ---
 name: dsh-hanako
-description: "dsh-hanako 插件（把 DeepSeek Harness 接进 Hana 的进程外 subagent 执行器）的配置辅助与使用指南。触发场景：dsh-hanako 刚装好需要配置 defaultCwd、依赖缺失需要安装（DSHana 标签页自装 / Agent 用 dsh_install 工具 / 手动 pnpm install）、标签页自检/自愈（安装依赖/手动启动/检测依赖/检查更新/更新 DSH）、web host 起不来（先看标签页自检 t1/t2）、DSH 任务失败排查、审批怎么应答、dsh_run/dsh_install/dsh_approve/dsh_cancel/dsh_session 怎么用（dsh_install 为 install/verify/check/update 四合一，vX 起合并原 dsh_update）、默认模型怎么配（DSH 设置页「DSHana 设置」分页，provider/model/思考三级联动）、DSH 版本检查与更新（dsh_install 工具 action=check/update / 设置页 DSH 版本块 / 标签页 deps 卡片）、安装/升级卡片（dsh_install 异步渲染 /card/dep 实时日志）、DeepSeek Harness 相关。遇到 dsh-hanako 相关需求优先读本技能再动手。"
+description: "dsh-hanako 插件（把 DeepSeek Harness 接进 Hana 的进程外 subagent 执行器）的配置辅助与使用指南。触发场景：dsh-hanako 刚装好需要配置依赖/模型、依赖缺失需要安装（DSHana 标签页自装 / Agent 用 dsh_install 工具 / 手动 pnpm install）、标签页自检/自愈（安装依赖/手动启动/检测依赖/检查更新/更新 DSH）、web host 起不来（先看标签页自检 t1/t2）、DSH 任务失败排查、审批怎么应答、dsh_run/dsh_install/dsh_approve/dsh_cancel/dsh_session 怎么用（dsh_install 为 install/verify/check/update 四合一，vX 起合并原 dsh_update）、默认模型怎么配（DSH 设置页「DSHana 设置」分页，provider/model/思考三级联动）、DSH 版本检查与更新（dsh_install 工具 action=check/update / 设置页 DSH 版本块 / 标签页 deps 卡片）、安装/升级卡片（dsh_install 异步渲染 /card/dep 实时日志）、DeepSeek Harness 相关。遇到 dsh-hanako 相关需求优先读本技能再动手。"
 ---
 
 # dsh-hanako 配置辅助与使用指南
@@ -9,15 +9,15 @@ description: "dsh-hanako 插件（把 DeepSeek Harness 接进 Hana 的进程外 
 
 ## 首次安装配置（Agent 辅助用户完成）
 
-config.json 由宿主设置界面生成、**不随包分发**；defaultCwd 初始为空。按序完成：
+config.json 由宿主设置界面生成、**不随包分发**。按序完成：
 
 **0. 先看现状**：配置在 <宿主插件数据目录>/dsh-hanako/config.json（Windows 常见 %USERPROFILE%\.hanako\plugin-data\dsh-hanako\config.json）。**全新安装**：插件初始化自动生成默认配置（ensureConfigJson：无 config.json 时按 manifest 默认值生成 `{ schemaVersion, global, agents, sessions }`，已存在则不动，原子写 + 失败静默），无需手动保存，装完即可在设置界面看到默认值。**无需配置 API Key / 模型 / Node 路径**：凭据由 @dsh-hanako/provider 插件直读宿主 `provider-catalog.json`，模型跟随宿主 `models.json`（DSH models 页设置默认）；web host 默认使用宿主 electron 进程自身的 Node 运行时（`process.execPath`，`ELECTRON_RUN_AS_NODE=1`），**无需用户单独安装 Node.js**。可选配置 `nodejsPath`：macOS 上 Electron 内嵌 node 跑 pnpm 会触发签名校验失败（Electron 的 node 二进制非标准 node 签名），此时填系统 node 绝对路径（如 /opt/homebrew/bin/node），配置后 pnpm / web host 子进程改用自定义 node（下一次 spawn 生效）；已生成的 node 代理脚本（wrapper）在下次依赖安装时更新为新的 node 执行体；路径不存在、指向目录或不可执行时均发出警告并回退 Electron node。
 
-**1. defaultCwd（建议）**：为空且未传 cwd 时报 `cwd 不能为空`；设为项目沙箱目录。
+**cwd 无配置回退**：`dsh_session create` 每次调用必须显式传 `cwd` 指定沙箱工作目录（defaultCwd 配置已删除）。
 
-**2. 其余项默认可用**：approvalTimeoutSec（config.json `global.approvalTimeoutSec` 可配；未配置时回落 0 = 禁用自动拒绝）/ webPort（3080）/ defaultTimeoutSec（1800，秒）。agentPreset / reasoningEffort 不需要配置：工具不显式传时用 DSH 默认（DSH Web UI 可调 agent 预设与思考强度）。任务模型不需要配置：默认用 DSH 默认模型（settings.yaml `agent-default-model`），可在 **DSH 设置页「DSHana 设置」分页 → 「默认模型」卡片**直接配置（Provider/模型/思考强度三级联动，选项 = DSH 全部可用 provider，保存即生效），`dsh_run` 工具参数 `provider`/`model`/`reasoningEffort` 可显式覆盖（显式时 selectModel，DSH 会把所选模型写回全局默认 settings.yaml——显式指定即成为新默认）。**DSH 版本**：同分页「DSH 版本」卡片可检查 `@deepseek-ai/dsh` 版本并一键更新（卡片检查直查远端 latest，更新走宿主能力层；Agent 用 `dsh_install` 工具 action=check/update，未显式传 version/tag 时按配置基线 dshTag（默认 latest）执行）。
+**1. 其余项默认可用**：approvalTimeoutSec（config.json `global.approvalTimeoutSec` 可配；未配置时回落 0 = 禁用自动拒绝）/ webPort（3080）/ defaultTimeoutSec（1800，秒）。agentPreset / reasoningEffort 不需要配置：工具不显式传时用 DSH 默认（DSH Web UI 可调 agent 预设与思考强度）。任务模型不需要配置：默认用 DSH 默认模型（settings.yaml `agent-default-model`），可在 **DSH 设置页「DSHana 设置」分页 → 「默认模型」卡片**直接配置（Provider/模型/思考强度三级联动，选项 = DSH 全部可用 provider，保存即生效），`dsh_run` 工具参数 `provider`/`model`/`reasoningEffort` 可显式覆盖（显式时 selectModel，DSH 会把所选模型写回全局默认 settings.yaml——显式指定即成为新默认）。**DSH 版本**：同分页「DSH 版本」卡片可检查 `@deepseek-ai/dsh` 版本并一键更新（卡片检查直查远端 latest，更新走宿主能力层；Agent 用 `dsh_install` 工具 action=check/update，未显式传 version/tag 时按配置基线 dshTag（默认 latest）执行）。
 
-**3. 配置生效铁律（实时）**：「改完都要重启 Hana」不成立：t1 依赖/t2 进程状态直读 config.json/单例实时；t2 手动启动链路 resolveDshPkgDir → spawn，直写后无需重启；仅旧进程存活（g.web.ready=true）需先杀进程或重启。
+**2. 配置生效铁律（实时）**：「改完都要重启 Hana」不成立：t1 依赖/t2 进程状态直读 config.json/单例实时；t2 手动启动链路 resolveDshPkgDir → spawn，直写后无需重启；仅旧进程存活（g.web.ready=true）需先杀进程或重启。
 
 ## 依赖自主部署（页面自装首选，Agent pnpm install 兜底）
 
@@ -53,7 +53,7 @@ $node = <本机 node.exe 绝对路径，如 C:\Program Files\nodejs\node.exe>
 ## 配置完成后验证
 
 1. 打开 DSHana 标签页看自检（t1 依赖 / t2 进程，每项 ✓/✗ + 修复指引），按序修：t1 ✗ → deps 卡片「安装依赖/重新安装依赖」；t2 ✗ → 点「手动启动 web host」
-2. 跑最小试任务 `dsh_run(task="用文件写入工具在沙箱工作目录内创建 hello.txt，内容 hi，然后读回确认", cwd=<defaultCwd>)`，异步提交
+2. 跑最小试任务，cwd 显式传项目沙箱目录：`dsh_session(task="用文件写入工具在沙箱工作目录内创建 hello.txt，内容 hi，然后读回确认", cwd="<项目沙箱目录>"）`，异步提交后主动结束回合等待回调
 3. 卡片不报 web host 错误 → 起来；完成后看摘要；浏览器开 http://127.0.0.1:3080 可见会话（可选）
 4. 失败按排错表定位
 
@@ -61,13 +61,11 @@ $node = <本机 node.exe 绝对路径，如 C:\Program Files\nodejs\node.exe>
 
 | 工具 | 用途 | 关键点 | 详情 |
 |---|---|---|---|
-| `dsh_run(task, cwd?, timeout?, wait?, agentPreset?, reasoningEffort?, provider?, model?, sessionId?)` | 提交任务 | 默认异步（后台送达）；wait=true 同步；provider/model 显式覆盖模型（显式时 selectModel，写回 DSH 全局默认）；sessionId resume | [dsh-run 技能](dsh-run) |
+| `dsh_session(action, task?, cwd?, …)` | 会话全生命周期（含提交任务） | create 必传 task+cwd，异步提交后主动结束回合；send 续会话；cancel 取消；list/get 回看 | [dsh-session 技能](dsh-session) |
 | `dsh_install(action?, wait?, autoStart?, version?, tag?)` | 安装/验证依赖 + 检查/更新版本四合一 | action=install 安装（默认，按声明版本 pnpm install，可显式传 version/tag 覆盖，registry 兜底 + 自动运行级重验 + autoStart 自动拉起 web host，渲染安装卡片）；action=verify 只检测完整性；action=check 版本检查（本地 + 远端 dist-tags + 基线 tag，只读）；action=update 完整更新（停 web host → 按声明重装 → 起 web host，**正在执行的任务会中断**，渲染升级卡片）；version 优先于 tag，都不传用插件声明版本（config.json global.dshTag 仅作旧版兼容兜底）；异步默认 + 完成回调，wait=true 同步；安装/更新进行中重复调用返回状态 | [dsh-install 技能](dsh-install) |
 | `dsh_approve(rpcId, approvalId, outcome?)` | 应答审批 | allowed-once 放行 / rejected 拒绝；通知带 args 命令原文 | [dsh-approve 技能](dsh-approve) |
-| `dsh_cancel(sessionId)` | 取消任务 | 误派/卡死止损；幂等 | [dsh-cancel 技能](dsh-cancel) |
-| `dsh_session(action, limit?, sessionId?)` | 统一会话查询 | list=清单与摘要（dsh-home 唯一事实源 projcache，limit 默认 10）；get=凭 sessionId 直取内容（summary，sessionId 即访问凭证）；search 模式已移除 | [dsh-session 技能](dsh-session) |
 
-**工具调用的完整参数语义、返回结构、错误码、审批通道、副作用分别见上述六个独立工具技能（均从源码 tools/*.js 核对）**——本表只是速查。
+**工具调用的完整参数语义、返回结构、错误码、审批通道、副作用分别见上述独立工具技能（均从源码 tools/*.js 核对）**——本表只是速查。dsh_cancel 已并入 dsh_session（action=cancel），不再单独注册。
 
 ### 标签页自愈路由（浏览器按钮调用，Agent 一般不直接调）
 

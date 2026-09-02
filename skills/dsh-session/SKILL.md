@@ -1,6 +1,6 @@
 ---
 name: dsh-session
-description: "dsh_session 工具手册（源码 tools/dsh-session.js 核对；合并原 dsh_run / dsh_cancel）。触发场景：提交 DSH 任务（action=create 新建会话+提交 / send 续已有会话，task 必填，cwd 默认配置，超时/预设/推理强度/provider/model 可选，sessionId 即访问凭证）、取消任务（action=cancel，sessionId 必填，幂等）、查会话清单（action=list，解析 session_projcache，limit 默认 10）、凭 sessionId 取会话内容与最终结论（action=get，读会话 jsonl zstd 容器本地解压）、resume 复用会话（send 传上次 sessionId 即续）。需要提交/取消/查询 DSH 任务或会话前先读本技能。"
+description: "dsh_session 工具手册（源码 tools/dsh-session.js 核对；合并原 dsh_run / dsh_cancel）。触发场景：提交 DSH 任务（action=create 新建会话+提交 / send 续已有会话，task/cwd 必填，超时/预设/推理强度/provider/model 可选，sessionId 即访问凭证）、取消任务（action=cancel，sessionId 必填，幂等）、查会话清单（action=list，解析 session_projcache，limit 默认 10）、凭 sessionId 取会话内容与最终结论（action=get，读会话 jsonl zstd 容器本地解压）、resume 复用会话（send 传上次 sessionId 即续）。需要提交/取消/查询 DSH 任务或会话前先读本技能。"
 ---
 
 # dsh_session 工具手册
@@ -17,7 +17,7 @@ DSH 会话全生命周期工具（合并原 `dsh_run` / `dsh_cancel` 能力）�
 | `limit` | integer | 仅 list：返回条数（默认 10，有效 1~100） |
 | `sessionId` | string | get/send/cancel 必传（形如 `session-<uuid>`，取自回调/卡片/list；dsh-home 存在即读） |
 | `task` | string | create/send 必传：任务描述/消息文本 |
-| `cwd` | string | 仅 create：默认可写工作区（缺省用插件配置 defaultCwd） |
+| `cwd` | string | 仅 create 必传：沙箱工作目录（defaultCwd 配置已删除，每次调用显式指定） |
 | `timeout` | number | 仅 create/send：任务超时（秒），缺省用配置 defaultTimeoutSec（0/缺失回落 600s） |
 | `agentPreset` | string | 仅 create/send：agent 预设（standard/ptc/cordis/minimal） |
 | `reasoningEffort` | string | 仅 create/send：推理强度（off/high/max，显式传才指定） |
@@ -27,7 +27,8 @@ DSH 会话全生命周期工具（合并原 `dsh_run` / `dsh_cancel` 能力）�
 ## action=create：新建会话 + 提交任务（原 dsh_run）
 
 - **不允许传 sessionId**（新建；续会话用 send）
-- **task 必填**；cwd 缺省用配置 defaultCwd（两者至少给一个）
+- **task + cwd 必填**（defaultCwd 配置已删除，无回退）
+- **任务发起后主动结束当前回合**：create/send 固定异步提交，提交后 Agent 应立即 return（结束回复），让宿主通过 deferred 投递回调（任务完成/审批挂起/失败）。不结束回合则宿主无法送达 `<hana-background-result>` 和审批通知，任务状态不可见。
 - 固定异步：立即返回 `{ content: "任务已提交给 DSH（rpcId: xxx）…", details: { DSH: { rpcId, status: "running", cwd }, card: { route: "/card/op?sessionId=…&rpcId=…&timeoutMs=…" } } }`；deferred 注册 taskId=任务 rpcId（type=dsh-run，失败也唤醒），完成后宿主投递 `<hana-background-result>`
 - 提交链路：`session.create`（新建：`{cwd, agentPreset?}`）→ 记 sessionId + cwd → `selectModel`（仅显式传 provider/model/effort 时；model-unavailable 报错降级不带 effort 重试）→ `session.prompt`（mode=queue，立即 accepted）→ 经总线 events 频道事件循环（bus 插件订阅 `$events` 转发）→ 终态
 - 事件流（DSH 0.1.2）：事件不直连 remote.mux——`@dsh-hanako/bus` 在 DSH 进程内订阅 `$events` 并经总线转发（ready/emit/waterfall）。`api-session/status false` 即任务终态；`api-session/error` 记失败兜底；waterfall 帧已回投 next

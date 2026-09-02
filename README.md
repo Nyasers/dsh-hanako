@@ -19,7 +19,6 @@
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
 | `approvalTimeoutSec` | `30` | 审批挂起超过该时长（秒）无人应答自动 rejected（应答方失联检测）；0=禁用；改后对新审批立即生效 |
-| `defaultCwd` | 空 | 默认沙箱工作目录。**安装后建议设为实际项目目录**（为空且未传 cwd 时报 `cwd 不能为空`） |
 | `defaultTimeoutSec` | 1800 | 默认超时（秒，30 分钟） |
 | `nodejsPath` | 空 | 自定义 Node.js 路径（可选）：指定系统 node 可执行文件绝对路径（如 /opt/homebrew/bin/node）。留空用 Electron 自带 node；macOS 上 Electron 内嵌 node 跑 pnpm 签名校验失败时填此项解决。路径不存在时警告并降级回退 |
 | `webPort` | 3080 | DSH Web UI 端口：>0 插件加载即拉起 web host（卸载一并回收），0 关闭 |

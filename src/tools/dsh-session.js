@@ -38,7 +38,7 @@ export const name = "dsh_session";
 export const description =
   "DSH 会话全生命周期工具（合并原 dsh_run / dsh_cancel）：list=会话清单（解析 session_projcache，dsh-home 唯一事实源，limit 默认 10）；" +
   "get=凭 sessionId 直取会话元数据 + 最终结论 summary；" +
-  "create=新建会话 + 提交任务（task 必填，cwd 默认配置）；" +
+  "create=新建会话 + 提交任务（task/cwd 必填，cwd 每次调用显式指定）；" +
   "send=续已有会话发消息（sessionId + task 必填，resume 语义）；" +
   "cancel=取消任务（sessionId 必填）。" +
   "权限模型：sessionId 即访问凭证。完整调用手册见 SKILL: skills/dsh-session/SKILL.md";
@@ -65,7 +65,7 @@ export const parameters = {
     },
     cwd: {
       type: "string",
-      description: "仅 create：默认可写工作区目录（缺省用插件配置 defaultCwd）",
+      description: "仅 create 必传：沙箱工作目录（bash 与文件系统工具的活动范围，绝对路径；defaultCwd 配置已删除，每次调用显式指定）",
     },
     timeout: {
       type: "number",
@@ -406,6 +406,8 @@ async function doExecute(input, ctx) {
       throw new Error("send 必须传 sessionId（续已有会话；新建请用 create）");
     if (!String(input.task ?? "").trim())
       throw new Error(action + " 必须传 task（任务描述/消息文本）");
+    if (action === "create" && !String(input.cwd ?? "").trim())
+      throw new Error("create 必须传 cwd（沙箱工作目录；defaultCwd 配置已删除无回退，send 沿用会话已有 cwd）");
     // 复用 dsh-run 的 execute（提交主流程：submitTask + 事件流 + 卡片 + 审批接线）；
     // create 不传 sessionId（新建）、send 传 sessionId（resume 语义）。
     return runExecute(input, ctx);

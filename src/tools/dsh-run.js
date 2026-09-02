@@ -28,7 +28,6 @@ import {
   resolveReasoningEffort,
   resolveApprovalTimeoutSec,
   resolveDefaultTimeoutSec,
-  resolveDefaultCwd,
 } from "./lib/config.js";
 import {
   registerDeferredWake,
@@ -236,7 +235,7 @@ function submitTask(
         throw new Error(
           `目标会话不存在或已归档，无法 resume：${resumeSessionId}`,
         );
-      // 异常会话（cwd 为空/缺失）回退用户传的 cwd 或 defaultCwd，再不行才报错
+      // 异常会话（cwd 为空/缺失）回退用户显式传的 cwd，再不行才报错
       const resumeCwd = String(existing.cwd ?? "").trim() || cwd;
       if (!resumeCwd)
         throw new Error(
@@ -717,7 +716,7 @@ export const parameters = {
     cwd: {
       type: "string",
       description:
-        "DSH agent 的沙箱工作目录（bash 与文件系统工具的活动范围，绝对路径）。缺省用插件配置 defaultCwd。resume（传 sessionId）时以会话已有 cwd 为准，该值被忽略。",
+        "DSH agent 的沙箱工作目录（bash 与文件系统工具的活动范围，绝对路径）。create（新建会话）必传，无配置回退。resume（传 sessionId）时以会话已有 cwd 为准，该值被忽略。",
     },
     timeout: {
       type: "number",
@@ -788,9 +787,10 @@ async function doExecute(input, ctx) {
   if (!cfg.dshPkgDir) cfg.dshPkgDir = resolveDshPkgDir(cfg);
 
   // resume 时 cwd 可空：会话的 cwd 已在创建时定死，复用会话沿用其已有 cwd（提交层 resume 自动查询会话已有 cwd 并显式传入）
-  const cwd = String(input.cwd || resolveDefaultCwd(cfg) || "").trim();
+  // create 必传 cwd（defaultCwd 配置已删除，无回退）：沙箱工作目录每次调用显式指定
+  const cwd = String(input.cwd ?? "").trim();
   if (!cwd && !input.sessionId)
-    throw new Error("cwd 不能为空（工具参数或插件配置 defaultCwd 至少给一个）");
+    throw new Error("create 必须传 cwd（沙箱工作目录，defaultCwd 配置已删除无回退；send 沿用会话已有 cwd）");
   // 超时单位统一为秒（v0.25）：工具 timeout 参数与配置 defaultTimeoutSec 均为秒，
   // 边界换算——内部计时保留毫秒（setTimeout 需要毫秒），换算只在工具参数入口/配置读取处。
   // 显式 timeout > 0 采用（秒→毫秒）；否则用配置默认（resolveDefaultTimeoutSec 秒，
