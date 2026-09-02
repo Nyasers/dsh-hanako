@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.0.0-alpha.9（2026-09-02）
+
+- **node 代理改回插件根部署**（PR #46）：修复 koffi 等原生依赖 install script 找不到 node（`ELIFECYCLE: 'node' is not recognized`，全新安装必现）。根因是 T7d 过渡期漂移——部署目标 dsh-pkg → 插件根时 node 代理被单独写去数据目录 pnpm-proxy，而 pnpm run 的 PATH 首部仍指插件根；代理改回随部署目录走（写插件根），与 PATH 前缀同源绑定同一常量，此类漂移结构上不再可能。兼容清理旧 pnpm-proxy 残留；`.gitignore` 忽略运行期 `/node.cmd`、`/node`。
+- **dsh 依赖跟进 0.1.2-alpha.4 → 0.1.2-alpha.5**（PR #47）：上游修复从 `0.1.1-rc.2` / `0.1.2-alpha.3` 升级时应用可能启动失败或会话列表标题丢失（纯修复版，无协议/API 变化）。
+- **minimumReleaseAgeExclude 组织级 glob**（PR #47）：214 条 `@deepseek-ai/dsh-*@0.1.2-alpha.X` 版本条目压成一行 `@deepseek-ai/*`（pnpm ≥10.17 patterns；dsh monorepo 全树同发版，逐版本 age 豁免无意义；以后 dsh 发版免维护名单）。
+
 ## v1.0.0-alpha.8（2026-09-02）
 
 - **onStartUp 启动前自动安装一次依赖（加载即自愈）**（PR #45）：插件激活时在拉起 web host（WebUI/总线就绪点）之前自动跑一次依赖安装——幂等：cliBin 在且已装版本 === 插件声明 + 运行级冒烟通过 → 秒过跳过；缺失/版本漂移/依赖图不完整才真跑 `pnpm install --prod`（官方源失败自动重试 npmmirror），装好再拉起，冷启动即装完即用，无需人工 dsh_install / 标签页自装。
