@@ -54,13 +54,14 @@ import {
   rmdirSync,
   readdirSync,
 } from "node:fs";
-import { join, dirname } from "node:path";
+import { join, dirname, sep } from "node:path";
 import { homedir } from "node:os";
 // 共用模块（lib 内联进 dsh-run bundle，见文件头「分发形态」）：
 import {
   getSingleton,
   PLUGIN_ROOT,
   manifestDefaults,
+  IS_WIN,
 } from "./tools/lib/state.js";
 // vX（migrate 体系退役）：不再有版本迁移入口（junction-converge / config-schema 等全丢）
 import {
@@ -676,17 +677,23 @@ function probeBusReady(port, timeoutMs = 3000) {
 function clearDshRequireCaches(pkgDir, dataDir) {
   try {
     const mod = createRequire(import.meta.url)("module");
-    const hits = [String(pkgDir || ""), join(String(dataDir || ""), "dsh-home")]
-      .filter(Boolean)
-      .map((p) => p.toLowerCase());
-    if (hits.length === 0) return;
+    // 路径归一：仅 Windows 大小写不敏感（lowercase）；POSIX 保留原样避免误伤
+    // 大小写不同的真实路径。匹配带路径边界（=== 或前缀 + 分隔符）：/data/dsh-pkg
+    // 不误命中 /data/dsh-pkg-backup（CodeRabbit）。
+    const norm = (p) => (IS_WIN ? p.toLowerCase() : p);
+    const bases = [norm(String(pkgDir || "")), norm(join(String(dataDir || ""), "dsh-home"))].filter(Boolean);
+    if (bases.length === 0) return;
+    const isHit = (probe) => {
+      const s = norm(probe);
+      return bases.some((b) => s === b || s.startsWith(b + sep));
+    };
     // Module._pathCache：key = 内部解析缓存键，value = 解析出的绝对路径；
     // 命中插件根 / dsh-home 的条目删除（key 与 value 都查，覆盖两种形态）
     const pc = mod._pathCache;
     if (pc && typeof pc === "object") {
       for (const key of Object.keys(pc)) {
         const probe = String(key) + "\n" + String(pc[key] || "");
-        if (hits.some((p) => probe.toLowerCase().includes(p))) delete pc[key];
+        if (isHit(probe)) delete pc[key];
       }
     }
     // require.cache（Module._cache）：删除插件根与 dsh-home 下已加载的 CJS 模块
@@ -694,7 +701,7 @@ function clearDshRequireCaches(pkgDir, dataDir) {
     const cache = mod._cache;
     if (cache && typeof cache === "object") {
       for (const key of Object.keys(cache)) {
-        if (hits.some((p) => key.toLowerCase().includes(p))) delete cache[key];
+        if (isHit(key)) delete cache[key];
       }
     }
   } catch {
