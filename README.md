@@ -6,7 +6,7 @@
 
 1. **拖入 zip 包**：把插件的 release zip（`dsh-hanako-v<version>.zip`，从 GitHub Releases 下载）拖进 Hana 插件安装界面（或解压到插件目录），插件即完成装载
 
-2. **打开 DSHana 标签页自装**：插件加载后自动进程内 boot，若未就绪则显示诊断列表。点击 deps 卡片的「安装依赖」——页面自动完成部署（pnpm install --prod 按插件声明装进插件 node_modules，运行级验证），无需 Agent 介入。完成后去 t2 点「手动启动 web host」即可。**也可让 Agent 调 `dsh_install` 工具**（异步默认，渲染安装卡片显示实时 pnpm 日志，安装完成自动拉起 web host；`dsh_install(action="verify")` 只检测依赖完整性）。
+2. **无需手动装依赖（自动）**：插件加载（onStartUp）时自动安装一次 DSH 依赖（幂等：已装且与插件声明版本一致 + 运行级验证通过则秒过跳过；缺失/版本漂移/依赖不完整才真跑 pnpm install --prod，官方源失败自动重试 npmmirror），装好后自动拉起 web host，首次启动即装完即用。**仅当自动安装失败（如离线/网络受限）时**才需人工介入：打开 DSHana 标签页（未就绪显示 t1/t2 自检）→ deps 卡片点「安装依赖」——页面自动完成部署，完成后去 t2 点「手动启动 web host」；**也可让 Agent 调 `dsh_install` 工具**（异步默认，渲染安装卡片显示实时 pnpm 日志，安装完成自动拉起 web host；`dsh_install(action="verify")` 只检测依赖完整性）。
 
 3. **验证**：装完让 Agent 跑一次 `dsh_session(action="create", task="…", cwd="<项目沙箱目录>")` 最小试任务验证，卡片不报 web host 错误即安装成功。
 
