@@ -471,7 +471,7 @@ export default function registerWebuiRoutes(app, ctx) {
       });
     } catch (e) {
       ctx.log?.warn?.(
-        "[dsh-hanako] 运行级依赖检测失败:",
+        "[dsh-hanako] 依赖核对失败:",
         e?.message || String(e),
       );
       return c.json({ ok: false, error: "检测请求失败，请稍后重试" });
