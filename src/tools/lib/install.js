@@ -72,7 +72,7 @@ function pnpmErrorTail(stdoutTail, stderrTail) {
   const take = (tail) => {
     if (!tail) return "";
     const lines = tail.split("\n").filter((s) => s.length > 0).slice(-10);
-    return lines.join("\n");
+    return lines.join("\n").slice(-300); // 每流各自限 ≤300（CodeRabbit PR #57）
   };
   // stdout 在前、stderr 在后：join 后 slice(-300) 取末尾窗口，stderr（错误/警告优先级高）
   // 落在截断窗口内不被挤出；stdout 的进度文本在前段作上下文。
