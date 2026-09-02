@@ -475,8 +475,9 @@ export function ensureDshanaProfile(cfg) {
 // 诊断与工具包不 import cordis/pnpm，见 lib/install.js / lib/pnpm.js）。
 
 // ---- T7b 进程内 boot：dsh 模块动态定位（解耦 D6）----
-// dsh 包不在插件 node_modules（数据目录 dsh-pkg），且 profile-boot-*.js 是带构建
-// hash 的产物名（bin.js 按 hash 动态 import）——不能硬编码文件名，枚举 lib 目录试出
+// dsh 包位置 = 插件 node_modules（vY T7d：dsh-pkg 独立安装区已退役，依赖收进插件
+// node_modules，resolveDshPkgDir 唯一形态）；profile-boot-*.js 是带构建 hash 的
+// 产物名（bin.js 按 hash 动态 import）——不能硬编码文件名，枚举 lib 目录试出
 // 导出 runProfile 的候选（probe-inproc 验证过的定位方式）。
 // app-boot 经 createRequire 从 dsh 包视角解析：pnpm 严格结构下 @deepseek-ai/dsh-app-boot
 // 是 dsh 的间接依赖，不在顶层 node_modules——createRequire 沿 dsh 包的 .pnpm 依赖链
@@ -492,7 +493,7 @@ async function loadInprocDsh(pkgDir) {
   const libDir = join(dshPkg, "lib");
   if (!existsSync(join(dshPkg, "package.json"))) {
     throw new Error(
-      `DSH 包未就绪：${dshPkg} 不存在。请在 DSHana 标签页执行「安装依赖」（pnpm install 按声明拉取到 dsh-pkg），或手动在插件数据目录 dsh-pkg 执行 pnpm install`,
+      `DSH 包未就绪：${dshPkg} 不存在。依赖自动安装链会按插件声明补齐并自动重试，无需手动操作；若持续未就绪请查看上方依赖诊断（自动安装失败原因与重试状态）`,
     );
   }
   // ① profile-boot：枚举 lib 下 profile-boot-*.js，逐个 import 试 runProfile
@@ -1266,7 +1267,7 @@ function buildDepsDiagCheck(g, cfg) {
   if (installing) {
     // 安装中（含重装场景 installed 仍可能为 true）优先——实时进度
     // installLog 尾部由前端 .diag-progress 展示（随轮询刷新）
-    check.detail = "正在安装依赖…（npm i，进度见下方）";
+    check.detail = "正在安装依赖…（进度见下方）";
     check.fix = "";
   } else if (!installed) {
     // 未安装：保持现有文案
@@ -1277,7 +1278,7 @@ function buildDepsDiagCheck(g, cfg) {
       (checked.length > 1 ? "（已检查 " + checked.join("、") + "）" : "");
     if (installError) check.detail += "\n[上次安装失败] " + installError;
     check.fix =
-      "依赖缺失：点击本卡片「安装依赖」按钮自动在插件数据目录 dsh-pkg 执行 pnpm install（按声明拉取，完成后自动验证）；或确认插件目录 node_modules 解压完整";
+      "依赖缺失：点击本卡片「安装依赖」按钮自动按插件声明安装依赖（完成后自动运行级验证）；或确认插件目录 node_modules 解压完整";
   } else if (!smoke) {
     // 未检测过（进标签页自动检测一次 / 手动「检测依赖」；ok 暂算 installed）
     check.detail = "DSH 包已就绪，点击「检测依赖」验证依赖完整性";
@@ -1290,7 +1291,7 @@ function buildDepsDiagCheck(g, cfg) {
       "DSH 包存在但依赖不完整：" +
       (verifyError ? "\n" + verifyError : "运行级验证失败");
     check.fix =
-      "点击本卡片「重新安装依赖」按钮重新执行 pnpm install（按声明拉取，自动部署到 dsh-pkg，完成后自动验证）";
+      "点击本卡片「重新安装依赖」按钮重新按插件声明安装（完成后自动运行级验证）";
   } else {
     // 存在 + 验证通过：能跑 = 依赖图完整
     check.detail =
