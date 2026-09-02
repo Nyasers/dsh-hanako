@@ -99,8 +99,10 @@ function abnormalWakeResult({ err, loc, taskRpcId }) {
 // 容错纪律同任务回调：通知失败不影响任务，审批仍可在 dsh Web UI 人工处理。
 //
 // 投递形态（宿主 0.814.0+ interlude 插话式 deferred）：meta.interlude=true 时宿主走
-// pre_reply_interlude 插话队列——Agent 回合进行中也能投递，回复前插入时间线，不再等
-// 回合边界（subagent/workflow 同款组合：interlude + deliveryIntent=trigger_parent_turn）。
+// pre_reply_interlude 插话队列。实测（2026-09）：interlude 同样不能在 Agent 结束回合前
+// 插入时间线——消息在回合收尾时才落地，不会在回合进行中送达。故审批通知与任务回调
+// 一样，Agent 必须先结束当前回合才能收到；interlude + deliveryIntent=trigger_parent_turn
+// 组合只保留「唤醒语义 + 回帖时间线」，不提供回合内插话。
 async function notifyApprovalWake({ bus, sessionPath, rpcId, approval, task }) {
   if (!bus?.request || !sessionPath) return;
   const taskId = `${rpcId}::approval::${approval.approvalId}`;

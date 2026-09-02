@@ -7,7 +7,7 @@ description: "dsh_approve 工具手册（源码 tools/dsh-approve.js 核对）�
 
 应答 DSH 任务挂起的权限审批（approval/requested）。权限 `external_side_effect`（external_api）。实现 `tools/dsh-approve.js`。
 
-> **现状**：宿主审批应答适配已接入——dsh_run 事件循环处理 approval/request 瀑布帧：填充 `g.ops[sessionId].activeApprovals`、审批挂起暂停执行超时（应答/超时拒绝后恢复）、经宿主 interlude 插话投递 dsh-approval 通知；Agent 收到通知后调本工具应答，应答经总线 respond 自环 `/api/$events/result` 放行/拒绝。审批挂起期间执行超时暂停计时（审批等待是外部决策，不计入任务超时）。DSH Web UI（webPort，默认 3080）人工处理仍可用作兜底。
+> **现状**：宿主审批应答适配已接入——dsh_run 事件循环处理 approval/request 瀑布帧：填充 `g.ops[sessionId].activeApprovals`、审批挂起暂停执行超时（应答/超时拒绝后恢复）、经宿主 deferred（interlude 型）通道投递 dsh-approval 通知（**实测 interlude 同样在 Agent 结束回合时才落地，不能在回合进行中插入时间线**——Agent 须先结束当前回合才能收到审批通知）；Agent 收到通知后调本工具应答，应答经总线 respond 自环 `/api/$events/result` 放行/拒绝。审批挂起期间执行超时暂停计时（审批等待是外部决策，不计入任务超时）。DSH Web UI（webPort，默认 3080）人工处理仍可用作兜底。
 
 ## 参数契约
 
@@ -24,7 +24,7 @@ description: "dsh_approve 工具手册（源码 tools/dsh-approve.js 核对）�
 > 以下为已接入链路（2026-09 实测闭环）：
 
 1. **触发**：DSH agent 请求越界权限（approval/policy=ask）→ 任务挂起，插件把审批上下文存进运行期协调条目 `g.ops[sessionId].activeApprovals`（审批对象含 respond 路由所需 `respondRpcId`——审批帧信封自己的 RPC id，区别于任务 rpcId），暂停任务执行超时计时（目标行为）。
-2. **通知**：经宿主 deferred 通道投递（taskId = `` `${rpcId}::approval::${approvalId}` ``，rpcId 为任务级 rpcId；独立于任务完成通道），payload：
+2. **通知**：经宿主 deferred 通道投递（taskId = `` `${rpcId}::approval::${approvalId}` ``，rpcId 为任务级 rpcId；独立于任务完成通道；interlude 型投递，实测在 Agent 结束回合时才落地），payload：
    ```text
    { kind: "dsh-approval", rpcId, sessionId, approvalId, toolName, callId,
      reason,       // model 自述（不可尽信）
