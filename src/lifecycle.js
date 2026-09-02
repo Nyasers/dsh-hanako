@@ -682,6 +682,10 @@ export async function ensureWebHost(cfg) {
     }
     g.web = null;
   }
+  // 新启动尝试开始：作废旧退出记录（webLastExit 只反映「最近一次进程退出」；本次尝试
+  // 失败会更新 webLastError，诊断应走启动失败分支而非旧退出分支——否则 lastExit 遮蔽
+  // 当前失败，pickProcessFix 指引丢失。CodeRabbit PR #53）
+  g.webLastExit = null;
   if (!cfg.dshPkgDir) cfg.dshPkgDir = resolveDshPkgDir(cfg);
 
   const pkgDir = cfg.dshPkgDir;
