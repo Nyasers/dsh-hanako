@@ -6,12 +6,12 @@
 // devDependencies pnpm），改为运行时按需引导：下载 pnpm npm 包的 dist/pnpm.mjs
 // （自包含入口 CLI，静态 import 全为 node: 内置模块，宿主 electron node 直接执行）
 // + dist/worker.js（package 导入 worker）到数据目录
-// <dataDir>/pnpm-dist/pnpm-{version}/，固定版本 + sha256 校验。
-// 实测确认（宿主 node v24.15.0）：pnpm view 路径只依赖 pnpm.mjs；pnpm install/add 的导入
+// <dataDir>/pnpm-dist/pnpm-{version}/，版本随 packageManager、文件 sha256 静态校验。
+// 实测确认（宿主 node v26.8.1）：pnpm view 路径只依赖 pnpm.mjs；pnpm install/add 的导入
 // 阶段经 new Worker(join(import.meta.dirname, "worker.js")) 加载 worker.js（pnpm.mjs
 // 内联处 workerScriptPath），缺 worker.js 时导入 worker 静默退出 1（无错误信息）——
-// 故引导下载两个文件，缺一即重下。版本与校验同源静态配置（见下方 PNPM_BOOTSTRAP），
-// 与构建期 packageManager 解耦（运行时引导只需 view/install/add 三条路径，锁版本足够）。
+// 故引导下载两个文件，缺一即重下。文件清单与 sha256 静态配置（见下方 PNPM_BOOTSTRAP）；
+// 版本不在此硬编码——单一事实源 = package.json packageManager 字段（见下方解析）。
 //
 // 为什么自给自足：宿主 electron node 不带 npm/corepack/npx（Electron 发行只有 node
 // 运行时），引导是唯一自给自足路径；宿主侧未来可能开放 npm 调用（liliMozi 口头确认，
@@ -40,8 +40,9 @@ import {
   createWriteStream,
   existsSync,
   mkdirSync,
-  rmSync,
+  readFileSync,
   renameSync,
+  rmSync,
 } from "node:fs";
 import { get as httpsGet } from "node:https";
 import { join } from "node:path";
@@ -52,45 +53,68 @@ import {
   resolveNodeExecEnv,
 } from "./state.js";
 
-// ---- 版本单一事实源：package.json packageManager 字段（"pnpm@11.24.0" → "11.24.0"）----
-// 读取定位复用 state.js 的 PLUGIN_ROOT（向上找含 manifest.json 的目录，源码/bundle 两形态均成立）；
-// 解析失败回退硬编码（与 packageManager 同步的兜底值；升级 pnpm 版本时两处都要改）。
-// ---- 运行时引导配置（静态，版本与文件 sha256 同源）----
-// 版本单一事实源 = 本对象；与 package.json 的 packageManager 字段（构建期 pnpm）解耦：
-// 运行时引导的 pnpm 只服务 pnpm add（依赖部署）路径——v0.18.2 起 pnpm view（版本检查）
-// 改 HTTP 直查 npm registry（pnpm view 语义等价），锁 11.24.0 足够；升级 pnpm
-// 时需同时改 version 与对应文件 sha256（实测本地 node_modules/pnpm/dist/* 后更新）。
-// 版本与校验放同一对象，从结构上杜绝「动态版本 × 静态校验」不同步导致的
-// 误导性失败（改 packageManager 只影响构建，不会静默让运行时引导对不上 hash）。
-// ⚠️ 版本兼容：pnpm 11.24.0 的 engines 要求 node >=22.13；宿主 electron node 当前为
-// v24.15.0（满足）。升级 pnpm 时须核对新版本 engines 不超过宿主 node 版本
+// ---- 版本单一事实源：package.json packageManager 字段（pnpm@<version>[+sha512…]）----
+// corepack 语义：版本与 tarball 完整性（sha512）由 packageManager 单一承载。升级 pnpm =
+// 改 packageManager 版本 + `corepack use pnpm@<ver>` 刷新 hash（corepack 作 devDep 引入——
+// Node 25+ 官方不再捆绑 corepack，hash 维护工具需固定来源；devDep 不进运行时）。
+// 运行时引导的 pnpm 版本不在此硬编码：PNPM_VERSION 从插件根 package.json（PLUGIN_ROOT
+// 定位，源码/bundle 两形态均成立）解析，兼容裸版本（pnpm@11.25.0）与带 hash
+// （pnpm@11.25.0+sha512.…）两种形态；解析失败（字段缺失/畸形）引导时报可读错误，
+// 不静默回退——版本已无第二事实源，回退即用错版本。
+// ---- 运行时引导文件（静态，只存清单 + sha256）----
+// 文件 sha256 必须静态：packageManager 的 sha512 是 tarball 粒度，引导下载的是 dist
+// 单文件（pnpm.mjs + worker.js），校验粒度不同无法推导——文件级完整性锚点只能静态留。
+// 升级 pnpm 版本时：改 packageManager → corepack use 刷 hash → 重算两文件 sha256 更新此处。
+// ⚠️ 版本兼容：pnpm 11.25.0 的 engines 要求 node >=22.13；宿主 electron node 当前为
+// v26.8.1（满足）。升级 pnpm 时须核对新版本 engines 不超过宿主 node 版本
 // （宿主 node 版本固定，不做运行时探测；该约束靠此处注释人工把关）。
 // 两个文件：pnpm.mjs（入口 CLI）+ worker.js（package 导入 worker）——pnpm add 的
 // 导入阶段经 new Worker(import.meta.dirname/worker.js) 加载 worker.js（pnpm.mjs
 // 内联处：workerScriptPath = join(import.meta.dirname, "worker.js")），只下载
 // pnpm.mjs 会让 add 的导入 worker 崩溃（exit 1，无错误信息）；pnpm view 路径不触
-// 发 worker，单文件即可。实测（2026-09，宿主 node v24.15.0）确认两个文件均必需。
+// 发 worker，单文件即可。实测（2026-09，宿主 node v24.15.0 → v26.8.1）确认两文件均必需。
 const PNPM_BOOTSTRAP = {
-  version: "11.24.0",
   files: [
     {
       name: "pnpm.mjs",
-      sha256: "ad23cef73b049f61e2450b1ba0c0cf2259114b8ec70f5e09b241b85a0cf0841d",
+      sha256: "ddc64218bc85fb88d28b5def06eb01fafb39cb67f7a9465ce736456658cc7f11",
     },
     {
       name: "worker.js",
-      sha256: "7847564f84d0f9fd088539f679b88fb8dec7195e145b4bbf25b712442b6d99c8",
+      sha256: "81648f68f288deeace8ca799f1d1021bda7493cdc8afa2582600de9129fd9a82",
     },
   ],
 };
 
-// 兼容导出（外部取版本号用；值 = 静态配置 version，与文件 sha256 同源）
-export const PNPM_VERSION = PNPM_BOOTSTRAP.version;
+// 从插件根 package.json 的 packageManager 解析 pnpm 版本（pnpm@<ver> 或 pnpm@<ver>+sha512…）。
+// 正则：版本段 = 严格 semver 主体（含 prerelease），可选 +build（hash）段截断；非 pnpm /
+// 畸形格式不匹配 → null。解析失败返回 null（不 throw）——调用方（引导路径）给可读错误。
+function parsePnpmVersion() {
+  try {
+    const pkg = JSON.parse(readFileSync(join(PLUGIN_ROOT, "package.json"), "utf8"));
+    const pm = pkg && typeof pkg === "object" ? pkg.packageManager : null;
+    const m =
+      typeof pm === "string"
+        ? pm.match(/^pnpm@([0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?)(?:\+[0-9A-Za-z.-]+)?$/)
+        : null;
+    return m ? m[1] : null;
+  } catch {
+    return null; // 文件缺失 / JSON 畸形 → 引导路径统一给可读错误
+  }
+}
 
-// 下载源：unpkg 直链优先，jsdelivr 兜底（同一文件；两者均可能 302 到边缘 CDN）
+// 模块加载解析一次（packageManager 是插件包静态内容，运行期不变）；null = 解析失败
+// （install.js 等消费方在 ensurePnpm 成功后才读此值，解析失败时引导已抛错，不会取到 null）
+export const PNPM_VERSION = parsePnpmVersion();
+
+// 下载源：unpkg 直链优先 → npmmirror（npm registry 官方镜像，/files/ 包内文件直链，
+// 国内网络可达）→ jsdelivr 收尾。同一文件（npmmirror 与 registry tarball 逐字节一致，
+// 实测 sha256 同源）；均可能 302/跳边缘 CDN。registry.npmjs.org 官方无单文件端点
+// （只供 tarball）未纳入——为 tarball 引入解压分支不值，三家文件 CDN 已覆盖国际+国内。
 const PNPM_CDNS = [
-  (name) => `https://unpkg.com/pnpm@${PNPM_BOOTSTRAP.version}/dist/${name}`,
-  (name) => `https://cdn.jsdelivr.net/npm/pnpm@${PNPM_BOOTSTRAP.version}/dist/${name}`,
+  (name) => `https://unpkg.com/pnpm@${PNPM_VERSION}/dist/${name}`,
+  (name) => `https://registry.npmmirror.com/pnpm/${PNPM_VERSION}/files/dist/${name}`,
+  (name) => `https://cdn.jsdelivr.net/npm/pnpm@${PNPM_VERSION}/dist/${name}`,
 ];
 const DOWNLOAD_TIMEOUT_MS = 60000; // 单次下载请求超时（重定向跟随共享）
 const STDOUT_CAP = 65536; // runPnpm 内存累积上限（调用方只需尾部/错误提取）
@@ -214,9 +238,15 @@ async function doEnsurePnpm(opts) {
   // ① 宿主通道探测（未来接入点；当前恒 null → 走单文件引导）
   const host = await tryHostChannel();
   if (host && typeof host === "string" && host) return host;
+  // 版本解析失败（pm 段缺失/畸形）→ 可读错误，不静默回退（版本已无第二事实源）
+  if (!PNPM_VERSION) {
+    throw new Error(
+      "pnpm 版本解析失败：package.json packageManager 缺失或格式异常（期望 pnpm@<semver>[+sha512…]，由 corepack use 维护）",
+    );
+  }
   // ② 缓存路径 <dataDir>/pnpm-dist/pnpm-{version}/{pnpm.mjs,worker.js}（独立于 dsh-pkg）
   const dataDir = resolveDataDir(opts);
-  const cacheDir = join(dataDir, "pnpm-dist", "pnpm-" + PNPM_BOOTSTRAP.version);
+  const cacheDir = join(dataDir, "pnpm-dist", "pnpm-" + PNPM_VERSION);
   const entry = join(cacheDir, "pnpm.mjs");
   // ③ 缓存命中且全部文件 sha256 与预期一致 → 直接返回（幂等快速路径）
   const cached = await cacheIntact(cacheDir);
@@ -224,8 +254,8 @@ async function doEnsurePnpm(opts) {
     console.log("[pnpm] 命中缓存：" + entry);
     return entry;
   }
-  // ④ 下载：unpkg 优先 → jsdelivr 兜底；逐文件临时文件 → 校验 sha256 → 原子落位
-  // （mkdir + rename）。任一文件两源全败 → 抛可读错误（含两源提示）。
+  // ④ 下载：按 PNPM_CDNS 逐源尝试（unpkg → npmmirror → jsdelivr）；逐文件临时文件 →
+  // 校验 sha256 → 原子落位（mkdir + rename）。任一文件全源失败 → 抛可读错误（含源清单）。
   mkdirSync(cacheDir, { recursive: true });
   for (const file of PNPM_BOOTSTRAP.files) {
     const target = join(cacheDir, file.name);
@@ -275,7 +305,7 @@ async function doEnsurePnpm(opts) {
       throw new Error(
         "pnpm 引导失败（" +
           file.name +
-          "）：两个源均不可用（" +
+          "）：全部 CDN 源均不可用（" +
           PNPM_CDNS.map((f) => f(file.name)).join("、") +
           "），最后错误：" +
           (lastError?.message || lastError) +
