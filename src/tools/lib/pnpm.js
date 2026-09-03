@@ -8,7 +8,7 @@
 // 后解压提取 dist/pnpm.mjs（自包含入口 CLI，静态 import 全为 node: 内置模块，宿主
 // electron node 直接执行）+ dist/worker.js（package 导入 worker）到数据目录
 // <dataDir>/pnpm-dist/pnpm-{version}/。版本与完整性单一事实源 = packageManager。
-// 实测确认（宿主 node v26.8.1）：pnpm view 路径只依赖 pnpm.mjs；pnpm install/add 的导入
+// 宿主 node v26.8.1 下：pnpm view 路径只依赖 pnpm.mjs；pnpm install/add 的导入
 // 阶段经 new Worker(join(import.meta.dirname, "worker.js")) 加载 worker.js（pnpm.mjs
 // 内联处 workerScriptPath），缺 worker.js 时导入 worker 静默退出 1（无错误信息）——
 // 引导零静态校验字段：tarball sha512 来自 packageManager（corepack 维护），下载校验
@@ -21,14 +21,13 @@
 //
 // 导出：PNPM_VERSION（版本常量）/ ensurePnpm（幂等引导，返回 pnpm 入口绝对路径）
 // / tryHostChannel（宿主通道探测占位）/ runPnpm（spawn 宿主 node + pnpm 入口封装）
-// / DSH_PACKAGE + buildPnpmInstallArgs（pnpm install 参数构造收敛入口：T7a 起
+// / DSH_PACKAGE + buildPnpmInstallArgs（pnpm install 参数构造收敛入口：
 // lib/install.js 唯一安装调用点只传 registry 兜底意图，包名/旗标同源本模块）
 // / isValidPkgSpec（spec 注入面校验：仅接受严格 SemVer 或合法 dist-tag；校验职责在
 // 调用方——installDepsFromPlugin 计算 effectiveSpec 后、传 buildPnpmInstallArgs 前负责）。
-// 消费方（v0.18.2 收敛）：lib/install.js（installDepsFromPlugin 部署 dsh 依赖树 +
-// verifyDepsSmoke 的 pnpm 引导检查）。lib/check.js（npmViewDistTags）与 src/lifecycle.js
-// （patch 模板 {{NPM_CLI_PATH}} 占位符）v0.18.2 起退出——版本检查改 HTTP 直查 npm
-// registry（pnpm view 语义等价），patch 模板不再注入 pnpm 入口（settings 侧检查链路同改）。
+// 消费方：lib/install.js（installDepsFromPlugin 部署 dsh 依赖树 + verifyDepsSmoke 的
+// pnpm 引导检查）。版本检查走 HTTP 直查 npm registry（pnpm view 语义等价）；
+// settings 侧检查链路不经 pnpm 入口。
 //
 // 零运行时依赖：只用 node 内置模块（fs/path/crypto/https/child_process），不引入任何
 // npm 依赖（rspack externalsPresets.node 下保持外部 import）。容错纪律：引导失败抛
@@ -71,7 +70,6 @@ import {
 // （package 导入 worker）——pnpm add 的导入阶段经 new Worker(join(import.meta.dirname,
 // "worker.js")) 加载 worker.js（pnpm.mjs 内联处 workerScriptPath），只提取 pnpm.mjs
 // 会让 add 的导入 worker 崩溃（exit 1，无错误信息）；pnpm view 路径不触发 worker。
-// 实测（2026-09，宿主 node v24→v26）确认两文件均必需。
 
 // 从插件根 package.json 的 packageManager 解析 { version, sha512 }：
 // pnpm@<semver>+sha512.<hex>（corepack use 生成形态；sha512 为 tarball 完整性的 128 hex）。
@@ -97,12 +95,15 @@ const PNPM_MANAGER = parsePnpmManager();
 // 兼容导出（外部取版本号用；install.js smoke 报告等；值 = pm 段解析 version）
 export const PNPM_VERSION = PNPM_MANAGER ? PNPM_MANAGER.version : null;
 
-// tarball 下载源：registry.npmjs.org 官方优先 → registry.npmmirror.com 镜像兜底
-// （同一 tarball；npmmirror 可能 302 到边缘 CDN，downloadToFile 已跟随）。文件 CDN
-// （unpkg/jsdelivr）无 tarball 直链端点，不入列。
+// tarball 下载源（registry 类；unpkg/jsdelivr 等文件 CDN 无 tarball 端点，不入列）：
+// 官方 registry.npmjs.org → 官方国内镜像 npmmirror（302 到 cdn.npmmirror.com，已跟随）
+// → 第三方国内镜像（腾讯云 / 华为云，实测与官方 tarball 逐字节同源）。sha512 校验
+// 兜底：内容不符的源在引导时被拦下自动换下一个，源列表可安全扩充。
 const PNPM_TARBALL_SOURCES = [
   (version) => `https://registry.npmjs.org/pnpm/-/pnpm-${version}.tgz`,
   (version) => `https://registry.npmmirror.com/pnpm/-/pnpm-${version}.tgz`,
+  (version) => `https://mirrors.cloud.tencent.com/npm/pnpm/-/pnpm-${version}.tgz`,
+  (version) => `https://mirrors.huaweicloud.com/repository/npm/pnpm/-/pnpm-${version}.tgz`,
 ];
 const DOWNLOAD_TIMEOUT_MS = 60000; // 单次下载请求超时（重定向跟随共享）
 const STDOUT_CAP = 65536; // runPnpm 内存累积上限（调用方只需尾部/错误提取）
@@ -415,15 +416,11 @@ export async function runPnpm(args, opts = {}) {
   });
 }
 
-// ---- pnpm install 参数构造（T7a：lib/install.js 唯一安装调用点的收敛入口）----
-// v0.20.x 起：install.js 不再手拼 pnpm add 参数，改调 buildPnpmAddArgs（add @spec）。
-// T7a（dshana-embed-headless）：dsh 固定版本声明进插件根 package.json 的 dependencies，
-// 安装语义从「pnpm add @deepseek-ai/dsh@<spec>（版本基线 dshTag，外部可独立升级）」转为
-// 「pnpm install（按声明拉取，版本随插件发版）」——dsh 从外部可升级运行时依赖变为插件
-// 不可分割组成。故本函数废弃 add 形态，改为 buildPnpmInstallArgs：不拼包名/spec，只
-// 声明 install（pnpm 原生文本输出——ndjson reporter 已去除 2026-09-03，用户定稿：
-// 结构化事件层未被消费方解析利用，去掉后原生文本由 lib/install.js 逐行直通日志
-// 通道）；registry 兜底意图由调用方只传 URL。
+// ---- pnpm install 参数构造（lib/install.js 唯一安装调用点的收敛入口）----
+// dsh 固定版本声明进插件根 package.json 的 dependencies——安装语义 = pnpm install
+// （按声明拉取，版本随插件发版），dsh 是插件不可分割组成。本函数不拼包名/spec，只
+// 声明 install，输出为 pnpm 原生文本（由 lib/install.js 逐行直通日志通道）；
+// registry 兜底意图由调用方只传 URL。
 // ⚠️ 本函数保持纯拼接不做校验——声明版本合法性（严格 SemVer 或合法 dist-tag，见
 // isValidPkgSpec）由调用方负责：installDepsFromPlugin 读取插件根 package.json 的
 // dependencies 后校验（注入面收口，防 "npm:evil@1.0.0" / "github:user/repo" /
@@ -432,8 +429,8 @@ export const DSH_PACKAGE = "@deepseek-ai/dsh";
 
 export function buildPnpmInstallArgs({ registry } = {}) {
   // --prod：只装运行时 dependencies（插件根 package.json 有 rspack 等 devDeps 构建树，
-  // 运行时不需要；dsh + cordis 在 dependencies，T7d 起部署目标 = 插件根）。
-  const args = ["install", "--prod"]; // 原生文本输出（ndjson reporter 已去除）
+  // 运行时不需要；dsh + cordis 在 dependencies，部署目标 = 插件根）。
+  const args = ["install", "--prod"]; // 原生文本输出
   if (typeof registry === "string" && registry) {
     args.push("--registry=" + registry);
   }
