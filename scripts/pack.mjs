@@ -71,10 +71,20 @@ function assertCordisDistVersions(outDir) {
   if (!fs.pathExistsSync(cordisRoot)) {
     throw new Error("cordis 产物缺失（dist/cordis 不存在）：先跑 pnpm run build 再打包");
   }
+  // 完整性：必需 9 包（roster bundle dshana + 8 子插件）全部存在且 package.json 版本一致——
+  // 缺失/部分产物（含 count=0）一律拒包，防 build 失败后残留部分 dist 被误打包
+  const required = [
+    "dshana",
+    "app", "bridge", "bus", "clipboard", "logger", "provider", "settings", "theme",
+  ];
   let count = 0;
-  for (const name of fs.readdirSync(cordisRoot)) {
+  for (const name of required) {
     const pj = join(cordisRoot, name, "package.json");
-    if (!fs.pathExistsSync(pj)) continue;
+    if (!fs.pathExistsSync(pj)) {
+      throw new Error(
+        `cordis 产物不完整：缺少 ${name}/package.json（dist/cordis 下）——先跑 pnpm run build 再打包`,
+      );
+    }
     const j = fs.readJsonSync(pj);
     if (j.version !== version) {
       throw new Error(

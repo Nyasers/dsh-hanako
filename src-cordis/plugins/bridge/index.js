@@ -170,26 +170,41 @@ async function dispatchApiRpc(req, res, pathname) {
 
 /** 精确 Fetch 路由分发（session 日志下载等 GET/HEAD 非 JSON 端点）。 */
 async function dispatchFetchRoute(req, res, route) {
-  const chunks = []
-  for await (const chunk of req) chunks.push(chunk)
   const ac = new AbortController()
-  // 客户端断开（res close）：中止上游 fetch 并停止消费 body（防背压等待被 close 解除后继续读）
-  res.once('close', () => ac.abort())
+  let clientClosed = false
+  // 客户端断开（res close）：标记 + 中止上游 fetch（req 消费前即监听——读请求体期间断连也中止）
+  res.once('close', () => {
+    clientClosed = true
+    ac.abort()
+  })
+  const chunks = []
+  try {
+    for await (const chunk of req) chunks.push(chunk)
+  } catch (e) {
+    if (clientClosed) return // 客户端已断开：读请求体中断属预期，静默收尾
+    throw e
+  }
   const request = new Request(new URL(req.url || '/', 'http://dsh.internal'), {
     method: req.method || 'GET',
     headers: req.headers,
     ...(chunks.length > 0 ? { body: Buffer.concat(chunks) } : {}),
     signal: ac.signal,
   })
-  const response = await route.fetch(request)
+  let response
+  try {
+    response = await route.fetch(request)
+  } catch (e) {
+    if (ac.signal.aborted || (e && e.name === 'AbortError')) return // 客户端断开中止上游：res 已关
+    throw e
+  }
   res.writeHead(response.status, Object.fromEntries(response.headers.entries()))
   if (response.body === null) {
-    res.end()
+    if (!res.writableEnded) res.end()
     return
   }
   try {
     for await (const chunk of response.body) {
-      if (res.writableEnded) break
+      if (clientClosed || res.writableEnded) break
       if (!res.write(chunk)) {
         await new Promise((resolve) => {
           const done = () => {
@@ -200,11 +215,12 @@ async function dispatchFetchRoute(req, res, route) {
           res.once('drain', done)
           res.once('close', done)
         })
+        // 背压等待可能被 close 解除：等待后若已断开则不再继续写/读
+        if (clientClosed || res.writableEnded) break
       }
     }
   } catch (e) {
-    // 客户端断开 → ac.abort 使 for-await 抛 AbortError：直接返回（res 已关，不再 end）
-    if (ac.signal.aborted || (e && e.name === 'AbortError')) return
+    if (ac.signal.aborted || (e && e.name === 'AbortError')) return // 客户端断开 → abort 抛错：res 已关，不再 end
     throw e
   }
   if (!res.writableEnded) res.end()

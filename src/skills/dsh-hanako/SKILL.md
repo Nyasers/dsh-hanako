@@ -1,53 +1,82 @@
-﻿---
+---
 name: dsh-hanako
-description: "dsh-hanako 鎻掍欢锛堟妸 DeepSeek Harness 鎺ヨ繘 Hana 鐨勮繘绋嬪唴宓?subagent 鎵ц鍣級鐨勯厤缃緟鍔╀笌浣跨敤鎸囧崡銆傝Е鍙戝満鏅細dsh-hanako 鍒氳濂介渶瑕侀厤缃紙榛樿鍗冲彲锛屾棤闇€鎵嬪姩瑁呬緷璧?閰?Node锛夈€丏SHana 鏍囩椤垫樉绀鸿嚜涓句腑/闇€瑕佸鐞嗭紙errorClass 浜鸿瘽鎸囧紩锛夈€亀eb host 璧蜂笉鏉ワ紙鍏堝紑鏍囩椤电湅涓夋€佽嚜涓鹃〉锛歜ooting 闃舵/action-needed 鎸囧紩/ready 鐩村祵锛夈€佷緷璧栧畨瑁呭叏鑷姩锛堣嚜鍔ㄩ摼/鑷妇椤典笁鎬侊紝鏃犳墜鍔ㄥ伐鍏锋棤鎵嬪姩鎸夐挳锛夈€丏SH 浠诲姟澶辫触鎺掓煡銆佸鎵规€庝箞搴旂瓟锛坉sh_session action=approve锛夈€侀粯璁ゆā鍨嬫€庝箞閰嶏紙DSH 璁剧疆椤点€孌SHana 璁剧疆銆嶅垎椤碉紝provider/model/鎬濊€冧笁绾ц仈鍔級銆丏SH 鐗堟湰锛堟洿鏂?DSH = 鏇存柊鎻掍欢鍙戠増 + 閲嶅惎瀹夸富锛夈€佸畨瑁呰繘搴﹀疄鏃舵棩蹇楋紙鑷姩閾?鍗＄墖锛夈€丏eepSeek Harness 鐩稿叧銆傞亣鍒?dsh-hanako 鐩稿叧闇€姹備紭鍏堣鏈妧鑳藉啀鍔ㄦ墜銆?
+description: "dsh-hanako 插件（把 DeepSeek Harness 接进 Hana 的进程内嵌 subagent 执行器）的配置辅助与使用指南。触发场景：dsh-hanako 刚装好需要配置（默认即可，无需手动装依赖/配 Node）、DSHana 标签页显示自举中/需要处理（errorClass 人话指引）、web host 起不来（先开标签页看三态自举页：booting 阶段/action-needed 指引/ready 直嵌）、依赖安装全自动（自动链/自举页三态，无手动工具无手动按钮）、DSH 任务失败排查、审批怎么应答（dsh_session action=approve）、默认模型怎么配（DSH 设置页「DSHana 设置」分页，provider/model/思考三级联动）、DSH 版本（更新 DSH = 更新插件发版 + 重启宿主）、安装进度实时日志（自动链/卡片）、DeepSeek Harness 相关。遇到 dsh-hanako 相关需求优先读本技能再动手。"
 ---
 
-# dsh-hanako 閰嶇疆杈呭姪涓庝娇鐢ㄦ寚鍗?
-鎶?DeepSeek Harness锛圖SH锛夋帴杩?Hana锛氭彃浠跺姞杞藉嵆鍚姩**鑷姩閾剧姸鎬佹満**锛堜緷璧栬嚜涓?鈫?杩涚▼鍐呮媺璧?DSH web host锛夛紝DSH Web UI锛坔ttp://127.0.0.1:3080锛変互 **DSHana 鏍囩椤?*锛圔ootstrap 涓夋€佽嚜涓鹃〉锛夊唴宓屽彲瑙佸叏閮ㄤ細璇濄€?
-## 棣栨瀹夎閰嶇疆锛圓gent 杈呭姪鐢ㄦ埛瀹屾垚锛?
-config.json 鐢卞涓昏缃晫闈㈢敓鎴愩€?*涓嶉殢鍖呭垎鍙?*锛岀己鐪佸叏閮ㄥ彲鐢紝鏃犻渶浜哄伐棰勯厤缃細
+# dsh-hanako 配置辅助与使用指南
 
-- **鏃犻渶鎵嬪姩瑁呬緷璧?/ 鏃犻渶 Node 璺緞**锛氭彃浠跺姞杞斤紙onStartUp锛夎嚜鍔ㄩ摼浼氬箓绛夋鏌ュ苟鎸夋彃浠跺０鏄庯紙鎻掍欢鏍?package.json 鐨?dependencies锛屽浐瀹氱増鏈級鑷姩 `pnpm install --prod` 瑁呰繘**鎻掍欢鏍?node_modules**锛岃濂借嚜鍔ㄦ媺璧?web host鈥斺€斿叏绋嬫棤鎵嬪姩鎸夐挳銆倃eb host 榛樿鐢ㄥ涓?electron 鑷韩 Node 杩愯鏃讹紙`process.execPath`锛宍ELECTRON_RUN_AS_NODE=1`锛夈€?- **鍙€夐厤缃?`nodejsPath`**锛歮acOS 涓?Electron 鍐呭祵 node 璺?pnpm 瑙﹀彂绛惧悕鏍￠獙澶辫触锛坢acos-signature锛夋椂锛屽湪 **DSH 璁剧疆椤点€孌SHana 璁剧疆銆嶁啋 鑷畾涔?NodeJS 璺緞**锛堟垨 config.json `global.nodejsPath`锛夊～绯荤粺 node 缁濆璺緞锛堝 /opt/homebrew/bin/node锛夛紱淇濆瓨 config.json 鍚庤嚜鍔ㄩ摼浼?*鑷姩缁窇**锛坈onfig watch锛夛紝鏃犻渶閲嶅惎銆佹棤闇€鎵嬪姩鎿嶄綔椤甸潰銆?- **鏃犻渶閰嶇疆 API Key / 妯″瀷**锛氬嚟鎹敱 @dsh-hanako/provider 鐩磋瀹夸富 `provider-catalog.json`锛屾ā鍨嬭窡闅忓涓?`models.json`銆備换鍔￠粯璁ゆā鍨?= DSH 榛樿妯″瀷锛屽彲鍦ㄣ€孌SHana 璁剧疆銆嶅垎椤点€岄粯璁ゆā鍨嬨€嶅崱鐗囬厤缃紙provider/model/鎬濊€冧笁绾ц仈鍔級銆?- **DSH 鐗堟湰鍗＄墖**锛氬彧鏄剧ず鏈湴 DSH 鐗堟湰 + 銆屾洿鏂?DSH = 鏇存柊鎻掍欢鍙戠増銆嶈鏄庯紱**鍗囩骇 dsh = 瑁呮柊鎻掍欢鍖?+ 閲嶅惎瀹夸富**锛堣繘绋嬪唴 ESM 缂撳瓨璞佸厤涓嶅彲琛岋紝瑙佸凡鐭ラ檺鍒讹級銆?- `dsh_session(action="create")` 姣忔璋冪敤**蹇呴』鏄惧紡浼?`cwd`**锛坉efaultCwd 宸插垹闄わ級銆?
-**閰嶇疆鐢熸晥锛堝疄鏃讹級**锛歯odejsPath 绛夐厤缃繍琛屾湡鐩磋 config.json/鍗曚緥锛坮esolveNodeExec 姣忔 spawn 鍓嶈В鏋愶級锛屼繚瀛樺嵆瀵逛笅涓€娆″瓙杩涚▼鐢熸晥锛涘仠绛夌被澶辫触锛坢acos-signature锛変繚瀛?config.json 鍚庤嚜鍔ㄩ摼缁窇銆備粎銆岃繘绋嬪唴 boot 鐨勬棫妯″潡缂撳瓨銆嶇被闂闇€瑕侀噸鍚涓伙紙restart-needed锛岃涓嬶級銆?
-## 鍚姩鑷姩閾撅紙T2 鐘舵€佹満锛屽叏鑷姩锛岄〉闈㈡棤鎵嬪姩鍏ュ彛锛?
-鎻掍欢 onload 鍚庤嚜鍔ㄩ摼鍦ㄥ悗鍙版帹杩涳紙鏃犲父椹昏疆璇紝澶辫触閫€閬块噸璇曪級锛岄樁娈垫寔涔呯姸鎬佸瓨鍗曚緥 `g.boot`锛?
-1. **ensure-deps**锛氬箓绛夋鏌?瀹夎 dsh 渚濊禆锛坈liBin 鍦ㄤ笖鐗堟湰===澹版槑 + 闈欐€佹牳瀵归€氳繃 鈫?绉掕繃璺宠繃锛涘惁鍒?pnpm install --prod锛屽畼鏂规簮澶辫触鑷姩鍒?npmmirror锛夆啋
-2. **booting**锛氳繘绋嬪唴鍚姩 DSH web host锛坄g.startWebHost`锛夆啋
-3. **ready**锛氭敹鏁涳紙web host 灏辩华锛屾爣绛鹃〉鐩村祵 iframe锛?
-**澶辫触鍐崇瓥锛坋rrorClass 鍒嗙被锛孴1锛?*锛歩nstall/boot 澶辫触鍏堝垎绫诲啀琛屽姩鈥斺€?
-- **鍙仮澶嶈嚜鍔ㄩ€€閬块噸璇?*锛坣etwork / environment / unknown / native-toolchain锛夛細閫€閬?30s 鈫?2m 鈫?10m 鈫?30m锛坈ap锛夛紝鎻掍欢鐢熷懡鍛ㄦ湡鍐呮寔缁紝缃戠粶/宸ュ叿閾?鐜鎭㈠鍚?*鑷姩瀹屾垚**锛屾棤闇€鎿嶄綔銆?- **涓嶅彲鑷姩鎭㈠ 鈫?鍋滅瓑鏉′欢鍙樺寲**锛坢acos-signature 绛夐厤缃被 / declaration 澹版槑闂 / restart-needed 鍗囩骇缂撳瓨娈嬬暀锛夛細椤甸潰缁欐槑纭寚寮曪紱鏉′欢婊¤冻鍚庤嚜鍔ㄧ画璺戯紙閰嶇疆淇濆瓨 / 鎻掍欢鏇存柊 / 閲嶅惎瀹夸富锛夈€?
-鐘舵€佸揩鐓у崟涓€鍑哄彛 `GET /webui/boot-state`锛圱3锛夛細`{ phase, ready, deps:{ status,errorClass,guidance,error,version,logTail }, boot:{ attempt,nextRetryAt,errorClass,guidance,lastError }, web:{ ready,lastError } }`鈥斺€旀爣绛鹃〉鍙秷璐瑰畠娓叉煋涓夋€侊紙瑙佷笅锛夛紝Agent 鎺掓煡涔熺洿鎺ヨ瀹冦€?
-## DSHana 鏍囩椤碉紙Bootstrap 涓夋€佽嚜涓鹃〉锛孴4锛?
-鏍囩椤碉紙`/webui`锛夋寜 `boot-state` 娓叉煋涓夋€侊紝**鏃犱换浣曞彲鐐圭殑鍚姩/瀹夎/妫€娴嬫寜閽?*锛堟墜鍔ㄥ叆鍙ｅ凡闅?T5 閫€褰癸級锛?
-1. **booting锛堣嚜涓句腑锛?*锛氶樁娈垫椂闂寸嚎锛堜緷璧栧氨缁?鈫?鍚姩 Web Host 鈫?灏辩华锛? 渚濊禆瀹夎瀹炴椂鏃ュ織灏炬粴鍔?+ 閲嶈瘯淇℃伅锛堢 N 娆?/ 涓嬫鑷姩閲嶈瘯鏃跺埢锛夈€傝嚜鍔ㄦ帹杩涗腑锛岀瓑鍗冲彲銆?2. **action-needed锛堥渶瑕佸鐞嗭級**锛氳嚜鍔ㄩ摼鏆傚仠銆傞〉闈㈢粰鍑?**errorClass 浜鸿瘽 + 鏄庣‘鎿嶄綔姝ラ**锛堝閰嶇疆 nodejsPath銆佽缂栬瘧宸ュ叿閾俱€佹竻鐞嗙鐩橈級+ 銆岃嚜鍔ㄧ画璺戜腑/鍋滅瓑銆嶈鏄庯紙鍖哄垎鍙仮澶嶉€€閬块噸璇曚腑 vs 闇€閲嶅惎瀹夸富/绛夋潯浠讹級锛涘師濮嬮敊璇姌鍙犮€岃鎯呫€嶃€傜敤鎴峰彧鍋氶〉闈㈡墍杩扮幆澧冨姩浣滐紝**瀹屾垚鍚庤嚜鍔ㄧ画璺?*銆?3. **ready锛堝氨缁級**锛歩frame 鐩村祵 dsh Web UI銆?
-浜嬩欢娴?`GET /webui/events`锛堜繚鐣欙級锛歚ready`锛堟寕杞?iframe锛? `pending`锛堝仠鏈洪€€鍥炶嚜涓鹃〉锛? `diag-changed`锛堣嚜涓剧姸鎬佸彉鍖栦俊鍙凤細deps 缈昏浆鎴?web host 鍚姩澶辫触 鈫?鍒锋柊 boot-state锛? `theme-pref`銆?
-## 宸ュ叿閫熸煡
+把 DeepSeek Harness（DSH）接进 Hana：插件加载即启动**自动链状态机**（依赖自举 → 进程内拉起 DSH web host），DSH Web UI（http://127.0.0.1:3080）以 **DSHana 标签页**（Bootstrap 三态自举页）内嵌可见全部会话。
 
-| 宸ュ叿 | 鐢ㄩ€?| 鍏抽敭鐐?| 璇︽儏 |
+## 首次安装配置（Agent 辅助用户完成）
+
+config.json 由宿主设置界面生成、**不随包分发**，缺省全部可用，无需人工预配置：
+
+- **无需手动装依赖 / 无需 Node 路径**：插件加载（onStartUp）自动链会幂等检查并按插件声明（插件根 package.json 的 dependencies，固定版本）自动 `pnpm install --prod` 装进**插件根 node_modules**，装好自动拉起 web host——全程无手动按钮。web host 默认用宿主 electron 自身 Node 运行时（`process.execPath`，`ELECTRON_RUN_AS_NODE=1`）。
+- **可选配置 `nodejsPath`**：macOS 上 Electron 内嵌 node 跑 pnpm 触发签名校验失败（macos-signature）时，在 **DSH 设置页「DSHana 设置」→ 自定义 NodeJS 路径**（或 config.json `global.nodejsPath`）填系统 node 绝对路径（如 /opt/homebrew/bin/node）；保存 config.json 后自动链会**自动续跑**（config watch），无需重启、无需手动操作页面。
+- **无需配置 API Key / 模型**：凭据由 @dsh-hanako/provider 直读宿主 `provider-catalog.json`，模型跟随宿主 `models.json`。任务默认模型 = DSH 默认模型，可在「DSHana 设置」分页「默认模型」卡片配置（provider/model/思考三级联动）。
+- **DSH 版本卡片**：只显示本地 DSH 版本 + 「更新 DSH = 更新插件发版」说明；**升级 dsh = 装新插件包 + 重启宿主**（进程内 ESM 缓存豁免不可行，见已知限制）。
+- `dsh_session(action="create")` 每次调用**必须显式传 `cwd`**（defaultCwd 已删除）。
+
+**配置生效（实时）**：nodejsPath 等配置运行期直读 config.json/单例（resolveNodeExec 每次 spawn 前解析），保存即对下一次子进程生效；停等类失败（macos-signature）保存 config.json 后自动链续跑。仅「进程内 boot 的旧模块缓存」类问题需要重启宿主（restart-needed，见下）。
+
+## 启动自动链（T2 状态机，全自动，页面无手动入口）
+
+插件 onload 后自动链在后台推进（无常驻轮询，失败退避重试），阶段持久状态存单例 `g.boot`：
+
+1. **ensure-deps**：幂等检查/安装 dsh 依赖（cliBin 在且版本===声明 + 静态核对通过 → 秒过跳过；否则 pnpm install --prod，官方源失败自动切 npmmirror）→
+2. **booting**：进程内启动 DSH web host（`g.startWebHost`）→
+3. **ready**：收敛（web host 就绪，标签页直嵌 iframe）
+
+**失败决策（errorClass 分类，T1）**：install/boot 失败先分类再行动——
+
+- **可恢复自动退避重试**（network / environment / unknown / native-toolchain）：退避 30s → 2m → 10m → 30m（cap），插件生命周期内持续，网络/工具链/环境恢复后**自动完成**，无需操作。
+- **不可自动恢复 → 停等条件变化**（macos-signature 等配置类 / declaration 声明问题 / restart-needed 升级缓存残留）：页面给明确指引；条件满足后自动续跑（配置保存 / 插件更新 / 重启宿主）。
+
+状态快照单一出口 `GET /webui/boot-state`（T3）：`{ phase, ready, deps:{ status,errorClass,guidance,error,version,logTail }, boot:{ attempt,nextRetryAt,errorClass,guidance,lastError }, web:{ ready,lastError } }`——标签页只消费它渲染三态（见下），Agent 排查也直接读它。
+
+## DSHana 标签页（Bootstrap 三态自举页，T4）
+
+标签页（`/webui`）按 `boot-state` 渲染三态，**无任何可点的启动/安装/检测按钮**（手动入口已随 T5 退役）：
+
+1. **booting（自举中）**：阶段时间线（依赖就绪 → 启动 Web Host → 就绪）+ 依赖安装实时日志尾滚动 + 重试信息（第 N 次 / 下次自动重试时刻）。自动推进中，等即可。
+2. **action-needed（需要处理）**：自动链暂停。页面给出 **errorClass 人话 + 明确操作步骤**（如配置 nodejsPath、装编译工具链、清理磁盘）+ 「自动续跑中/停等」说明（区分可恢复退避重试中 vs 需重启宿主/等条件）；原始错误折叠「详情」。用户只做页面所述环境动作，**完成后自动续跑**。
+3. **ready（就绪）**：iframe 直嵌 dsh Web UI。
+
+事件流 `GET /webui/events`（保留）：`ready`（挂载 iframe）/ `pending`（停机退回自举页）/ `diag-changed`（自举状态变化信号：deps 翻转或 web host 启动失败 → 刷新 boot-state）/ `theme-pref`。
+
+## 工具速查
+
+| 工具 | 用途 | 关键点 | 详情 |
 |---|---|---|---|
-| `dsh_session(action, task?, cwd?, 鈥?` | 浼氳瘽鍏ㄧ敓鍛藉懆鏈燂紙瀹夸富 Agent 闈㈠敮涓€宸ュ叿锛?| action 鈭?create锛堟彁浜わ紝task+cwd 蹇呭～锛屽紓姝ユ彁浜ゅ悗涓诲姩缁撴潫鍥炲悎锛? send锛堢画浼氳瘽锛? cancel锛堝彇娑堬級/ list/get锛堝洖鐪嬶級/ approve锛堝簲绛斿鎵癸細sessionId+approvalId锛屽喅绛栫湅 args 涓嶅惉 reason锛夛紱鎿嶄綔瀹炵幇鎸?subtool 妯″潡鍖?| [dsh-session 鎶€鑳絔(dsh-session) |
+| `dsh_session(action, task?, cwd?, …)` | 会话全生命周期（宿主 Agent 面唯一工具） | action ∈ create（提交，task+cwd 必填，异步提交后主动结束回合）/ send（续会话）/ cancel（取消）/ list/get（回看）/ approve（应答审批：sessionId+approvalId，决策看 args 不听 reason）；操作实现按 subtool 模块化 | [dsh-session 技能](dsh-session) |
 
-> 渚濊禆瀹夎宸插叏鑷姩锛堣嚜鍔ㄩ摼 + Bootstrap 鑷妇锛屾棤鎵嬪姩宸ュ叿锛夛細`g.installDeps`/`g.verifyDeps` 鐢辨彃浠剁敓鍛藉懆鏈熼┍鍔紝鏍囩椤靛彧璇诲睍绀轰笁鎬併€?
-## 鎺掗敊琛?
-**web host 璧蜂笉鏉?鈫?鍏堝紑 DSHana 鏍囩椤电湅涓夋€佽嚜涓鹃〉**锛歜ooting 鏄剧ず闃舵/杩涘害/閲嶈瘯锛沘ction-needed 鐩存帴缁?errorClass 浜鸿瘽 + 鎿嶄綔姝ラ锛涘師濮嬮敊璇姌鍙犮€岃鎯呫€嶃€傚鐓э細
+> 依赖安装已全自动（自动链 + Bootstrap 自举，无手动工具）：`g.installDeps`/`g.verifyDeps` 由插件生命周期驱动，标签页只读展示三态。
 
-| 鐜拌薄 | 鍘熷洜 | 澶勭悊 |
+## 排错表
+
+**web host 起不来 → 先开 DSHana 标签页看三态自举页**：booting 显示阶段/进度/重试；action-needed 直接给 errorClass 人话 + 操作步骤；原始错误折叠「详情」。对照：
+
+| 现象 | 原因 | 处理 |
 |---|---|---|
-| 椤甸潰 action-needed锛歮acos-signature | Electron node 绛惧悕鏍￠獙澶辫触 | 閰嶇疆 nodejsPath锛堣缃〉 鈫?鑷畾涔?NodeJS 璺緞锛夛紝淇濆瓨鍚庤嚜鍔ㄧ画璺?|
-| 椤甸潰 action-needed锛歯ative-toolchain | koffi/node-pty 绛夊師鐢熸ā鍧楃紪璇戝け璐?| 瑁呯紪璇戝伐鍏烽摼锛坢acOS `xcode-select --install` / Windows VS Build Tools锛夛紝鑷姩閾句細閲嶈瘯 |
-| 椤甸潰 action-needed锛歟nvironment锛圗ACCES/EPERM/ENOSPC锛?| 鏉冮檺/纾佺洏 | 娓呯悊纾佺洏鎴栬皟鏁存潈闄愶紙EBUSY 灞為攣锛岃嚜鍔ㄩ噸璇曪級 |
-| 椤甸潰 action-needed锛歳estart-needed | dsh 宸茶法鐗堟湰鍗囩骇锛屽涓讳粛鎸佹棫妯″潡缂撳瓨 | **閲嶅惎瀹夸富锛圚ana锛?*锛岄噸鍚悗鑷姩缁窇 |
-| 椤甸潰 action-needed锛歞eclaration / unknown | 澹版槑鎴栦笂娓搁棶棰?/ 鏈煡 | 鏃犻渶鎵嬪姩锛涚瓑鎻掍欢鏇存柊鎴栦笂鎶ヤ綔鑰咃紝鑷姩閾句繚瀹堥噸璇?|
-| booting 闀挎椂闂存棤杩涘睍 / 浜嬩欢涓㈠け | 浜嬩欢娴佹柇鎴栭€€閬块棿闅?| 椤甸潰 30s 鍏滃簳/閫€閬垮埌鐐硅嚜鍔ㄥ埛鏂帮紱寮€浼氳瘽鏃ュ織鐪嬭嚜鍔ㄩ摼閲岀▼纰?|
-| 椤甸潰 ready 浣嗕换鍔℃姤 web host 閿欒 | 绔彛鍗犵敤/杩涚▼寮傚父 | 鏌?webPort 鍗犵敤锛涘紑浼氳瘽鏃ュ織锛堣嚜鍔ㄩ摼 `[hana]` 琛岋級瀹氫綅 |
-| `dsh_session` 鎶ャ€孌SH 鍖呮湭灏辩华銆?| 渚濊禆缂哄け/婕傜Щ | 鑷姩閾鹃€氬父宸茶嚜鎰堬紙ensure-deps 闃舵鑷姩瀹夎锛夛紱浠嶅け璐ョ瓑閫€閬?鏌ヤ細璇濇棩蹇?|
-| pnpm install 涓嬭浇澶辫触/瓒呮椂 | registry 缃戠粶 | 宸插唴缃畼鏂规簮 鈫?npmmirror 鑷姩閲嶈瘯锛涙寔缁け璐ユ煡浠ｇ悊/缃戠粶 |
-| bash 鎶?`E_ACCESSDENIED` | DSH bash 娌欑 Windows 闄愬埗 | 鏀圭敤鏂囦欢绯荤粺宸ュ叿锛坵rite/read/edit锛?|
-| 鏀逛簡閰嶇疆/浠ｇ爜涓嶇敓鏁?| 瀹夸富妯″潡缂撳瓨 / 闇€閲嶅惎鐨勭紦瀛樻畫鐣?| 閰嶇疆绫诲疄鏃剁敓鏁堬紱鍗囩骇/浠ｇ爜绫婚噸鍚?Hana |
+| 页面 action-needed：macos-signature | Electron node 签名校验失败 | 配置 nodejsPath（设置页 → 自定义 NodeJS 路径），保存后自动续跑 |
+| 页面 action-needed：native-toolchain | koffi/node-pty 等原生模块编译失败 | 装编译工具链（macOS `xcode-select --install` / Windows VS Build Tools），自动链会重试 |
+| 页面 action-needed：environment（EACCES/EPERM/ENOSPC） | 权限/磁盘 | 清理磁盘或调整权限（EBUSY 属锁，自动重试） |
+| 页面 action-needed：restart-needed | dsh 已跨版本升级，宿主仍持旧模块缓存 | **重启宿主（Hana）**，重启后自动续跑 |
+| 页面 action-needed：declaration / unknown | 声明或上游问题 / 未知 | 无需手动；等插件更新或上报作者，自动链保守重试 |
+| booting 长时间无进展 / 事件丢失 | 事件流断或退避间隙 | 页面 30s 兜底/退避到点自动刷新；开会话日志看自动链里程碑 |
+| 页面 ready 但任务报 web host 错误 | 端口占用/进程异常 | 查 webPort 占用；开会话日志（自动链 `[hana]` 行）定位 |
+| `dsh_session` 报「DSH 包未就绪」 | 依赖缺失/漂移 | 自动链通常已自愈（ensure-deps 阶段自动安装）；仍失败等退避/查会话日志 |
+| pnpm install 下载失败/超时 | registry 网络 | 已内置官方源 → npmmirror 自动重试；持续失败查代理/网络 |
+| bash 报 `E_ACCESSDENIED` | DSH bash 沙箱 Windows 限制 | 改用文件系统工具（write/read/edit） |
+| 改了配置/代码不生效 | 宿主模块缓存 / 需重启的缓存残留 | 配置类实时生效；升级/代码类重启 Hana |
 
-**璇婃柇鏃ュ織**锛氬叏閮ㄨ繍琛屾棩蹇楀湪浼氳瘽鏃ュ織鏂囦欢 `<dataDir>/logs/<YYYYMMDD-HHmmss-SSS>.log`锛堟棫鏃ュ織 onload zstd 鍘嬬缉 `.log.zst` 淇濈暀锛夈€傝鍓嶇紑 src锛歚out`/`err`锛坵eb host锛夈€乣hana`锛堟彃浠剁敓鍛藉懆鏈?+ 閲岀▼纰?`[鑷姩閾綸`/`[渚濊禆瀹夎]`/`[渚濊禆楠岃瘉]`锛夈€乣pnpm`锛坧npm 鍘熷杈撳嚭閫?chunk 瀹炴椂钀界洏锛夈€俻npm/鑷姩閾惧け璐ュ厛鐪?`[hana]` 鑷姩閾捐锛坋rrorClass + 閫€閬?鍋滅瓑鍐崇瓥锛変笌 `[pnpm]` 琛屻€?
-## 宸茬煡闄愬埗
+**诊断日志**：全部运行日志在会话日志文件 `<dataDir>/logs/<YYYYMMDD-HHmmss-SSS>.log`（旧日志 onload zstd 压缩 `.log.zst` 保留）。行前缀 src：`out`/`err`（web host）、`hana`（插件生命周期 + 里程碑 `[自动链]`/`[依赖安装]`/`[依赖验证]`）、`pnpm`（pnpm 原始输出逐 chunk 实时落盘）。pnpm/自动链失败先看 `[hana]` 自动链行（errorClass + 退避/停等决策）与 `[pnpm]` 行。
 
-- **鍗囩骇 dsh = 瑁呮柊鎻掍欢鍖?+ 閲嶅惎瀹夸富**锛氭彃浠朵晶鏃犳硶璞佸厤瀹夸富杩涚▼鍐?ESM 妯″潡缂撳瓨锛坰pec 鍐崇瓥锛屽嬁閲嶈蛋寮矾锛夛紱璺ㄧ増鏈崌绾у悗 boot 鎾炴棫 .pnpm 缂撳瓨 鈫?restart-needed 鍋滅瓑锛岄噸鍚涓昏嚜鍔ㄧ画璺?- 涓婚璺熼殢锛歴ystem 璺熼殢瀹夸富锛宭ight/dark 鍘熺敓锛涘涓诲垏涓婚鍚庡３椤靛疄鏃惰窡闅忥紙缁?`hana.theme.changed` + `/webui/events` theme-pref锛?- bash 鍦?Windows 鍙兘 E_ACCESSDENIED锛圖SH 娌欑闄愬埗锛夛紱鏂囦欢宸ュ叿姝ｅ父锛學indows 浼樺厛鐢?- wait=true 鍚屾妯″紡鏃犲鎵归€氱煡锛堝彧鑳?Web UI 鎴栬秴鏃讹級锛涢暱浠诲姟寤鸿寮傛
-- 瓒婄晫鏉冮檺榛樿璧板鎵癸細deferred 閫氱煡 鈫?`dsh_session(action="approve", 鈥?` 搴旂瓟锛沗approvalTimeoutSec` 鍐呮棤浜哄簲绛旇嚜鍔ㄦ嫆缁濓紙鏈厤缃洖钀?0 = 绂佺敤鑷姩鎷掔粷锛?- 浠诲姟榛樿鏂板缓浼氳瘽锛涗紶 sessionId 澶嶇敤锛坮esume锛夛紱浼氳瘽/璐︽湰鍦ㄦ彃浠舵暟鎹洰褰?dsh-home/锛屼笉纰?~/.DSH
+## 已知限制
+
+- **升级 dsh = 装新插件包 + 重启宿主**：插件侧无法豁免宿主进程内 ESM 模块缓存（spec 决策，勿重走弯路）；跨版本升级后 boot 撞旧 .pnpm 缓存 → restart-needed 停等，重启宿主自动续跑
+- 主题跟随：system 跟随宿主，light/dark 原生；宿主切主题后壳页实时跟随（经 `hana.theme.changed` + `/webui/events` theme-pref）
+- bash 在 Windows 可能 E_ACCESSDENIED（DSH 沙箱限制）；文件工具正常，Windows 优先用
+- wait=true 同步模式无审批通知（只能 Web UI 或超时）；长任务建议异步
+- 越界权限默认走审批：deferred 通知 → `dsh_session(action="approve", …)` 应答；`approvalTimeoutSec` 内无人应答自动拒绝（缺省回落 30 秒 = manifest 默认；仅显式设 0 禁用自动拒绝）
+- 任务默认新建会话；传 sessionId 复用（resume）；会话/账本在插件数据目录 dsh-home/，不碰 ~/.DSH
