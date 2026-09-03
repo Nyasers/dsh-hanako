@@ -388,7 +388,7 @@
           var st = panelStatusView();
           hana.panel.set({
             sections: [
-              { kind: "status", id: "dshana-status", label: "DSH web host", value: st.word, delta: st.delta, deltaTone: st.tone },
+              { kind: "status", id: "dshana-status", label: "DSHana", value: st.word, delta: st.delta, deltaTone: st.tone },
             ],
             refresh: { intervalMs: 30000 },
           }).catch(function () { /* 面板不可用静默降级 */ });
