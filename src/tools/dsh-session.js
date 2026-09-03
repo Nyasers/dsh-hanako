@@ -18,7 +18,7 @@ import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { zstdDecompressSync } from "node:zlib";
-import { textFromMessageBlocks } from "./lib/protocol.js";
+import { textFromMessageBlocks } from "../lib/protocol.js";
 import { execute as runExecute } from "./dsh-run.js";
 import { execute as cancelExecute } from "./dsh-cancel.js";
 

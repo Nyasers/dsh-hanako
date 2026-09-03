@@ -22,10 +22,10 @@
 // 导出：PNPM_VERSION（版本常量）/ ensurePnpm（幂等引导，返回 pnpm 入口绝对路径）
 // / tryHostChannel（宿主通道探测占位）/ runPnpm（spawn 宿主 node + pnpm 入口封装）
 // / DSH_PACKAGE + buildPnpmInstallArgs（pnpm install 参数构造收敛入口：
-// lib/install.js 唯一安装调用点只传 registry 兜底意图，包名/旗标同源本模块）
+// lib/bootstrap.js 唯一安装调用点只传 registry 兜底意图，包名/旗标同源本模块）
 // / isValidPkgSpec（spec 注入面校验：仅接受严格 SemVer 或合法 dist-tag；校验职责在
 // 调用方——installDepsFromPlugin 计算 effectiveSpec 后、传 buildPnpmInstallArgs 前负责）。
-// 消费方：lib/install.js（installDepsFromPlugin 部署 dsh 依赖树 + verifyDepsSmoke 的
+// 消费方：lib/bootstrap.js（installDepsFromPlugin 部署 dsh 依赖树 + verifyDepsSmoke 的
 // pnpm 引导检查）。版本检查走 HTTP 直查 npm registry（pnpm view 语义等价）；
 // settings 侧检查链路不经 pnpm 入口。
 //
@@ -51,7 +51,7 @@ import {
   PLUGIN_ROOT,
   resolveNodeExec,
   resolveNodeExecEnv,
-} from "../tools/lib/state.js";
+} from "./state.js";
 
 // ---- 版本与完整性单一事实源：package.json packageManager（pnpm@<version>+sha512.<hex>）----
 // corepack 语义：版本 + tarball sha512 由 packageManager 单一承载（corepack use 生成）。
@@ -127,7 +127,7 @@ export async function tryHostChannel() {
   return null;
 }
 
-// ---- 数据目录解析（与 lib/install.js / lifecycle.js 同一约定：显式 → 单例 → 插件根 data）----
+// ---- 数据目录解析（与 lib/bootstrap.js / lifecycle.js 同一约定：显式 → 单例 → 插件根 data）----
 // 缓存独立于 dsh-pkg（dsh 依赖树部署目录），只放 pnpm 引导文件（pnpm.mjs + worker.js）。
 function resolveDataDir(opts) {
   if (opts && typeof opts.dataDir === "string" && opts.dataDir) {
@@ -452,10 +452,10 @@ export async function runPnpm(args, opts = {}) {
   });
 }
 
-// ---- pnpm install 参数构造（lib/install.js 唯一安装调用点的收敛入口）----
+// ---- pnpm install 参数构造（lib/bootstrap.js 唯一安装调用点的收敛入口）----
 // dsh 固定版本声明进插件根 package.json 的 dependencies——安装语义 = pnpm install
 // （按声明拉取，版本随插件发版），dsh 是插件不可分割组成。本函数不拼包名/spec，只
-// 声明 install，输出为 pnpm 原生文本（由 lib/install.js 逐行直通日志通道）；
+// 声明 install，输出为 pnpm 原生文本（由 lib/bootstrap.js 逐行直通日志通道）；
 // registry 兜底意图由调用方只传 URL。
 // ⚠️ 本函数保持纯拼接不做校验——声明版本合法性（严格 SemVer 或合法 dist-tag，见
 // isValidPkgSpec）由调用方负责：installDepsFromPlugin 读取插件根 package.json 的
@@ -486,7 +486,7 @@ export function buildPnpmInstallArgs({ registry } = {}) {
 //      严格校验不过的版本号不应被 dist-tag 规则放行）；tag 正则本身已排除
 //      @ / : / 空格等协议与 alias 字符（规则冗余防御）。
 // 校验失败返回 false，由调用方按容错纪律提前返回 { ok:false, error }（不 throw）。
-// 校验职责在调用方（lib/install.js installDepsFromPlugin 计算 effectiveSpec 后调用）；
+// 校验职责在调用方（lib/bootstrap.js installDepsFromPlugin 计算 effectiveSpec 后调用）；
 // buildPnpmInstallArgs 保持纯拼接（声明已由调用方校验）。
 export function isValidPkgSpec(spec) {
   const s = String(spec || "").trim();

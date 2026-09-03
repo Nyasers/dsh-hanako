@@ -20,7 +20,7 @@
 //   web host 日志     logTs / appendLog / logFileStamp / newWebLogPath（兜底实现）
 // 单例挂载（globalThis.__dshHanako，经 getSingleton()）：g.closeProcess /
 // g.updateDsh / g.startWebHost / g.installDeps / g.verifyDeps / g.checkDshUpdate 均在本模块顶层完成
-// （installDeps/verifyDeps/checkDshUpdate 直接引用 lib/install.js & lib/check.js）；g.runMigrations
+// （installDeps/verifyDeps/checkDshUpdate 直接引用 lib/bootstrap.js & lib/check.js）；g.runMigrations
 // 由 src/migrate.js 顶层挂载（本模块 import 时即挂好）。routes/webui.js、index.js、tools/dsh-*.js
 // 仍经 globalThis 单例调用，不受影响。
 //
@@ -28,7 +28,7 @@
 // import，随 rspack 单 bundle 内联进 dist/index.js（build.mjs 的 staticUrlToMeta 递归收集 ROOT 下
 // 全部 .js 路径做 import.meta.url 替换）。src/migrate.js 同样经本模块静态 import 内联；index.js
 // 不静态 import migrate.js（避免 Node ESM 固定 URL 缓存读到旧模块），经 globalThis 单例
-// （g.runMigrations）调用——与 g.startWebHost / g.closeProcess 同纪律。本文件自身的 ../tools/lib/*
+// （g.runMigrations）调用——与 g.startWebHost / g.closeProcess 同纪律。本文件自身的 ./*
 // 引用随 bundle 内联，无固定 URL 缓存问题。
 //
 // 语义不变：ensureWebHost 重复调用幂等；web host 进程随插件 onload/卸载生命周期拉起/回收
@@ -39,7 +39,7 @@ import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 // dsh profile 名解析（vX：dshana profile 路线，boot --profile 用配置；config.js 内联进 bundle）
-import { resolveProfileName } from "../tools/lib/config.js";
+import { resolveProfileName } from "./config.js";
 import {
   readFileSync,
   existsSync,
@@ -55,13 +55,13 @@ import {
   getSingleton,
   PLUGIN_ROOT,
   manifestDefaults,
-} from "../tools/lib/state.js";
+} from "./state.js";
 // vX（migrate 体系退役）：不再有版本迁移入口（junction-converge / config-schema 等全丢）
 import {
   resolveDshPkgDir,
   installDepsFromPlugin,
   verifyDepsSmoke,
-} from "./install.js";
+} from "./bootstrap.js";
 // dshana profile 运行时种子化/迁移/scope 链接（lib 提取，ensureDshanaProfile 调用；
 // 种子模板为独立文件 src-cordis/seed（构建期复制 dist/cordis/seed）；设计
 // specs/current/dshana-profile-bundle/spec.md）：
@@ -422,12 +422,12 @@ export async function ensureDshanaProfile(cfg) {
 }
 
 // ---- web host 生命周期：进程内 boot dsh（T7b 方案 A；spawn 形态已整体退役）----
-// dsh 依赖位置解析（resolveDshPkgDir）已提取到 lib/install.js——数据目录
+// dsh 依赖位置解析（resolveDshPkgDir）已提取到 lib/bootstrap.js——数据目录
 // dsh-pkg/ 优先（Agent npm i @deepseek-ai/dsh 部署的轻量分发形态），插件安装目录
 // node_modules 兑底（现役 zip 自带形态）。DSH_HOME 恒在数据目录。
 // 唯一形态 = 宿主进程内 runProfile() boot dshana（webserver 保留在进程内 bind 端口）。
 // 子进程面收敛（2026-09-02 去 spawn）：仅 pnpm install 保留子进程（D6 解耦——安装需
-// 独立进程跑 pnpm；依赖完整性验证已静态化（见 lib/install.js verifyDepsSmoke），运行
+// 独立进程跑 pnpm；依赖完整性验证已静态化（见 lib/bootstrap.js verifyDepsSmoke），运行
 // 级裁决由进程内 boot 承担）。
 
 // ---- T7b 进程内 boot：dsh 模块动态定位（解耦 D6）----
@@ -998,7 +998,7 @@ function ensureProviderPushWatch(cfg) {
   );
 }
 // ---- DSH 检查能力（checkDshUpdate / npmViewDistTags / semver 比较 / 本地版本
-// 直读已提取到 lib/check.js + lib/install.js，经 getSingleton 挂 g.checkDshUpdate 供
+// 直读已提取到 lib/check.js + lib/bootstrap.js，经 getSingleton 挂 g.checkDshUpdate 供
 // Agent 工具 dsh_install / DSHana 标签页 webui 路由两面共用，单一事实源；
 // 设置页「DSH 版本」卡片 v0.18.1 起由 dsh 侧 @dsh-hanako/settings 直查远端，不经此通道）----
 function emitBus(channel, payload) {
@@ -1062,7 +1062,7 @@ getSingleton().startWebHost = async function startWebHostFromPlugin(
   }
 };
 
-// installDepsFromPlugin / verifyDepsSmoke 已提取到 lib/install.js（本文件顶部
+// installDepsFromPlugin / verifyDepsSmoke 已提取到 lib/bootstrap.js（本文件顶部
 // import），这里显式挂单例（getSingleton 本体在 lib/state.js 不再逐函数赋值；mountSingleton
 // 与 lib 侧挂载保持同款幂等语义）。tools/dsh-install.js（Agent）与 index.js 自动链经
 // g.installDeps / g.verifyDeps 调用（/webui 手动路由已随 T5 退役）。

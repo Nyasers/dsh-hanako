@@ -59,7 +59,7 @@
 // 注释风格：中文 / 双引号 / 分号 / SPDX 头（宿主侧 src/ 规范）；零运行时依赖。
 
 import { EventEmitter } from "node:events";
-import { getSingleton } from "../tools/lib/state.js";
+import { getSingleton } from "./state.js";
 
 const BUS_PATH = "/api/dshana.bus";
 const RECONNECT_BASE_MS = 1000; // 退避基数

@@ -47,7 +47,7 @@ import { render as webuiShellHtml } from "../assets/webui-shell.jinja2";
 // 都重新赋值（闭包指向当前模块的 Set，见下方挂钩处），不设一次性守卫。
 const webStartFailedListeners = new Set();
 
-// ---- deps 状态翻转通知订阅者（tools/lib/install.js 调 g.notifyDepsChanged）----
+// ---- deps 状态翻转通知订阅者（tools/lib/bootstrap.js 调 g.notifyDepsChanged）----
 // 与 webStartFailedListeners 同模式：安装/检测进入与终态时通知壳页一次性刷新诊断
 // （事件驱动替代面板 5s 周期 tick；安装中进度滚动由壳页 installing 态 tick 承担）。
 const depsChangedListeners = new Set();

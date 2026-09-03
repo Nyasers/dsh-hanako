@@ -20,27 +20,27 @@
 // 权限：external_side_effect（调用 dsh 编码 agent 执行任务，消耗 Hana 宿主 provider 额度，Auto 模式送审）。
 import { join } from "node:path";
 import { readFileSync, existsSync } from "node:fs";
-import { getSingleton, PLUGIN_ROOT, manifestDefaults } from "./lib/state.js";
-import { resolveDshPkgDir } from "../lib/install.js";
+import { getSingleton, PLUGIN_ROOT, manifestDefaults } from "../lib/state.js";
+import { resolveDshPkgDir } from "../lib/bootstrap.js";
 import {
   readDshDefaultModel,
   readDshDefaultPreset,
   resolveReasoningEffort,
   resolveApprovalTimeoutSec,
   resolveDefaultTimeoutSec,
-} from "./lib/config.js";
+} from "../lib/config.js";
 import {
   registerDeferredWake,
   resolveDeferredWake,
   abnormalWakeResult,
   notifyApprovalWake,
-} from "./lib/wake.js";
+} from "../lib/wake.js";
 import {
   callUnaryBus,
   openMux,
   textFromChunk,
   textFromMessageBlocks,
-} from "./lib/protocol.js";
+} from "../lib/protocol.js";
 // 生命周期能力（web host 拉起）——本模块只做任务提交，对单例/web host 的依赖经
 // app/lifecycle.js 转发（lifecycle.js 顶层 mountLifecycle 已把 closeProcess / updateDsh /
 // startWebHost / installDeps / verifyDeps / checkDshUpdate 挂到 globalThis 单例）。

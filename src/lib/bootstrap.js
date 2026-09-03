@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/lib/install.js — dsh 依赖部署/验证共用模块（lib 提取）
+// src/lib/bootstrap.js — dsh 依赖部署/验证共用模块（lib 提取）
 // 从 tools/dsh-run.js 剥离：resolveDshPkgDir / installDepsFromPlugin / verifyDepsSmoke
 // + semver 比较辅助（parseSemver / compareSemver）+ 本地版本直读（readDshInstalledVersion）。
 // 状态经 lib/state.js 的 getSingleton 访问分组对象 g.deps = { status, result, error,
@@ -31,7 +31,7 @@ import {
   resolveNodeExec,
   resolveNodeExecEnv,
   IS_WIN,
-} from "../tools/lib/state.js";
+} from "./state.js";
 import {
   ensurePnpm,
   runPnpm,
