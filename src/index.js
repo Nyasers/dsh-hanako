@@ -23,35 +23,32 @@
 import { existsSync, mkdirSync, appendFileSync, watch } from "node:fs";
 import { join, dirname } from "node:path";
 // 日志生命周期（vX 起独立于 migrate 体系）：旧日志归档压缩 + 时间戳日志文件命名
-import { archiveOldLogs, logFileStamp, nextTimestampLogPath } from "./log-archive.js";
+import { archiveOldLogs, logFileStamp, nextTimestampLogPath } from "./lib/log-archive.js";
 
 // ---- bundle 收敛 ----（单 bundle 形态）
 // 生命周期能力：src/lifecycle.js 顶层 mountLifecycle() 在 import 时即挂单例
-import "./lifecycle.js";
+import "./lib/lifecycle.js";
 // T1 错误分类器（spec：dsh-deps-zero-intervention）——T2 自动链状态机（本文件 onload）对
 // install/boot 失败归类决策（可恢复退避重试 / 不可恢复停等待条件）与指引文案，纯函数复用
 import {
   classifyInstallError,
   ERROR_CLASS_GUIDANCE,
-} from "./tools/lib/errclass.js";
-// 5 个工具模块（ESM 导出 name/description/parameters/execute(+sessionPermission)；
-// dsh_update 已并入 dsh_install 四合一，见 tools/dsh-install.js）
-import * as dshInstall from "./tools/dsh-install.js";
-import * as dshApprove from "./tools/dsh-approve.js";
-// T7e 工具收敛：dsh-run / dsh-cancel 并入 dsh-session（create/send/cancel 分支），
-// 不再作为独立工具注册；dsh-session.js 内部 import 复用它们的 execute 实现。
-import * as dshSession from "./tools/dsh-session.js";
+} from "./lib/errclass.js";
+// 工具模块（ESM 导出 name/description/parameters/execute(+sessionPermission)；宿主自动加 pluginId_ 前缀）
+// T7e+：dsh-run / dsh-cancel / dsh-approve 全并入 dsh-session（create/send/cancel/approve
+// 分支），文件保留为 session 内部实现模块（import 复用 execute），不单独注册；dsh_install
+// 已退役（自动链 + Bootstrap 自举承担）。宿主 Agent 面仅 dsh_session 单工具。
+import * as dshSession from "./tools/session.js";
 // 宿主 task 体系接入（handler.abort → dsh session.cancel）：取消链路收归宿主 task
 // 协议（task:abort → handler.abort → session.cancel），dsh_cancel 不再直连取消
-import { callUnaryBus } from "./tools/lib/protocol.js";
+import { callUnaryBus } from "./lib/protocol.js";
 // 路由工厂（默认导出）
 import registerWebuiRoutes from "./routes/webui.js";
 import registerCardRoutes from "./routes/card.js";
 
 // 工具清单（registerTool 消费普通契约；宿主自动加 pluginId_ 前缀）
-// T7e：dsh-run/dsh-cancel 并入 dsh-session（create/send/cancel）；approve 独立保留
-// （权限应答语义正交，非会话操作）；install 独立（依赖管理）。
-const HANAKO_TOOLS = [dshSession, dshInstall, dshApprove];
+// 单工具收敛（2026-09-04）：dsh_run/dsh_cancel/dsh_approve 全并入 dsh_session。
+const HANAKO_TOOLS = [dshSession];
 
 // ---- 统一日志（时间戳会话文件；旧日志 zstd 压缩保留经 migrate.js 统一迁移入口）----
 // DSHana 插件全量运行日志：每次插件会话创建 <YYYYMMDD-HHmmss-SSS>.log 真实文件（文件名
@@ -213,7 +210,7 @@ export default class DshHanakoPlugin {
       if (typeof clearBootTimer === "function") clearBootTimer();
       if (typeof stopConfigWatch === "function") stopConfigWatch();
       if (g && typeof g.closeProcess === "function") {
-        Promise.resolve(g.closeProcess()).catch(() => {});
+        Promise.resolve(g.closeProcess()).catch(() => { });
       }
     });
 
@@ -227,7 +224,7 @@ export default class DshHanakoPlugin {
     // 链（30s→2m→10m→30m cap，插件生命周期内持续）到点自动重新评估；③ 停等类中配置引导
     // 类（macos-signature：nodejsPath 配置）→ fs.watch config.json 变化即重新评估（设置保存
     // 后自动续跑）；④ 宿主重启/插件重载 → 新 onload 重新评估（g.web?.ready 快速路径收敛）。
-    // 手动/工具路径（dsh_install 工具 autoStart）与状态机并存：
+    // 手动/工具路径与状态机并存：
     // installDepsFromPlugin 的 installing/running 守卫 + ensureWebHost 的 readyPromise 幂等
     // ——他人路径先装/先起时状态机让路（等落终态或直接收敛），互不冲突。
     //
@@ -250,11 +247,9 @@ export default class DshHanakoPlugin {
     ]);
     // 停等类中「配置变化即可续跑」的子集（挂 config.json watch；其余停等类只等重载/重启）
     const CONFIG_CONTINUE_CLASSES = new Set(["macos-signature"]);
-    // boot 升级缓存残留特征（原诊断修复指引判定同源，T5 随诊断壳退役，特征正则沿用）：跨 dsh 版本升级后
-    // 宿主进程仍持旧模块缓存，boot 读已删 .pnpm 路径必败——重启宿主前重试无意义，归
-    // restart-needed 停等
+    // boot ENOENT 文本特征（见 classifyBootFailure：ENOENT 类统一归 restart-needed——
+    // 进程内 ESM 缓存/布局陈旧与文件缺失在 boot 阶段不文本区分，重启宿主先验）
     const ENOENT_TEXT_RE = /(?:ENOENT|no such file|cannot find)/i;
-    const STALE_PNPM_RE = /\.pnpm[\\/]@deepseek-ai\+dsh@/i;
     // 时刻/间隔可读化（会话日志展示下次重试时间）
     const pad2 = (n) => String(n).padStart(2, "0");
     const fmtClock = (t) => {
@@ -354,15 +349,18 @@ export default class DshHanakoPlugin {
       }
       return { errorClass: "unknown", guidance: null };
     };
-    // boot 失败分类：升级缓存残留 → restart-needed（需重启宿主，停等）；其余文本经错误
-    // 分类器归类（多为 unknown → 保守退避；含网络/环境/声明特征时正确归类）
+    // boot 失败分类：ENOENT 类统一归 restart-needed（需重启宿主，停等）——进程内 ESM
+    // 缓存/布局陈旧与文件缺失在 boot 阶段难以文本区分，且 boot 能跑到加载即说明依赖
+    // 已在位（缺失会被前置 ensure-deps 拦截），ENOENT 更可能指向旧模块图/旧布局；重启
+    // 宿主成本低且先验有效，重启后仍复现才需重装/上报。其余文本经错误分类器归类
+    // （多为 unknown → 保守退避；含网络/环境/声明特征时正确归类）
     const classifyBootFailure = (text) => {
       const t = String(text || "");
-      if (ENOENT_TEXT_RE.test(t) && STALE_PNPM_RE.test(t)) {
+      if (ENOENT_TEXT_RE.test(t)) {
         return {
           errorClass: "restart-needed",
           guidance:
-            "检测到 dsh 跨版本升级缓存残留：请重启 Hana 加载新版本（重启后插件会自动续跑，无需其它操作）",
+            "启动失败疑似与更新后的缓存或文件加载有关：请重启 Hana 使新版本生效（重启后插件会自动续跑）；若仍失败，请重装插件或上报诊断",
         };
       }
       return classifyInstallError({ milestoneLog: t });
@@ -399,10 +397,9 @@ export default class DshHanakoPlugin {
         g.boot.nextRetryAt = null;
         g.appendLog?.(
           "hana",
-          `[自动链] ${stageLabel}失败属不可自动恢复类（${klass}）：自动链停等，${
-            CONFIG_CONTINUE_CLASSES.has(klass)
-              ? "配置（nodejsPath 等）保存后自动续跑"
-              : "插件更新或重启宿主后自动续跑"
+          `[自动链] ${stageLabel}失败属不可自动恢复类（${klass}）：自动链停等，${CONFIG_CONTINUE_CLASSES.has(klass)
+            ? "配置（nodejsPath 等）保存后自动续跑"
+            : "插件更新或重启宿主后自动续跑"
           }，无需手动操作`,
         );
         if (CONFIG_CONTINUE_CLASSES.has(klass)) watchConfigForContinue();
@@ -446,7 +443,7 @@ export default class DshHanakoPlugin {
         g.appendLog?.(
           "hana",
           "[自动链] config 续跑 watch 建立失败（等重载/重启续跑）：" +
-            (e?.message || e),
+          (e?.message || e),
         );
       }
     };
@@ -457,7 +454,7 @@ export default class DshHanakoPlugin {
     // 不抛（调用方按未知可恢复退避，等安装真正结束后下一轮续跑）。
     const waitDepsSettled = async () => {
       const deadline = Date.now() + 300000;
-      for (;;) {
+      for (; ;) {
         const st = g.deps && g.deps.status;
         if (st !== "installing" && st !== "running") return true;
         if (Date.now() > deadline) return false;
@@ -495,7 +492,7 @@ export default class DshHanakoPlugin {
           return true;
         }
         if (r && r.state === "installing") {
-          // 并发窗口：他人路径（dsh_install 工具/标签页）正在安装，等其落终态再续
+          // 并发窗口：他人路径（标签页/其他入口）正在安装，等其落终态再续
           g.appendLog?.(
             "hana",
             "依赖安装已在其他路径进行中，等待完成后再启动 web host…",

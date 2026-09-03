@@ -15,7 +15,7 @@ import assert from "node:assert/strict";
 import {
   classifyInstallError,
   ERROR_CLASS_GUIDANCE,
-} from "../src/tools/lib/errclass.js";
+} from "../src/lib/errclass.js";
 
 // 便捷构造：字段缺省时补全为常见失败形态（exit 1），单测只覆盖关心的字段
 function sig(overrides) {

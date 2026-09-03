@@ -1,19 +1,7 @@
-# dshana profile 的 user patch 层（$DSH_HOME/profiles/dshana/cordis.patch.yml）。
-# 作为 profile 挂在官方 @deepseek-ai/dsh-base 服务层之后；叠加官方 UI client 插件
-# （复用纯呈现组件）与 @dsh-hanako/* 子插件。@dsh-hanako/* 子插件经
-# node_modules/@dsh-hanako/* 实体随 profile 落位（见 build.mjs buildCordis）。
-#
-# 形态说明（vX 定稿，SDD dshana-webui-headless）：自定义 profile 不走官方 web
-# profile——bundles 只用 dsh-base（纯服务层），无 connection/browser-auth 鉴权面。
-# UI 组件（ui-layout/ui-workspace/ui-conversation 等）是 browser-only 纯呈现层
-# （host apply 空函数，client 注入链自闭环），复用它们不强联鉴权（实测：dsh-base-only
-# + 完整 UI roster 下全部激活，仅 connection 依赖者 pending——已从 roster 去除）。
-# 数据面（API/事件/WS）由总线桥承载（宿主 V2 app route → callUnaryBus → bridge →
-# dsh 服务），浏览器不直连 dsh HTTP。未来 headless 自包含（构建期拷贝 dist + client
-# 插件进插件产物）后再评估裁剪。
-#
-# 注意：session-log-export（浏览器导出端点）依赖 connection，headless 下不走，
-# 本 roster 不包含（如需要按总线桥改造后补回）。
+# @dsh-hanako/dshana 内置 roster（官方语义 bundle patch，src-cordis/ 顶层）。
+# 层序：profile manifest 的 dsh.profile.bundles 按序应用本文件（在 @deepseek-ai/dsh-base
+# 之后），随后叠加 profile 用户层与 $DSH_HOME home 层——用户/home 按 id 逐行覆盖本文件
+# （后写胜出）。扩展 roster 走用户层或 home 层，勿改本文件。
 
 # ── surface-specific 值覆盖（与官方 web bundle 同值，显式保留防演进漂移）──
 

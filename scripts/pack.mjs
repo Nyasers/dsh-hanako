@@ -19,16 +19,16 @@ import fs from "fs-extra";
 const require = createRequire(import.meta.url);
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 // 版本单一事实源：package.json（唯一来源，不支持命令行传版本——显式传版本容易与
-// manifest 不同步（历史教训）；版本同步用 scripts/version.mjs 自动化）
+// manifest 不同步（历史教训）；版本同步用 scripts/bump.mjs 自动化）
 const version = fs.readJsonSync(join(ROOT, "package.json")).version;
 if (!version) throw new Error("package.json version 缺失");
 
 // 防回归：版本一致性强制校验（历史曾手改只 bump package.json，manifest.json version 停在
 // 旧值，发布包内版本与 tag 不一致）。打包版本必须同时等于 manifest.json 的 version。
-const manifestVersion = fs.readJsonSync(join(ROOT, "manifest.json")).version;
+const manifestVersion = fs.readJsonSync(join(ROOT, "src", "manifest.json")).version;
 if (version !== manifestVersion)
   throw new Error(
-    `版本不一致：package.json ${version} ≠ manifest.json ${manifestVersion}（manifest 未同步，跑 scripts/version.mjs 或手动同步后再打包）`,
+    `版本不一致：package.json ${version} ≠ manifest.json ${manifestVersion}（manifest 未同步，跑 scripts/bump.mjs 或手动同步后再打包）`,
   );
 
 // 1. 静态项复制进 dist —— dist 即完整交付目录（bundle + manifest + skills + cordis 插件），
@@ -37,10 +37,10 @@ if (version !== manifestVersion)
 const staticItems = [
   "NOTICE",
   "package.json",
-  "manifest.json",
+  // manifest.json 与 skills 已随 src 域（src/manifest.json、src/skills/，build:src 产出
+  // dist 副本），不再经根级静态复制
   "pnpm-workspace.yaml",
   "pnpm-lock.yaml",
-  "skills",
 ];
 const distDir = join(ROOT, "dist");
 for (const item of staticItems) {
@@ -61,8 +61,44 @@ for (const item of staticItems) {
   });
 }
 
+// 1.5) cordis 包 version 一致性校验（防回归，与 manifest 校验对称）：cordis 包（roster
+//   bundle dshana + 8 子插件）version 与 manifest 同批由 scripts/bump.mjs bump 同步
+//   （单一事实源 = 主 package.json；源码 src-cordis 内随同步维护），pack 时读 dist 产物
+//   校验一致——手改/漏同步即出包版本漂移。
+function assertCordisDistVersions(outDir) {
+  const cordisRoot = join(outDir, "cordis");
+  // cordis 未组装 = 构建未跑/被清：fail-closed（校验放行空产物会让缺 bundle 的包过包）
+  if (!fs.pathExistsSync(cordisRoot)) {
+    throw new Error("cordis 产物缺失（dist/cordis 不存在）：先跑 pnpm run build 再打包");
+  }
+  // 完整性：必需 9 包（roster bundle dshana + 8 子插件）全部存在且 package.json 版本一致——
+  // 缺失/部分产物（含 count=0）一律拒包，防 build 失败后残留部分 dist 被误打包
+  const required = [
+    "dshana",
+    "app", "bridge", "bus", "clipboard", "logger", "provider", "settings", "theme",
+  ];
+  let count = 0;
+  for (const name of required) {
+    const pj = join(cordisRoot, name, "package.json");
+    if (!fs.pathExistsSync(pj)) {
+      throw new Error(
+        `cordis 产物不完整：缺少 ${name}/package.json（dist/cordis 下）——先跑 pnpm run build 再打包`,
+      );
+    }
+    const j = fs.readJsonSync(pj);
+    if (j.version !== version) {
+      throw new Error(
+        `版本不一致：cordis 包 ${join("cordis", name, "package.json")} version ${j.version} ≠ package.json ${version}（跑 scripts/bump.mjs 同步后再打包）`,
+      );
+    }
+    count += 1;
+  }
+  console.log(`[pack] cordis 包版本一致（${count} 个 = ${version}）`);
+}
+assertCordisDistVersions(distDir);
+
 // 2. 静态资产压缩（terser JS 纯语法级 + clean-css CSS 压缩，覆盖写回 dist 副本）
-//     cordis 插件（dist/cordis/node_modules/@dsh-hanako/*/index.js，由 build 从
+//     cordis 插件（dist/cordis/*/index.js，由 build 从
 //     src-cordis 组装）被 dsh 运行时 import() 加载、client.js 被浏览器
 //     ModuleLoader 按 window.__ModuleLoader__.load 注册；均只做语法级压缩。
 function resolveTool(pkgName) {

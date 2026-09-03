@@ -1,0 +1,25 @@
+{
+  "name": "@dsh-hanako/settings",
+  "version": "1.0.0-beta.3+dsh-0.1.2-rc.1",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-connection"
+      ],
+      "platform": "web"
+    }
+  },
+  "cordis": {
+    "name": "@dsh-hanako/settings"
+  }
+}

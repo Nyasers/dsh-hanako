@@ -153,24 +153,24 @@
           h = tableBuf.shift() || "";
         out.push(
           '<table class="dsh-md-table"><thead><tr>' +
-            h
-              .split("|")
-              .map(function (c) {
-                return "<th>" + inlineMd(c.trim()) + "</th>";
-              })
-              .join("") +
-            "</tr></thead><tbody>",
+          h
+            .split("|")
+            .map(function (c) {
+              return "<th>" + inlineMd(c.trim()) + "</th>";
+            })
+            .join("") +
+          "</tr></thead><tbody>",
         );
         tableBuf.forEach(function (row) {
           out.push(
             "<tr>" +
-              row
-                .split("|")
-                .map(function (c) {
-                  return "<td>" + inlineMd(c.trim()) + "</td>";
-                })
-                .join("") +
-              "</tr>",
+            row
+              .split("|")
+              .map(function (c) {
+                return "<td>" + inlineMd(c.trim()) + "</td>";
+              })
+              .join("") +
+            "</tr>",
           );
         });
         out.push("</tbody></table>");
@@ -189,8 +189,8 @@
         if (inCode) {
           out.push(
             '<pre class="dsh-code"><code>' +
-              esc(codeBuf.join("\n")) +
-              "</code></pre>",
+            esc(codeBuf.join("\n")) +
+            "</code></pre>",
           );
           inCode = false;
           codeBuf = [];
@@ -267,8 +267,8 @@
     if (inCode)
       out.push(
         '<pre class="dsh-code"><code>' +
-          esc(codeBuf.join("\n")) +
-          "</code></pre>",
+        esc(codeBuf.join("\n")) +
+        "</code></pre>",
       );
     return out.join("");
   }

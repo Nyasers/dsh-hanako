@@ -1,0 +1,10 @@
+{
+  "name": "@dsh-hanako/logger",
+  "version": "1.0.0-beta.3+dsh-0.1.2-rc.1",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "cordis": {
+    "name": "@dsh-hanako/logger"
+  }
+}

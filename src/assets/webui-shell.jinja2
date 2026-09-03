@@ -190,7 +190,8 @@
       color: var(--accent, #537D96)
     }
 
-    /* 实时日志/原始错误滚动区（复用诊断进度样式） */
+    /* 实时日志/原始错误滚动区（复用诊断进度样式）：隐藏滚动条 + 固定滚底跟随最新输出
+       （scrollTop 由 applyBoot 渲染后统一置底；滚动条隐藏 Firefox scrollbar-width / WebKit 伪元素） */
     .diag-progress {
       white-space: pre-wrap;
       word-break: break-all;
@@ -202,7 +203,14 @@
       padding: 8px 10px;
       margin: 0;
       max-height: 140px;
-      overflow: auto
+      overflow-y: scroll;
+      scrollbar-width: none;
+      -ms-overflow-style: none
+    }
+    .diag-progress::-webkit-scrollbar {
+      display: none;
+      width: 0;
+      height: 0
     }
 
     .muted {
@@ -621,6 +629,9 @@
         document.body.setAttribute("data-view", view);
         var el = panelEl();
         if (el) el.innerHTML = view === "action" ? actionViewHtml(bs) : bootViewHtml(bs);
+        // 日志滚动区固定滚底（跟随最新输出；滚动条已 CSS 隐藏）
+        var dp = el && el.querySelector(".diag-progress");
+        if (dp) dp.scrollTop = dp.scrollHeight;
         var d = bs.deps || {};
         if (d.status === "installing" || d.status === "running") startInstallTick();
         else stopInstallTick();
