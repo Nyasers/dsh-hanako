@@ -250,11 +250,9 @@ export default class DshHanakoPlugin {
     ]);
     // 停等类中「配置变化即可续跑」的子集（挂 config.json watch；其余停等类只等重载/重启）
     const CONFIG_CONTINUE_CLASSES = new Set(["macos-signature"]);
-    // boot 升级缓存残留特征（原诊断修复指引判定同源，T5 随诊断壳退役，特征正则沿用）：跨 dsh 版本升级后
-    // 宿主进程仍持旧模块缓存，boot 读已删 .pnpm 路径必败——重启宿主前重试无意义，归
-    // restart-needed 停等
+    // boot ENOENT 文本特征（见 classifyBootFailure：ENOENT 类统一归 restart-needed——
+    // 进程内 ESM 缓存/布局陈旧与文件缺失在 boot 阶段不文本区分，重启宿主先验）
     const ENOENT_TEXT_RE = /(?:ENOENT|no such file|cannot find)/i;
-    const STALE_PNPM_RE = /\.pnpm[\\/]@deepseek-ai\+dsh@/i;
     // 时刻/间隔可读化（会话日志展示下次重试时间）
     const pad2 = (n) => String(n).padStart(2, "0");
     const fmtClock = (t) => {
@@ -354,15 +352,18 @@ export default class DshHanakoPlugin {
       }
       return { errorClass: "unknown", guidance: null };
     };
-    // boot 失败分类：升级缓存残留 → restart-needed（需重启宿主，停等）；其余文本经错误
-    // 分类器归类（多为 unknown → 保守退避；含网络/环境/声明特征时正确归类）
+    // boot 失败分类：ENOENT 类统一归 restart-needed（需重启宿主，停等）——进程内 ESM
+    // 缓存/布局陈旧与文件缺失在 boot 阶段难以文本区分，且 boot 能跑到加载即说明依赖
+    // 已在位（缺失会被前置 ensure-deps 拦截），ENOENT 更可能指向旧模块图/旧布局；重启
+    // 宿主成本低且先验有效，重启后仍复现才需重装/上报。其余文本经错误分类器归类
+    // （多为 unknown → 保守退避；含网络/环境/声明特征时正确归类）
     const classifyBootFailure = (text) => {
       const t = String(text || "");
-      if (ENOENT_TEXT_RE.test(t) && STALE_PNPM_RE.test(t)) {
+      if (ENOENT_TEXT_RE.test(t)) {
         return {
           errorClass: "restart-needed",
           guidance:
-            "检测到 dsh 跨版本升级缓存残留：请重启 Hana 加载新版本（重启后插件会自动续跑，无需其它操作）",
+            "检测到文件缺失类启动失败（多为插件/dsh 更新后的进程内模块缓存或布局陈旧）：请重启 Hana 加载新版本（重启后插件会自动续跑）；若重启后仍复现请重装插件或上报诊断",
         };
       }
       return classifyInstallError({ milestoneLog: t });
