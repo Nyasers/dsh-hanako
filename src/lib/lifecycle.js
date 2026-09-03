@@ -1007,7 +1007,7 @@ function ensureProviderPushWatch(cfg) {
 }
 // ---- DSH 检查能力（checkDshUpdate / npmViewDistTags / semver 比较 / 本地版本
 // 直读已提取到 lib/check.js + lib/bootstrap.js，经 getSingleton 挂 g.checkDshUpdate 供
-// Agent 工具 dsh_install / DSHana 标签页 webui 路由两面共用，单一事实源；
+// DSHana 标签页 webui 路由与生命周期共用，单一事实源；
 // 设置页「DSH 版本」卡片 v0.18.1 起由 dsh 侧 @dsh-hanako/settings 直查远端，不经此通道）----
 function emitBus(channel, payload) {
   try {
@@ -1072,7 +1072,7 @@ getSingleton().startWebHost = async function startWebHostFromPlugin(
 
 // installDepsFromPlugin / verifyDepsSmoke 已提取到 lib/bootstrap.js（本文件顶部
 // import），这里显式挂单例（getSingleton 本体在 lib/state.js 不再逐函数赋值；mountSingleton
-// 与 lib 侧挂载保持同款幂等语义）。tools/dsh-install.js（Agent）与 index.js 自动链经
+// 与 lib 侧挂载保持同款幂等语义）。index.js 自动链经
 // g.installDeps / g.verifyDeps 调用（/webui 手动路由已随 T5 退役）。
 getSingleton().installDeps = installDepsFromPlugin;
 getSingleton().verifyDeps = verifyDepsSmoke;

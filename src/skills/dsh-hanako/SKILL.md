@@ -48,7 +48,7 @@ config.json 由宿主设置界面生成、**不随包分发**，缺省全部可�
 
 | 工具 | 用途 | 关键点 | 详情 |
 |---|---|---|---|
-| `dsh_session(action, task?, cwd?, …)` | 会话全生命周期（宿主 Agent 面唯一工具） | action ∈ create（提交，task+cwd 必填，异步提交后主动结束回合）/ send（续会话）/ cancel（取消）/ list/get（回看）/ approve（应答审批：sessionId+approvalId，决策看 args 不听 reason）；操作实现按 subtool 模块化 | [dsh-session 技能](dsh-session) |
+| `dsh_session(action, task?, cwd?, …)` | 会话全生命周期（宿主 Agent 面唯一工具） | action ∈ create（提交，task+cwd 必填，异步提交后主动结束回合）/ send（续会话）/ cancel（取消）/ list/get（回看）/ approve（应答审批：sessionId+approvalId，决策看 args 不听 reason）；操作实现按 subtool 模块化 | [dsh-session 技能](../dsh-session) |
 
 > 依赖安装已全自动（自动链 + Bootstrap 自举，无手动工具）：`g.installDeps`/`g.verifyDeps` 由插件生命周期驱动，标签页只读展示三态。
 

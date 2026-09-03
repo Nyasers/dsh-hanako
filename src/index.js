@@ -224,7 +224,7 @@ export default class DshHanakoPlugin {
     // 链（30s→2m→10m→30m cap，插件生命周期内持续）到点自动重新评估；③ 停等类中配置引导
     // 类（macos-signature：nodejsPath 配置）→ fs.watch config.json 变化即重新评估（设置保存
     // 后自动续跑）；④ 宿主重启/插件重载 → 新 onload 重新评估（g.web?.ready 快速路径收敛）。
-    // 手动/工具路径（dsh_install 工具 autoStart）与状态机并存：
+    // 手动/工具路径与状态机并存：
     // installDepsFromPlugin 的 installing/running 守卫 + ensureWebHost 的 readyPromise 幂等
     // ——他人路径先装/先起时状态机让路（等落终态或直接收敛），互不冲突。
     //
@@ -492,7 +492,7 @@ export default class DshHanakoPlugin {
           return true;
         }
         if (r && r.state === "installing") {
-          // 并发窗口：他人路径（dsh_install 工具/标签页）正在安装，等其落终态再续
+          // 并发窗口：他人路径（标签页/其他入口）正在安装，等其落终态再续
           g.appendLog?.(
             "hana",
             "依赖安装已在其他路径进行中，等待完成后再启动 web host…",

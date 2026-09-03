@@ -52,7 +52,7 @@ DSH 会话全生命周期工具（合并原 `dsh_run` / `dsh_cancel` / `dsh_appr
 
 ## action=approve：应答会话挂起审批（原 dsh_approve）
 
-- **sessionId + approvalId 必填**（审批通知里带；全链路唯一定位键 = 任务 sessionId，同键即应答该会话挂起的审批；同一任务可能挂起多个审批，逐个应答）
+- **sessionId + approvalId 必填**：sessionId 标识审批所属的任务会话（与 dsh_session 提交/卡片同键），approvalId 标识该会话内具体的一个审批（同一任务可能挂起多个审批，每个 approvalId 逐个应答）——应答目标 = sessionId 会话内 approvalId 所指的审批
 - **outcome**：`allowed-once`（默认，安全默认值：放行单次仅本次操作）/ `rejected`（拒绝该请求）
 - **审批触发**：DSH agent 请求越界权限（approval/requested）→ 任务挂起，审批上下文存 `g.ops[sessionId].activeApprovals`；宿主经 deferred（interlude 型）投递 dsh-approval 通知，payload：`{ kind, rpcId, sessionId, approvalId, toolName, callId, reason, args, taskPreview }`（args = 工具调用参数原文，命令/路径）
 - **决策：看 args（具体执行了什么），不听 reason（model 自述不可尽信）**——合理放行，危险拒绝
@@ -80,4 +80,4 @@ projcache 元数据 + summary（jsonl 最后一条 assistant/message 的 text，
 ## 关联
 
 - `dsh_install` 已退役：依赖安装由自动链 + Bootstrap 自举承担（无需手动工具）
-- 事件流/总线：`@dsh-hanako/bus`（消息总线，dshana.bus WS 服务端）；审批瀑布帧广播不区分会话（宿主按 sessionId 归属过滤尚未实现）
+- 事件流/总线：`@dsh-hanako/bus`（消息总线，dshana.bus WS 服务端）；已知边界：瀑布帧（$events 广播）不带会话归属标识，事件循环侧无法按 sessionId 预过滤——单 dsh_session 并发场景无碍；多个 dsh_session 同时挂起审批时，同一帧会进各任务循环并各自登记/通知（toolCallCache 按 `rpcId::callId` 命中才填充 args，跨任务帧缓存 miss 则 args=null）——存在跨会话误导通知；彻底的会话级过滤需事件源侧（bus 翻译器）在瀑布帧上标注会话，列为后续项
