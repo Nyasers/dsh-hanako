@@ -1,19 +1,7 @@
-# @dsh-hanako/dshana 的内置 roster（官方语义 bundle patch）。
-# 本文件 = src-cordis/cordis.patch.yml：构建期由 build.mjs buildCordis 随 bundle 顶层
-# 落位为 dist/cordis/dshana/cordis.patch.yml（package.json 的
-# dsh.bundle.patch 声明指向本文件）。8 个 @dsh-hanako/* 子插件不发布 npm，与本 bundle
-# 同 scope 物理共存于 profile 的 node_modules/@dsh-hanako——插件侧建单条 scope 目录链接
-# 暴露（升级即更新，零拷贝，漂移由 ensureDshanaProfile 幂等修复）。
-#
-# 加载语义（官方 bundle 层序，与 @deepseek-ai/dsh-base 同款）：profile manifest 的
-# dsh.profile.bundles: ["@deepseek-ai/dsh-base", "@dsh-hanako/dshana"] 按序应用各 bundle
-# patch（本文件），随后叠加 profile 用户层（$DSH_HOME/profiles/dshana/cordis.patch.yml，
-# 运行时种子化的空用户层文件，归用户所有）与 home 层（$DSH_HOME/cordis.patch.yml，机器级，
-# 对所有 profile 生效）；用户/home 层按 id 逐行覆盖本文件（后写胜出）。要扩展 roster
-# 走用户层或 home 层，勿改本文件。
-#
-# patchReload: live 只 watch 用户层与 home 层文件——本文件是 bundle 内置内容，变更随插件
-# 升级落位（scope 链接漂移由 ensureDshanaProfile 重建），需重启 web host 生效。
+# @dsh-hanako/dshana 内置 roster（官方语义 bundle patch，src-cordis/ 顶层）。
+# 层序：profile manifest 的 dsh.profile.bundles 按序应用本文件（在 @deepseek-ai/dsh-base
+# 之后），随后叠加 profile 用户层与 $DSH_HOME home 层——用户/home 按 id 逐行覆盖本文件
+# （后写胜出）。扩展 roster 走用户层或 home 层，勿改本文件。
 
 # ── surface-specific 值覆盖（与官方 web bundle 同值，显式保留防演进漂移）──
 
