@@ -1,21 +1,23 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// scripts/version.mjs — dsh-hanako 版本 bump 自动化（npm semver 体系）
+// scripts/bump.mjs — dsh-hanako 版本 bump 自动化（仓库自定义发版命令，与 npm/pnpm
+// version 生命周期解耦——入口 pnpm run bump，由 package.json scripts 的
+// prebump/bump/postbump 编排：prebump=pack 验证 → bump=算号写主 → postbump=同步+提交）
 //
 // 使用时机：所有功能改动已提交、工作区干净、确认要发版时。工作区有未提交改动
 // 直接拒绝（bump 是发版动作，不允许混入其他改动）——dry-run 只是预览，不要求
 // 工作区干净（自测/预览时允许有未提交改动）。
 //
-// 职责边界：version 阶段只算号 + bump 主 package.json（单一事实源）；派生同步
-// （manifest.json + cordis 包 version）与 git commit/tag 收尾在 postversion 阶段
-// （scripts/postversion.mjs）——对齐 npm 生命周期：preversion(pack 验证) → version
-// (bump 主) → postversion(同步 manifest/cordis + commit/tag)。
-// 注意：本仓库走 pnpm run version（钩子链无自动 commit，顺序安全）；若改用 npm version，
-// npm 会在 version 后自行 commit/tag（不含派生同步文件）——勿混用。
-// 打包验证（源码能 build + 链路通 + 版本一致）由 preversion 钩子前置：
-// pnpm run version → preversion(pnpm run pack → prepack(build) → pack) → version。
-// dry-run 预览（--dry-run）走 node 直跑绕过 preversion 钩子——钩子感知不到脚本参数
+// 职责边界：bump 阶段只算号 + 写主 package.json（单一事实源）；派生同步
+// （manifest.json + cordis 包 version）与 git commit/tag 收尾在 postbump 阶段
+// （scripts/postbump.mjs）。编排链（pnpm run bump 自动触发 pre/post 钩子）：
+//   prebump(pnpm run pack 验证) → bump(算号 + 写主) → postbump(同步 manifest/cordis + commit/tag)
+// 注意：这是仓库自定义命令（prebump/bump/postbump），与 npm/pnpm 的 version 生命周期
+// 完全无关——不要用 pnpm version / npm version 触发本流程（它们走自己的钩子与自动提交）。
+// 打包验证（源码能 build + 链路通 + 版本一致）由 prebump 钩子前置：
+// pnpm run bump → prebump(pnpm run pack → prepack(build) → pack) → bump。
+// dry-run 预览（--dry-run）走 node 直跑绕过 prebump 钩子——钩子感知不到脚本参数
 // （pre 钩子 argv 恒为空），无法条件跳过打包；需要完整链路验证时用真实 bump。
 // push 手动（tag 触发 CI 发布）。
 // 说明：pnpm-lock.yaml 不含该包自身 version（lockfileVersion 仅记录依赖解析树与
@@ -42,15 +44,15 @@
 // 字母或连字符（alpha/beta/rc 等）；build metadata 标识符不受前导零限制（SemVer §10）。
 //
 // 用法：
-//   node scripts/version.mjs patch                 # 1.0.0-alpha.1 -> 1.0.0（毕业）
-//   node scripts/version.mjs minor                 # 1.0.0-alpha.1 -> 1.0.0（毕业，minor 不递增）；
+//   node scripts/bump.mjs patch                 # 1.0.0-alpha.1 -> 1.0.0（毕业）
+//   node scripts/bump.mjs minor                 # 1.0.0-alpha.1 -> 1.0.0（毕业，minor 不递增）；
 //                                                 # 1.0.1-alpha.1 -> 1.1.0
-//   node scripts/version.mjs major                 # 1.0.0-alpha.1 -> 1.0.0（毕业，major 不递增）；
+//   node scripts/bump.mjs major                 # 1.0.0-alpha.1 -> 1.0.0（毕业，major 不递增）；
 //                                                 # 1.1.0-alpha.1 -> 2.0.0
-//   node scripts/version.mjs prerelease            # 1.0.0-alpha.1 -> 1.0.0-alpha.2（无 pre 时 x.y.(z+1)-0）
-//   node scripts/version.mjs pre                   # 同 prerelease
-//   node scripts/version.mjs 1.0.0-beta.0          # 显式版本号（完整 semver）
-//   node scripts/version.mjs patch --dry-run       # 预览，不落盘不改 git
+//   node scripts/bump.mjs prerelease            # 1.0.0-alpha.1 -> 1.0.0-alpha.2（无 pre 时 x.y.(z+1)-0）
+//   node scripts/bump.mjs pre                   # 同 prerelease
+//   node scripts/bump.mjs 1.0.0-beta.0          # 显式版本号（完整 semver）
+//   node scripts/bump.mjs patch --dry-run       # 预览，不落盘不改 git
 //   npm run version -- patch                       # 等价
 
 import fs from "node:fs";
@@ -64,7 +66,7 @@ const dryRun = args.includes("--dry-run");
 const versionArg = args.find((a) => !a.startsWith("--"));
 
 if (!versionArg) {
-  console.error("用法: node scripts/version.mjs patch|minor|major|prerelease|pre|<semver> [--dry-run]");
+  console.error("用法: node scripts/bump.mjs patch|minor|major|prerelease|pre|<semver> [--dry-run]");
   process.exit(1);
 }
 
@@ -128,7 +130,7 @@ function readDshDep() {
 function dshBuild() {
   const dep = readDshDep();
   if (!dep) {
-    console.error("[version] package.json 缺少 @deepseek-ai/dsh 依赖声明，无法计算 build 段");
+    console.error("[bump] package.json 缺少 @deepseek-ai/dsh 依赖声明，无法计算 build 段");
     process.exit(1);
   }
   return "dsh-" + dep;
@@ -191,7 +193,7 @@ function calcNewVersion(current, arg) {
 }
 
 // cordis 包清单（src-cordis 顶层 roster bundle + plugins/* 子插件 package.json，相对
-// ROOT）：version 与 manifest 同批在 postversion 同步（scripts/postversion.mjs）；cordis
+// ROOT）：version 与 manifest 同批在 postbump 同步（scripts/postbump.mjs）；cordis
 // 包随插件整体发版不独立发布，历史独立号废弃，version 仅元数据一致性（单一事实源 =
 // 主 package.json）
 function cordisPkgPaths() {
@@ -210,31 +212,31 @@ function main() {
   const pkg = read("package.json");
   const current = pkg.version;
   if (!parseSemver(current)) {
-    console.error("[version] 当前版本不是合法 semver: " + current);
+    console.error("[bump] 当前版本不是合法 semver: " + current);
     process.exit(1);
   }
   const nextBase = calcNewVersion(current, versionArg);
 
   if (nextBase === null) {
-    console.error("[version] 无效版本参数: " + versionArg + "（支持 patch|minor|major|prerelease|pre|dsh 或完整 semver，如 1.0.0-beta.0）");
+    console.error("[bump] 无效版本参数: " + versionArg + "（支持 patch|minor|major|prerelease|pre|dsh 或完整 semver，如 1.0.0-beta.0）");
     process.exit(1);
   }
   // build 段统一刷新为 dsh 依赖段（版本规则 2026-09-03：build 恒 = dsh-<dependencies>）
   const next = nextBase + "+" + dshBuild();
 
-  console.log("[version] 当前 " + current + " -> 新版本 " + next + (dryRun ? "（dry-run，不落盘）" : ""));
+  console.log("[bump] 当前 " + current + " -> 新版本 " + next + (dryRun ? "（dry-run，不落盘）" : ""));
   if (dryRun) {
-    // dry-run 预览绕过 preversion 钩子（钩子感知不到参数，无法条件跳过），故不触发
-    // 打包验证；需要完整链路验证时用真实 bump（pnpm run version，无 --dry-run）。
-    console.log("[version] dry-run 预览：preversion 打包验证已绕过（钩子无法感知 --dry-run）；");
-    console.log("[version]   完整链路验证请走真实 bump：pnpm run version -- <子命令>");
+    // dry-run 预览绕过 prebump 钩子（钩子感知不到参数，无法条件跳过），故不触发
+    // 打包验证；需要完整链路验证时用真实 bump（pnpm run bump，无 --dry-run）。
+    console.log("[bump] dry-run 预览：prebump 打包验证已绕过（钩子无法感知 --dry-run）；");
+    console.log("[bump]   完整链路验证请走真实 bump：pnpm run bump -- <子命令>");
   }
   if (next === current) {
-    console.error("[version] 版本号未变化");
+    console.error("[bump] 版本号未变化");
     process.exit(1);
   }
   if (!SEMVER_RE.test(next)) {
-    console.error("[version] 无效版本号: " + next + "（须为合法 semver，如 1.0.0 / 1.0.0-beta.2-hotfix.1+dsh-0.1.2-alpha.5）");
+    console.error("[bump] 无效版本号: " + next + "（须为合法 semver，如 1.0.0 / 1.0.0-beta.2-hotfix.1+dsh-0.1.2-alpha.5）");
     process.exit(1);
   }
 
@@ -243,20 +245,20 @@ function main() {
   if (!dryRun) {
     const dirty = execSync("git status --porcelain", { cwd: ROOT }).toString().trim();
     if (dirty) {
-      console.error("[version] 工作区有未提交改动，先提交（或还原）再发版：\n" + dirty);
+      console.error("[bump] 工作区有未提交改动，先提交（或还原）再发版：\n" + dirty);
       process.exit(1);
     }
   }
 
   // 1) package.json bump（单一事实源）；manifest/cordis 同步与 commit/tag 在
-  //    postversion 阶段（scripts/postversion.mjs，见文件头职责边界说明）
+  //    postbump 阶段（scripts/postbump.mjs，见文件头职责边界说明）
   if (!dryRun) {
     pkg.version = next;
     write("package.json", pkg);
   }
-  console.log("[version] package.json -> " + next + "（postversion 将同步 manifest + cordis 包并提交）");
+  console.log("[bump] package.json -> " + next + "（postbump 将同步 manifest + cordis 包并提交）");
   if (dryRun) {
-    console.log("[version] [dry-run] 后续 postversion（未跑）：manifest.json + " + cordisPkgPaths().length + " 个 cordis 包同步 → git add → commit chore: bump v" + next + " → tag v" + next);
+    console.log("[bump] [dry-run] 后续 postbump（未跑）：manifest.json + " + cordisPkgPaths().length + " 个 cordis 包同步 → git add → commit chore: bump v" + next + " → tag v" + next);
   }
 }
 

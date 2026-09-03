@@ -8,9 +8,9 @@
     "build": "node scripts/build.mjs",
     "pack": "node scripts/pack.mjs",
     "prepack": "node scripts/build.mjs",
-    "preversion": "pnpm run pack",
-    "version": "node scripts/version.mjs",
-    "postversion": "node scripts/postversion.mjs"
+    "prebump": "pnpm run pack",
+    "bump": "node scripts/bump.mjs",
+    "postbump": "node scripts/postbump.mjs"
   },
   "dependencies": {
     "@deepseek-ai/cordis": "4.0.2",
