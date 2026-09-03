@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.0.0-beta.4+dsh-0.1.2-rc.1（2026-09-03）
+
+- **dshana profile 用户插件化**（PR #64，spec：dshana-profile-bundle）：src-cordis 翻转 `@dsh-hanako/dshana` roster bundle——8 子插件保持独立包并上双链构建（rspack 服务端 ESM bundle + tsdown client 闭包工厂，资产经 asset/source 内联，弃运行时 fs 读文件），bundle 包只带 cordis.patch.yml 挂载；用户可自装 cordis 插件（tests/cordis-user-plugin 覆盖）。
+- **profile 随包归一**：官方 initProfile 生成真实目录 + scope 链接（`node_modules/@dsh-hanako` → 插件 cordis），manifest 每次 ensure 归一（期望 bundles + CLI 追加项保留）；`cordis.patch.yml` 用户资产化（缺失生成极简模板、存在绝不覆写）；seed 整树退役，老 junction 形态自动迁移。
+- **工具收敛宿主面单 `dsh_session`**：subtool 源码架构（`tools/session.js` 分派壳 + `tools/subtool/{run,query,cancel,approve}.js` 各导 execute）；dsh_install 退役（依赖安装由自动链 + Bootstrap 自举承担）；SKILL 收敛为 dsh-hanako + dsh-session。
+- **布局随源码域**：manifest/skills/rspack.config 归 src（build:src 产出），构建 preset 与每包 cordis.config 归 src-cordis，跨域共享留 scripts；源码/产物单层平铺，`@dsh-hanako` scope 语义保留。
+- **发版版本体系**：bump（算号写主单一事实源）→ postbump（syncver 同步 manifest + 9 cordis 源、tagver HEAD 版本门禁 + tag preflight）；cordis 包 version 与主版本同批随主同步，pack 对必需 9 包 fail-closed 完整性校验（缺/残拒包）。
+- **CodeRabbit 三轮闭环**：bridge 事件循环客户端断开全链路容错（clientClosed + AbortError 抑制）、profile 迁移 symlink unlinkSync、protocol HTTP fallback 超时、SKILL 编码恢复（无 BOM/UTF-8）、事件过滤边界如实标注（瀑布帧无会话标识，事件源侧标注列为后续）。
+
 ## v1.0.0-beta.3+dsh-0.1.2-rc.1（2026-09-03）
 
 - **pnpm 版本与引导单一事实源化**（PR #63）：`packageManager` 改 corepack 形态（`pnpm@11.25.0+sha512…`，版本 + tarball 完整性单一承载）。运行时引导从「dist 单文件下载 + 静态 sha256 校验」重写为「tarball 下载 + pm 段 sha512 校验 + 零依赖 tar 解压提取」（`extractPnpmFiles`，支持 PAX/GNU 头）——`PNPM_BOOTSTRAP` 静态配置（版本 + 文件 sha256）整体删除，升级 pnpm 只需 `corepack use` 刷 pm 段，pnpm.js 零改动。
