@@ -65,7 +65,7 @@ import {
 // dshana profile 运行时种子化/迁移/scope 链接（lib 提取，ensureDshanaProfile 调用；
 // 种子模板为独立文件 src-cordis/seed（构建期复制 dist/cordis/seed）；设计
 // specs/current/dshana-profile-bundle/spec.md）：
-import { ensureProfileSeeded } from "./tools/lib/profile-seed.js";
+import { ensureProfileSeeded } from "./lib/profile-seed.js";
 import { connectBus, closeBus, setBusConfigProvider } from "./lib/bus.js";
 
 const STDERR_CAP = 8192;
@@ -381,7 +381,7 @@ function buildProviderRoutes() {
 //   dsh.profile.bundles=[@deepseek-ai/dsh-base, @dsh-hanako/dshana]、用户层
 //   cordis.patch.yml 模板、pnpm-workspace.yaml；cordis.yml 空根由 dsh boot 自维护）+
 //   node_modules/@dsh-hanako 单条 scope 目录链接 → PLUGIN_ROOT/cordis。
-// 初始化/迁移/链接幂等逻辑收敛在 tools/lib/profile-seed.js（ensureProfileSeeded，纯路径
+// 初始化/迁移/链接幂等逻辑收敛在 lib/profile-seed.js（ensureProfileSeeded，纯路径
 // 逻辑便于测试）；本函数只做 profile 名门控 + 路径定位 + 官方 initProfile 注入
 // （loadInprocDsh 拿 appBoot，dsh 依赖缺失时跳过由诊断引导）+ g.appendLog 日志。语义：
 //   老整树 junction → 删链接后官方初始化；老拷贝实体目录（name=dsh-profile-dshana 且

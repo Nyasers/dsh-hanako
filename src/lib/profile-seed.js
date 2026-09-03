@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// tools/lib/profile-seed.js — dshana profile 运行时种子化/迁移/scope 链接（lib 提取）
+// lib/profile-seed.js — dshana profile 运行时种子化/迁移/scope 链接（lib 提取）
 // 从 src/lifecycle.js ensureDshanaProfile 剥离的纯路径逻辑（设计 specs/current/
 // dshana-profile-bundle/spec.md D1/D2/D4/D5）：profile 目录（$DSH_HOME/profiles/dshana）
 // 由插件运行时初始化为用户自有真实目录（不再整树 junction 挂插件产物），8 个
@@ -36,6 +36,7 @@
 import {
   existsSync,
   readFileSync,
+  writeFileSync,
   mkdirSync,
   lstatSync,
   realpathSync,
@@ -54,6 +55,45 @@ const PROFILE_MANIFEST_NAME = "dsh-profile-dshana";
 // bundle；patchReload live 与官方自定义 profile 默认一致）。导出供消费方/测试断言。
 export const PROFILE_BUNDLES = ["@deepseek-ai/dsh-base", "@dsh-hanako/dshana"];
 export const PROFILE_PATCH_RELOAD = "live";
+
+// 历史内置 bundle 名并集（随包托管边界：profile 目录只有 cordis.patch.yml 归用户，其余
+// 全部随包更新）。manifest 归一依据：bundles = 当前期望（PROFILE_BUNDLES，随插件版本演进）
+// + 现列表中「不属于任何历史内置」的项（= 用户经 dsh plugin --profile 装的 bundle，保留）。
+// 将来期望变化（如去 dsh-base/换源）时：新内置进期望、旧内置仍留在历史集 → 升级自动
+// 替换/移除内置项、用户自装项永不丢。
+const HISTORICAL_PROFILE_BUNDLES = new Set([...PROFILE_BUNDLES]);
+
+// manifest 随包归一（幂等：一致不写；期望内字段按插件声明刷新，CLI 追加项保留）
+function normalizeProfileManifest(profileDir, log) {
+  const manifestPath = join(profileDir, "package.json");
+  if (!existsSync(manifestPath)) return; // initProfile 刚生成/缺失由 initProfile 兜底
+  let j = null;
+  try {
+    j = JSON.parse(readFileSync(manifestPath, "utf8"));
+  } catch {
+    log("[cordis] profile manifest 解析失败，跳过随包归一（由诊断引导）");
+    return;
+  }
+  if (!j || typeof j !== "object") return;
+  const cur = Array.isArray(j.dsh?.profile?.bundles) ? j.dsh.profile.bundles : [];
+  const computed = [...PROFILE_BUNDLES];
+  for (const name of cur) {
+    if (HISTORICAL_PROFILE_BUNDLES.has(name) || computed.includes(name)) continue;
+    computed.push(name); // 用户经 dsh plugin --profile 追加的 bundle（不在历史内置集）保留
+  }
+  const reload = j.dsh?.profile?.patchReload;
+  if (reload === PROFILE_PATCH_RELOAD && sameList(cur, computed)) return; // 一致不写
+  j.dsh = { ...(j.dsh || {}), profile: { ...(j.dsh?.profile || {}), bundles: computed, patchReload: PROFILE_PATCH_RELOAD } };
+  try {
+    writeFileSync(manifestPath, JSON.stringify(j, null, 2) + "\n", "utf8");
+    log(`[cordis] profile manifest 随包归一：bundles -> [${computed.join(", ")}]（期望随插件版本）`);
+  } catch (e) {
+    log(`[cordis] profile manifest 随包归一写入失败：${(e && e.message) || e}`);
+  }
+}
+function sameList(a, b) {
+  return a.length === b.length && a.every((x, i) => x === b[i]);
+}
 
 // 老拷贝形态的内置文件（清理用；新形态由官方 initProfile 管理，不在此列）
 const LEGACY_BUILTIN_FILES = ["package.json", "cordis.patch.yml", "pnpm-workspace.yaml"];
@@ -238,6 +278,8 @@ export function ensureProfileSeeded(opts) {
     log(`[cordis] profile 初始化失败（initProfile）：${(e && e.message) || e}`);
     return "init-failed";
   }
+  // ---- manifest 随包归一（profile 目录只有 cordis.patch.yml 归用户，其余随包更新）----
+  normalizeProfileManifest(profileDir, log);
   // ---- scope 链接 ----
   return ensureScopeLink(profileDir, scopeSrc, doLink, log);
 }

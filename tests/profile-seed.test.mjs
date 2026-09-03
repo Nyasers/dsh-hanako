@@ -30,7 +30,7 @@ import {
   ensureProfileSeeded,
   PROFILE_BUNDLES,
   PROFILE_PATCH_RELOAD,
-} from "../src/tools/lib/profile-seed.js";
+} from "../src/lib/profile-seed.js";
 
 // 官方 initProfile 语义的 stub：缺失才写三文件（manifest/用户层模板/pnpm-workspace），
 // 记录调用参数；manifest 为合法 dsh-profile-dshana（二次判定 readLegacyCopyInfo 会解析）。
@@ -359,6 +359,30 @@ test("initProfile 失败：stub 抛错 → init-failed", (t) => {
   assert.ok(!existsSync(profileDir), "失败态不建目录（initProfile 抛错前未 mkdir）");
 });
 
+test("manifest 随包归一：补缺失期望项、CLI 追加保留、patchReload 归期望（幂等）", (t) => {
+  const root = tmpRoot(t);
+  const scopeSrc = makeScopeSrc(root);
+  const profileDir = profileDirOf(root);
+  ensureProfileSeeded({ profileDir, scopeSrc, initProfile: makeStubInitProfile([]), log: () => {} });
+  // 模拟异常/旧态 + 用户 CLI 追加：删期望项 dsh-base、patchReload 改 startup、加 @user/extra
+  const mp = join(profileDir, "package.json");
+  const j = JSON.parse(readFileSync(mp, "utf8"));
+  j.dsh.profile.bundles = ["@dsh-hanako/dshana", "@user/extra"];
+  j.dsh.profile.patchReload = "startup";
+  writeFileSync(mp, JSON.stringify(j, null, 2) + "\n");
+  const logs = [];
+  const out = ensureProfileSeeded({ profileDir, scopeSrc, initProfile: makeStubInitProfile([]), log: (m) => logs.push(m) });
+  assert.equal(out, "ensured");
+  const after = JSON.parse(readFileSync(mp, "utf8"));
+  assert.deepEqual(after.dsh.profile.bundles, [...PROFILE_BUNDLES, "@user/extra"], "期望内置项补齐 + CLI 追加保留（顺序：期望在前）");
+  assert.equal(after.dsh.profile.patchReload, "live", "patchReload 归一为期望");
+  assert.ok(logs.some((l) => l.includes("随包归一")), "应记归一日志");
+  // 幂等：再次 ensure 一致不写
+  const snap = readFileSync(mp, "utf8");
+  const logs2 = [];
+  ensureProfileSeeded({ profileDir, scopeSrc, initProfile: makeStubInitProfile([]), log: (m) => logs2.push(m) });
+  assert.equal(readFileSync(mp, "utf8"), snap, "归一后二次 ensure 零写");
+});
 test("源缺失：scopeSrc 不存在 → missing-source，initProfile 不被调用", (t) => {
   const root = tmpRoot(t);
   const profileDir = profileDirOf(root);
