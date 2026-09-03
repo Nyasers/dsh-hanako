@@ -46,12 +46,6 @@ import {
   mkdirSync,
   writeFileSync,
   appendFileSync,
-  cpSync,
-  lstatSync,
-  realpathSync,
-  symlinkSync,
-  rmSync,
-  rmdirSync,
   readdirSync,
 } from "node:fs";
 import { join, dirname } from "node:path";
@@ -68,6 +62,9 @@ import {
   installDepsFromPlugin,
   verifyDepsSmoke,
 } from "./tools/lib/install.js";
+// dshana profile 运行时种子化/迁移/scope 链接（lib 提取，ensureDshanaProfile 调用；
+// 模板常量在 profile-template.js；设计 specs/current/dshana-profile-bundle/spec.md）：
+import { ensureProfileSeeded } from "./tools/lib/profile-seed.js";
 import { connectBus, closeBus, setBusConfigProvider } from "./lib/bus.js";
 
 const STDERR_CAP = 8192;
@@ -374,94 +371,37 @@ function buildProviderRoutes() {
   g.latestProviderRoutes = result.routes;
   return result;
 }
-// ---- dshana profile 挂载：目录链接 → PLUGIN_ROOT/cordis（替代拷贝落位）----
-// vX（dshana profile 路线）：子插件与服务层全部收敛进 dshana profile，进程内 boot 只带
-// --profile（默认 dshana）。dsh 的 loadProfile 要求 $DSH_HOME/profiles/<name> 存在且含
-// package.json（dsh.profile.bundles），空目录会直接抛「profile does not exist」。
-// 挂载方式：$DSH_HOME/profiles/dshana 建目录链接指向插件目录 cordis/（打包产物 =
-// PLUGIN_ROOT/cordis，见 build.mjs buildCordis）——单一事实源（插件更新即 profile
-// 更新，零拷贝零漂移），dsh 的 loadProfile 对目录链接透明（node fs 直读）。
-// 平台：Windows 用 directory junction（免管理员权限），非 Windows 用目录 symlink
-// （type=dir，无需特权）；两者 lstat isSymbolicLink / realpath 语义一致，幂等检查通用。
-// 幂等：目标是链接且指向源目录时不动；非链接 / 指向过期则重建（删实体目录或旧链接，
-// 重新建链接）。源缺失记 warn 不阻断——若 profile 缺失 dsh 侧会再报，最终由诊断引导修复。
-// 注：链接指向插件安装目录（宿主升级插件会整体替换该目录），重建时机 = 每次
-// web host boot 前（ensureDshanaProfile），插件升级后首次拉起自动重建链接。
+// ---- dshana profile 运行时种子化（真实目录 + scope 链接，替代整树 junction）----
+// vX（dshana-profile-bundle 重构，spec：specs/current/dshana-profile-bundle/spec.md
+// D1/D2/D4/D5）：profile 目录改为运行时种子化的用户自有真实目录（用户可自装插件），
+// 不再整树 junction 挂插件产物。产物 = scope 树（dist/cordis/node_modules/@dsh-hanako/**，
+// 含 bundle @dsh-hanako/dshana 与 8 子插件，见 build.mjs buildCordis）：
+//   profileDir = $DSH_HOME/profiles/dshana：种子四件套（package.json manifest
+//   dsh.profile.bundles=[@deepseek-ai/dsh-base, @dsh-hanako/dshana]、cordis.yml 空根、
+//   cordis.patch.yml 用户层、pnpm-workspace.yaml）+ node_modules/@dsh-hanako 单条
+//   scope 目录链接 → PLUGIN_ROOT/cordis/node_modules/@dsh-hanako。
+// 种子化/迁移/链接幂等逻辑收敛在 tools/lib/profile-seed.js（ensureProfileSeeded，纯路径
+// 逻辑便于测试）；本函数只做 profile 名门控 + 路径定位 + g.appendLog 日志注入。语义：
+//   老整树 junction → 删链接重种子；老拷贝实体目录（name=dsh-profile-dshana 且
+//   dependencies 空 = 纯内置物）→ 清内置残留重种子；含用户依赖/未知内容 → 拒绝迁移
+//   （warn + 诊断引导，绝不整树删除）。种子文件只补缺失不覆盖用户改动；scope 链接
+//   缺失/漂移重建、失败回退整体拷贝。源缺失记 warn 不阻断——若 profile 缺失 dsh 侧
+//   会再报，最终由诊断引导修复。
 const PROFILE_NAME = "dshana";
 export function ensureDshanaProfile(cfg) {
-  const g = getSingleton();
-  // 仅 dshana profile 路线需要挂载：配置改回官方 profile（如 web）时不挂载，
-  // 走官方 bundle（dsh 自动 initProfile）；dshana 才需要插件自带的 profile 材料。
+  // 仅 dshana profile 路线需要种子化：配置改回官方 profile（如 web）时不执行，
+  // 走官方 bundle（dsh 自动 initProfile）。
   if (resolveProfileName(cfg) !== PROFILE_NAME) return;
+  const g = getSingleton();
+  const append = (msg) => g.appendLog?.("hana", msg);
+  const srcRoot = join(PLUGIN_ROOT, "cordis"); // 打包产物 cordis/（scope 树形态，包内无顶层 package.json）
+  const scopeSrc = join(srcRoot, "node_modules", "@dsh-hanako");
   const dshHome = join(cfg.dataDir, "dsh-home");
-  const srcRoot = join(PLUGIN_ROOT, "cordis");
-  const destRoot = join(dshHome, "profiles", PROFILE_NAME);
-  if (!existsSync(join(srcRoot, "package.json"))) {
-    g.appendLog?.(
-      "hana",
-      `[cordis] profile 源缺失：${srcRoot}（插件未打包 cordis/ 或安装不完整）`,
-    );
-    return;
-  }
-  // 已是正确链接：跳过（零拷贝，无内容比对）
-  try {
-    const stat = lstatSync(destRoot);
-    if (stat.isSymbolicLink()) {
-      const resolved = realpathSync(destRoot);
-      if (resolved === realpathSync(srcRoot)) return;
-    }
-  } catch {
-    /* 不存在或无法 stat：重建 */
-  }
-  // 非链接 / 指向过期：先删旧目标（实体目录或旧链接），再建链接
-  try {
-    if (existsSync(destRoot)) {
-      const stat = lstatSync(destRoot);
-      if (stat.isSymbolicLink()) {
-        // 旧链接（指向过期源）：rmdir 删链接本身，不递归（防误删链接目标）
-        rmdirSync(destRoot);
-      } else {
-        // 旧实体目录（历史拷贝落位残留）：整体删除后重建链接
-        rmSync(destRoot, { recursive: true, force: true });
-      }
-    }
-  } catch (e) {
-    g.appendLog?.(
-      "hana",
-      `[cordis] 旧 profile 清理失败：${(e && e.message) || e}（跳过重建）`,
-    );
-    return;
-  }
-  try {
-    mkdirSync(dirname(destRoot), { recursive: true });
-    // 平台差异：Windows 用 directory junction（免管理员权限创建目录链接）；
-    // 非 Windows（Linux/macOS）用目录符号链接（symlink type=dir，无需特权）。
-    // 两者对 node fs 透明（lstat isSymbolicLink / realpath 均成立），幂等检查通用。
-    if (process.platform === "win32") {
-      symlinkSync(srcRoot, destRoot, "junction");
-    } else {
-      symlinkSync(srcRoot, destRoot, "dir");
-    }
-    g.appendLog?.(
-      "hana",
-      `[cordis] dshana profile 链接（${process.platform === "win32" ? "junction" : "symlink"}）-> ${srcRoot}`,
-    );
-  } catch (e) {
-    // 链接建立失败（跨盘/权限等）：回退拷贝落位（旧行为，保证 profile 可用）
-    g.appendLog?.(
-      "hana",
-      `[cordis] profile 链接失败（${(e && e.message) || e}），回退拷贝落位`,
-    );
-    try {
-      cpSync(srcRoot, destRoot, { recursive: true, force: true });
-      g.appendLog?.("hana", `[cordis] dshana profile 落位（拷贝回退）-> ${destRoot}`);
-    } catch (e2) {
-      g.appendLog?.(
-        "hana",
-        `[cordis] profile 落位失败：${(e2 && e2.message) || e2}`,
-      );
-    }
-  }
+  ensureProfileSeeded({
+    profileDir: join(dshHome, "profiles", PROFILE_NAME),
+    scopeSrc,
+    log: append,
+  });
 }
 
 // ---- web host 生命周期：进程内 boot dsh（T7b 方案 A；spawn 形态已整体退役）----
@@ -693,8 +633,9 @@ export async function ensureWebHost(cfg) {
   // 当前会话日志 = 时间戳会话文件（index.js onload 已初始化单例 g.logPath）。
   // 单例优先；index.js 未初始化（冷启动边缘）时兜底自建。写进 web/logLastExit/错误消息供诊断。
   const logPath = g.logPath || newWebLogPath(cfg.dataDir);
-  // 启动前确保 dshana profile 已落位（dist/cordis → $DSH_HOME/profiles/dshana），
-  // 否则 dsh loadProfile 会抛「profile does not exist」。
+  // 启动前确保 dshana profile 已种子化并挂 scope 链接（$DSH_HOME/profiles/dshana 真实
+  // 目录 → dist/cordis/node_modules/@dsh-hanako），否则 dsh loadProfile 会抛「profile
+  // does not exist」。
   ensureDshanaProfile(cfg);
   return bootInproc(cfg, { pkgDir, dshHome, port, logPath });
 }

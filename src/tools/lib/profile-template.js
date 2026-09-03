@@ -29,3 +29,43 @@ export const PROFILE_PNPM_WORKSPACE = `packages:
 nodeLinker: hoisted
 autoInstallPeers: false
 `;
+
+// ---- 种子化 profile manifest（package.json，T2 种子写入）----
+// 与官方 initProfile 生成的 profile manifest 同构（上游 @deepseek-ai/dsh-app-boot
+// initProfile：{ name: dsh-profile-<dir>, private, dependencies: {}, dsh.profile.{
+// bundles, patchReload } }，参考 packages/boot/app-boot/src/profile.ts）：name 固定
+// dsh-profile-dshana，bundles = 官方 dsh-base + 本插件 bundle（@dsh-hanako/dshana）。
+// patchReload: live 与官方自定义 profile 默认一致（profile 用户层与 home 层热载）。
+export const PROFILE_MANIFEST_NAME = "dsh-profile-dshana";
+export const PROFILE_MANIFEST_JSON = `{
+  "name": "dsh-profile-dshana",
+  "private": true,
+  "version": "1.0.0",
+  "dependencies": {},
+  "dsh": {
+    "profile": {
+      "bundles": [
+        "@deepseek-ai/dsh-base",
+        "@dsh-hanako/dshana"
+      ],
+      "patchReload": "live"
+    }
+  }
+}
+`;
+
+// cordis.patch.yml 用户层种子（空用户层 + 引导注释）：本文件归 profile 用户所有，
+// 种子只补缺失不覆盖。layer 语义：在全部 bundle 层（dsh-base → @dsh-hanako/dshana）
+// 之后按 id 逐行覆盖（后写胜出）；用户自装插件在此 insert 行，插件包落位 profile
+// node_modules（pnpm add 或手工）。
+export const PROFILE_USER_PATCH_YML = `# dshana profile 的用户 patch 层（$DSH_HOME/profiles/dshana/cordis.patch.yml，
+# 由插件首次 boot 种子化；此后归用户所有，插件升级不覆盖）。
+# 层序：本文件在全部 bundle 层（@deepseek-ai/dsh-base、@dsh-hanako/dshana）之后应用，
+# 按 id 逐行覆盖，后写胜出（$DSH_HOME/cordis.patch.yml home 层对所有 profile 生效）。
+# 用法：要扩展 dshana 的 cordis 插件，在下方数组中 insert 插件行；插件包需落位本
+# profile 的 node_modules（pnpm add 或手工放置——pnpm-workspace.yaml 为 hoisted 形态）。
+# 注意：@dsh-hanako scope 为内置插件保留区（目录链接指向插件产物 cordis 的 scope，
+# 升级即更新），勿向该 scope 安装第三方包。patchReload: live 下本文件变更热载；
+# 进程内 HMR 可能静默降级，稳妥生效方式 = 重启 web host。
+[]
+`;
