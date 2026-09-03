@@ -8,7 +8,9 @@
 // 工作区干净（自测/预览时允许有未提交改动）。
 //
 // 职责边界：只做版本号的机械同步——package.json（单一事实源）bump → manifest.json
-// 同步（防手改漏同步的坑）→ commit + annotated tag。
+// 同步（防手改漏同步的坑）+ cordis 包 version 同步（src-cordis 顶层 roster bundle 与
+// plugins/* 子插件：随插件整体发版不独立发布，version 与 manifest 同批同步、恒 = 主
+// 版本，单一事实源同主 package.json）→ commit + annotated tag。
 // 打包验证（源码能 build + 链路通 + 版本一致）由 preversion 钩子前置：
 // pnpm run version → preversion(pnpm run pack → prepack(build) → pack) → version。
 // dry-run 预览（--dry-run）走 node 直跑绕过 preversion 钩子——钩子感知不到脚本参数
@@ -200,6 +202,21 @@ function run(cmd, desc) {
   }
 }
 
+// cordis 包清单（src-cordis 顶层 roster bundle + plugins/* 子插件 package.json，相对
+// ROOT）：version 与 manifest 同批同步（cordis 包随插件整体发版不独立发布，历史独立号
+// 废弃；version 仅元数据一致性，单一事实源 = 主 package.json）
+function cordisPkgPaths() {
+  const out = ["src-cordis/package.json"];
+  const plugins = path.join(ROOT, "src-cordis", "plugins");
+  for (const name of fs.readdirSync(plugins)) {
+    const p = path.join(plugins, name);
+    if (!fs.statSync(p).isDirectory()) continue;
+    const pj = path.join(p, "package.json");
+    if (fs.existsSync(pj)) out.push(path.relative(ROOT, pj));
+  }
+  return out.sort();
+}
+
 function main() {
   const pkg = read("package.json");
   const current = pkg.version;
@@ -247,7 +264,7 @@ function main() {
     pkg.version = next;
     write("package.json", pkg);
   }
-  console.log("[version] 1/3 package.json -> " + next);
+  console.log("[version] 1/4 package.json -> " + next);
 
   // 2) manifest.json 同步（脚本保证同步，防漏）
   if (!dryRun) {
@@ -255,18 +272,26 @@ function main() {
     manifest.version = next;
     write("manifest.json", manifest);
   }
-  console.log("[version] 2/3 manifest.json -> " + next);
+  console.log("[version] 2/4 manifest.json -> " + next);
 
-  // 2.5) pnpm-lock.yaml 不同步版本（见文件头：pnpm-lock 不含根包 version，bump 只同步
-  //    package.json + manifest.json；lock 由 pnpm install 自动维护，不做机械对齐）
+  // 3) cordis 包 version 同步（与 manifest 同批；src-cordis 顶层 roster bundle + plugins/*）
+  const cordisFiles = cordisPkgPaths();
+  if (!dryRun) {
+    for (const rel of cordisFiles) {
+      const c = read(rel);
+      c.version = next;
+      write(rel, c);
+    }
+  }
+  console.log("[version] 3/4 cordis 包（" + cordisFiles.length + " 个）-> " + next);
 
-  // 3) git commit + annotated tag（CHANGELOG 由发版人自行维护，bump 前写好并提交；
-  //    本脚本只提交版本号两个文件；打包验证已由 preversion 钩子先行完成）
-  run("git add package.json manifest.json", "git add");
+  // 4) git commit + annotated tag（CHANGELOG 由发版人自行维护，bump 前写好并提交；
+  //    本脚本只提交版本号文件，打包验证已由 preversion 钩子先行完成）
+  run("git add package.json manifest.json " + cordisFiles.join(" "), "git add");
   run("git commit -m \"chore: bump v" + next + "\"", "git commit");
   run("git tag -a v" + next + " -m \"v" + next + "\"", "git tag -a v" + next);
 
-  console.log("\n[version] ✅ v" + next + " bump 完成（package.json + manifest.json 对齐）。推送（tag 触发 CI 发布）：");
+  console.log("\n[version] ✅ v" + next + " bump 完成（package.json + manifest.json + " + cordisFiles.length + " 个 cordis 包对齐）。推送（tag 触发 CI 发布）：");
   console.log("  git push origin master --tags");
 }
 

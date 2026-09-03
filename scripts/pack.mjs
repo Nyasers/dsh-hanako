@@ -61,6 +61,29 @@ for (const item of staticItems) {
   });
 }
 
+// 1.5) cordis 包 version 一致性校验（防回归，与 manifest 校验对称）：cordis 包（roster
+//   bundle dshana + 8 子插件）version 与 manifest 同批由 scripts/version.mjs bump 同步
+//   （单一事实源 = 主 package.json；源码 src-cordis 内随同步维护），pack 时读 dist 产物
+//   校验一致——手改/漏同步即出包版本漂移。
+function assertCordisDistVersions(outDir) {
+  const cordisRoot = join(outDir, "cordis");
+  if (!fs.pathExistsSync(cordisRoot)) return; // cordis 未组装（理论不达，build 恒先跑）
+  let count = 0;
+  for (const name of fs.readdirSync(cordisRoot)) {
+    const pj = join(cordisRoot, name, "package.json");
+    if (!fs.pathExistsSync(pj)) continue;
+    const j = fs.readJsonSync(pj);
+    if (j.version !== version) {
+      throw new Error(
+        `版本不一致：cordis 包 ${join("cordis", name, "package.json")} version ${j.version} ≠ package.json ${version}（跑 scripts/version.mjs 同步后再打包）`,
+      );
+    }
+    count += 1;
+  }
+  console.log(`[pack] cordis 包版本一致（${count} 个 = ${version}）`);
+}
+assertCordisDistVersions(distDir);
+
 // 2. 静态资产压缩（terser JS 纯语法级 + clean-css CSS 压缩，覆盖写回 dist 副本）
 //     cordis 插件（dist/cordis/*/index.js，由 build 从
 //     src-cordis 组装）被 dsh 运行时 import() 加载、client.js 被浏览器
