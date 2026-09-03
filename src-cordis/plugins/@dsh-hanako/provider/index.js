@@ -111,7 +111,10 @@ async function loadDeps(config, getBusDshPkgDir) {
     let mod = null;
     for (const base of bases) {
       try {
-        mod = await import(resolvePkgEntry(join(base, "node_modules"), spec));
+        // webpackIgnore：运行时原生 import（spec 为运行时变量/表达式，基座解析后为
+        // 绝对路径 file:// URL——cordis 子插件打包（rspack）须保留原生 import 语义，
+        // 与主 bundle loadInprocDsh 同款注释）
+        mod = await import(/* webpackIgnore: true */ resolvePkgEntry(join(base, "node_modules"), spec));
         break;
       } catch {
         /* 该基座不可解析，试下一个 */
@@ -119,7 +122,7 @@ async function loadDeps(config, getBusDshPkgDir) {
     }
     if (mod === null) {
       try {
-        mod = await import(spec);
+        mod = await import(/* webpackIgnore: true */ spec);
       } catch {
         /* 依赖不可用 */
       }

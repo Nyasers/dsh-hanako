@@ -19,11 +19,10 @@
 //      原生即成功，桥自动退场，不浪费 user activation），失败（NotAllowedError）
 //      走桥：MessageChannel 回执 + 2.5s 超时
 //
-// 注入脚本内容文件化（review 修订）：桥脚本正文存独立文件 clipboard-bridge.js
-// （本目录，随包分发；cordis 子插件散装分发不经 rspack，运行时 readFileSync 读取），
-// index.js 只保留包装与注入逻辑——与主 bundle assets/* 文件化、profile 种子模板
-// 文件化同一原则。文件缺失/读取失败时降级：不注册桥（嵌入场景复制失败不转接，
-// 其余零行为差异），warn 记日志。
+// 注入脚本内容文件化 + 打包内联（review 修订）：桥脚本正文存独立文件
+// assets/clipboard-bridge.js（纯浏览器 JS），经 rspack asset/source 内联进本包
+// bundle（见 scripts/cordis.config.mjs）——源码文件化、产物自包含、构建期压缩，
+// 无运行时文件 IO。与主 bundle src/assets 内联同架构。
 //
 // 与 bundle patch 方案的取舍：tapIndex 是 dsh web server 稳定扩展点，dsh 升级后
 // 注入机制不变（bundle hash 无关）；覆盖点在 Clipboard 实例方法层，覆盖所有
@@ -34,29 +33,13 @@
 // ui.hostCapabilities 声明 clipboard.writeText。缺壳页面桥时桥消息无人响应 →
 // 2.5s 超时 reject → dsh UI 显示复制失败（不静默假装成功）。
 
-import { readFileSync } from "node:fs";
+import bridgeScript from "./assets/clipboard-bridge.js";
 
 export const name = "@dsh-hanako/clipboard";
 
 const BRIDGE_ID = '@dsh-hanako/clipboard-bridge';
 
-// 桥脚本正文（独立文件，本目录随包分发）。模块顶层读一次；缺失/失败 → null，
-// apply 内降级（不注册 tapIndex，warn 记录）——嵌入复制不转接，原生路径不受影响。
-let bridgeScript = null;
-let bridgeLoadError = null;
-try {
-  bridgeScript = readFileSync(new URL("./clipboard-bridge.js", import.meta.url), "utf8");
-} catch (e) {
-  bridgeLoadError = (e && e.message) || e;
-}
-
 export function apply(ctx) {
-  if (bridgeScript === null) {
-    try {
-      ctx.logger?.warn?.(`[@dsh-hanako/clipboard] 桥脚本读取失败，clipboard 桥未注册：${bridgeLoadError}`);
-    } catch { /* 忽略 */ }
-    return;
-  }
   ctx.inject(["webServer"], (httpCtx) => {
     httpCtx.effect(() => {
       try {

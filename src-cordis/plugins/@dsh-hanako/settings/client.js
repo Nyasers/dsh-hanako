@@ -6,10 +6,11 @@
 // 设置面板「DSHana 设置」分页原生渲染——不再用 tapIndex DOM 注入，而是按 dsh client
 // 插件规范注册 settings.section slot（ledger 驱动导航：ui-settings-general 的
 // useSections 直接投影 ctx.slots.entries("settings.section")，注册即出现在设置面板
-// 导航，无需任何 DOM hack）。本文件是 package.json exports["./client"] 指向的
-// client bundle：window.__ModuleLoader__.load({ id, factory }) 格式（与
-// dsh-client-ui-* 同构），id 必须等于包名（boot manifest 按包名注册、
-// /plugins/<id>/client.js 按包名寻址）。
+// 导航，无需任何 DOM hack）。本文件是 ESM 源（构建输入）：tsdown client 链
+// （scripts/client-chain.mjs）构建期为 package.json exports["./client"] 指向的
+// client bundle 产物（学官方 dsh clientBundle 预设：intro/banner/footer 包
+// window.__ModuleLoader__.load({ id, factory })，react/jsx-runtime external 走
+// loader 注入模块表 require）。CSS/图标存 assets/（hs.css/gear.svg）经 ?inline 内联。
 //
 // 分页内容 = 设置中心式布局（同一 settings.section 内，两个并列分组卡片，不再是
 // 「默认模型表单 + 版本块硬堆叠」）：
@@ -35,67 +36,22 @@
 // （read/save/check-version/request-update/update-status）不走 RPC 信封
 // （不在 ApiProxy 契约内），组件里直接 fetch。
 
-window.__ModuleLoader__.load({
-  id: "@dsh-hanako/settings",
-  factory: (require) => {
-    var module = { exports: {} };
-    var exports = module.exports;
-    Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
-
-    // ---- 依赖：seed/static 词与已注册 factory（与 dsh-client-ui-* 同构）----
-    let react = require("react");
-    let jsx_runtime = require("react/jsx-runtime");
+import * as react from "react";
+import * as jsx_runtime from "react/jsx-runtime";
+import cssText from "./assets/hs.css?inline";
+import iconSvg from "./assets/gear.svg?inline";
 
     // ---- 页头品牌图标：齿轮（设置语义，stroke 跟随 currentColor）----
     // 注入方式：dangerouslySetInnerHTML（ICON 是 SVG 字符串，作 children 会被 React
     // 转义成文本；注入为 HTML 才能渲染成图形）
-    const ICON =
-      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>';
+    const ICON = iconSvg; // 独立文件 assets/gear.svg（?inline 内联）
+
 
     // ---- 样式：dsw CSS 变量 + 固定 data-plugin-css 注入（幂等，同 shipped 姿势）----
     // 设置中心布局：滚动容器 .hs-page → 页头品牌区 .hs-header → 两个并列分组卡片
     // .hs-card（卡片头 .hs-card-head 分隔线 + 内容区 .hs-card-body）。
     // 类前缀 hs- = hana-settings（替代改名前的 hdm = hana-default-model）。
-    const CSS =
-      ".hs-page{box-sizing:border-box;flex:1;min-height:0;overflow-y:auto;flex-direction:column;gap:14px;display:flex;padding:6px 4px 14px}" +
-      // ---- 页头：DSHana 品牌区（图标 + 标题）----
-      ".hs-header{display:flex;align-items:center;gap:10px;padding:2px 2px 8px}" +
-      ".hs-header-icon{flex:none;width:34px;height:34px;border-radius:9px;background:var(--dsw-alias-button-primary-fill,#537d96);color:var(--dsw-alias-label-primary-foreground,#ffffff);display:flex;align-items:center;justify-content:center}" +
-      ".hs-header-icon svg{width:17px;height:17px}" +
-      ".hs-header-text{flex:1;min-width:0}" +
-      ".hs-header-title{color:var(--dsw-alias-label-primary,#1f2329);margin:0;font-size:17px;font-weight:600;line-height:24px}" +
-      // ---- 分组卡片（默认模型 / DSH 版本）：纸面分层 + 圆角 + 卡片头分隔线----
-      ".hs-card{box-sizing:border-box;border:1px solid var(--dsw-alias-border-l1,#e5e5e5);border-radius:10px;background:var(--dsw-alias-bg-base,#ffffff);padding:14px 16px;display:flex;flex-direction:column;gap:12px}" +
-      ".hs-card-head{display:flex;flex-direction:column;gap:2px;padding-bottom:10px;border-bottom:1px solid var(--dsw-alias-border-l1,#f0f0f0)}" +
-      ".hs-card-title{color:var(--dsw-alias-label-primary,#1f2329);margin:0;font-size:14px;font-weight:600;line-height:20px}" +
-      ".hs-card-sub{color:var(--dsw-alias-label-tertiary,#8a8f98);margin:0;font-size:12px;line-height:17px;white-space:pre-line}" +
-      ".hs-card-body{display:flex;flex-direction:column;gap:10px}" +
-      // ---- 表单行（默认模型卡片）----
-      ".hs-row{display:flex;align-items:center;gap:10px}" +
-      ".hs-label{flex:none;width:72px;color:var(--dsw-alias-label-secondary,#5a5f66);font-size:13px}" +
-      ".hs-value{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-primary,#1f2329);font-size:13px;line-height:20px}" +
-      ".hs-select{flex:1;min-width:0;height:30px;padding:0 8px;border:1px solid var(--dsw-alias-border-l1,#d8d8d8);border-radius:8px;background:var(--dsw-alias-bg-base,#ffffff);color:var(--dsw-alias-label-primary,#1f2329);font-family:inherit;font-size:13px;line-height:20px}" +
-      ".hs-select:focus{outline:none;border-color:var(--dsw-alias-button-primary-fill,#537d96)}" +
-      // ---- 版本信息面板（DSH 版本卡片：本地版本 信息块）----
-      ".hs-info{display:flex;flex-direction:column;gap:8px;padding:10px 12px;background: var(--dsw-alias-bg-module-platform,#EFE8DB);border-radius:8px}" +
-      ".hs-info-row{display:flex;align-items:center;justify-content:space-between;gap:12px}" +
-      ".hs-info-label{flex:none;color:var(--dsw-alias-label-secondary,#5a5f66);font-size:12px}" +
-      ".hs-info-value{min-width:0;color:var(--dsw-alias-label-primary,#1f2329);font-size:13px;font-variant-numeric:tabular-nums;word-break:break-all;text-align:right}" +
-      // ---- 操作区与按钮----
-      ".hs-actions{display:flex;align-items:center;gap:10px}" +
-      ".hs-save{box-sizing:border-box;height:28px;padding:0 14px;border:none;border-radius:14px;background:var(--dsw-alias-button-primary-fill,#537d96);color:var(--dsw-alias-label-primary-foreground,#ffffff);cursor:pointer;font-family:inherit;font-size:13px;line-height:28px}" +
-      ".hs-save:hover{background:var(--dsw-alias-button-primary-hover,#3f6179)}" +
-      ".hs-save[disabled]{opacity:.6;cursor:default}" +
-      ".hs-btn{box-sizing:border-box;height:28px;padding:0 14px;border:1px solid var(--dsw-alias-border-l1,#d8d8d8);border-radius:14px;background:transparent;color:var(--dsw-alias-label-primary,#1f2329);cursor:pointer;font-family:inherit;font-size:13px;line-height:26px}" +
-      ".hs-btn:hover{background:var(--dsw-alias-bg-hover,#f2f3f5)}" +
-      ".hs-btn[disabled]{opacity:.6;cursor:default}" +
-      // ---- 状态行（表单行内 = 单行截断；版本卡片整行 = 可换行 hs-status-line）----
-      ".hs-status{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:18px}" +
-      ".hs-status.hs-ok{color:var(--dsw-alias-state-success-primary,#2e7d32)}" +
-      ".hs-status.hs-err{color:var(--dsw-alias-state-error-primary,#c62828)}" +
-      ".hs-status.hs-info{color:var(--dsw-alias-label-secondary,#5a5f66)}" +
-      ".hs-status-line{white-space:pre-wrap;word-break:break-all}" +
-      ".hs-current{margin-top:2px;padding-top:8px;border-top:1px solid var(--dsw-alias-border-l1,#f0f0f0);color:var(--dsw-alias-label-secondary,#5a5f66);font-size:12px;line-height:18px}";
+    const CSS = cssText; // 独立文件 assets/hs.css（?inline 内联）
     const tagId = "@dsh-hanako/settings/HanaSettingsSection.css";
     // JSON.stringify 自带引号（选择器属性值引号），外面不能再套引号（否则 style[data-plugin-css=""...""] 非法选择器）
     if (
@@ -628,8 +584,4 @@ window.__ModuleLoader__.load({
       );
     }
 
-    exports.apply = apply;
-    exports.inject = inject;
-    return module.exports;
-  },
-});
+export { apply, inject };

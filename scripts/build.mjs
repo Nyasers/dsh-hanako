@@ -14,6 +14,8 @@ import { dirname, join } from "node:path";
 
 import fs from "fs-extra";
 import config from "./rspack.config.mjs";
+import cordisConfigs from "./cordis.config.mjs";
+import { buildClientBundles } from "./client-chain.mjs";
 // 构建后整体 terser 压缩（对 rspack 产物 + routes 壳做第二轮压缩）
 import { minifyJs } from "./minify-assets.mjs";
 
@@ -56,8 +58,7 @@ const staticUrlToMeta = new Map();
       name === "node_modules" ||
       name === "releases" ||
       name === "_tmp" ||
-      name === ".git" ||
-      name === "src-cordis"
+      name === ".git"
     )
       continue;
     const p = join(urlRoot, name);
@@ -152,44 +153,99 @@ function extraTerser(root) {
 }
 await extraTerser(join(ROOT, "dist"));
 
-// 5) 构建 cordis 资产（dist/cordis）：src-cordis = @dsh-hanako/dshana bundle 源码根目录
-//    （顶层 package.json + cordis.patch.yml）+ 子插件 plugins/ + 种子模板 seed/。产物：
-//      dist/cordis/node_modules/@dsh-hanako/dshana/   ← src-cordis/{package.json, cordis.patch.yml}
-//        （bundle 顶层文件入 dshana 子目录：package.json 的 dsh.bundle.patch 声明随包生效）
-//      dist/cordis/node_modules/@dsh-hanako/<8 子插件> ← src-cordis/plugins/@dsh-hanako/**
-//      dist/cordis/seed/**                            ← src-cordis/seed/**（profile 种子模板，
-//        四件套独立文件：package.json/cordis.yml/cordis.patch.yml/pnpm-workspace.yaml；运行时
-//        由 profile-seed.js ensureProfileSeeded 读模板落位 $DSH_HOME/profiles/dshana）
-//    profile 根四件套不再由构建期内嵌字符串生成——profile 目录改为运行时种子化的用户自有
-//    真实目录（落位见 lifecycle.js ensureDshanaProfile → tools/lib/profile-seed.js）。
-//    插件 JS 不做 build 这轮 terser（归 pack.mjs 静态压缩步），故不在此遍历的 node_modules
-//    跳过名单之外再压缩。
-function buildCordis(srcRoot, outRoot) {
+// 4) 构建 cordis bundle 子插件包（dist/cordis）：从 src-cordis 构建出 bundle 化的
+//    @dsh-hanako/* 子插件包；src → 插件本体 bundle（dist/index.js，前述步骤）——两源两产物：
+//      dist/cordis/node_modules/@dsh-hanako/<8 包>/index.js
+//        ← 各包源码入口经 rspack 打成 ESM bundle（见 cordis.config.mjs：内部模块合并、
+//        assets/ 独立资源 minify + asset/source 内联、node 内建外部 import、具名导出保留）
+//      dist/cordis/node_modules/@dsh-hanako/<8 包>/{package.json, client.js?}
+//        ← 源包静态文件（client.js 仅 bridge/settings：浏览器端 __ModuleLoader__ bundle，
+//        非 ESM 不进 rspack，原样保留供 package.json exports["./client"] 寻址；
+//        assets/ 与内部模块已内联/合并，不复制）
+//      dist/cordis/node_modules/@dsh-hanako/dshana/{package.json, cordis.patch.yml}
+//        ← src-cordis 顶层（roster bundle 包：dsh.bundle.patch 声明，无 JS 入口不打包）
+//      dist/cordis/seed/** ← src-cordis/seed/**（profile 种子模板四件套，运行时种子化读模板）
+//    profile 根四件套不再由构建期生成——profile 目录改为运行时种子化的用户自有真实目录
+//    （落位见 lifecycle.js ensureDshanaProfile → tools/lib/profile-seed.js）。
+//    插件 JS 不做 build 这轮 terser（rspack 已 minimize；pack.mjs 静态压缩步兜底二次压缩），
+//    故不在此遍历的 node_modules 跳过名单之外再压缩。
+function buildCordisStatic(srcRoot, outRoot) {
   fs.removeSync(outRoot);
   fs.ensureDirSync(outRoot);
-  // 1) 子插件（scope 目录整体复制）：plugins/@dsh-hanako → node_modules/@dsh-hanako
-  //    （8 包与 bundle 同 scope 物理共存，经单条 scope 目录链接暴露进 profile node_modules）
+  // 1) 子插件静态文件（package.json + 存在时的 client.js）：plugins/@dsh-hanako/<pkg>
   const pluginsRoot = join(srcRoot, "plugins");
   if (!fs.pathExistsSync(pluginsRoot)) throw new Error("src-cordis/plugins 缺失");
-  for (const scope of fs.readdirSync(pluginsRoot)) {
+  const scopes = fs.readdirSync(pluginsRoot).filter((n) => !n.startsWith("."));
+  const pkgNames = [];
+  for (const scope of scopes) {
     const scopeDir = join(pluginsRoot, scope);
     if (!fs.statSync(scopeDir).isDirectory()) continue;
-    fs.copySync(scopeDir, join(outRoot, "node_modules", scope));
+    for (const name of fs.readdirSync(scopeDir)) {
+      const pkgSrc = join(scopeDir, name);
+      if (!fs.statSync(pkgSrc).isDirectory()) continue;
+      const pkgOut = join(outRoot, "node_modules", scope, name);
+      fs.ensureDirSync(pkgOut);
+      pkgNames.push(name);
+      // 静态 allowlist：package.json 恒复制；client.js 仅存在时复制（bridge/settings
+      // 浏览器端 __ModuleLoader__ bundle）。index.js 由 rspack 输出覆盖；assets/ 与
+      // ws-lib.js 等内部模块已内联/合并进 bundle，不复制。
+      for (const f of ["package.json"]) {
+        const s = join(pkgSrc, f);
+        if (!fs.pathExistsSync(s)) throw new Error(`cordis 插件文件缺失：${s}`);
+        fs.copySync(s, join(pkgOut, f));
+      }
+      const clientSrc = join(pkgSrc, "client.js");
+      if (fs.pathExistsSync(clientSrc)) fs.copySync(clientSrc, join(pkgOut, "client.js"));
+    }
   }
-  // 2) bundle 顶层文件 → node_modules/@dsh-hanako/dshana/
-  const bundleDir = join(outRoot, "node_modules", "@dsh-hanako", "dshana");
+  // 2) dshana roster bundle 包（src-cordis 顶层两文件，无 JS 入口不打包）
+  const bundleOut = join(outRoot, "node_modules", "@dsh-hanako", "dshana");
   for (const f of ["cordis.patch.yml", "package.json"]) {
     const s = join(srcRoot, f);
     if (!fs.pathExistsSync(s)) throw new Error(`cordis bundle 文件缺失：${s}`);
-    fs.copySync(s, join(bundleDir, f));
+    fs.copySync(s, join(bundleOut, f));
   }
   // 3) 种子模板（profile 四件套独立文件，运行时读模板种子化）→ dist/cordis/seed/
   const seedSrc = join(srcRoot, "seed");
   if (!fs.pathExistsSync(seedSrc)) throw new Error("cordis seed 模板目录缺失：" + seedSrc);
   fs.copySync(seedSrc, join(outRoot, "seed"));
-  console.log("cordis assets -> dist/cordis/");
+  console.log("cordis 静态组装 -> dist/cordis/（子插件 " + pkgNames.length + " 包 + dshana bundle + seed）");
 }
-buildCordis(join(ROOT, "src-cordis"), join(ROOT, "dist", "cordis"));
+
+// 打包 8 个子插件：rspack 多 entry（cordis.config.mjs 数组配置），逐配置编译输出各包 index.js。
+// 顺序依赖 buildCordisStatic 先建目录（rspack clean:false，只写 index.js 不删静态文件）。
+function buildCordisBundles(outRoot) {
+  return (async () => {
+    const pkgDir = join(outRoot, "node_modules", "@dsh-hanako");
+    let count = 0;
+    for (const cfg of cordisConfigs) {
+      await new Promise((resolvePromise, reject) => {
+        const compiler = rspack(cfg);
+        compiler.run((err, stats) => {
+          compiler.close(() => {});
+          if (err) return reject(err);
+          if (stats?.hasErrors()) return reject(new Error(stats.toString({ errors: true })));
+          resolvePromise();
+        });
+      });
+      count += 1;
+    }
+    console.log(`cordis 子插件打包 -> ${pkgDir}（${count} 个 ESM bundle）`);
+  })();
+}
+await buildCordisStatic(join(ROOT, "src-cordis"), join(ROOT, "dist", "cordis"));
+await buildCordisBundles(join(ROOT, "dist", "cordis"));
+// 第二条构建链：client 半（tsdown closure-factory，学官方 dsh clientBundle 预设）——
+// settings 等浏览器端 client 源 → dist/cordis/.../client.js 自注册 bundle（见
+// scripts/client-chain.mjs）。产物与 rspack 服务端半同目录共存。
+await buildClientBundles();
+
+// 4.5) cordis 子插件 bundle 同款回写：rspack 会把各包源码模块的 import.meta.url 静态化为
+// 构建机上的源码绝对路径（src-cordis/plugins/...），分发后路径失效——collectSource 现已
+// 涵盖 src-cordis（见上），这里对 dist/cordis 再跑一次 walk 回写 import.meta.url（产物
+// bundle 与散装时代同路径落位 node_modules/@dsh-hanako/<pkg>/index.js，语义不变：
+// createRequire(import.meta.url) 仍解析到插件包目录，app 的 frontend 多基座解析不受影响）
+walk(join(ROOT, "dist", "cordis"));
 
 
 // 6) 构建后强制校验：产物不得残留带引号的 file:// 字面量（构建机路径泄漏即失败）。
