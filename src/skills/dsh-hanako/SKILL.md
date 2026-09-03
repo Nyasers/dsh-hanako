@@ -1,6 +1,6 @@
 ---
 name: dsh-hanako
-description: "dsh-hanako 插件（把 DeepSeek Harness 接进 Hana 的进程内嵌 subagent 执行器）的配置辅助与使用指南。触发场景：dsh-hanako 刚装好需要配置（默认即可，无需手动装依赖/配 Node）、DSHana 标签页显示自举中/需要处理（errorClass 人话指引）、web host 起不来（先开标签页看三态自举页：booting 阶段/action-needed 指引/ready 直嵌）、依赖缺失需安装或验证（Agent 用 dsh_install 工具 action=install/verify，页面无任何手动按钮）、DSH 任务失败排查、审批怎么应答、dsh_session/dsh_install/dsh_approve 怎么用、默认模型怎么配（DSH 设置页「DSHana 设置」分页，provider/model/思考三级联动）、DSH 版本（更新 DSH = 更新插件发版 + 重启宿主）、安装卡片（dsh_install 异步渲染 /card/dep 实时日志）、DeepSeek Harness 相关。遇到 dsh-hanako 相关需求优先读本技能再动手。"
+description: "dsh-hanako 插件（把 DeepSeek Harness 接进 Hana 的进程内嵌 subagent 执行器）的配置辅助与使用指南。触发场景：dsh-hanako 刚装好需要配置（默认即可，无需手动装依赖/配 Node）、DSHana 标签页显示自举中/需要处理（errorClass 人话指引）、web host 起不来（先开标签页看三态自举页：booting 阶段/action-needed 指引/ready 直嵌）、依赖安装全自动（自动链/自举页三态，无手动工具无手动按钮）、DSH 任务失败排查、审批怎么应答（dsh_session action=approve）、默认模型怎么配（DSH 设置页「DSHana 设置」分页，provider/model/思考三级联动）、DSH 版本（更新 DSH = 更新插件发版 + 重启宿主）、安装进度实时日志（自动链/卡片）、DeepSeek Harness 相关。遇到 dsh-hanako 相关需求优先读本技能再动手。"
 ---
 
 # dsh-hanako 配置辅助与使用指南
@@ -48,11 +48,9 @@ config.json 由宿主设置界面生成、**不随包分发**，缺省全部可�
 
 | 工具 | 用途 | 关键点 | 详情 |
 |---|---|---|---|
-| `dsh_session(action, task?, cwd?, …)` | 会话全生命周期（含提交任务） | create 必传 task+cwd，异步提交后主动结束回合；send 续会话；cancel 取消；list/get 回看 | [dsh-session 技能](dsh-session) |
-| `dsh_install(action?, wait?, autoStart?)` | 依赖安装/验证（action ∈ install/verify） | install 按插件声明 pnpm install --prod（幂等跳过 + registry 兜底 + 自动核对 + autoStart 拉起 web host，异步渲染安装卡片）；verify 只读静态核对 | [dsh-install 技能](dsh-install) |
-| `dsh_approve(rpcId, approvalId, outcome?)` | 应答审批 | allowed-once 放行 / rejected 拒绝；通知带 args 命令原文 | [dsh-approve 技能](dsh-approve) |
+| `dsh_session(action, task?, cwd?, …)` | 会话全生命周期（宿主 Agent 面唯一工具） | action ∈ create（提交，task+cwd 必填，异步提交后主动结束回合）/ send（续会话）/ cancel（取消）/ list/get（回看）/ approve（应答审批：sessionId+approvalId，决策看 args 不听 reason）；操作实现按 subtool 模块化 | [dsh-session 技能](dsh-session) |
 
-> Agent 排查/安装走 `dsh_install` 工具（能力层 `g.installDeps`/`g.verifyDeps`），**不调页面路由**；标签页只读展示。
+> 依赖安装已全自动（自动链 + Bootstrap 自举，无手动工具）：`g.installDeps`/`g.verifyDeps` 由插件生命周期驱动，标签页只读展示三态。
 
 ## 排错表
 
@@ -66,8 +64,8 @@ config.json 由宿主设置界面生成、**不随包分发**，缺省全部可�
 | 页面 action-needed：restart-needed | dsh 已跨版本升级，宿主仍持旧模块缓存 | **重启宿主（Hana）**，重启后自动续跑 |
 | 页面 action-needed：declaration / unknown | 声明或上游问题 / 未知 | 无需手动；等插件更新或上报作者，自动链保守重试 |
 | booting 长时间无进展 / 事件丢失 | 事件流断或退避间隙 | 页面 30s 兜底/退避到点自动刷新；开会话日志看自动链里程碑 |
-| 页面 ready 但任务报 web host 错误 | 端口占用/进程异常 | 查 webPort 占用；`dsh_install(action="verify")` + 会话日志定位 |
-| `dsh_session` 报「DSH 包未就绪」 | 依赖缺失/漂移 | `dsh_install()`（默认 install）自动装（自动链通常已自愈） |
+| 页面 ready 但任务报 web host 错误 | 端口占用/进程异常 | 查 webPort 占用；开会话日志（自动链 `[hana]` 行）定位 |
+| `dsh_session` 报「DSH 包未就绪」 | 依赖缺失/漂移 | 自动链通常已自愈（ensure-deps 阶段自动安装）；仍失败等退避/查会话日志 |
 | pnpm install 下载失败/超时 | registry 网络 | 已内置官方源 → npmmirror 自动重试；持续失败查代理/网络 |
 | bash 报 `E_ACCESSDENIED` | DSH bash 沙箱 Windows 限制 | 改用文件系统工具（write/read/edit） |
 | 改了配置/代码不生效 | 宿主模块缓存 / 需重启的缓存残留 | 配置类实时生效；升级/代码类重启 Hana |
@@ -80,5 +78,5 @@ config.json 由宿主设置界面生成、**不随包分发**，缺省全部可�
 - 主题跟随：system 跟随宿主，light/dark 原生；宿主切主题后壳页实时跟随（经 `hana.theme.changed` + `/webui/events` theme-pref）
 - bash 在 Windows 可能 E_ACCESSDENIED（DSH 沙箱限制）；文件工具正常，Windows 优先用
 - wait=true 同步模式无审批通知（只能 Web UI 或超时）；长任务建议异步
-- 越界权限默认走审批：deferred 通知 → dsh_approve 应答；`approvalTimeoutSec` 内无人应答自动拒绝（未配置回落 0 = 禁用自动拒绝）
+- 越界权限默认走审批：deferred 通知 → `dsh_session(action="approve", …)` 应答；`approvalTimeoutSec` 内无人应答自动拒绝（未配置回落 0 = 禁用自动拒绝）
 - 任务默认新建会话；传 sessionId 复用（resume）；会话/账本在插件数据目录 dsh-home/，不碰 ~/.DSH

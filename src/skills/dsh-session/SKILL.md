@@ -1,11 +1,11 @@
 ---
 name: dsh-session
-description: "dsh_session 工具手册（源码 src/tools/dsh-session.js 核对；合并原 dsh_run / dsh_cancel / dsh_approve）。触发场景：提交 DSH 任务（action=create 新建会话+提交 / send 续已有会话，task/cwd 必填，超时/预设/推理强度/provider/model 可选，sessionId 即访问凭证）、取消任务（action=cancel，sessionId 必填，幂等）、查会话清单（action=list，解析 session_projcache，limit 默认 10）、凭 sessionId 取会话内容与最终结论（action=get，读会话 jsonl zstd 容器本地解压）、应答会话挂起审批（action=approve：sessionId/approvalId 必填，outcome=allowed-once/rejected，决策看 args 不听 reason，宿主审批适配应答经总线 respond 回投）、resume 复用会话（send 传上次 sessionId 即续）。需要提交/取消/查询/审批 DSH 任务或会话前先读本技能。"
+description: "dsh_session 工具手册（源码 src/tools/session.js 核对；合并原 dsh_run / dsh_cancel / dsh_approve，操作按 subtool 模块化）。触发场景：提交 DSH 任务（action=create 新建会话+提交 / send 续已有会话，task/cwd 必填，超时/预设/推理强度/provider/model 可选，sessionId 即访问凭证）、取消任务（action=cancel，sessionId 必填，幂等）、查会话清单（action=list，解析 session_projcache，limit 默认 10）、凭 sessionId 取会话内容与最终结论（action=get，读会话 jsonl zstd 容器本地解压）、应答会话挂起审批（action=approve：sessionId/approvalId 必填，outcome=allowed-once/rejected，决策看 args 不听 reason，宿主审批适配应答经总线 respond 回投）、resume 复用会话（send 传上次 sessionId 即续）。需要提交/取消/查询/审批 DSH 任务或会话前先读本技能。"
 ---
 
 # dsh_session 工具手册
 
-DSH 会话全生命周期工具（合并原 `dsh_run` / `dsh_cancel` / `dsh_approve` 能力）。权限 `external_side_effect`（external_llm_api，create/send 消耗宿主 provider 额度；cancel/approve 改变会话/审批状态）。实现 `tools/dsh-session.js`（list/get 本地实现 + create/send 复用 `lib/dsh-run.js` 的 execute + cancel 复用 `lib/dsh-cancel.js` + approve 复用 `lib/dsh-approve.js`——三者是 session 内部实现模块，不再独立注册）。
+DSH 会话全生命周期工具（合并原 `dsh_run` / `dsh_cancel` / `dsh_approve` 能力）。权限 `external_side_effect`（external_llm_api，create/send 消耗宿主 provider 额度；cancel/approve 改变会话/审批状态）。实现 `tools/session.js`（注册分派壳）+ `tools/subtool/{run,query,cancel,approve}.js`（各操作独立 execute：run=create/send 提交、query=list/get 只读查询、cancel、approve——subtool 不再单独注册，宿主 Agent 面仅 dsh_session）。
 
 ## 参数契约
 
