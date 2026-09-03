@@ -19,6 +19,12 @@
 //      原生即成功，桥自动退场，不浪费 user activation），失败（NotAllowedError）
 //      走桥：MessageChannel 回执 + 2.5s 超时
 //
+// 注入脚本内容文件化（review 修订）：桥脚本正文存独立文件 clipboard-bridge.js
+// （本目录，随包分发；cordis 子插件散装分发不经 rspack，运行时 readFileSync 读取），
+// index.js 只保留包装与注入逻辑——与主 bundle assets/* 文件化、profile 种子模板
+// 文件化同一原则。文件缺失/读取失败时降级：不注册桥（嵌入场景复制失败不转接，
+// 其余零行为差异），warn 记日志。
+//
 // 与 bundle patch 方案的取舍：tapIndex 是 dsh web server 稳定扩展点，dsh 升级后
 // 注入机制不变（bundle hash 无关）；覆盖点在 Clipboard 实例方法层，覆盖所有
 // navigator.clipboard.writeText 调用点（不限于单一复制函数），且不修改任何
@@ -28,60 +34,35 @@
 // ui.hostCapabilities 声明 clipboard.writeText。缺壳页面桥时桥消息无人响应 →
 // 2.5s 超时 reject → dsh UI 显示复制失败（不静默假装成功）。
 
+import { readFileSync } from "node:fs";
+
 export const name = "@dsh-hanako/clipboard";
 
-const BRIDGE = `<script id="@dsh-hanako/clipboard-bridge">
-(function () {
-  var isEmbedded = (function () {
-    try { return window.parent !== window; } catch (e) { return false; }
-  })();
-  if (!isEmbedded) return;
-  // 父窗口（宿主壳页）origin：postMessage 定向投递 + 回执校验（防第三方窗口伪造）。
-  // 读取方式：Chromium 的 ancestorOrigins 第一位 = 最近父窗口 origin；不可用时回退
-  // location.href 推导不可靠，故 postMessage 兜底用 "*"（仅回执侧校验 source+origin）。
-  var parentOrigin = null;
-  try {
-    if (window.location.ancestorOrigins && window.location.ancestorOrigins.length > 0) {
-      parentOrigin = window.location.ancestorOrigins[0];
-    }
-  } catch (e) { /* 忽略 */ }
-  var nc = navigator.clipboard;
-  if (!nc || typeof nc.writeText !== "function") return;
-  var orig = nc.writeText.bind(nc);
-  nc.writeText = function (text) {
-    var p;
-    try { p = orig(text); } catch (e) { return bridgeCopy(text); }
-    if (p && typeof p.then === "function") {
-      return p.then(function () {}, function () { return bridgeCopy(text); });
-    }
-    return bridgeCopy(text);
-  };
-  function bridgeCopy(text) {
-    return new Promise(function (resolve, reject) {
-      var ch = new MessageChannel();
-      var to = setTimeout(function () { ch.port1.close(); reject(new Error("copy bridge timeout")); }, 2500);
-      ch.port1.onmessage = function (e) {
-        clearTimeout(to);
-        ch.port1.close();
-        // 回执校验：来源必须是宿主壳页窗口（parent）+ 匹配其 origin，防伪造 __dshCopyResult
-        if (e.origin && parentOrigin && e.origin !== parentOrigin) { reject(new Error("copy bridge origin mismatch")); return; }
-        if (e.data && e.data.__dshCopyResult && e.data.__dshCopyResult.ok) resolve();
-        else reject(new Error("copy bridge failed"));
-      };
-      // 定向投递到宿主壳页（已知其 origin 时）；未知时退 "*"（仅本窗口的 parent 收得到）
-      window.parent.postMessage({ __dshCopy: true, id: "cb" + Math.random().toString(36).slice(2), text: text }, parentOrigin || "*", [ch.port2]);
-    });
-  }
-})();
-</script>`;
+const BRIDGE_ID = '@dsh-hanako/clipboard-bridge';
+
+// 桥脚本正文（独立文件，本目录随包分发）。模块顶层读一次；缺失/失败 → null，
+// apply 内降级（不注册 tapIndex，warn 记录）——嵌入复制不转接，原生路径不受影响。
+let bridgeScript = null;
+let bridgeLoadError = null;
+try {
+  bridgeScript = readFileSync(new URL("./clipboard-bridge.js", import.meta.url), "utf8");
+} catch (e) {
+  bridgeLoadError = (e && e.message) || e;
+}
 
 export function apply(ctx) {
+  if (bridgeScript === null) {
+    try {
+      ctx.logger?.warn?.(`[@dsh-hanako/clipboard] 桥脚本读取失败，clipboard 桥未注册：${bridgeLoadError}`);
+    } catch { /* 忽略 */ }
+    return;
+  }
   ctx.inject(["webServer"], (httpCtx) => {
     httpCtx.effect(() => {
       try {
         httpCtx.webServer.tapIndex((html) => {
-          if (html.includes('id="@dsh-hanako/clipboard"')) return html;
-          return html.replace("</head>", BRIDGE + "</head>");
+          if (html.includes(`id="${BRIDGE_ID}"`)) return html;
+          return html.replace("</head>", `<script id="${BRIDGE_ID}">\n${bridgeScript}</script>\n</head>`);
         });
       } catch (e) {
         try { ctx.logger?.warn?.(`[@dsh-hanako/clipboard] tapIndex 注册失败：${e?.message || e}`); } catch { /* 忽略 */ }
