@@ -8,7 +8,11 @@
 // 工作区干净（自测/预览时允许有未提交改动）。
 //
 // 职责边界：只做版本号的机械同步——package.json（单一事实源）bump → manifest.json
-// 同步（防手改漏同步的坑）→ pack 校验（版本一致性强制校验）→ commit + annotated tag。
+// 同步（防手改漏同步的坑）→ commit + annotated tag。
+// 打包验证（源码能 build + 链路通 + 版本一致）由 preversion 钩子前置：
+// pnpm run version → preversion(pnpm run pack → prepack(build) → pack) → version。
+// dry-run 预览（--dry-run）走 node 直跑绕过 preversion 钩子——钩子感知不到脚本参数
+// （pre 钩子 argv 恒为空），无法条件跳过打包；需要完整链路验证时用真实 bump。
 // push 手动（tag 触发 CI 发布）。
 // 说明：pnpm-lock.yaml 不含该包自身 version（lockfileVersion 仅记录依赖解析树与
 // importers 的依赖声明，根包版本不落在 lock 里），故 bump 只同步 package.json +
@@ -213,6 +217,12 @@ function main() {
   const next = nextBase + "+" + dshBuild();
 
   console.log("[version] 当前 " + current + " -> 新版本 " + next + (dryRun ? "（dry-run，不落盘）" : ""));
+  if (dryRun) {
+    // dry-run 预览绕过 preversion 钩子（钩子感知不到参数，无法条件跳过），故不触发
+    // 打包验证；需要完整链路验证时用真实 bump（pnpm run version，无 --dry-run）。
+    console.log("[version] dry-run 预览：preversion 打包验证已绕过（钩子无法感知 --dry-run）；");
+    console.log("[version]   完整链路验证请走真实 bump：pnpm run version -- <子命令>");
+  }
   if (next === current) {
     console.error("[version] 版本号未变化");
     process.exit(1);
@@ -237,7 +247,7 @@ function main() {
     pkg.version = next;
     write("package.json", pkg);
   }
-  console.log("[version] 1/4 package.json -> " + next);
+  console.log("[version] 1/3 package.json -> " + next);
 
   // 2) manifest.json 同步（脚本保证同步，防漏）
   if (!dryRun) {
@@ -245,17 +255,13 @@ function main() {
     manifest.version = next;
     write("manifest.json", manifest);
   }
-  console.log("[version] 2/4 manifest.json -> " + next);
+  console.log("[version] 2/3 manifest.json -> " + next);
 
   // 2.5) pnpm-lock.yaml 不同步版本（见文件头：pnpm-lock 不含根包 version，bump 只同步
   //    package.json + manifest.json；lock 由 pnpm install 自动维护，不做机械对齐）
 
-  // 3) pack 验证（内含版本一致性强制校验：package.json == manifest.json == 打包版本，
-  //    不一致直接 fail；打包版本只读 package.json，不传参）
-  run("node scripts/pack.mjs", "3/4 打包验证");
-
-  // 4) git commit + annotated tag（CHANGELOG 由发版人自行维护，bump 前写好并提交；
-  //    本脚本只提交版本号两个文件）
+  // 3) git commit + annotated tag（CHANGELOG 由发版人自行维护，bump 前写好并提交；
+  //    本脚本只提交版本号两个文件；打包验证已由 preversion 钩子先行完成）
   run("git add package.json manifest.json", "git add");
   run("git commit -m \"chore: bump v" + next + "\"", "git commit");
   run("git tag -a v" + next + " -m \"v" + next + "\"", "git tag -a v" + next);

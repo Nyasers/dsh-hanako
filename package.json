@@ -7,6 +7,8 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "pack": "node scripts/pack.mjs",
+    "prepack": "node scripts/build.mjs",
+    "preversion": "pnpm run pack",
     "version": "node scripts/version.mjs"
   },
   "dependencies": {
