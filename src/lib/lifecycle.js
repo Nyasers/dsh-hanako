@@ -39,7 +39,7 @@ import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 // dsh profile 名解析（vX：dshana profile 路线，boot --profile 用配置；config.js 内联进 bundle）
-import { resolveProfileName } from "./tools/lib/config.js";
+import { resolveProfileName } from "../tools/lib/config.js";
 import {
   readFileSync,
   existsSync,
@@ -55,18 +55,18 @@ import {
   getSingleton,
   PLUGIN_ROOT,
   manifestDefaults,
-} from "./tools/lib/state.js";
+} from "../tools/lib/state.js";
 // vX（migrate 体系退役）：不再有版本迁移入口（junction-converge / config-schema 等全丢）
 import {
   resolveDshPkgDir,
   installDepsFromPlugin,
   verifyDepsSmoke,
-} from "./tools/lib/install.js";
+} from "./install.js";
 // dshana profile 运行时种子化/迁移/scope 链接（lib 提取，ensureDshanaProfile 调用；
 // 种子模板为独立文件 src-cordis/seed（构建期复制 dist/cordis/seed）；设计
 // specs/current/dshana-profile-bundle/spec.md）：
-import { ensureProfileSeeded } from "./lib/profile-seed.js";
-import { connectBus, closeBus, setBusConfigProvider } from "./lib/bus.js";
+import { ensureProfileSeeded } from "./profile-seed.js";
+import { connectBus, closeBus, setBusConfigProvider } from "./bus.js";
 
 const STDERR_CAP = 8192;
 const PORT_READY_TIMEOUT_MS = 60000; // web host 端口就绪等待上限

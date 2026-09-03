@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// tools/lib/errclass.js — 依赖安装失败错误分类器（spec：dsh-deps-zero-intervention，T1 纯函数）
+// src/lib/errclass.js — 依赖安装失败错误分类器（spec：dsh-deps-zero-intervention，T1 纯函数）
 //
 // 背景（spec「错误只看 exit 1 无法引导」）：install/boot 失败时只看到退出码无法决定
 // 策略——分类才决定退避重试 / 停+引导 / 等条件续跑与用户指引。本模块把结构化失败

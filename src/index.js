@@ -23,17 +23,17 @@
 import { existsSync, mkdirSync, appendFileSync, watch } from "node:fs";
 import { join, dirname } from "node:path";
 // 日志生命周期（vX 起独立于 migrate 体系）：旧日志归档压缩 + 时间戳日志文件命名
-import { archiveOldLogs, logFileStamp, nextTimestampLogPath } from "./log-archive.js";
+import { archiveOldLogs, logFileStamp, nextTimestampLogPath } from "./lib/log-archive.js";
 
 // ---- bundle 收敛 ----（单 bundle 形态）
 // 生命周期能力：src/lifecycle.js 顶层 mountLifecycle() 在 import 时即挂单例
-import "./lifecycle.js";
+import "./lib/lifecycle.js";
 // T1 错误分类器（spec：dsh-deps-zero-intervention）——T2 自动链状态机（本文件 onload）对
 // install/boot 失败归类决策（可恢复退避重试 / 不可恢复停等待条件）与指引文案，纯函数复用
 import {
   classifyInstallError,
   ERROR_CLASS_GUIDANCE,
-} from "./tools/lib/errclass.js";
+} from "./lib/errclass.js";
 // 5 个工具模块（ESM 导出 name/description/parameters/execute(+sessionPermission)；
 // dsh_update 已并入 dsh_install 四合一，见 tools/dsh-install.js）
 import * as dshInstall from "./tools/dsh-install.js";

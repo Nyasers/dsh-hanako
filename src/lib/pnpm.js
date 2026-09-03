@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// tools/lib/pnpm.js — pnpm 运行时引导（tarball 渐进式方案）共用模块（lib 提取）
+// src/lib/pnpm.js — pnpm 运行时引导（tarball 渐进式方案）共用模块（lib 提取）
 // 从插件安装包中摘除 pnpm（zip 不再携带 node_modules/pnpm，package.json 不再声明
 // devDependencies pnpm），改为运行时按需引导：下载 pnpm npm 包 tarball（registry
 // 官方源，gzip 压缩 ~4.9MB，一次下载含全部所需），以 packageManager 的 sha512 校验
@@ -51,7 +51,7 @@ import {
   PLUGIN_ROOT,
   resolveNodeExec,
   resolveNodeExecEnv,
-} from "./state.js";
+} from "../tools/lib/state.js";
 
 // ---- 版本与完整性单一事实源：package.json packageManager（pnpm@<version>+sha512.<hex>）----
 // corepack 语义：版本 + tarball sha512 由 packageManager 单一承载（corepack use 生成）。

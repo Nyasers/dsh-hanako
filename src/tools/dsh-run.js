@@ -21,7 +21,7 @@
 import { join } from "node:path";
 import { readFileSync, existsSync } from "node:fs";
 import { getSingleton, PLUGIN_ROOT, manifestDefaults } from "./lib/state.js";
-import { resolveDshPkgDir } from "./lib/install.js";
+import { resolveDshPkgDir } from "../lib/install.js";
 import {
   readDshDefaultModel,
   readDshDefaultPreset,
@@ -46,7 +46,7 @@ import {
 // startWebHost / installDeps / verifyDeps / checkDshUpdate 挂到 globalThis 单例）。
 // config.json 引导已退役（vX，migrate 体系删除）：配置读取侧 resolve* 缺省回退兜底。
 // 与 lifecycle.js 同属 index.js 单 bundle 收敛入口的静态 import 链。
-import { ensureWebHost } from "../lifecycle.js";
+import { ensureWebHost } from "../lib/lifecycle.js";
 
 // 0.1.2 终态结果：读会话投影缓存（projcache json——明文）。
 // 0.1.2 无 session/get 命令、$events 无内容事件（api-session/* 只有
