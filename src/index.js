@@ -34,10 +34,10 @@ import {
   classifyInstallError,
   ERROR_CLASS_GUIDANCE,
 } from "./lib/errclass.js";
-// 5 个工具模块（ESM 导出 name/description/parameters/execute(+sessionPermission)；
-import * as dshApprove from "./tools/dsh-approve.js";
-// T7e 工具收敛：dsh-run / dsh-cancel 并入 dsh-session（create/send/cancel 分支），
-// 不再作为独立工具注册；dsh-session.js 内部 import 复用它们的 execute 实现。
+// 工具模块（ESM 导出 name/description/parameters/execute(+sessionPermission)；宿主自动加 pluginId_ 前缀）
+// T7e+：dsh-run / dsh-cancel / dsh-approve 全并入 dsh-session（create/send/cancel/approve
+// 分支），文件保留为 session 内部实现模块（import 复用 execute），不单独注册；dsh_install
+// 已退役（自动链 + Bootstrap 自举承担）。宿主 Agent 面仅 dsh_session 单工具。
 import * as dshSession from "./tools/dsh-session.js";
 // 宿主 task 体系接入（handler.abort → dsh session.cancel）：取消链路收归宿主 task
 // 协议（task:abort → handler.abort → session.cancel），dsh_cancel 不再直连取消
@@ -47,9 +47,8 @@ import registerWebuiRoutes from "./routes/webui.js";
 import registerCardRoutes from "./routes/card.js";
 
 // 工具清单（registerTool 消费普通契约；宿主自动加 pluginId_ 前缀）
-// T7e：dsh-run/dsh-cancel 并入 dsh-session（create/send/cancel）；approve 独立保留
-// （权限应答语义正交，非会话操作）；install 独立（依赖管理）。
-const HANAKO_TOOLS = [dshSession, dshApprove]; // dsh_install 已退役：D6 零干预后安装由自动链 + Bootstrap 自举承担（2026-09-04）
+// 单工具收敛（2026-09-04）：dsh_run/dsh_cancel/dsh_approve 全并入 dsh_session。
+const HANAKO_TOOLS = [dshSession];
 
 // ---- 统一日志（时间戳会话文件；旧日志 zstd 压缩保留经 migrate.js 统一迁移入口）----
 // DSHana 插件全量运行日志：每次插件会话创建 <YYYYMMDD-HHmmss-SSS>.log 真实文件（文件名

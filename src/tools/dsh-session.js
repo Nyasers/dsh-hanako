@@ -21,6 +21,7 @@ import { zstdDecompressSync } from "node:zlib";
 import { textFromMessageBlocks } from "../lib/protocol.js";
 import { execute as runExecute } from "./dsh-run.js";
 import { execute as cancelExecute } from "./dsh-cancel.js";
+import { execute as approveExecute } from "./dsh-approve.js"; // 审批应答（会话操作，并入统一工具，2026-09-04）
 
 const __here = dirname(fileURLToPath(import.meta.url));
 // PLUGIN_ROOT 向上查找含 manifest.json 的目录——源码形态（tools/ 下）与
@@ -48,8 +49,9 @@ export const parameters = {
   properties: {
     action: {
       type: "string",
-      enum: ["list", "get", "create", "send", "cancel"],
-      description: "list=会话清单；get=凭 sessionId 取内容；create=新建会话+提交；send=续会话发消息；cancel=取消任务",
+      enum: ["list", "get", "create", "send", "cancel", "approve"],
+      description:
+        "list=会话清单；get=凭 sessionId 取内容；create=新建会话+提交；send=续会话发消息；cancel=取消任务；approve=应答会话挂起的审批（allowed-once/rejected）",
     },
     limit: {
       type: "integer",
@@ -57,7 +59,16 @@ export const parameters = {
     },
     sessionId: {
       type: "string",
-      description: "get/send/cancel 必传（形如 session-<uuid>，取自回调/卡片/ list 结果）：get=读取、send=续会话、cancel=取消",
+      description: "get/send/cancel/approve 必传（形如 session-<uuid>，取自回调/卡片/list 结果）：get=读取、send=续会话、cancel=取消、approve=应答该会话的审批",
+    },
+    approvalId: {
+      type: "string",
+      description: "仅 approve：审批 id（审批通知里带；同一任务可能挂起多个审批，逐个应答）",
+    },
+    outcome: {
+      type: "string",
+      enum: ["allowed-once", "rejected"],
+      description: "仅 approve：allowed-once=放行单次（安全默认，仅本次操作）/ rejected=拒绝该请求",
     },
     task: {
       type: "string",
@@ -96,7 +107,7 @@ export const sessionPermission = {
   describeSideEffect: () => ({
     kind: "local_read",
     summary:
-      "读取 DSH 会话持久化缓存 session_projcache.json 与会话 jsonl（zstd 容器本地解压，只读；dsh-home 唯一事实源，sessionId 即访问凭证）；create/send 经总线提交 dsh 任务、cancel 取消任务（写会话状态）",
+      "读取 DSH 会话持久化缓存 session_projcache.json 与会话 jsonl（zstd 容器本地解压，只读；dsh-home 唯一事实源，sessionId 即访问凭证）；create/send 经总线提交 dsh 任务、cancel 取消任务、approve 应答会话挂起审批（写会话/审批状态）",
     ruleId: "dsh-hanako-session",
   }),
 };
@@ -419,7 +430,13 @@ async function doExecute(input, ctx) {
     return cancelExecute(input, ctx);
   }
 
-  throw new Error(`action 必须是 list / get / create / send / cancel（收到 "${action}"）`);
+  if (action === "approve") {
+    // 审批应答（会话操作：应答挂在某 session 挂起的审批上，sessionId 定位）——复用
+    // dsh-approve 的 execute（activeApprovals 校验 + 总线应答），并入统一工具不再单独注册
+    return approveExecute(input, ctx);
+  }
+
+  throw new Error(`action 必须是 list / get / create / send / cancel / approve（收到 "${action}"）`);
 }
 
 export async function execute(input, ctx) {
