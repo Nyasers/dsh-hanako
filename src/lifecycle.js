@@ -63,7 +63,8 @@ import {
   verifyDepsSmoke,
 } from "./tools/lib/install.js";
 // dshana profile 运行时种子化/迁移/scope 链接（lib 提取，ensureDshanaProfile 调用；
-// 模板常量在 profile-template.js；设计 specs/current/dshana-profile-bundle/spec.md）：
+// 种子模板为独立文件 src-cordis/seed（构建期复制 dist/cordis/seed）；设计
+// specs/current/dshana-profile-bundle/spec.md）：
 import { ensureProfileSeeded } from "./tools/lib/profile-seed.js";
 import { connectBus, closeBus, setBusConfigProvider } from "./lib/bus.js";
 
@@ -400,6 +401,7 @@ export function ensureDshanaProfile(cfg) {
   ensureProfileSeeded({
     profileDir: join(dshHome, "profiles", PROFILE_NAME),
     scopeSrc,
+    seedDir: join(srcRoot, "seed"), // 种子模板目录（dist/cordis/seed，构建期复制自 src-cordis/seed）
     log: append,
   });
 }

@@ -7,6 +7,12 @@
 // 由插件运行时种子化为用户自有真实目录（不再整树 junction 挂插件产物），8 个
 // @dsh-hanako/* 子插件 + bundle @dsh-hanako/dshana 经单条 scope 目录链接暴露。
 //
+// 模板文件化（review 修订 2026-09-04）：种子四件套（package.json/cordis.yml/
+// cordis.patch.yml/pnpm-workspace.yaml）以独立文件存于源码层 src-cordis/seed/
+// （构建期随 scope 树落位 dist/cordis/seed/，见 build.mjs buildCordis），运行时由
+// 本模块按名读取——YAML/JSON 模板保持文件形态可审可校验，不再内嵌 JS 字符串。
+// opts.seedDir 为注入的模板目录（消费方 lifecycle.js 传 PLUGIN_ROOT/cordis/seed）。
+//
 // 形态判定（迁移只处理已声明「纯内置物」的两态，其余拒绝——绝不整树删除）：
 //   profiles/dshana 不存在                      → 种子（四件套 + scope 链接）
 //   isSymbolicLink（老整树 junction）           → rmdir 链接本身后种子
@@ -38,21 +44,14 @@ import {
   cpSync,
 } from "node:fs";
 import { join } from "node:path";
-import {
-  PROFILE_MANIFEST_NAME,
-  PROFILE_MANIFEST_JSON,
-  PROFILE_CORDIS_YML,
-  PROFILE_USER_PATCH_YML,
-  PROFILE_PNPM_WORKSPACE,
-} from "./profile-template.js";
 
-// 种子四件套（顺序即写入/清理顺序；package.json 为 profile manifest）
-const SEED_FILES = [
-  ["package.json", PROFILE_MANIFEST_JSON],
-  ["cordis.yml", PROFILE_CORDIS_YML],
-  ["cordis.patch.yml", PROFILE_USER_PATCH_YML],
-  ["pnpm-workspace.yaml", PROFILE_PNPM_WORKSPACE],
-];
+// 老整树拷贝残留判定用的内置 profile manifest 名（与 seed/package.json 的 name 一致；
+// 模板内容本身在 seed 目录文件，这里只留判定常量）。
+const PROFILE_MANIFEST_NAME = "dsh-profile-dshana";
+
+// 种子四件套（顺序即写入/清理顺序；package.json 为 profile manifest；内容从
+// seedDir 按名读取 = src-cordis/seed 同名文件，见 build.mjs buildCordis 复制）
+const SEED_NAMES = ["package.json", "cordis.yml", "cordis.patch.yml", "pnpm-workspace.yaml"];
 
 const noop = () => {};
 
@@ -93,7 +92,7 @@ function rmBestEffort(p) {
 // 清理老拷贝内置残留：种子四件套 + node_modules/@dsh-hanako 实体拷贝（该形态已声明
 // 纯内置物、无用户内容可能；其余未知文件保守保留不碰）
 function cleanupLegacyCopy(profileDir, log) {
-  for (const [name] of SEED_FILES) {
+  for (const name of SEED_NAMES) {
     const p = join(profileDir, name);
     if (existsSync(p)) {
       rmBestEffort(p);
@@ -107,15 +106,17 @@ function cleanupLegacyCopy(profileDir, log) {
   }
 }
 
-// 种子四件套（幂等：只补缺失，已有文件一律不覆盖——模板内容不重写、用户改动不覆盖）
-function seedProfileFiles(profileDir, log) {
+// 种子四件套（幂等：只补缺失，已有文件一律不覆盖——模板内容不重写、用户改动不覆盖）；
+// 内容从 seedDir 按名读取（seedDir 缺失由入口前置检查拦截，见 ensureProfileSeeded）
+function seedProfileFiles(profileDir, seedDir, log) {
   mkdirSync(profileDir, { recursive: true });
-  for (const [name, content] of SEED_FILES) {
+  for (const name of SEED_NAMES) {
     const p = join(profileDir, name);
     if (existsSync(p)) continue;
     try {
+      const content = readFileSync(join(seedDir, name), "utf8");
       writeFileSync(p, content, "utf8");
-      log(`[cordis] profile 种子文件已写入：${name}`);
+      log(`[cordis] profile 种子文件已写入：${name}（模板 ${seedDir}/${name}）`);
     } catch (e) {
       log(`[cordis] profile 种子文件写入失败（${name}）：${(e && e.message) || e}（不阻断，dsh loadProfile 会再报）`);
     }
@@ -166,17 +167,25 @@ function ensureScopeLink(profileDir, scopeSrc, createLink, log) {
 }
 
 // 主入口：dshana profile 种子化/迁移/scope 链接（幂等；消费方 = lifecycle.js
-// ensureDshanaProfile，profile 名门控与 srcRoot 定位在调用方完成）。
-// opts: { profileDir, scopeSrc, log?, createLink? }——profileDir = $DSH_HOME/profiles/dshana；
-// scopeSrc = PLUGIN_ROOT/cordis/node_modules/@dsh-hanako。
-// 返回 outcome：missing-source | refused | seeded | ensured（见各步注释）
+// ensureDshanaProfile，profile 名门控与路径定位在调用方完成）。
+// opts: { profileDir, scopeSrc, seedDir, log?, createLink? }——profileDir =
+// $DSH_HOME/profiles/dshana；scopeSrc = PLUGIN_ROOT/cordis/node_modules/@dsh-hanako；
+// seedDir = PLUGIN_ROOT/cordis/seed（种子模板目录，构建期复制自 src-cordis/seed）。
+// 返回 outcome：missing-source（scope 源缺失）| missing-seed（模板目录缺失）|
+// refused（拒绝迁移）| linked | scope-copied | ensured | failed（scope 链接/回退失败）
 export function ensureProfileSeeded(opts) {
-  const { profileDir, scopeSrc, log = noop, createLink } = opts || {};
-  if (!profileDir || !scopeSrc) throw new Error("ensureProfileSeeded: profileDir/scopeSrc 必填");
+  const { profileDir, scopeSrc, seedDir, log = noop, createLink } = opts || {};
+  if (!profileDir || !scopeSrc || !seedDir) {
+    throw new Error("ensureProfileSeeded: profileDir/scopeSrc/seedDir 必填");
+  }
   // 源缺失检查（scope 树形态：产物包内无顶层 package.json，检查 scope 目录存在）
   if (!existsSync(scopeSrc)) {
     log(`[cordis] scope 源缺失：${scopeSrc}（插件未打包 cordis/ 或安装不完整）`);
     return "missing-source";
+  }
+  if (!existsSync(seedDir)) {
+    log(`[cordis] profile 种子模板目录缺失：${seedDir}（插件未打包 cordis/seed 或安装不完整）`);
+    return "missing-seed";
   }
   const doLink = createLink || defaultCreateScopeLink;
   // ---- 形态判定与迁移 ----
@@ -234,7 +243,7 @@ export function ensureProfileSeeded(opts) {
       }
     }
   }
-  // ---- 种子四件套（幂等）+ scope 链接 ----
-  seedProfileFiles(profileDir, log);
+  // ---- 种子四件套（幂等，内容读自 seedDir）+ scope 链接 ----
+  seedProfileFiles(profileDir, seedDir, log);
   return ensureScopeLink(profileDir, scopeSrc, doLink, log);
 }

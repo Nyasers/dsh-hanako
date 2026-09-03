@@ -1,0 +1,10 @@
+# dshana profile 的用户 patch 层（$DSH_HOME/profiles/dshana/cordis.patch.yml，
+# 由插件首次 boot 种子化；此后归用户所有，插件升级不覆盖）。
+# 层序：本文件在全部 bundle 层（@deepseek-ai/dsh-base、@dsh-hanako/dshana）之后应用，
+# 按 id 逐行覆盖，后写胜出（$DSH_HOME/cordis.patch.yml home 层对所有 profile 生效）。
+# 用法：要扩展 dshana 的 cordis 插件，在下方数组中 insert 插件行；插件包需落位本
+# profile 的 node_modules（pnpm add 或手工放置——pnpm-workspace.yaml 为 hoisted 形态）。
+# 注意：@dsh-hanako scope 为内置插件保留区（目录链接指向插件产物 cordis 的 scope，
+# 升级即更新），勿向该 scope 安装第三方包。patchReload: live 下本文件变更热载；
+# 进程内 HMR 可能静默降级，稳妥生效方式 = 重启 web host。
+[]

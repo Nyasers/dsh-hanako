@@ -152,14 +152,16 @@ function extraTerser(root) {
 }
 await extraTerser(join(ROOT, "dist"));
 
-// 5) 构建 cordis scope 树（dist/cordis）：src-cordis = @dsh-hanako/dshana bundle 源码根目录
-//    （顶层 package.json + cordis.patch.yml）+ 子插件 plugins/。产物只出 scope 树：
+// 5) 构建 cordis 资产（dist/cordis）：src-cordis = @dsh-hanako/dshana bundle 源码根目录
+//    （顶层 package.json + cordis.patch.yml）+ 子插件 plugins/ + 种子模板 seed/。产物：
 //      dist/cordis/node_modules/@dsh-hanako/dshana/   ← src-cordis/{package.json, cordis.patch.yml}
 //        （bundle 顶层文件入 dshana 子目录：package.json 的 dsh.bundle.patch 声明随包生效）
 //      dist/cordis/node_modules/@dsh-hanako/<8 子插件> ← src-cordis/plugins/@dsh-hanako/**
-//    profile 根四件套（package.json/cordis.yml/cordis.patch.yml/pnpm-workspace.yaml）不再由
-//    构建期生成——profile 目录改为运行时种子化的用户自有真实目录（落位见 lifecycle.js
-//    ensureDshanaProfile → tools/lib/profile-seed.js；模板常量在 tools/lib/profile-template.js）。
+//      dist/cordis/seed/**                            ← src-cordis/seed/**（profile 种子模板，
+//        四件套独立文件：package.json/cordis.yml/cordis.patch.yml/pnpm-workspace.yaml；运行时
+//        由 profile-seed.js ensureProfileSeeded 读模板落位 $DSH_HOME/profiles/dshana）
+//    profile 根四件套不再由构建期内嵌字符串生成——profile 目录改为运行时种子化的用户自有
+//    真实目录（落位见 lifecycle.js ensureDshanaProfile → tools/lib/profile-seed.js）。
 //    插件 JS 不做 build 这轮 terser（归 pack.mjs 静态压缩步），故不在此遍历的 node_modules
 //    跳过名单之外再压缩。
 function buildCordis(srcRoot, outRoot) {
@@ -181,7 +183,11 @@ function buildCordis(srcRoot, outRoot) {
     if (!fs.pathExistsSync(s)) throw new Error(`cordis bundle 文件缺失：${s}`);
     fs.copySync(s, join(bundleDir, f));
   }
-  console.log("cordis scope tree -> dist/cordis/");
+  // 3) 种子模板（profile 四件套独立文件，运行时读模板种子化）→ dist/cordis/seed/
+  const seedSrc = join(srcRoot, "seed");
+  if (!fs.pathExistsSync(seedSrc)) throw new Error("cordis seed 模板目录缺失：" + seedSrc);
+  fs.copySync(seedSrc, join(outRoot, "seed"));
+  console.log("cordis assets -> dist/cordis/");
 }
 buildCordis(join(ROOT, "src-cordis"), join(ROOT, "dist", "cordis"));
 
