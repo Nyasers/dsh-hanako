@@ -363,7 +363,7 @@ export default class DshHanakoPlugin {
         return {
           errorClass: "restart-needed",
           guidance:
-            "检测到文件缺失类启动失败（多为插件/dsh 更新后的进程内模块缓存或布局陈旧）：请重启 Hana 加载新版本（重启后插件会自动续跑）；若重启后仍复现请重装插件或上报诊断",
+            "启动失败疑似与更新后的缓存或文件加载有关：请重启 Hana 使新版本生效（重启后插件会自动续跑）；若仍失败，请重装插件或上报诊断",
         };
       }
       return classifyInstallError({ milestoneLog: t });
