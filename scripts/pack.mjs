@@ -44,8 +44,7 @@ execFileSync(process.execPath, [join(ROOT, "scripts", "build.mjs")], {
 //    包根结构 = 标准插件形态（根 index.js + routes/ 壳，无 dist 这层目录）。
 //    app/（card.js/css 已 asset/source 内联进 bundle）与 routes/（壳由 build 生成）不再复制。
 const staticItems = [
-  "LICENSE",
-  "README.md",
+  "NOTICE",
   "package.json",
   "manifest.json",
   "pnpm-workspace.yaml",
@@ -59,8 +58,8 @@ for (const item of staticItems) {
   // dereference: true —— 历史为内置 pnpm 的符号链接复制（node_modules/pnpm →
   // .pnpm/pnpm@…/node_modules/pnpm，zip 内置 pnpm）；现版本起 pnpm 改运行时引导
   // （tools/lib/pnpm.js ensurePnpm 下载单文件到数据目录 pnpm-dist/），不再打包
-  // node_modules/pnpm——其余静态项（LICENSE/README/package.json/manifest/dsh-plugin/
-  // skills）均为真实实体，dereference 恒为 no-op，保留无害。
+  // node_modules/pnpm——其余静态项（NOTICE/package.json/manifest/pnpm-workspace/
+  // pnpm-lock/skills）均为真实实体，dereference 恒为 no-op，保留无害。
   fs.copySync(src, join(distDir, item), {
     dereference: true,
     filter: (srcPath) => {
