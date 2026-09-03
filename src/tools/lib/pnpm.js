@@ -3,15 +3,16 @@
 //
 // tools/lib/pnpm.js — pnpm 运行时引导（tarball 渐进式方案）共用模块（lib 提取）
 // 从插件安装包中摘除 pnpm（zip 不再携带 node_modules/pnpm，package.json 不再声明
-// devDependencies pnpm），改为运行时按需引导：下载 pnpm npm 包的 dist/pnpm.mjs
-// （自包含入口 CLI，静态 import 全为 node: 内置模块，宿主 electron node 直接执行）
-// + dist/worker.js（package 导入 worker）到数据目录
-// <dataDir>/pnpm-dist/pnpm-{version}/，固定版本 + sha256 校验。
-// 实测确认（宿主 node v24.15.0）：pnpm view 路径只依赖 pnpm.mjs；pnpm install/add 的导入
+// devDependencies pnpm），改为运行时按需引导：下载 pnpm npm 包 tarball（registry
+// 官方源，gzip 压缩 ~4.9MB，一次下载含全部所需），以 packageManager 的 sha512 校验
+// 后解压提取 dist/pnpm.mjs（自包含入口 CLI，静态 import 全为 node: 内置模块，宿主
+// electron node 直接执行）+ dist/worker.js（package 导入 worker）到数据目录
+// <dataDir>/pnpm-dist/pnpm-{version}/。版本与完整性单一事实源 = packageManager。
+// 宿主 node v26.8.1 下：pnpm view 路径只依赖 pnpm.mjs；pnpm install/add 的导入
 // 阶段经 new Worker(join(import.meta.dirname, "worker.js")) 加载 worker.js（pnpm.mjs
 // 内联处 workerScriptPath），缺 worker.js 时导入 worker 静默退出 1（无错误信息）——
-// 故引导下载两个文件，缺一即重下。版本与校验同源静态配置（见下方 PNPM_BOOTSTRAP），
-// 与构建期 packageManager 解耦（运行时引导只需 view/install/add 三条路径，锁版本足够）。
+// 引导零静态校验字段：tarball sha512 来自 packageManager（corepack 维护），下载校验
+// 后解压提取两文件，缺一即重下。升级 pnpm 仅改 packageManager（corepack use 刷 hash）。
 //
 // 为什么自给自足：宿主 electron node 不带 npm/corepack/npx（Electron 发行只有 node
 // 运行时），引导是唯一自给自足路径；宿主侧未来可能开放 npm 调用（liliMozi 口头确认，
@@ -20,14 +21,13 @@
 //
 // 导出：PNPM_VERSION（版本常量）/ ensurePnpm（幂等引导，返回 pnpm 入口绝对路径）
 // / tryHostChannel（宿主通道探测占位）/ runPnpm（spawn 宿主 node + pnpm 入口封装）
-// / DSH_PACKAGE + buildPnpmInstallArgs（pnpm install 参数构造收敛入口：T7a 起
+// / DSH_PACKAGE + buildPnpmInstallArgs（pnpm install 参数构造收敛入口：
 // lib/install.js 唯一安装调用点只传 registry 兜底意图，包名/旗标同源本模块）
 // / isValidPkgSpec（spec 注入面校验：仅接受严格 SemVer 或合法 dist-tag；校验职责在
 // 调用方——installDepsFromPlugin 计算 effectiveSpec 后、传 buildPnpmInstallArgs 前负责）。
-// 消费方（v0.18.2 收敛）：lib/install.js（installDepsFromPlugin 部署 dsh 依赖树 +
-// verifyDepsSmoke 的 pnpm 引导检查）。lib/check.js（npmViewDistTags）与 src/lifecycle.js
-// （patch 模板 {{NPM_CLI_PATH}} 占位符）v0.18.2 起退出——版本检查改 HTTP 直查 npm
-// registry（pnpm view 语义等价），patch 模板不再注入 pnpm 入口（settings 侧检查链路同改）。
+// 消费方：lib/install.js（installDepsFromPlugin 部署 dsh 依赖树 + verifyDepsSmoke 的
+// pnpm 引导检查）。版本检查走 HTTP 直查 npm registry（pnpm view 语义等价）；
+// settings 侧检查链路不经 pnpm 入口。
 //
 // 零运行时依赖：只用 node 内置模块（fs/path/crypto/https/child_process），不引入任何
 // npm 依赖（rspack externalsPresets.node 下保持外部 import）。容错纪律：引导失败抛
@@ -36,14 +36,15 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
-  createReadStream,
   createWriteStream,
-  existsSync,
   mkdirSync,
-  rmSync,
+  readFileSync,
   renameSync,
+  rmSync,
+  writeFileSync,
 } from "node:fs";
 import { get as httpsGet } from "node:https";
+import { gunzipSync } from "node:zlib";
 import { join } from "node:path";
 import {
   getSingleton,
@@ -52,45 +53,62 @@ import {
   resolveNodeExecEnv,
 } from "./state.js";
 
-// ---- 版本单一事实源：package.json packageManager 字段（"pnpm@11.24.0" → "11.24.0"）----
-// 读取定位复用 state.js 的 PLUGIN_ROOT（向上找含 manifest.json 的目录，源码/bundle 两形态均成立）；
-// 解析失败回退硬编码（与 packageManager 同步的兜底值；升级 pnpm 版本时两处都要改）。
-// ---- 运行时引导配置（静态，版本与文件 sha256 同源）----
-// 版本单一事实源 = 本对象；与 package.json 的 packageManager 字段（构建期 pnpm）解耦：
-// 运行时引导的 pnpm 只服务 pnpm add（依赖部署）路径——v0.18.2 起 pnpm view（版本检查）
-// 改 HTTP 直查 npm registry（pnpm view 语义等价），锁 11.24.0 足够；升级 pnpm
-// 时需同时改 version 与对应文件 sha256（实测本地 node_modules/pnpm/dist/* 后更新）。
-// 版本与校验放同一对象，从结构上杜绝「动态版本 × 静态校验」不同步导致的
-// 误导性失败（改 packageManager 只影响构建，不会静默让运行时引导对不上 hash）。
-// ⚠️ 版本兼容：pnpm 11.24.0 的 engines 要求 node >=22.13；宿主 electron node 当前为
-// v24.15.0（满足）。升级 pnpm 时须核对新版本 engines 不超过宿主 node 版本
+// ---- 版本与完整性单一事实源：package.json packageManager（pnpm@<version>+sha512.<hex>）----
+// corepack 语义：版本 + tarball sha512 由 packageManager 单一承载（corepack use 生成）。
+// 升级 pnpm = 改 packageManager + `corepack use pnpm@<ver>` 刷新 hash（corepack 作 devDep
+// 引入——Node 25+ 官方不再捆绑 corepack，hash 维护工具需固定来源；devDep 不进运行时）。
+// 运行时引导零静态校验字段：从插件根 package.json（PLUGIN_ROOT 定位，源码/bundle 两
+// 形态均成立）解析出版本与 sha512，下载 tarball 后即以此 sha512 校验——完整性链
+// packageManager（corepack 维护）→ tarball → 解压文件，无人工重算环节。
+// 要求 pm 段带 sha512 hash：旧裸版本形态（pnpm@11.25.0 无 hash）无法校验 tarball，
+// 引导时报可读错误提示 corepack use 刷新（历史发布包不含本代码，兼容非问题）。
+// ⚠️ 版本兼容：pnpm 11.25.0 的 engines 要求 node >=22.13；宿主 electron node 当前为
+// v26.8.1（满足）。升级 pnpm 时须核对新版本 engines 不超过宿主 node 版本
 // （宿主 node 版本固定，不做运行时探测；该约束靠此处注释人工把关）。
-// 两个文件：pnpm.mjs（入口 CLI）+ worker.js（package 导入 worker）——pnpm add 的
-// 导入阶段经 new Worker(import.meta.dirname/worker.js) 加载 worker.js（pnpm.mjs
-// 内联处：workerScriptPath = join(import.meta.dirname, "worker.js")），只下载
-// pnpm.mjs 会让 add 的导入 worker 崩溃（exit 1，无错误信息）；pnpm view 路径不触
-// 发 worker，单文件即可。实测（2026-09，宿主 node v24.15.0）确认两个文件均必需。
-const PNPM_BOOTSTRAP = {
-  version: "11.24.0",
-  files: [
-    {
-      name: "pnpm.mjs",
-      sha256: "ad23cef73b049f61e2450b1ba0c0cf2259114b8ec70f5e09b241b85a0cf0841d",
-    },
-    {
-      name: "worker.js",
-      sha256: "7847564f84d0f9fd088539f679b88fb8dec7195e145b4bbf25b712442b6d99c8",
-    },
-  ],
-};
+// tarball 内所需两文件：package/dist/pnpm.mjs（入口 CLI）+ package/dist/worker.js
+// （package 导入 worker）——pnpm add 的导入阶段经 new Worker(join(import.meta.dirname,
+// "worker.js")) 加载 worker.js（pnpm.mjs 内联处 workerScriptPath），只提取 pnpm.mjs
+// 会让 add 的导入 worker 崩溃（exit 1，无错误信息）；pnpm view 路径不触发 worker。
 
-// 兼容导出（外部取版本号用；值 = 静态配置 version，与文件 sha256 同源）
-export const PNPM_VERSION = PNPM_BOOTSTRAP.version;
+// 严格 SemVer（node-semver 校验同款：核心组件与数字 prerelease 标识符禁止前导零；
+// 标识符非空——连续点/空段不匹配）。const 定义须在 parsePnpmManager 之前：模块顶层
+// 解析（PNPM_MANAGER）早于文件后部执行，后置 const 引用会撞 TDZ。
+const SEMVER_STRICT_RE =
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 
-// 下载源：unpkg 直链优先，jsdelivr 兜底（同一文件；两者均可能 302 到边缘 CDN）
-const PNPM_CDNS = [
-  (name) => `https://unpkg.com/pnpm@${PNPM_BOOTSTRAP.version}/dist/${name}`,
-  (name) => `https://cdn.jsdelivr.net/npm/pnpm@${PNPM_BOOTSTRAP.version}/dist/${name}`,
+// 从插件根 package.json 的 packageManager 解析 { version, sha512 }：
+// pnpm@<semver>+sha512.<hex>（corepack use 生成形态；sha512 为 tarball 完整性的 128 hex）。
+// 版本段须过严格 SemVer 判定（isValidSemverSpec：拒前导零 01.25.0 / 空标识符 alpha..1 /
+// prerelease 数字前导零 -01 等畸形——否则绕过解析错误分支，落到误导性「全部源不可用」）；
+// 旧裸版本形态（无 +sha512 段）/ 畸形格式 → null（引导路径给可读错误，不静默回退）。
+function parsePnpmManager() {
+  try {
+    const pkg = JSON.parse(readFileSync(join(PLUGIN_ROOT, "package.json"), "utf8"));
+    const pm = pkg && typeof pkg === "object" ? pkg.packageManager : null;
+    if (typeof pm !== "string") return null;
+    const m = pm.match(/^pnpm@([^\s@+]+)\+sha512\.([0-9a-fA-F]{128})$/);
+    if (!m || !isValidSemverSpec(m[1])) return null;
+    return { version: m[1], sha512: m[2].toLowerCase() };
+  } catch {
+    return null; // 文件缺失 / JSON 畸形 → 引导路径统一给可读错误
+  }
+}
+
+// 模块加载解析一次（packageManager 是插件包静态内容，运行期不变）；null = 解析失败
+const PNPM_MANAGER = parsePnpmManager();
+
+// 兼容导出（外部取版本号用；install.js smoke 报告等；值 = pm 段解析 version）
+export const PNPM_VERSION = PNPM_MANAGER ? PNPM_MANAGER.version : null;
+
+// tarball 下载源（registry 类；unpkg/jsdelivr 等文件 CDN 无 tarball 端点，不入列）：
+// 官方 registry.npmjs.org → 官方国内镜像 npmmirror（302 到 cdn.npmmirror.com，已跟随）
+// → 第三方国内镜像（腾讯云 / 华为云，实测与官方 tarball 逐字节同源）。sha512 校验
+// 兜底：内容不符的源在引导时被拦下自动换下一个，源列表可安全扩充。
+const PNPM_TARBALL_SOURCES = [
+  (version) => `https://registry.npmjs.org/pnpm/-/pnpm-${version}.tgz`,
+  (version) => `https://registry.npmmirror.com/pnpm/-/pnpm-${version}.tgz`,
+  (version) => `https://mirrors.cloud.tencent.com/npm/pnpm/-/pnpm-${version}.tgz`,
+  (version) => `https://mirrors.huaweicloud.com/repository/npm/pnpm/-/pnpm-${version}.tgz`,
 ];
 const DOWNLOAD_TIMEOUT_MS = 60000; // 单次下载请求超时（重定向跟随共享）
 const STDOUT_CAP = 65536; // runPnpm 内存累积上限（调用方只需尾部/错误提取）
@@ -120,15 +138,71 @@ function resolveDataDir(opts) {
   return join(PLUGIN_ROOT, "data");
 }
 
-// ---- sha256（node:crypto 流式计算，零依赖）----
-function sha256File(file) {
-  return new Promise((resolve, reject) => {
-    const hash = createHash("sha256");
-    const rs = createReadStream(file);
-    rs.on("error", reject);
-    rs.on("data", (d) => hash.update(d));
-    rs.on("end", () => resolve(hash.digest("hex")));
-  });
+// ---- tar 提取（零依赖：node 无内置 tar；npm tarball = gzip(tar) 字节流）----
+// 遍历 512B 头块：常规文件（typeflag '0'/NUL）+ PAX 扩展头（'x'，path 覆盖）+
+// GNU longname（'L'）。目标条目命中才取数据 Buffer——只读不按路径写盘，无 zip-slip
+// 面。size 按 8 进制解析（>8GiB 文件的 base-256 size 不处理，npm 包无此量级）。
+// pnpm tarball 条目带 package/ 前缀，dist 下两文件为所需。
+const TAR_TARGETS = {
+  "package/dist/pnpm.mjs": "pnpm.mjs",
+  "package/dist/worker.js": "worker.js",
+};
+
+function extractPnpmFiles(tgzBuf) {
+  const tarBuf = gunzipSync(tgzBuf);
+  const out = new Map(); // 短名（pnpm.mjs/worker.js）→ Buffer
+  let off = 0;
+  let pendingLong = null; // GNU longname 待应用到下一实体头
+  let paxPath = null; // PAX path 覆盖（同样只对下一实体头生效）
+  while (off + 512 <= tarBuf.length) {
+    const head = tarBuf.subarray(off, off + 512);
+    if (head.every((b) => b === 0)) break; // 全零块 = 归档结束
+    const typeflag = String.fromCharCode(head[156] || 0);
+    const sizeStr = head.subarray(124, 136).toString("utf8").replace(/\0.*$/, "").trim();
+    const size = sizeStr ? parseInt(sizeStr, 8) : 0;
+    if (!Number.isFinite(size) || size < 0) {
+      throw new Error("tar 头解析失败 @ " + off);
+    }
+    const dataStart = off + 512;
+    const dataEnd = dataStart + size;
+    off = dataEnd + (Math.ceil(size / 512) * 512 - size);
+    if (typeflag === "x") {
+      // PAX 扩展头记录：格式 "<len> key=value\n"；只取 path
+      const pax = tarBuf.subarray(dataStart, dataEnd).toString("utf8");
+      for (const rec of pax.split("\n")) {
+        const sp = rec.indexOf(" ");
+        const eq = rec.indexOf("=", sp + 1);
+        if (sp > 0 && eq > sp + 1 && rec.slice(sp + 1, eq) === "path") {
+          paxPath = rec.slice(eq + 1);
+        }
+      }
+      continue;
+    }
+    if (typeflag === "L") {
+      pendingLong = tarBuf.subarray(dataStart, dataEnd).toString("utf8").replace(/\0.*$/, "");
+      continue;
+    }
+    let name;
+    if (pendingLong) {
+      name = pendingLong;
+      pendingLong = null;
+    } else if (paxPath) {
+      name = paxPath;
+      paxPath = null;
+    } else {
+      const raw = head.subarray(0, 100).toString("utf8").replace(/\0.*$/, "");
+      const prefix = head.subarray(345, 500).toString("utf8").replace(/\0.*$/, "");
+      name = prefix ? prefix + "/" + raw : raw;
+    }
+    if ((typeflag === "0" || typeflag === "\0") && Object.hasOwn(TAR_TARGETS, name)) {
+      out.set(TAR_TARGETS[name], tarBuf.subarray(dataStart, dataEnd));
+    }
+  }
+  const missing = Object.keys(TAR_TARGETS).filter((n) => !out.has(TAR_TARGETS[n]));
+  if (missing.length) {
+    throw new Error("tarball 缺少目标文件: " + missing.join(", "));
+  }
+  return out;
 }
 
 // ---- https GET（跟随 3xx 重定向；unpkg/jsdelivr 均可能 302 到边缘 CDN）----
@@ -201,7 +275,7 @@ let ensurePromise = null;
 
 export function ensurePnpm(opts) {
   // 并发防护：引导进行中（下载/校验）的调用共享同一 promise——install/check/lifecycle
-  // 并发触发只下载一次。settle 后重置为 null：下次调用重新走「缓存存在 + sha256 一致」
+  // 并发触发只下载一次。settle 后重置为 null：下次调用重新走「缓存存在（两文件）」
   // 快速路径（幂等，不重复下载；文件被外部删除时也能自愈重下）。
   if (ensurePromise) return ensurePromise;
   ensurePromise = doEnsurePnpm(opts).finally(() => {
@@ -214,87 +288,112 @@ async function doEnsurePnpm(opts) {
   // ① 宿主通道探测（未来接入点；当前恒 null → 走单文件引导）
   const host = await tryHostChannel();
   if (host && typeof host === "string" && host) return host;
+  // 版本解析失败（pm 段缺失/畸形/无 sha512）→ 可读错误，不静默回退
+  if (!PNPM_MANAGER) {
+    throw new Error(
+      "pnpm 引导配置解析失败：package.json packageManager 缺失或格式异常（期望 pnpm@<semver>+sha512.<hex>，用 corepack use 维护）",
+    );
+  }
+  const { version, sha512 } = PNPM_MANAGER;
   // ② 缓存路径 <dataDir>/pnpm-dist/pnpm-{version}/{pnpm.mjs,worker.js}（独立于 dsh-pkg）
   const dataDir = resolveDataDir(opts);
-  const cacheDir = join(dataDir, "pnpm-dist", "pnpm-" + PNPM_BOOTSTRAP.version);
+  const cacheDir = join(dataDir, "pnpm-dist", "pnpm-" + version);
   const entry = join(cacheDir, "pnpm.mjs");
-  // ③ 缓存命中且全部文件 sha256 与预期一致 → 直接返回（幂等快速路径）
+  // ③ 缓存命中（两文件存在；tarball 校验 + 原子落位保证无部分写入形态）→ 幂等快速路径
   const cached = await cacheIntact(cacheDir);
   if (cached) {
     console.log("[pnpm] 命中缓存：" + entry);
     return entry;
   }
-  // ④ 下载：unpkg 优先 → jsdelivr 兜底；逐文件临时文件 → 校验 sha256 → 原子落位
-  // （mkdir + rename）。任一文件两源全败 → 抛可读错误（含两源提示）。
+  // ④ 下载 tarball → sha512 校验（packageManager hash）→ gunzip + tar 提取两文件 →
+  // 原子发布：两文件 + 完成标记（.pnpm-ok，最后落位）——标记存在即两文件齐全，读侧
+  // 不见混合对；标记记录 tarball sha512 + 文件 sha256，缓存命中时重算比对（防同版本
+  // hash 变更沿用旧文件 / 缓存文件被篡改截断）。
   mkdirSync(cacheDir, { recursive: true });
-  for (const file of PNPM_BOOTSTRAP.files) {
-    const target = join(cacheDir, file.name);
-    const tmp = join(
+  let lastError = null;
+  for (const makeUrl of PNPM_TARBALL_SOURCES) {
+    const url = makeUrl(version);
+    const tmpTgz = join(
       cacheDir,
-      ".pnpm." + file.name + "." + process.pid + "." + Date.now() + ".tmp",
+      ".pnpm." + version + ".tgz." + process.pid + "." + Date.now() + ".tmp",
     );
-    let lastError = null;
-    for (const cdn of PNPM_CDNS) {
-      const url = cdn(file.name);
-      try {
-        console.log("[pnpm] 引导下载 " + url + " …");
-        await downloadToFile(url, tmp);
-        const actual = await sha256File(tmp);
-        if (actual !== file.sha256) {
-          try {
-            rmSync(tmp, { force: true });
-          } catch {
-            /* 清理失败忽略 */
-          }
-          throw new Error(
-            "pnpm 引导 sha256 校验失败（" +
-              file.name +
-              "：期望 " +
-              file.sha256 +
-              "，实际 " +
-              actual +
-              "）",
-          );
-        }
-        rmSync(target, { force: true }); // 旧缓存（哈希不符场景）先清，再原子落位
+    try {
+      console.log("[pnpm] 引导下载 " + url + " …");
+      await downloadToFile(url, tmpTgz);
+      const tgzBuf = readFileSync(tmpTgz); // 单次读取：同一 buffer 供 sha512 校验与解压
+      const actual = createHash("sha512").update(tgzBuf).digest("hex");
+      if (actual !== sha512) {
+        throw new Error(
+          "tarball sha512 校验失败（期望 " + sha512 + "，实际 " + actual + "）",
+        );
+      }
+      console.log("[pnpm] sha512 校验通过，解压提取 …");
+      const files = extractPnpmFiles(tgzBuf); // Map<短名, Buffer>
+      const digests = {}; // 提取 buffer 直接算 digest（不二次读盘）
+      for (const [shortName, buf] of files) {
+        const target = join(cacheDir, shortName);
+        const tmp = join(
+          cacheDir,
+          ".pnpm." + shortName + "." + process.pid + "." + Date.now() + ".tmp",
+        );
+        writeFileSync(tmp, buf);
+        digests[shortName] = createHash("sha256").update(buf).digest("hex");
+        rmSync(target, { force: true }); // 旧缓存（缺失/损坏场景）先清，再原子落位
         renameSync(tmp, target); // 同目录 rename，原子替换
         console.log("[pnpm] 引导完成：" + target);
-        lastError = null;
-        break;
-      } catch (e) {
-        lastError = e;
-        try {
-          rmSync(tmp, { force: true });
-        } catch {
-          /* 清理失败忽略 */
-        }
-        console.warn("[pnpm] " + url + " 下载失败：" + (e?.message || e));
       }
+      // 完成标记最后落位：两文件已齐 → 标记写入即发布完成（cacheIntact 验收依据）
+      const markerPath = join(cacheDir, ".pnpm-ok");
+      const markerTmp = markerPath + "." + process.pid + "." + Date.now() + ".tmp";
+      writeFileSync(markerTmp, JSON.stringify({ sha512, files: digests }));
+      rmSync(markerPath, { force: true });
+      renameSync(markerTmp, markerPath);
+      rmSync(tmpTgz, { force: true }); // 下载产物用完即清（缓存只留两文件 + 标记）
+      lastError = null;
+      break;
+    } catch (e) {
+      lastError = e;
+      try {
+        rmSync(tmpTgz, { force: true });
+      } catch {
+        /* 清理失败忽略 */
+      }
+      console.warn("[pnpm] " + url + " 失败：" + (e?.message || e));
     }
-    if (lastError) {
-      throw new Error(
-        "pnpm 引导失败（" +
-          file.name +
-          "）：两个源均不可用（" +
-          PNPM_CDNS.map((f) => f(file.name)).join("、") +
-          "），最后错误：" +
-          (lastError?.message || lastError) +
-          "。请检查网络后重试。",
-      );
-    }
+  }
+  if (lastError) {
+    throw new Error(
+      "pnpm 引导失败：全部 tarball 源均不可用（" +
+        PNPM_TARBALL_SOURCES.map((f) => f(version)).join("、") +
+        "），最后错误：" +
+        (lastError?.message || lastError) +
+        "。请检查网络后重试。",
+    );
   }
   return entry;
 }
 
-// 缓存完整性：全部引导文件存在且 sha256 与预期一致（任一缺失/不符 → 重新下载）
-async function cacheIntact(cacheDir) {
-  for (const file of PNPM_BOOTSTRAP.files) {
-    const p = join(cacheDir, file.name);
-    if (!existsSync(p)) return false;
+// 缓存完整性：完成标记 .pnpm-ok 存在且与当前期望一致——标记（两文件之后原子落位）
+// 记录 tarball sha512（须等于 pm 段 hash：同版本 hash 变更时旧文件作废重下）与两文件
+// sha256（重算比对：防篡改/截断/混合对）。任一不符（含旧版无标记缓存）→ 重下自愈。
+function cacheIntact(cacheDir) {
+  let meta = null;
+  try {
+    meta = JSON.parse(readFileSync(join(cacheDir, ".pnpm-ok"), "utf8"));
+  } catch {
+    return false; // 无标记 / 标记损坏
+  }
+  if (!meta || typeof meta !== "object" || meta.sha512 !== PNPM_MANAGER.sha512) return false;
+  for (const shortName of ["pnpm.mjs", "worker.js"]) {
+    const digest = meta.files && meta.files[shortName];
+    if (typeof digest !== "string") return false;
     try {
-      if ((await sha256File(p)) !== file.sha256) return false;
+      const actual = createHash("sha256")
+        .update(readFileSync(join(cacheDir, shortName)))
+        .digest("hex");
+      if (actual !== digest) return false;
     } catch {
-      return false;
+      return false; // 文件缺失 / 读失败
     }
   }
   return true;
@@ -353,15 +452,11 @@ export async function runPnpm(args, opts = {}) {
   });
 }
 
-// ---- pnpm install 参数构造（T7a：lib/install.js 唯一安装调用点的收敛入口）----
-// v0.20.x 起：install.js 不再手拼 pnpm add 参数，改调 buildPnpmAddArgs（add @spec）。
-// T7a（dshana-embed-headless）：dsh 固定版本声明进插件根 package.json 的 dependencies，
-// 安装语义从「pnpm add @deepseek-ai/dsh@<spec>（版本基线 dshTag，外部可独立升级）」转为
-// 「pnpm install（按声明拉取，版本随插件发版）」——dsh 从外部可升级运行时依赖变为插件
-// 不可分割组成。故本函数废弃 add 形态，改为 buildPnpmInstallArgs：不拼包名/spec，只
-// 声明 install（pnpm 原生文本输出——ndjson reporter 已去除 2026-09-03，用户定稿：
-// 结构化事件层未被消费方解析利用，去掉后原生文本由 lib/install.js 逐行直通日志
-// 通道）；registry 兜底意图由调用方只传 URL。
+// ---- pnpm install 参数构造（lib/install.js 唯一安装调用点的收敛入口）----
+// dsh 固定版本声明进插件根 package.json 的 dependencies——安装语义 = pnpm install
+// （按声明拉取，版本随插件发版），dsh 是插件不可分割组成。本函数不拼包名/spec，只
+// 声明 install，输出为 pnpm 原生文本（由 lib/install.js 逐行直通日志通道）；
+// registry 兜底意图由调用方只传 URL。
 // ⚠️ 本函数保持纯拼接不做校验——声明版本合法性（严格 SemVer 或合法 dist-tag，见
 // isValidPkgSpec）由调用方负责：installDepsFromPlugin 读取插件根 package.json 的
 // dependencies 后校验（注入面收口，防 "npm:evil@1.0.0" / "github:user/repo" /
@@ -370,8 +465,8 @@ export const DSH_PACKAGE = "@deepseek-ai/dsh";
 
 export function buildPnpmInstallArgs({ registry } = {}) {
   // --prod：只装运行时 dependencies（插件根 package.json 有 rspack 等 devDeps 构建树，
-  // 运行时不需要；dsh + cordis 在 dependencies，T7d 起部署目标 = 插件根）。
-  const args = ["install", "--prod"]; // 原生文本输出（ndjson reporter 已去除）
+  // 运行时不需要；dsh + cordis 在 dependencies，部署目标 = 插件根）。
+  const args = ["install", "--prod"]; // 原生文本输出
   if (typeof registry === "string" && registry) {
     args.push("--registry=" + registry);
   }
@@ -410,11 +505,6 @@ export function isValidPkgSpec(spec) {
 // 但也不能被 dist-tag 规则放行（会装到非预期包）。
 const SEMVER_LOOSE_SHAPE_RE =
   /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
-
-// 严格 SemVer 判定（与 scripts/version.mjs 同款规则：核心组件与数字 prerelease
-// 标识符必须 0|[1-9]\d*，无前导零；非数字标识符须含至少一个字母或连字符）
-const SEMVER_STRICT_RE =
-  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 
 function isValidSemverSpec(s) {
   const m = String(s).match(SEMVER_STRICT_RE);
