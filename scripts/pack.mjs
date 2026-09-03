@@ -67,7 +67,10 @@ for (const item of staticItems) {
 //   校验一致——手改/漏同步即出包版本漂移。
 function assertCordisDistVersions(outDir) {
   const cordisRoot = join(outDir, "cordis");
-  if (!fs.pathExistsSync(cordisRoot)) return; // cordis 未组装（理论不达，build 恒先跑）
+  // cordis 未组装 = 构建未跑/被清：fail-closed（校验放行空产物会让缺 bundle 的包过包）
+  if (!fs.pathExistsSync(cordisRoot)) {
+    throw new Error("cordis 产物缺失（dist/cordis 不存在）：先跑 pnpm run build 再打包");
+  }
   let count = 0;
   for (const name of fs.readdirSync(cordisRoot)) {
     const pj = join(cordisRoot, name, "package.json");

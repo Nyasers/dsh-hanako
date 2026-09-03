@@ -413,12 +413,20 @@ export async function ensureDshanaProfile(cfg) {
     append("[cordis] dsh app-boot 无 initProfile（版本过旧？），profile 种子化跳过（由诊断引导）");
     return;
   }
-  ensureProfileSeeded({
-    profileDir: join(dshHome, "profiles", PROFILE_NAME),
-    scopeSrc,
-    initProfile: appBoot.initProfile, // 官方 initProfile(dir, bundles, patchReload)：生成 manifest/用户层模板/pnpm-workspace（幂等）
-    log: append,
-  });
+  // ensureProfileSeeded 为同步调用（内部含 fs 操作，ensureScopeLink 的 mkdirSync 在
+  // 保护块外可能抛）；异常不得穿透 ensureDshanaProfile（ensureWebHost await 它，穿透会让
+  // web host 启动中断）——捕获并记 outcome/异常，保持既有诊断路径（profile 缺失 dsh 侧再报）
+  try {
+    const outcome = ensureProfileSeeded({
+      profileDir: join(dshHome, "profiles", PROFILE_NAME),
+      scopeSrc,
+      initProfile: appBoot.initProfile, // 官方 initProfile(dir, bundles, patchReload)：生成 manifest/用户层模板/pnpm-workspace（幂等）
+      log: append,
+    });
+    append(`[cordis] profile 初始化结果：${outcome}`);
+  } catch (e) {
+    append(`[cordis] profile 初始化异常：${(e && e.message) || e}（由诊断引导，dsh loadProfile 会再报）`);
+  }
 }
 
 // ---- web host 生命周期：进程内 boot dsh（T7b 方案 A；spawn 形态已整体退役）----

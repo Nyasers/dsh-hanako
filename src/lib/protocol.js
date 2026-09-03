@@ -29,6 +29,13 @@ function nextRpcId() {
   return `r_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+// HTTP fallback fetch 超时（总线不可用时直连 dsh 的降级路径不能无限挂）：无 caller
+// signal 时用 BUS_RPC_TIMEOUT_MS；有则 AbortSignal.any 合并（任一触发即中止）
+function rpcTimeoutSignal(signal) {
+  const t = AbortSignal.timeout(BUS_RPC_TIMEOUT_MS);
+  return signal ? AbortSignal.any([signal, t]) : t;
+}
+
 async function callUnary(base, method, payload, signal, meta) {
   const rpcId = nextRpcId();
   // meta.rpcId 回传：rpcId 由宿主生成（client-request 信封），dsh 侧以此写 jsonl
@@ -39,7 +46,7 @@ async function callUnary(base, method, payload, signal, meta) {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ type: "client-request", rpcId, method, payload }),
-    signal,
+    signal: rpcTimeoutSignal(signal),
   });
   if (!res.ok) throw new Error(`dsh /api/${method} HTTP ${res.status}`);
   const full = await res.json();
@@ -182,7 +189,7 @@ async function respondDirect(base, payload, signal) {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(payload),
-    signal,
+    signal: rpcTimeoutSignal(signal),
   });
   if (!res.ok) throw new Error(`/api/respond HTTP ${res.status}`);
   return await res.json();

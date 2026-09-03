@@ -1,83 +1,57 @@
----
+﻿---
 name: dsh-session
-description: "dsh_session 工具手册（源码 src/tools/session.js 核对；合并原 dsh_run / dsh_cancel / dsh_approve，操作按 subtool 模块化）。触发场景：提交 DSH 任务（action=create 新建会话+提交 / send 续已有会话，task/cwd 必填，超时/预设/推理强度/provider/model 可选，sessionId 即访问凭证）、取消任务（action=cancel，sessionId 必填，幂等）、查会话清单（action=list，解析 session_projcache，limit 默认 10）、凭 sessionId 取会话内容与最终结论（action=get，读会话 jsonl zstd 容器本地解压）、应答会话挂起审批（action=approve：sessionId/approvalId 必填，outcome=allowed-once/rejected，决策看 args 不听 reason，宿主审批适配应答经总线 respond 回投）、resume 复用会话（send 传上次 sessionId 即续）。需要提交/取消/查询/审批 DSH 任务或会话前先读本技能。"
+description: "dsh_session 宸ュ叿鎵嬪唽锛堟簮鐮?src/tools/session.js 鏍稿锛涘悎骞跺師 dsh_run / dsh_cancel / dsh_approve锛屾搷浣滄寜 subtool 妯″潡鍖栵級銆傝Е鍙戝満鏅細鎻愪氦 DSH 浠诲姟锛坅ction=create 鏂板缓浼氳瘽+鎻愪氦 / send 缁凡鏈変細璇濓紝task/cwd 蹇呭～锛岃秴鏃?棰勮/鎺ㄧ悊寮哄害/provider/model 鍙€夛紝sessionId 鍗宠闂嚟璇侊級銆佸彇娑堜换鍔★紙action=cancel锛宻essionId 蹇呭～锛屽箓绛夛級銆佹煡浼氳瘽娓呭崟锛坅ction=list锛岃В鏋?session_projcache锛宭imit 榛樿 10锛夈€佸嚟 sessionId 鍙栦細璇濆唴瀹逛笌鏈€缁堢粨璁猴紙action=get锛岃浼氳瘽 jsonl zstd 瀹瑰櫒鏈湴瑙ｅ帇锛夈€佸簲绛斾細璇濇寕璧峰鎵癸紙action=approve锛歴essionId/approvalId 蹇呭～锛宱utcome=allowed-once/rejected锛屽喅绛栫湅 args 涓嶅惉 reason锛屽涓诲鎵归€傞厤搴旂瓟缁忔€荤嚎 respond 鍥炴姇锛夈€乺esume 澶嶇敤浼氳瘽锛坰end 浼犱笂娆?sessionId 鍗崇画锛夈€傞渶瑕佹彁浜?鍙栨秷/鏌ヨ/瀹℃壒 DSH 浠诲姟鎴栦細璇濆墠鍏堣鏈妧鑳姐€?
 ---
 
-# dsh_session 工具手册
+# dsh_session 宸ュ叿鎵嬪唽
 
-DSH 会话全生命周期工具（合并原 `dsh_run` / `dsh_cancel` / `dsh_approve` 能力）。权限 `external_side_effect`（external_llm_api，create/send 消耗宿主 provider 额度；cancel/approve 改变会话/审批状态）。实现 `tools/session.js`（注册分派壳）+ `tools/subtool/{run,query,cancel,approve}.js`（各操作独立 execute：run=create/send 提交、query=list/get 只读查询、cancel、approve——subtool 不再单独注册，宿主 Agent 面仅 dsh_session）。
+DSH 浼氳瘽鍏ㄧ敓鍛藉懆鏈熷伐鍏凤紙鍚堝苟鍘?`dsh_run` / `dsh_cancel` / `dsh_approve` 鑳藉姏锛夈€傛潈闄?`external_side_effect`锛坋xternal_llm_api锛宑reate/send 娑堣€楀涓?provider 棰濆害锛沜ancel/approve 鏀瑰彉浼氳瘽/瀹℃壒鐘舵€侊級銆傚疄鐜?`tools/session.js`锛堟敞鍐屽垎娲惧３锛? `tools/subtool/{run,query,cancel,approve}.js`锛堝悇鎿嶄綔鐙珛 execute锛歳un=create/send 鎻愪氦銆乹uery=list/get 鍙鏌ヨ銆乧ancel銆乤pprove鈥斺€攕ubtool 涓嶅啀鍗曠嫭娉ㄥ唽锛屽涓?Agent 闈粎 dsh_session锛夈€?
+## 鍙傛暟濂戠害
 
-## 参数契约
-
-`required: ["action"]`：
-
-| 参数 | 类型 | 语义 |
+`required: ["action"]`锛?
+| 鍙傛暟 | 绫诲瀷 | 璇箟 |
 |---|---|---|
-| `action` | string | `list` / `get` / `create` / `send` / `cancel` / `approve`（见下各节） |
-| `limit` | integer | 仅 list：返回条数（默认 10，有效 1~100） |
-| `sessionId` | string | get/send/cancel/approve 必传（形如 `session-<uuid>`，取自回调/卡片/list；dsh-home 存在即读） |
-| `approvalId` | string | 仅 approve：审批 id（审批通知里带；同一任务可能挂起多个审批，逐个应答） |
-| `outcome` | enum | 仅 approve：`allowed-once`（放行单次，安全默认）/ `rejected`（拒绝该请求） |
-| `task` | string | create/send 必传：任务描述/消息文本 |
-| `cwd` | string | 仅 create 必传：沙箱工作目录（defaultCwd 配置已删除，每次调用显式指定） |
-| `timeout` | number | 仅 create/send：任务超时（秒），缺省用配置 defaultTimeoutSec（0/缺失回落 600s） |
-| `agentPreset` | string | 仅 create/send：agent 预设（standard/ptc/cordis/minimal） |
-| `reasoningEffort` | string | 仅 create/send：推理强度（off/high/max，显式传才指定） |
-| `provider` | string | 仅 create/send：显式 provider（显式即成为 DSH 新默认） |
-| `model` | string | 仅 create/send：显式 model id（与 provider 一起传时覆盖 DSH 默认） |
+| `action` | string | `list` / `get` / `create` / `send` / `cancel` / `approve`锛堣涓嬪悇鑺傦級 |
+| `limit` | integer | 浠?list锛氳繑鍥炴潯鏁帮紙榛樿 10锛屾湁鏁?1~100锛?|
+| `sessionId` | string | get/send/cancel/approve 蹇呬紶锛堝舰濡?`session-<uuid>`锛屽彇鑷洖璋?鍗＄墖/list锛沝sh-home 瀛樺湪鍗宠锛?|
+| `approvalId` | string | 浠?approve锛氬鎵?id锛堝鎵归€氱煡閲屽甫锛涘悓涓€浠诲姟鍙兘鎸傝捣澶氫釜瀹℃壒锛岄€愪釜搴旂瓟锛?|
+| `outcome` | enum | 浠?approve锛歚allowed-once`锛堟斁琛屽崟娆★紝瀹夊叏榛樿锛? `rejected`锛堟嫆缁濊璇锋眰锛?|
+| `task` | string | create/send 蹇呬紶锛氫换鍔℃弿杩?娑堟伅鏂囨湰 |
+| `cwd` | string | 浠?create 蹇呬紶锛氭矙绠卞伐浣滅洰褰曪紙defaultCwd 閰嶇疆宸插垹闄わ紝姣忔璋冪敤鏄惧紡鎸囧畾锛?|
+| `timeout` | number | 浠?create/send锛氫换鍔¤秴鏃讹紙绉掞級锛岀己鐪佺敤閰嶇疆 defaultTimeoutSec锛?/缂哄け鍥炶惤 600s锛?|
+| `agentPreset` | string | 浠?create/send锛歛gent 棰勮锛坰tandard/ptc/cordis/minimal锛?|
+| `reasoningEffort` | string | 浠?create/send锛氭帹鐞嗗己搴︼紙off/high/max锛屾樉寮忎紶鎵嶆寚瀹氾級 |
+| `provider` | string | 浠?create/send锛氭樉寮?provider锛堟樉寮忓嵆鎴愪负 DSH 鏂伴粯璁わ級 |
+| `model` | string | 浠?create/send锛氭樉寮?model id锛堜笌 provider 涓€璧蜂紶鏃惰鐩?DSH 榛樿锛?|
 
-## action=create：新建会话 + 提交任务（原 dsh_run）
+## action=create锛氭柊寤轰細璇?+ 鎻愪氦浠诲姟锛堝師 dsh_run锛?
+- **涓嶅厑璁镐紶 sessionId**锛堟柊寤猴紱缁細璇濈敤 send锛?- **task + cwd 蹇呭～**锛坉efaultCwd 閰嶇疆宸插垹闄わ紝鏃犲洖閫€锛?- **浠诲姟鍙戣捣鍚庝富鍔ㄧ粨鏉熷綋鍓嶅洖鍚?*锛歝reate/send 鍥哄畾寮傛鎻愪氦锛屾彁浜ゅ悗 Agent 搴旂珛鍗?return锛堢粨鏉熷洖澶嶏級锛岃瀹夸富閫氳繃 deferred 鎶曢€掑洖璋冿紙浠诲姟瀹屾垚/瀹℃壒鎸傝捣/澶辫触锛夈€傚鎵归€氱煡璧?interlude 鍨?deferred锛屼絾 interlude 鍚屾牱鍦ㄥ洖鍚堢粨鏉熸椂鎵嶈惤鍦帮紙瀹炴祴涓嶈兘鍦ㄧ粨鏉熷洖鍚堝墠鎻掑叆鏃堕棿绾匡級锛屼笉缁撴潫鍥炲悎鍚屾牱鏀朵笉鍒般€?- 鍥哄畾寮傛锛氱珛鍗宠繑鍥?`{ content: [{ type: "text", text: "浠诲姟宸叉彁浜ょ粰 DSH锛坮pcId: xxx锛夆€? }], details: { dsh: { rpcId, status: "running", cwd }, card: { route: "/card/op?sessionId=鈥?rpcId=鈥?timeoutMs=鈥? } } }`锛沝eferred 娉ㄥ唽 taskId=浠诲姟 rpcId锛坱ype=dsh-run锛屽け璐ヤ篃鍞ら啋锛夛紝瀹屾垚鍚庡涓绘姇閫?`<hana-background-result>`
+- 鎻愪氦閾捐矾锛歚session.create`锛堟柊寤猴細`{cwd, agentPreset?}`锛夆啋 璁?sessionId + cwd 鈫?`selectModel`锛堜粎鏄惧紡浼?provider/model/effort 鏃讹紱model-unavailable 鎶ラ敊闄嶇骇涓嶅甫 effort 閲嶈瘯锛夆啋 `session.prompt`锛坢ode=queue锛岀珛鍗?accepted锛夆啋 缁忔€荤嚎 events 棰戦亾浜嬩欢寰幆锛坆us 鎻掍欢璁㈤槄 `$events` 杞彂锛夆啋 缁堟€?- 浜嬩欢娴侊紙DSH 0.1.2锛夛細浜嬩欢涓嶇洿杩?remote.mux鈥斺€擿@dsh-hanako/bus` 鍦?DSH 杩涚▼鍐呰闃?`$events` 骞剁粡鎬荤嚎杞彂锛坮eady/emit/waterfall锛夈€俙api-session/status false` 鍗充换鍔＄粓鎬侊紱`api-session/error` 璁板け璐ュ厹搴曪紱waterfall 甯у凡鍥炴姇 next
+- **缁堟€佹槧灏?*锛歚api-session/status [sid, false]` 鈫?`end_turn`锛堟棤 error 鏃讹級锛涘嚭鐜拌繃 `api-session/error` 鈫?`error`锛涙祦缁撴潫鏃犵粓鎬佸抚鍏滃簳 `end_turn`
+- 瓒呮椂锛氫换鍔¤秴鏃讹紙timeout 绉掞級浼氱粓姝㈠苟鎶ラ敊锛涘鎵规寕璧锋殏鍋滆鏃讹紙瀹℃壒绛夊緟鏄閮ㄥ喅绛栵紝涓嶈鍏ユ墽琛岃秴鏃讹紝搴旂瓟鍚庢仮澶嶏級
+- 鍗＄墖锛歚/card/op?sessionId=鈥?rpcId=鈥锛堝疄鏃舵棩蹇?杩涘害锛屾彃浠堕噸鍚悗鍙仮澶嶏級
 
-- **不允许传 sessionId**（新建；续会话用 send）
-- **task + cwd 必填**（defaultCwd 配置已删除，无回退）
-- **任务发起后主动结束当前回合**：create/send 固定异步提交，提交后 Agent 应立即 return（结束回复），让宿主通过 deferred 投递回调（任务完成/审批挂起/失败）。审批通知走 interlude 型 deferred，但 interlude 同样在回合结束时才落地（实测不能在结束回合前插入时间线），不结束回合同样收不到。
-- 固定异步：立即返回 `{ content: [{ type: "text", text: "任务已提交给 DSH（rpcId: xxx）…" }], details: { dsh: { rpcId, status: "running", cwd }, card: { route: "/card/op?sessionId=…&rpcId=…&timeoutMs=…" } } }`；deferred 注册 taskId=任务 rpcId（type=dsh-run，失败也唤醒），完成后宿主投递 `<hana-background-result>`
-- 提交链路：`session.create`（新建：`{cwd, agentPreset?}`）→ 记 sessionId + cwd → `selectModel`（仅显式传 provider/model/effort 时；model-unavailable 报错降级不带 effort 重试）→ `session.prompt`（mode=queue，立即 accepted）→ 经总线 events 频道事件循环（bus 插件订阅 `$events` 转发）→ 终态
-- 事件流（DSH 0.1.2）：事件不直连 remote.mux——`@dsh-hanako/bus` 在 DSH 进程内订阅 `$events` 并经总线转发（ready/emit/waterfall）。`api-session/status false` 即任务终态；`api-session/error` 记失败兜底；waterfall 帧已回投 next
-- **终态映射**：`api-session/status [sid, false]` → `end_turn`（无 error 时）；出现过 `api-session/error` → `error`；流结束无终态帧兜底 `end_turn`
-- 超时：任务超时（timeout 秒）会终止并报错；审批挂起暂停计时（审批等待是外部决策，不计入执行超时，应答后恢复）
-- 卡片：`/card/op?sessionId=…&rpcId=…`（实时日志/进度，插件重启后可恢复）
+## action=send锛氱画宸叉湁浼氳瘽鍙戞秷鎭紙鍘?dsh_run resume锛?
+- **sessionId + task 蹇呭～**锛堢画涓婃浼氳瘽锛沜wd 娌跨敤浼氳瘽宸叉湁鍊硷紝鎻愪氦灞傝嚜鍔ㄦ煡璇級
+- 鍏朵綑琛屼负涓?create 鐩稿悓锛堟彁浜?鈫?浜嬩欢娴?鈫?缁堟€?鈫?鍗＄墖锛?
+## action=cancel锛氬彇娑堜换鍔★紙鍘?dsh_cancel锛?
+- **sessionId 蹇呭～**锛坉sh_run 鍥炶皟/鍗＄墖 URL 閲屽甫锛涘彇娑堜竴寰嬫樉寮忎紶 sessionId锛?- 骞傜瓑锛氫换鍔″凡缁撴潫杩斿洖鏃犻渶鍙栨秷锛涜繍琛屾湡鍗忚皟鏉＄洰浠?sessionId 閿帶锛屾瀬鏃?cancel 璺宠繃鏍囪
+- 鎬荤嚎 Unary RPC `session.cancel` 鈫?浠诲姟浠?aborted 缁堟€佹敹灏?鈫?鍞ら啋 Agent
+- 鍗℃/璇淳/涓嶅啀闇€瑕佺粨鏋滄椂姝㈡崯鐢?
+## action=approve锛氬簲绛斾細璇濇寕璧峰鎵癸紙鍘?dsh_approve锛?
+- **sessionId + approvalId 蹇呭～**锛堝鎵归€氱煡閲屽甫锛涘叏閾捐矾鍞竴瀹氫綅閿?= 浠诲姟 sessionId锛屽悓閿嵆搴旂瓟璇ヤ細璇濇寕璧风殑瀹℃壒锛涘悓涓€浠诲姟鍙兘鎸傝捣澶氫釜瀹℃壒锛岄€愪釜搴旂瓟锛?- **outcome**锛歚allowed-once`锛堥粯璁わ紝瀹夊叏榛樿鍊硷細鏀捐鍗曟浠呮湰娆℃搷浣滐級/ `rejected`锛堟嫆缁濊璇锋眰锛?- **瀹℃壒瑙﹀彂**锛欴SH agent 璇锋眰瓒婄晫鏉冮檺锛坅pproval/requested锛夆啋 浠诲姟鎸傝捣锛屽鎵逛笂涓嬫枃瀛?`g.ops[sessionId].activeApprovals`锛涘涓荤粡 deferred锛坕nterlude 鍨嬶級鎶曢€?dsh-approval 閫氱煡锛宲ayload锛歚{ kind, rpcId, sessionId, approvalId, toolName, callId, reason, args, taskPreview }`锛坅rgs = 宸ュ叿璋冪敤鍙傛暟鍘熸枃锛屽懡浠?璺緞锛?- **鍐崇瓥锛氱湅 args锛堝叿浣撴墽琛屼簡浠€涔堬級锛屼笉鍚?reason锛坢odel 鑷堪涓嶅彲灏戒俊锛?*鈥斺€斿悎鐞嗘斁琛岋紝鍗遍櫓鎷掔粷
+- **搴旂瓟閾捐矾**锛氬簲绛旂粡鎬荤嚎 RPC锛坈allUnaryBus锛夊彂 `method="respond"` 鈫?bus 缈昏瘧鍣ㄨ嚜鐜皟 `POST /api/$events/result`锛坋ventId = 瀹℃壒甯?eventId锛宱utcome `{ kind: 'result', value }`锛夛紱鎬荤嚎鏈繛鎺ラ檷绾?HTTP 鐩磋繛
+- **瓒呮椂**锛歚approvalTimeoutSec`锛坈onfig.json `global.approvalTimeoutSec` 浼樺厛锛岀己鐪?0=绂佺敤锛夊唴鏃犱汉搴旂瓟鑷姩 rejected锛坄auto: expired`锛?- **瀹℃壒鎸傝捣鏆傚仠鎵ц瓒呮椂璁℃椂**锛堝鎵圭瓑寰呮槸澶栭儴鍐崇瓥锛屼笉璁″叆浠诲姟瓒呮椂锛涘簲绛?瓒呮椂鍚庢仮澶嶏級锛涘簲绛旀垚鍔?瓒呮椂鍚庝换鍔＄户缁窇鑷崇粓鎬?- **鍏滃簳**锛欴SH Web UI锛坵ebPort 榛樿 3080锛変汉宸ュ鐞嗕粛鍙敤
+- **閿欒璇箟**锛氫换鍔′笉瀛樺湪/宸茶繃鏈熴€佸鎵逛笉鍦ㄥ緟鍔炲垪琛紙鍙兘宸插簲绛?瓒呮椂锛夈€佸凡搴旂瓟鍕块噸澶嶅簲绛斻€佸簲绛旀湭鎺ュ彈锛堝彲鑳借秴鏃?浠栨柟澶勭悊锛夆€斺€旀寜杩斿洖娑堟伅澶勭悊鍗冲彲
 
-## action=send：续已有会话发消息（原 dsh_run resume）
+## action=list锛氫細璇濇竻鍗?
+瑙ｆ瀽 `session_projcache.json`锛坉sh-home 鍞竴浜嬪疄婧愶級锛歚{ sessionId, title, cwd?, createdAt?, lastPromptAt?, usage?, turns?, steps?, llmMs? }`锛屾寜 lastPromptAt 闄嶅簭鍙栨渶杩?N 鏉°€傜函鏈湴璇伙紝涓嶈皟 DSH web host銆?
+## action=get锛氬嚟 sessionId 鐩村彇浼氳瘽鍐呭
 
-- **sessionId + task 必填**（续上次会话；cwd 沿用会话已有值，提交层自动查询）
-- 其余行为与 create 相同（提交 → 事件流 → 终态 → 卡片）
+projcache 鍏冩暟鎹?+ summary锛坖sonl 鏈€鍚庝竴鏉?assistant/message 鐨?text锛屾埅鏂?鈮?000锛夈€俲sonl `<dataDir>/dsh-home/sessions/<cwd-key>/<sessionId>/session.jsonl.zstd` 鏄甯?zstd 瀹瑰櫒锛堝抚 magic `0xFD2FB528`锛夛紝node:zlib 閫愬抚瑙ｅ帇鎷兼帴銆?
+## 浣跨敤鍦烘櫙
 
-## action=cancel：取消任务（原 dsh_cancel）
+- 鎻愪氦浠诲姟锛歚create`锛堟柊浠诲姟锛夋垨 `send`锛堢画涓婃 sessionId鈥斺€斿厛 list/get 纭浼氳瘽锛?- 姝㈡崯锛歚cancel`锛堝崱姝?璇淳锛?- 鍥炵湅锛歚list`锛堟竻鍗曪級鈫?`get`锛堟渶缁堢粨璁?鍐呭锛?- 瀹℃壒锛氭敹鍒?dsh-approval 閫氱煡鍚?`approve`锛坰essionId+approvalId+outcome锛屽喅绛栫湅 args 涓嶅惉 reason锛?
+## 鍏宠仈
 
-- **sessionId 必填**（dsh_run 回调/卡片 URL 里带；取消一律显式传 sessionId）
-- 幂等：任务已结束返回无需取消；运行期协调条目以 sessionId 键控，极早 cancel 跳过标记
-- 总线 Unary RPC `session.cancel` → 任务以 aborted 终态收尾 → 唤醒 Agent
-- 卡死/误派/不再需要结果时止损用
-
-## action=approve：应答会话挂起审批（原 dsh_approve）
-
-- **sessionId + approvalId 必填**（审批通知里带；全链路唯一定位键 = 任务 sessionId，同键即应答该会话挂起的审批；同一任务可能挂起多个审批，逐个应答）
-- **outcome**：`allowed-once`（默认，安全默认值：放行单次仅本次操作）/ `rejected`（拒绝该请求）
-- **审批触发**：DSH agent 请求越界权限（approval/requested）→ 任务挂起，审批上下文存 `g.ops[sessionId].activeApprovals`；宿主经 deferred（interlude 型）投递 dsh-approval 通知，payload：`{ kind, rpcId, sessionId, approvalId, toolName, callId, reason, args, taskPreview }`（args = 工具调用参数原文，命令/路径）
-- **决策：看 args（具体执行了什么），不听 reason（model 自述不可尽信）**——合理放行，危险拒绝
-- **应答链路**：应答经总线 RPC（callUnaryBus）发 `method="respond"` → bus 翻译器自环调 `POST /api/$events/result`（eventId = 审批帧 eventId，outcome `{ kind: 'result', value }`）；总线未连接降级 HTTP 直连
-- **超时**：`approvalTimeoutSec`（config.json `global.approvalTimeoutSec` 优先，缺省 0=禁用）内无人应答自动 rejected（`auto: expired`）
-- **审批挂起暂停执行超时计时**（审批等待是外部决策，不计入任务超时；应答/超时后恢复）；应答成功/超时后任务继续跑至终态
-- **兜底**：DSH Web UI（webPort 默认 3080）人工处理仍可用
-- **错误语义**：任务不存在/已过期、审批不在待办列表（可能已应答/超时）、已应答勿重复应答、应答未接受（可能超时/他方处理）——按返回消息处理即可
-
-## action=list：会话清单
-
-解析 `session_projcache.json`（dsh-home 唯一事实源）：`{ sessionId, title, cwd?, createdAt?, lastPromptAt?, usage?, turns?, steps?, llmMs? }`，按 lastPromptAt 降序取最近 N 条。纯本地读，不调 DSH web host。
-
-## action=get：凭 sessionId 直取会话内容
-
-projcache 元数据 + summary（jsonl 最后一条 assistant/message 的 text，截断 ≤4000）。jsonl `<dataDir>/dsh-home/sessions/<cwd-key>/<sessionId>/session.jsonl.zstd` 是多帧 zstd 容器（帧 magic `0xFD2FB528`），node:zlib 逐帧解压拼接。
-
-## 使用场景
-
-- 提交任务：`create`（新任务）或 `send`（续上次 sessionId——先 list/get 确认会话）
-- 止损：`cancel`（卡死/误派）
-- 回看：`list`（清单）→ `get`（最终结论/内容）
-- 审批：收到 dsh-approval 通知后 `approve`（sessionId+approvalId+outcome，决策看 args 不听 reason）
-
-## 关联
-
-- `dsh_install` 已退役：依赖安装由自动链 + Bootstrap 自举承担（无需手动工具）
-- 事件流/总线：`@dsh-hanako/bus`（消息总线，dshana.bus WS 服务端）；审批瀑布帧广播不区分会话（宿主按 sessionId 归属过滤尚未实现）
+- `dsh_install` 宸查€€褰癸細渚濊禆瀹夎鐢辫嚜鍔ㄩ摼 + Bootstrap 鑷妇鎵挎媴锛堟棤闇€鎵嬪姩宸ュ叿锛?- 浜嬩欢娴?鎬荤嚎锛歚@dsh-hanako/bus`锛堟秷鎭€荤嚎锛宒shana.bus WS 鏈嶅姟绔級锛涘鎵圭€戝竷甯у箍鎾笉鍖哄垎浼氳瘽锛堝涓绘寜 sessionId 褰掑睘杩囨护灏氭湭瀹炵幇锛?

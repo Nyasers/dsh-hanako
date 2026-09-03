@@ -48,6 +48,21 @@ function main() {
     console.log("[tagver] 主版本相对 HEAD 未变化（未真实 bump），跳过 git commit/tag");
     return;
   }
+  // 预检：目标 tag 已存在则 fail-before（不 staging、不 commit——避免留下未打 tag 的发版 commit）
+  const tagRef = "refs/tags/v" + version;
+  try {
+    const existing = execSync("git rev-parse -q --verify " + tagRef, {
+      cwd: ROOT,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    if (existing) {
+      console.error("[tagver] tag " + tagRef + " 已存在（" + existing.slice(0, 12) + "），拒绝重复发版——如确需重打先删旧 tag");
+      process.exit(1);
+    }
+  } catch {
+    /* tag 不存在：正常，继续 */
+  }
   const files = versionCommitFiles();
   run("git add " + files.join(" "), "git add");
   run("git commit -m \"chore: bump v" + version + "\"", "git commit");

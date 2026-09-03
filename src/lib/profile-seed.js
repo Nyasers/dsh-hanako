@@ -42,7 +42,6 @@ import {
   realpathSync,
   symlinkSync,
   rmSync,
-  rmdirSync,
   cpSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -168,7 +167,7 @@ function ensureScopeLink(profileDir, scopeSrc, createLink, log) {
       } catch {
         /* 链接目标缺失（broken link）：按漂移删除重建 */
       }
-      rmdirSync(link); // 删链接本身，不递归（防误删链接目标）
+      rmSync(link, { force: true }); // 删链接本身（rmSync 对符号链接/junction 均只删链接不递归；POSIX 下 rmdir 对 symlink 报 ENOTDIR）
     } else if (st.isDirectory()) {
       // 实体目录残留（老拷贝 / pnpm 误建等）：@dsh-hanako 为插件保留区，删后重建
       rmSync(link, { recursive: true, force: true });
@@ -226,7 +225,7 @@ export function ensureProfileSeeded(opts) {
   if (destStat && destStat.isSymbolicLink()) {
     // 老整树 junction：删链接本身（不递归），随后初始化
     try {
-      rmdirSync(profileDir);
+      rmSync(profileDir, { force: true }); // 老整树 junction：删链接本身（同上 rmSync 语义，跨平台对 symlink/junction）
       destStat = null;
       log("[cordis] 检测到老整树 junction（profiles/dshana），移除链接后按新形态初始化");
     } catch (e) {

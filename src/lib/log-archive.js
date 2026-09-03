@@ -21,7 +21,7 @@ import {
 import { zstdCompressSync } from "node:zlib";
 import { join } from "node:path";
 
-const LOG_NAME_RE = /^\d{8}-\d{6}(?:-\d+)?\.log$/;
+const LOG_NAME_RE = /^\d{8}-\d{6}(?:-\d+)*\.log$/; // 毫秒戳 + 可选碰撞后缀（nextTimestampLogPath 冲突时 -2/-3…）
 
 /** 毫秒级时间戳（日志文件名与行前缀共用）：同一秒内多次会话天然不撞名 */
 export function logFileStamp(d) {
