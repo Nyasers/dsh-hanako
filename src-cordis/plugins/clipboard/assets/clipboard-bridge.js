@@ -6,7 +6,7 @@
 // 经 tapIndex 注入每个 index 响应的 <head> 内，运行时由 index.js
 // readFileSync(new URL("./clipboard-bridge.js", import.meta.url)) 读取并包
 // <script id="@dsh-hanako/clipboard-bridge"> 后注入。cordis 子插件散装分发
-// （不经 rspack，文件随包复制进 dist/cordis/node_modules/@dsh-hanako/clipboard/），
+// （不经 rspack，文件随包复制进 dist/cordis/clipboard/），
 // pack.mjs 静态压缩步会把本文件按 script 语义 terser（module=false，无 ESM 语法）。
 // 语义与配套见 index.js 头注释（clipboard 权限链/MessageChannel 回执/2.5s 超时）。
 (function () {

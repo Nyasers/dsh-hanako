@@ -1,6 +1,6 @@
 # @dsh-hanako/dshana 的内置 roster（官方语义 bundle patch）。
 # 本文件 = src-cordis/cordis.patch.yml：构建期由 build.mjs buildCordis 随 bundle 顶层
-# 落位为 dist/cordis/node_modules/@dsh-hanako/dshana/cordis.patch.yml（package.json 的
+# 落位为 dist/cordis/dshana/cordis.patch.yml（package.json 的
 # dsh.bundle.patch 声明指向本文件）。8 个 @dsh-hanako/* 子插件不发布 npm，与本 bundle
 # 同 scope 物理共存于 profile 的 node_modules/@dsh-hanako——插件侧建单条 scope 目录链接
 # 暴露（升级即更新，零拷贝，漂移由 ensureDshanaProfile 幂等修复）。

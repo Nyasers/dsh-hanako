@@ -5,7 +5,8 @@
 // 从 src/lifecycle.js ensureDshanaProfile 剥离的纯路径逻辑（设计 specs/current/
 // dshana-profile-bundle/spec.md D1/D2/D4/D5）：profile 目录（$DSH_HOME/profiles/dshana）
 // 由插件运行时初始化为用户自有真实目录（不再整树 junction 挂插件产物），8 个
-// @dsh-hanako/* 子插件 + bundle @dsh-hanako/dshana 经单条 scope 目录链接暴露。
+// @dsh-hanako/* 子插件 + bundle @dsh-hanako/dshana 经单条 scope 目录链接暴露（scopeSrc =
+// PLUGIN_ROOT/cordis——9 包平铺于 cordis 资产根，链接名 @dsh-hanako 供 cordis 解析）。
 //
 // 官方生成工具（2026-09-04 定案）：profile 文件（manifest package.json / 用户层
 // cordis.patch.yml / pnpm-workspace.yaml）由 @deepseek-ai/dsh-app-boot 的 initProfile
@@ -158,7 +159,7 @@ function ensureScopeLink(profileDir, scopeSrc, createLink, log) {
 // 主入口：dshana profile 初始化/迁移/scope 链接（幂等；消费方 = lifecycle.js
 // ensureDshanaProfile，profile 名门控与路径定位在调用方完成）。
 // opts: { profileDir, scopeSrc, initProfile, log?, createLink? }——profileDir =
-// $DSH_HOME/profiles/dshana；scopeSrc = PLUGIN_ROOT/cordis/node_modules/@dsh-hanako；
+// $DSH_HOME/profiles/dshana；scopeSrc = PLUGIN_ROOT/cordis（产物平铺 scope 根）；
 // initProfile = 官方 @deepseek-ai/dsh-app-boot 的 initProfile(dir, bundles, patchReload)
 //（生成 manifest/用户层模板/pnpm-workspace，幂等只补缺失）。
 // 返回 outcome：missing-source（scope 源缺失）| refused（拒绝迁移）| init-failed |

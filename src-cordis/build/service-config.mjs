@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Nyasers
 //
 // src-cordis/build/service-config.mjs — cordis 子插件服务端半共享 preset（rspack）
-// 学官方 dsh 组织：每包自持构建描述（plugins/@dsh-hanako/<pkg>/cordis.config.mjs），
+// 学官方 dsh 组织：每包自持构建描述（plugins/<pkg>/cordis.config.mjs），
 // 共享 preset 层消费描述生成实际打包配置。本模块 = 原 scripts/cordis.config.mjs
 // 单包逻辑的参数化提取（两源两产物：src → 插件本体；src-cordis → 子插件包）。
 //

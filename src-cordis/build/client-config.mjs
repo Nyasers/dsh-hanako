@@ -3,7 +3,7 @@
 //
 // src-cordis/build/client-config.mjs — cordis 子插件 client 半共享 preset（tsdown）
 // 学官方 dsh（packages/client/tsdown.client.ts clientBundle 预设）：每包自持构建描述
-// （plugins/@dsh-hanako/<pkg>/cordis.config.mjs 的 client 字段），本 preset 生成并执行
+// （plugins/<pkg>/cordis.config.mjs 的 client 字段），本 preset 生成并执行
 // tsdown 打包。输出 closure-factory 自注册 client bundle：
 //   format cjs + outputOptions intro/banner/footer →
 //     intro:  var module = { exports: {} }; var exports = module.exports;

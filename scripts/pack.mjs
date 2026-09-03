@@ -62,7 +62,7 @@ for (const item of staticItems) {
 }
 
 // 2. 静态资产压缩（terser JS 纯语法级 + clean-css CSS 压缩，覆盖写回 dist 副本）
-//     cordis 插件（dist/cordis/node_modules/@dsh-hanako/*/index.js，由 build 从
+//     cordis 插件（dist/cordis/*/index.js，由 build 从
 //     src-cordis 组装）被 dsh 运行时 import() 加载、client.js 被浏览器
 //     ModuleLoader 按 window.__ModuleLoader__.load 注册；均只做语法级压缩。
 function resolveTool(pkgName) {
