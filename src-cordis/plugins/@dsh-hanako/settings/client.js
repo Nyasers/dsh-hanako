@@ -7,7 +7,7 @@
 // 插件规范注册 settings.section slot（ledger 驱动导航：ui-settings-general 的
 // useSections 直接投影 ctx.slots.entries("settings.section")，注册即出现在设置面板
 // 导航，无需任何 DOM hack）。本文件是 ESM 源（构建输入）：tsdown client 链
-// （scripts/client-chain.mjs）构建期为 package.json exports["./client"] 指向的
+// （src-cordis/build/client-config.mjs）构建期为 package.json exports["./client"] 指向的
 // client bundle 产物（学官方 dsh clientBundle 预设：intro/banner/footer 包
 // window.__ModuleLoader__.load({ id, factory })，react/jsx-runtime external 走
 // loader 注入模块表 require）。CSS/图标存 assets/（hs.css/gear.svg）经 ?inline 内联。

@@ -22,7 +22,7 @@
 //
 // 注入脚本内容文件化 + 打包内联（review 修订）：桥脚本正文存独立文件
 // assets/theme-bridge.js（纯浏览器 JS），经 rspack asset/source 内联进本包
-// bundle（见 scripts/cordis.config.mjs）。桥脚本唯一动态点是数据表注入占位符
+// bundle（preset 见 src-cordis/build/service-config.mjs）。桥脚本唯一动态点是数据表注入占位符
 // __DSH_THEME_TOKENS__（TOKEN_MAP 序列化），模块初始化时一次 replace 替换——
 // 与主 bundle src/assets 内联同架构，无运行时文件 IO。
 //
