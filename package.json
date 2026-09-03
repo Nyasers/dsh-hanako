@@ -9,7 +9,8 @@
     "pack": "node scripts/pack.mjs",
     "prepack": "node scripts/build.mjs",
     "preversion": "pnpm run pack",
-    "version": "node scripts/version.mjs"
+    "version": "node scripts/version.mjs",
+    "postversion": "node scripts/postversion.mjs"
   },
   "dependencies": {
     "@deepseek-ai/cordis": "4.0.2",

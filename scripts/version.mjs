@@ -7,10 +7,12 @@
 // 直接拒绝（bump 是发版动作，不允许混入其他改动）——dry-run 只是预览，不要求
 // 工作区干净（自测/预览时允许有未提交改动）。
 //
-// 职责边界：只做版本号的机械同步——package.json（单一事实源）bump → manifest.json
-// 同步（防手改漏同步的坑）+ cordis 包 version 同步（src-cordis 顶层 roster bundle 与
-// plugins/* 子插件：随插件整体发版不独立发布，version 与 manifest 同批同步、恒 = 主
-// 版本，单一事实源同主 package.json）→ commit + annotated tag。
+// 职责边界：version 阶段只算号 + bump 主 package.json（单一事实源）；派生同步
+// （manifest.json + cordis 包 version）与 git commit/tag 收尾在 postversion 阶段
+// （scripts/postversion.mjs）——对齐 npm 生命周期：preversion(pack 验证) → version
+// (bump 主) → postversion(同步 manifest/cordis + commit/tag)。
+// 注意：本仓库走 pnpm run version（钩子链无自动 commit，顺序安全）；若改用 npm version，
+// npm 会在 version 后自行 commit/tag（不含派生同步文件）——勿混用。
 // 打包验证（源码能 build + 链路通 + 版本一致）由 preversion 钩子前置：
 // pnpm run version → preversion(pnpm run pack → prepack(build) → pack) → version。
 // dry-run 预览（--dry-run）走 node 直跑绕过 preversion 钩子——钩子感知不到脚本参数
@@ -188,23 +190,10 @@ function calcNewVersion(current, arg) {
   return formatSemver(ev);
 }
 
-function run(cmd, desc) {
-  console.log("[version] " + desc + "...");
-  if (dryRun) {
-    console.log("  [dry-run] " + cmd);
-    return;
-  }
-  try {
-    execSync(cmd, { stdio: "inherit", cwd: ROOT, shell: true });
-  } catch (e) {
-    console.error("[version] " + desc + " 失败: " + e.message);
-    process.exit(1);
-  }
-}
-
 // cordis 包清单（src-cordis 顶层 roster bundle + plugins/* 子插件 package.json，相对
-// ROOT）：version 与 manifest 同批同步（cordis 包随插件整体发版不独立发布，历史独立号
-// 废弃；version 仅元数据一致性，单一事实源 = 主 package.json）
+// ROOT）：version 与 manifest 同批在 postversion 同步（scripts/postversion.mjs）；cordis
+// 包随插件整体发版不独立发布，历史独立号废弃，version 仅元数据一致性（单一事实源 =
+// 主 package.json）
 function cordisPkgPaths() {
   const out = ["src-cordis/package.json"];
   const plugins = path.join(ROOT, "src-cordis", "plugins");
@@ -259,40 +248,16 @@ function main() {
     }
   }
 
-  // 1) package.json bump（单一事实源）
+  // 1) package.json bump（单一事实源）；manifest/cordis 同步与 commit/tag 在
+  //    postversion 阶段（scripts/postversion.mjs，见文件头职责边界说明）
   if (!dryRun) {
     pkg.version = next;
     write("package.json", pkg);
   }
-  console.log("[version] 1/4 package.json -> " + next);
-
-  // 2) manifest.json 同步（脚本保证同步，防漏）
-  if (!dryRun) {
-    const manifest = read("manifest.json");
-    manifest.version = next;
-    write("manifest.json", manifest);
+  console.log("[version] package.json -> " + next + "（postversion 将同步 manifest + cordis 包并提交）");
+  if (dryRun) {
+    console.log("[version] [dry-run] 后续 postversion（未跑）：manifest.json + " + cordisPkgPaths().length + " 个 cordis 包同步 → git add → commit chore: bump v" + next + " → tag v" + next);
   }
-  console.log("[version] 2/4 manifest.json -> " + next);
-
-  // 3) cordis 包 version 同步（与 manifest 同批；src-cordis 顶层 roster bundle + plugins/*）
-  const cordisFiles = cordisPkgPaths();
-  if (!dryRun) {
-    for (const rel of cordisFiles) {
-      const c = read(rel);
-      c.version = next;
-      write(rel, c);
-    }
-  }
-  console.log("[version] 3/4 cordis 包（" + cordisFiles.length + " 个）-> " + next);
-
-  // 4) git commit + annotated tag（CHANGELOG 由发版人自行维护，bump 前写好并提交；
-  //    本脚本只提交版本号文件，打包验证已由 preversion 钩子先行完成）
-  run("git add package.json manifest.json " + cordisFiles.join(" "), "git add");
-  run("git commit -m \"chore: bump v" + next + "\"", "git commit");
-  run("git tag -a v" + next + " -m \"v" + next + "\"", "git tag -a v" + next);
-
-  console.log("\n[version] ✅ v" + next + " bump 完成（package.json + manifest.json + " + cordisFiles.length + " 个 cordis 包对齐）。推送（tag 触发 CI 发布）：");
-  console.log("  git push origin master --tags");
 }
 
 main();
