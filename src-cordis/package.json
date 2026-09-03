@@ -1,13 +1,12 @@
 {
-  "name": "dsh-profile-dshana",
+  "name": "@dsh-hanako/dshana",
   "private": true,
   "version": "1.0.0",
-  "description": "dshana profile：官方服务层（dsh-base）复用官方 UI client 插件（ui-layout/ui-workspace 等纯呈现组件，不强联鉴权）+ @dsh-hanako/* 子插件；不走官方 web profile（无 connection/browser-auth 鉴权面，WebUI 由宿主专供）；由插件运行时整体挂载为 $DSH_HOME/profiles/dshana",
-  "dependencies": {},
+  "type": "module",
+  "description": "dshana 内置 roster 的官方语义 bundle：仿 @deepseek-ai/dsh-base，以 dsh.bundle.patch 声明内置 cordis.patch.yml，经 profile manifest 的 dsh.profile.bundles 层序加载（在 profile 用户层与 home 层之前）。与 dsh-base 的差异：官方 bundle 把子插件列为 npm dependencies 由 pnpm 闭包拉取；本插件的 8 个 @dsh-hanako/* 子插件不发布 npm，与本包同 scope 物理共存于 profile 的 node_modules/@dsh-hanako（插件侧单条 scope 目录链接暴露，升级即更新），故不声明 dependencies（声明了也无法从 registry 解析）",
   "dsh": {
-    "profile": {
-      "bundles": ["@deepseek-ai/dsh-base"],
-      "patchReload": "live"
+    "bundle": {
+      "patch": "./cordis.patch.yml"
     }
   }
 }
