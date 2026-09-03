@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.0.0-beta.2-hotfix.2+dsh-0.1.2-alpha.5（2026-09-03）
+
+- **/webui 刷新侧栏误报未就绪**（PR #61）：服务端渲染 ready 时客户端 boot 变量仍为 null，`attach()` 首推面板即按默认「未就绪」报给宿主侧栏，且无恢复机制（事件流不重放旧态）→ 卡死未就绪。修复：`pushPanel()` 未知态（boot=null）不推，快照到达后经 `applyBoot` 补推真实状态；初始化 ready 路径补 `refreshBoot()` 快照对齐。
+- **ready 状态机回退与首次快照重试**（#61 后续，CodeRabbit Major）：非 ready 快照撤销 `readyReceived`（防回退到 booting 后无法再完整走 mountReady 恢复）；boot 首次快照失败 3 次有界重试（5/10/15s），避免侧栏停留未知态。
+- **侧栏状态标签** `DSH web host` → `DSHana`。
+- **.prettierignore** 排除 `*.jinja2`：模板混合 HTML/CSS/JS/eta 标签非标准语法，格式化器会把 `{{= }}` 当花括号块拆行破坏（2026-09-03 工作区事故；顺带还原事故中混入的 1000+ 行格式噪声，仅保留实质改动）。
+
 ## v1.0.0-beta.2-hotfix.1+dsh-0.1.2-alpha.5（2026-09-03）
 
 - **去除 pnpm ndjson reporter**（PR #57）：pnpm 安装改原生文本输出——ndjson 解析层（PNPM_STAGE_DESC / pnpmNdjsonLineToText 等六函数 + makePipe 逐行 JSON 转换）实际未驱动任何结构化展示（Bootstrap 壳页直显文本日志），白付复杂度，整体移除（−211 行）。行规范化/跨 chunk 重组/emitLog/tail 语义保留；失败错误提取 pnpmErrorTail 改原生文本尾部直取（每流各限 ≤300）。T1 错误分类链路输入形态不变（特征码在原生文本同样命中）。
