@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.0.0-beta.2-hotfix.2+dsh-0.1.2-rc.1（2026-09-03）
+
+- **dsh 依赖跟进 0.1.2-alpha.5 → 0.1.2-rc.1**（PR #62）：上游 0.1.2 系列由 alpha 收敛至 RC（GitHub compare 核对为纯版本号阶段变更，无协议/API 变化）。版本号 build 段随依赖刷新 `+dsh-0.1.2-rc.1`，主体不 bump（`dsh` 子命令语义）。
+- **packageManager** pnpm `11.24.0` → `11.25.0`（随 lockfile 同步）。
+
 ## v1.0.0-beta.2-hotfix.2+dsh-0.1.2-alpha.5（2026-09-03）
 
 - **/webui 刷新侧栏误报未就绪**（PR #61）：服务端渲染 ready 时客户端 boot 变量仍为 null，`attach()` 首推面板即按默认「未就绪」报给宿主侧栏，且无恢复机制（事件流不重放旧态）→ 卡死未就绪。修复：`pushPanel()` 未知态（boot=null）不推，快照到达后经 `applyBoot` 补推真实状态；初始化 ready 路径补 `refreshBoot()` 快照对齐。
