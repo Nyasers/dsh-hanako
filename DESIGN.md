@@ -25,13 +25,16 @@ Hana 宿主进程
 
 ## 工具
 
-三个工具由插件注册（实现 `tools/*.js`），**完整调用手册见各工具的 SKILL**：
+宿主 Agent 工具面收敛为**单工具 `dsh_session`**（源码 `tools/session.js` 分派壳 + `tools/subtool/{run,query,cancel,approve}.js`——每操作独立 execute，subtool 不再单独注册）。**完整调用手册见 [dsh-session](src/skills/dsh-session/SKILL.md)**：
 
-| 工具 | 用途 | 调用手册 |
+| action | 用途 | 实现 |
 | --- | --- | --- |
-| `dsh_session` | 会话全生命周期：list（清单）/ get（凭 sessionId 取内容）/ create（新建+提交）/ send（续会话，resume）/ cancel（取消）。合并原 dsh_run / dsh_cancel | [dsh-session](skills/dsh-session/SKILL.md) |
-| `dsh_install` | 依赖安装/验证两合一（action=install 按声明 pnpm install --prod 到插件根 + autoStart + 安装卡片；verify 静态核对，无子进程）。版本严格锁声明 | [dsh-install](skills/dsh-install/SKILL.md) |
-| `dsh_approve` | 应答 DSH 任务挂起的权限审批（allowed-once / rejected）——独立保留（权限应答语义正交，非会话操作） | [dsh-approve](skills/dsh-approve/SKILL.md) |
+| `create` / `send` | 新建会话+提交 / 续已有会话（task+cwd 必填，resume 语义） | subtool/run（合并原 dsh_run） |
+| `list` / `get` | 会话清单 / 凭 sessionId 取内容（projcache + jsonl zstd 本地读） | subtool/query |
+| `cancel` | 取消任务（sessionId 必填，幂等） | subtool/cancel（原 dsh_cancel） |
+| `approve` | 应答会话挂起审批（allowed-once/rejected，决策看 args） | subtool/approve（原 dsh_approve） |
+
+`dsh_install` 已退役：依赖安装由自动链 + Bootstrap 自举承担（D6 零干预），能力层 `lib/bootstrap.js`（installDeps/verifyDeps）保留供插件生命周期使用。
 
 任务提交链路（dsh_session create/send）：`session.create`（新建 `{cwd, agentPreset?}`；send 沿用会话 cwd）→ `selectModel`（仅显式传 provider/model/effort 时）→ `session.prompt`（mode=queue）→ 经总线 events 频道（bus 插件订阅 `$events` 转发）→ 终态（`api-session/status false` = end_turn）。deferred taskId = 任务 rpcId，完成宿主唤醒。
 
@@ -83,4 +86,4 @@ DSH 设置页「DSHana 设置」分页（settings.section slot，id `dshana-sett
 - **升级 dsh = 装新插件包 + 重启宿主**：插件侧无法豁免宿主进程内 ESM 模块缓存（spec 决策，勿重走弯路）；跨版本升级后 boot 撞旧 .pnpm 路径 ENOENT → errorClass=restart-needed 停等，重启宿主后自动链自动续跑
 - **bash 工具在 Windows 上可能 `E_ACCESSDENIED`**（dsh-bash-sandbox 创建 bash 服务实例失败，属 DSH 沙箱环境限制）。文件系统工具正常，Windows 上优先用文件系统工具
 - **HMR 降级**：进程内 boot 无 `--expose-internals`，dshana profile 的 patchReload live 依赖 HMR 可能静默降级（patch 静态/重启生效，插件升级时 dispose+reboot 重载）
-- 越界权限请求默认走审批自动化：插件捕获 approval/requested → 通知 Agent → `dsh_approve` 应答；无人应答超时自动拒绝
+- 越界权限请求默认走审批自动化：插件捕获 approval/requested → 通知 Agent → `dsh_session(action="approve")` 应答；无人应答超时自动拒绝
