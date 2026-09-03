@@ -66,9 +66,11 @@ const shell = 'import { pluginRoutes } from "../index.js";\nexport default plugi
 fs.outputFileSync(join(ROOT, "dist", "routes", "index.js"), shell, "utf8");
 console.log("route shell -> routes/index.js");
 
-// 3) manifest 复制（src 域构件 → dist 根：state.js PLUGIN_ROOT 向上找 manifest 即达）
+// 3) src 域构件复制（→ dist 根）：manifest.json（state.js PLUGIN_ROOT 向上找 manifest
+// 即达）+ skills/（插件 SKILL 随 src 分发，描述插件工具与宿主能力）
 fs.copySync(join(ROOT, "src", "manifest.json"), join(ROOT, "dist", "manifest.json"));
-console.log("manifest.json -> dist/");
+fs.copySync(join(ROOT, "src", "skills"), join(ROOT, "dist", "skills"));
+console.log("manifest.json + skills -> dist/");
 
 // 4) 二次 terser（主区）
 await extraTerser(join(ROOT, "dist"));

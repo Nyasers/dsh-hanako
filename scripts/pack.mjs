@@ -37,11 +37,10 @@ if (version !== manifestVersion)
 const staticItems = [
   "NOTICE",
   "package.json",
-  // manifest.json 已随 src 域移入 src/manifest.json（src 半构建产出 dist/manifest.json），
-  // 不再经根级静态复制
+  // manifest.json 与 skills 已随 src 域（src/manifest.json、src/skills/，build:src 产出
+  // dist 副本），不再经根级静态复制
   "pnpm-workspace.yaml",
   "pnpm-lock.yaml",
-  "skills",
 ];
 const distDir = join(ROOT, "dist");
 for (const item of staticItems) {
