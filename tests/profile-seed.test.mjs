@@ -35,7 +35,7 @@ import {
 const TEST_FILE_DIR = dirname(fileURLToPath(import.meta.url));
 // 真实模板目录（源码层 src-cordis/seed；生产运行时经构建复制为 dist/cordis/seed）
 const REAL_SEED_DIR = join(TEST_FILE_DIR, "..", "src-cordis", "seed");
-const SEED_NAMES = ["package.json", "cordis.yml", "cordis.patch.yml", "pnpm-workspace.yaml"];
+const SEED_NAMES = ["package.json", "cordis.patch.yml", "pnpm-workspace.yaml"]; // cordis.yml 不入种子（dsh boot prepareProfile 自维护空根）
 
 // 平台分支目录链接（junction/symlink(dir) 与生产同款）
 function makeDirLink(target, link) {
@@ -189,12 +189,13 @@ test("老整树实体拷贝迁移：清内置残留 → 种子 + scope 链接", 
   const scopeSrc = makeScopeSrc(root);
   const seedDir = makeSeedDir(root);
   const profileDir = profileDirOf(root);
-  // 老拷贝残留：实体目录含四件套 + node_modules/@dsh-hanako 实体拷贝（含旧文件标记）
+  // 老拷贝残留：实体目录含内置文件 + node_modules/@dsh-hanako 实体拷贝（含旧文件标记）
   mkdirSync(join(profileDir, "node_modules", "@dsh-hanako", "logger"), { recursive: true });
   writeFileSync(join(profileDir, "node_modules", "@dsh-hanako", "logger", "legacy-marker.txt"), "old-copy\n");
   writeFileSync(join(profileDir, "package.json"), "{\n  \"name\": \"dsh-profile-dshana\",\n  \"private\": true,\n  \"dependencies\": {}\n}\n");
   writeFileSync(join(profileDir, "cordis.patch.yml"), "# 58 行老 roster 内容……\n- id: system-prompt\n");
-  writeFileSync(join(profileDir, "cordis.yml"), "[]\n");
+  // cordis.yml 残留（dsh 自维护文件，不在种子清理范围——boot 会写回空根覆盖）
+  writeFileSync(join(profileDir, "cordis.yml"), "# 老拷贝残留\n[]\n");
   writeFileSync(join(profileDir, "pnpm-workspace.yaml"), "packages:\n  - .\n");
   const { logs, push } = collectLogs();
   const outcome = ensureProfileSeeded({ profileDir, scopeSrc, seedDir, log: push });
@@ -202,6 +203,7 @@ test("老整树实体拷贝迁移：清内置残留 → 种子 + scope 链接", 
   assertSeededFiles(profileDir, seedDir); // 旧内容被模板替换（种子后 cordis.patch.yml 为模板空用户层）
   assertScopeLink(profileDir, scopeSrc);
   assert.ok(!existsSync(join(profileDir, "node_modules", "@dsh-hanako", "logger", "legacy-marker.txt")), "旧实体拷贝应被清理");
+  assert.ok(existsSync(join(profileDir, "cordis.yml")), "cordis.yml 残留保留（dsh 自维护文件，不由种子清理）");
   assert.ok(logs.some((l) => l.includes("老拷贝")), "应记老拷贝清理日志");
 });
 
@@ -327,18 +329,19 @@ test("缺文件补齐 + 用户改动不覆盖", (t) => {
   const seedDir = makeSeedDir(root);
   const profileDir = profileDirOf(root);
   ensureProfileSeeded({ profileDir, scopeSrc, seedDir, log: () => { } });
-  // 用户编辑 patch、误删 cordis.yml
+  // 用户编辑 patch、误删 pnpm-workspace.yaml（cordis.yml 由 dsh boot 自维护，不在补齐范围）
   const userPatch = "# 用户改动后的用户层\n[]\n";
   writeFileSync(join(profileDir, "cordis.patch.yml"), userPatch);
-  rmSync(join(profileDir, "cordis.yml"));
+  rmSync(join(profileDir, "pnpm-workspace.yaml"));
   const out = ensureProfileSeeded({ profileDir, scopeSrc, seedDir, log: () => { } });
   assert.equal(out, "ensured");
   assert.equal(readFileSync(join(profileDir, "cordis.patch.yml"), "utf8"), userPatch, "用户 patch 不得被覆盖");
   assert.equal(
-    readFileSync(join(profileDir, "cordis.yml"), "utf8"),
-    readFileSync(join(seedDir, "cordis.yml"), "utf8"),
-    "缺失的 cordis.yml 应从 seedDir 补齐",
+    readFileSync(join(profileDir, "pnpm-workspace.yaml"), "utf8"),
+    readFileSync(join(seedDir, "pnpm-workspace.yaml"), "utf8"),
+    "缺失的 pnpm-workspace.yaml 应从 seedDir 补齐",
   );
+  assert.ok(!existsSync(join(profileDir, "cordis.yml")), "ensure 不创建 cordis.yml（dsh boot 自维护）");
 });
 
 test("源缺失：scopeSrc 不存在 → missing-source，profile 不动", (t) => {

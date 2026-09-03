@@ -7,14 +7,17 @@
 // 由插件运行时种子化为用户自有真实目录（不再整树 junction 挂插件产物），8 个
 // @dsh-hanako/* 子插件 + bundle @dsh-hanako/dshana 经单条 scope 目录链接暴露。
 //
-// 模板文件化（review 修订 2026-09-04）：种子四件套（package.json/cordis.yml/
-// cordis.patch.yml/pnpm-workspace.yaml）以独立文件存于源码层 src-cordis/seed/
+// 模板文件化（review 修订 2026-09-04）：种子模板以独立文件存于源码层 src-cordis/seed/
 // （构建期随 scope 树落位 dist/cordis/seed/，见 build.mjs buildCordis），运行时由
 // 本模块按名读取——YAML/JSON 模板保持文件形态可审可校验，不再内嵌 JS 字符串。
 // opts.seedDir 为注入的模板目录（消费方 lifecycle.js 传 PLUGIN_ROOT/cordis/seed）。
+// 种子范围（2026-09-04 修订）：cordis.yml 不在种子内——它是 loader include 锚点的空
+// entry 根，dsh 每次 boot 的 prepareProfile 无条件写回维护（官方所有 profile 同款），
+// 种子预填属冗余；剩余三件套 = package.json（profile manifest）/ cordis.patch.yml
+// （用户层初始引导模板）/ pnpm-workspace.yaml（hoisted workspace）。
 //
 // 形态判定（迁移只处理已声明「纯内置物」的两态，其余拒绝——绝不整树删除）：
-//   profiles/dshana 不存在                      → 种子（四件套 + scope 链接）
+//   profiles/dshana 不存在                      → 种子（三件套 + scope 链接）
 //   isSymbolicLink（老整树 junction）           → rmdir 链接本身后种子
 //   实体目录且 node_modules/@dsh-hanako 已是链接 → 新形态：幂等 ensure（只补缺失、
 //                                                 链接漂移才重建；不覆盖用户改动）
@@ -49,9 +52,10 @@ import { join } from "node:path";
 // 模板内容本身在 seed 目录文件，这里只留判定常量）。
 const PROFILE_MANIFEST_NAME = "dsh-profile-dshana";
 
-// 种子四件套（顺序即写入/清理顺序；package.json 为 profile manifest；内容从
-// seedDir 按名读取 = src-cordis/seed 同名文件，见 build.mjs buildCordis 复制）
-const SEED_NAMES = ["package.json", "cordis.yml", "cordis.patch.yml", "pnpm-workspace.yaml"];
+// 种子文件清单（顺序即写入/清理顺序；package.json 为 profile manifest；内容从
+// seedDir 按名读取 = src-cordis/seed 同名文件，见 build.mjs buildCordis 复制）。
+// cordis.yml 不入种子（dsh boot prepareProfile 自维护空根，见文件头注释）。
+const SEED_NAMES = ["package.json", "cordis.patch.yml", "pnpm-workspace.yaml"];
 
 const noop = () => {};
 

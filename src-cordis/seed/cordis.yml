@@ -1,7 +1,0 @@
-# dshana profile 根配置种子模板（src-cordis/seed → dist/cordis/seed，运行时由
-# profile-seed.js ensureProfileSeeded 读取落位 $DSH_HOME/profiles/dshana）。
-# 本文件是空 entry 根：dsh profile 组合语义 = 空根上依次叠加各 bundle patch /
-# profile 用户层 / home 层 / --patch overlays 组成整树。
-# 头注释文案沿革：构建期字符串时代的原文（"Edit cordis.patch.yml" 指引仍适用于
-# 种子化后的 profile 用户层文件 cordis.patch.yml，勿改本文件）。
-[]
