@@ -372,24 +372,25 @@ function buildProviderRoutes() {
   g.latestProviderRoutes = result.routes;
   return result;
 }
-// ---- dshana profile 运行时种子化（真实目录 + scope 链接，替代整树 junction）----
+// ---- dshana profile 运行时初始化（真实目录 + scope 链接，替代整树 junction）----
 // vX（dshana-profile-bundle 重构，spec：specs/current/dshana-profile-bundle/spec.md
-// D1/D2/D4/D5）：profile 目录改为运行时种子化的用户自有真实目录（用户可自装插件），
+// D1/D2/D4/D5）：profile 目录改为运行时初始化的用户自有真实目录（用户可自装插件），
 // 不再整树 junction 挂插件产物。产物 = scope 树（dist/cordis/node_modules/@dsh-hanako/**，
 // 含 bundle @dsh-hanako/dshana 与 8 子插件，见 build.mjs buildCordis）：
-//   profileDir = $DSH_HOME/profiles/dshana：种子四件套（package.json manifest
-//   dsh.profile.bundles=[@deepseek-ai/dsh-base, @dsh-hanako/dshana]、cordis.yml 空根、
-//   cordis.patch.yml 用户层、pnpm-workspace.yaml）+ node_modules/@dsh-hanako 单条
-//   scope 目录链接 → PLUGIN_ROOT/cordis/node_modules/@dsh-hanako。
-// 种子化/迁移/链接幂等逻辑收敛在 tools/lib/profile-seed.js（ensureProfileSeeded，纯路径
-// 逻辑便于测试）；本函数只做 profile 名门控 + 路径定位 + g.appendLog 日志注入。语义：
-//   老整树 junction → 删链接重种子；老拷贝实体目录（name=dsh-profile-dshana 且
-//   dependencies 空 = 纯内置物）→ 清内置残留重种子；含用户依赖/未知内容 → 拒绝迁移
-//   （warn + 诊断引导，绝不整树删除）。种子文件只补缺失不覆盖用户改动；scope 链接
-//   缺失/漂移重建、失败回退整体拷贝。源缺失记 warn 不阻断——若 profile 缺失 dsh 侧
+//   profileDir = $DSH_HOME/profiles/dshana：官方 initProfile 生成（manifest
+//   dsh.profile.bundles=[@deepseek-ai/dsh-base, @dsh-hanako/dshana]、用户层
+//   cordis.patch.yml 模板、pnpm-workspace.yaml；cordis.yml 空根由 dsh boot 自维护）+
+//   node_modules/@dsh-hanako 单条 scope 目录链接 → PLUGIN_ROOT/cordis/node_modules/@dsh-hanako。
+// 初始化/迁移/链接幂等逻辑收敛在 tools/lib/profile-seed.js（ensureProfileSeeded，纯路径
+// 逻辑便于测试）；本函数只做 profile 名门控 + 路径定位 + 官方 initProfile 注入
+// （loadInprocDsh 拿 appBoot，dsh 依赖缺失时跳过由诊断引导）+ g.appendLog 日志。语义：
+//   老整树 junction → 删链接后官方初始化；老拷贝实体目录（name=dsh-profile-dshana 且
+//   dependencies 空 = 纯内置物）→ 清内置残留后官方补齐；含用户依赖/未知内容 → 拒绝迁移
+//   （warn + 诊断引导，绝不整树删除）。initProfile 幂等只补缺失不覆盖用户改动；scope
+//   链接缺失/漂移重建、失败回退整体拷贝。源缺失记 warn 不阻断——若 profile 缺失 dsh 侧
 //   会再报，最终由诊断引导修复。
 const PROFILE_NAME = "dshana";
-export function ensureDshanaProfile(cfg) {
+export async function ensureDshanaProfile(cfg) {
   // 仅 dshana profile 路线需要种子化：配置改回官方 profile（如 web）时不执行，
   // 走官方 bundle（dsh 自动 initProfile）。
   if (resolveProfileName(cfg) !== PROFILE_NAME) return;
@@ -398,10 +399,24 @@ export function ensureDshanaProfile(cfg) {
   const srcRoot = join(PLUGIN_ROOT, "cordis"); // 打包产物 cordis/（scope 树形态，包内无顶层 package.json）
   const scopeSrc = join(srcRoot, "node_modules", "@dsh-hanako");
   const dshHome = join(cfg.dataDir, "dsh-home");
+  // 官方生成工具 initProfile（@deepseek-ai/dsh-app-boot 导出，与 loadLayeredEnv 同模块）：
+  // 复用 loadInprocDsh 拿 appBoot（dsh 依赖缺失/版本无 initProfile 时无法官方生成 →
+  // warn 跳过，由诊断链引导——profile 无 manifest 时 dsh loadProfile 会再报）。
+  let appBoot = null;
+  try {
+    appBoot = (await loadInprocDsh(cfg.dshPkgDir || resolveDshPkgDir(cfg)))?.appBoot ?? null;
+  } catch (e) {
+    append(`[cordis] dsh app-boot 解析失败，profile 种子化跳过（${(e && e.message) || e}，由诊断引导）`);
+    return;
+  }
+  if (typeof appBoot?.initProfile !== "function") {
+    append("[cordis] dsh app-boot 无 initProfile（版本过旧？），profile 种子化跳过（由诊断引导）");
+    return;
+  }
   ensureProfileSeeded({
     profileDir: join(dshHome, "profiles", PROFILE_NAME),
     scopeSrc,
-    seedDir: join(srcRoot, "seed"), // 种子模板目录（dist/cordis/seed，构建期复制自 src-cordis/seed）
+    initProfile: appBoot.initProfile, // 官方 initProfile(dir, bundles, patchReload)：生成 manifest/用户层模板/pnpm-workspace（幂等）
     log: append,
   });
 }
@@ -638,7 +653,7 @@ export async function ensureWebHost(cfg) {
   // 启动前确保 dshana profile 已种子化并挂 scope 链接（$DSH_HOME/profiles/dshana 真实
   // 目录 → dist/cordis/node_modules/@dsh-hanako），否则 dsh loadProfile 会抛「profile
   // does not exist」。
-  ensureDshanaProfile(cfg);
+  await ensureDshanaProfile(cfg);
   return bootInproc(cfg, { pkgDir, dshHome, port, logPath });
 }
 // ---- T7b：进程内 boot dsh（动态 import + runProfile，webserver 保留在进程内 bind）----

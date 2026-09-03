@@ -170,8 +170,8 @@ await extraTerser(join(ROOT, "dist"));
 //        src-cordis/build/client-config.mjs，学官方 clientBundle 预设）
 //      dist/cordis/node_modules/@dsh-hanako/dshana/{package.json, cordis.patch.yml}
 //        ← src-cordis 顶层（roster bundle 包：dsh.bundle.patch 声明，无 JS 入口不打包）
-//      dist/cordis/seed/** ← src-cordis/seed/**（profile 种子模板四件套，运行时种子化读模板）
-//    profile 根四件套不再由构建期生成——profile 目录改为运行时种子化的用户自有真实目录
+//    profile 文件（manifest/用户层/pnpm-workspace/cordis.yml）不随产物分发——profile
+//    目录由运行时官方 initProfile 生成 + dsh boot prepareProfile 自维护
 //    （落位见 lifecycle.js ensureDshanaProfile → tools/lib/profile-seed.js）。
 //    插件 JS 不做 build 这轮 terser（rspack 已 minimize；pack.mjs 静态压缩步兜底二次压缩），
 //    故不在此遍历的 node_modules 跳过名单之外再压缩。
@@ -211,11 +211,7 @@ function buildCordisStatic(srcRoot, outRoot) {
     if (!fs.pathExistsSync(s)) throw new Error(`cordis bundle 文件缺失：${s}`);
     fs.copySync(s, join(bundleOut, f));
   }
-  // 3) 种子模板（profile 四件套独立文件，运行时读模板种子化）→ dist/cordis/seed/
-  const seedSrc = join(srcRoot, "seed");
-  if (!fs.pathExistsSync(seedSrc)) throw new Error("cordis seed 模板目录缺失：" + seedSrc);
-  fs.copySync(seedSrc, join(outRoot, "seed"));
-  console.log("cordis 静态组装 -> dist/cordis/（子插件 " + pkgNames.length + " 包 + dshana bundle + seed）");
+  console.log("cordis 静态组装 -> dist/cordis/（子插件 " + pkgNames.length + " 包 + dshana bundle）");
 }
 
 // 打包 cordis 子插件（两链编排）：扫描各包自持构建描述（cordis.config.mjs）→
