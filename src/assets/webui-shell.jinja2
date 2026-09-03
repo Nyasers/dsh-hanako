@@ -383,10 +383,12 @@
       function pushPanel() {
         try {
           if (!hana || !hana.panel || !hana.panel.set) return;
+          if (!boot) return; // 快照未到（未知态）不推——避免把「未就绪」误报给宿主侧栏；
+          // 快照到达后必经 applyBoot → pushPanel 以真实状态补推
           var st = panelStatusView();
           hana.panel.set({
             sections: [
-              { kind: "status", id: "dshana-status", label: "DSH web host", value: st.word, delta: st.delta, deltaTone: st.tone },
+              { kind: "status", id: "dshana-status", label: "DSHana", value: st.word, delta: st.delta, deltaTone: st.tone },
             ],
             refresh: { intervalMs: 30000 },
           }).catch(function () { /* 面板不可用静默降级 */ });
@@ -615,6 +617,7 @@
           pushPanel();
           return;
         }
+        readyReceived = false; // 非 ready 快照：撤销就绪标志，使后续 ready 恢复时能完整走 mountReady（data-view 恢复 + attach）
         document.body.setAttribute("data-view", view);
         var el = panelEl();
         if (el) el.innerHTML = view === "action" ? actionViewHtml(bs) : bootViewHtml(bs);
@@ -635,6 +638,16 @@
           .then(function (d) { if (d) applyBoot(d); })
           .catch(function () { /* 快照读取失败忽略（等下一事件/兜底） */ })
           .finally(function () { bootRefreshing = false; });
+      }
+      var bootSnapshotRetries = 0; // 首次快照失败有限重试计数器
+      function retryBootSnapshot() {
+        if (boot || bootSnapshotRetries >= 3) return;
+        bootSnapshotRetries += 1;
+        setTimeout(function () {
+          if (boot) return;
+          refreshBoot();
+          retryBootSnapshot();
+        }, 5000 * bootSnapshotRetries);
       }
       function mountReady() {
         if (readyReceived) return;
@@ -834,6 +847,9 @@
       if (document.body.getAttribute("data-view") === "ready") {
         readyReceived = true;
         attach();
+        refreshBoot(); // 服务端渲染 ready 时 boot 仍为 null：拉一次快照对齐侧栏面板状态
+        retryBootSnapshot(); // 首次快照失败时有限重试（3 次，5/10/15s 间隔），避免侧栏停留在未知态
+        //（attach 首推被 boot 判空跳过；applyBoot(ready) 会以真实状态补推「运行中」）
         openReadyStream();
       } else {
         if (initBoot && typeof initBoot === "object") applyBoot(initBoot);
