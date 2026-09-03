@@ -1,7 +1,7 @@
 {
   "name": "@dsh-hanako/dshana",
   "private": true,
-  "version": "1.0.0-beta.3+dsh-0.1.2-rc.1",
+  "version": "1.0.0-beta.4+dsh-0.1.2-rc.1",
   "type": "module",
   "description": "dshana 内置 roster 的官方语义 bundle：仿 @deepseek-ai/dsh-base，以 dsh.bundle.patch 声明内置 cordis.patch.yml，经 profile manifest 的 dsh.profile.bundles 层序加载（在 profile 用户层与 home 层之前）。与 dsh-base 的差异：官方 bundle 把子插件列为 npm dependencies 由 pnpm 闭包拉取；本插件的 8 个 @dsh-hanako/* 子插件不发布 npm，与本包同 scope 物理共存于 profile 的 node_modules/@dsh-hanako（插件侧单条 scope 目录链接暴露，升级即更新），故不声明 dependencies（声明了也无法从 registry 解析）",
   "dsh": {
