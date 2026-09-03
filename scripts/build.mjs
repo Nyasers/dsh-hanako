@@ -17,7 +17,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 
 import fs from "fs-extra";
-import config from "./rspack.config.mjs";
+import config from "../src/rspack.config.mjs"; // src 域：主 bundle 构建配置随源码根
 // cordis 子插件构建：共享 preset 层在 src-cordis/build（配置随源码走，学官方 dsh）
 import { serviceBundle } from "../src-cordis/build/service-config.mjs";
 import { buildClientBundle } from "../src-cordis/build/client-config.mjs";

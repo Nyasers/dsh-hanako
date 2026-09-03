@@ -8,8 +8,9 @@
     "build": "pnpm run build:src && pnpm run build:cordis",
     "build:src": "node scripts/build.mjs --src",
     "build:cordis": "node scripts/build.mjs --cordis",
-    "prepack": "node scripts/syncver.mjs",
-    "pack": "pnpm run build && node scripts/pack.mjs",
+    "syncver": "node scripts/syncver.mjs",
+    "prepack": "pnpm run syncver && pnpm run build",
+    "pack": "node scripts/pack.mjs",
     "prebump": "pnpm run build",
     "bump": "node scripts/bump.mjs",
     "postbump": "pnpm run syncver && node scripts/postbump.mjs"

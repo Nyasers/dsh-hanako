@@ -34,6 +34,20 @@ function main() {
     console.error("[postbump] package.json version 缺失");
     process.exit(1);
   }
+  // 硬门禁：仅当主版本相对 HEAD 确实变化（bump 真实改版）才提交——防 bump --dry-run /
+  // 工作区杂改动（package.json 其它未提交内容）被误当 bump 提交（历史事故两次）
+  let headVersion = null;
+  try {
+    headVersion = JSON.parse(
+      execSync("git show HEAD:package.json", { cwd: ROOT, encoding: "utf8" }),
+    ).version;
+  } catch {
+    /* HEAD 无 package.json（首提交前）→ 视为版本未变，走跳过 */
+  }
+  if (headVersion === version) {
+    console.log("[postbump] 主版本相对 HEAD 未变化（未真实 bump），跳过 git commit/tag");
+    return;
+  }
   const files = versionCommitFiles();
   const diff = execSync("git status --porcelain -- " + files.join(" "), {
     cwd: ROOT,
