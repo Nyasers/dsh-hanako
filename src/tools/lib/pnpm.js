@@ -37,7 +37,6 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   createWriteStream,
-  existsSync,
   mkdirSync,
   readFileSync,
   renameSync,
@@ -71,18 +70,24 @@ import {
 // "worker.js")) 加载 worker.js（pnpm.mjs 内联处 workerScriptPath），只提取 pnpm.mjs
 // 会让 add 的导入 worker 崩溃（exit 1，无错误信息）；pnpm view 路径不触发 worker。
 
+// 严格 SemVer（node-semver 校验同款：核心组件与数字 prerelease 标识符禁止前导零；
+// 标识符非空——连续点/空段不匹配）。const 定义须在 parsePnpmManager 之前：模块顶层
+// 解析（PNPM_MANAGER）早于文件后部执行，后置 const 引用会撞 TDZ。
+const SEMVER_STRICT_RE =
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+
 // 从插件根 package.json 的 packageManager 解析 { version, sha512 }：
 // pnpm@<semver>+sha512.<hex>（corepack use 生成形态；sha512 为 tarball 完整性的 128 hex）。
+// 版本段须过严格 SemVer 判定（isValidSemverSpec：拒前导零 01.25.0 / 空标识符 alpha..1 /
+// prerelease 数字前导零 -01 等畸形——否则绕过解析错误分支，落到误导性「全部源不可用」）；
 // 旧裸版本形态（无 +sha512 段）/ 畸形格式 → null（引导路径给可读错误，不静默回退）。
 function parsePnpmManager() {
   try {
     const pkg = JSON.parse(readFileSync(join(PLUGIN_ROOT, "package.json"), "utf8"));
     const pm = pkg && typeof pkg === "object" ? pkg.packageManager : null;
     if (typeof pm !== "string") return null;
-    const m = pm.match(
-      /^pnpm@([0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?)\+sha512\.([0-9a-fA-F]{128})$/,
-    );
-    if (!m) return null;
+    const m = pm.match(/^pnpm@([^\s@+]+)\+sha512\.([0-9a-fA-F]{128})$/);
+    if (!m || !isValidSemverSpec(m[1])) return null;
     return { version: m[1], sha512: m[2].toLowerCase() };
   } catch {
     return null; // 文件缺失 / JSON 畸形 → 引导路径统一给可读错误
@@ -301,7 +306,9 @@ async function doEnsurePnpm(opts) {
     return entry;
   }
   // ④ 下载 tarball → sha512 校验（packageManager hash）→ gunzip + tar 提取两文件 →
-  // 逐文件原子落位。完整性链：sha512 覆盖下载全量，解压产物随之可信，无文件级二次校验。
+  // 原子发布：两文件 + 完成标记（.pnpm-ok，最后落位）——标记存在即两文件齐全，读侧
+  // 不见混合对；标记记录 tarball sha512 + 文件 sha256，缓存命中时重算比对（防同版本
+  // hash 变更沿用旧文件 / 缓存文件被篡改截断）。
   mkdirSync(cacheDir, { recursive: true });
   let lastError = null;
   for (const makeUrl of PNPM_TARBALL_SOURCES) {
@@ -313,14 +320,16 @@ async function doEnsurePnpm(opts) {
     try {
       console.log("[pnpm] 引导下载 " + url + " …");
       await downloadToFile(url, tmpTgz);
-      const actual = createHash("sha512").update(readFileSync(tmpTgz)).digest("hex");
+      const tgzBuf = readFileSync(tmpTgz); // 单次读取：同一 buffer 供 sha512 校验与解压
+      const actual = createHash("sha512").update(tgzBuf).digest("hex");
       if (actual !== sha512) {
         throw new Error(
           "tarball sha512 校验失败（期望 " + sha512 + "，实际 " + actual + "）",
         );
       }
       console.log("[pnpm] sha512 校验通过，解压提取 …");
-      const files = extractPnpmFiles(readFileSync(tmpTgz)); // Map<短名, Buffer>
+      const files = extractPnpmFiles(tgzBuf); // Map<短名, Buffer>
+      const digests = {}; // 提取 buffer 直接算 digest（不二次读盘）
       for (const [shortName, buf] of files) {
         const target = join(cacheDir, shortName);
         const tmp = join(
@@ -328,11 +337,18 @@ async function doEnsurePnpm(opts) {
           ".pnpm." + shortName + "." + process.pid + "." + Date.now() + ".tmp",
         );
         writeFileSync(tmp, buf);
+        digests[shortName] = createHash("sha256").update(buf).digest("hex");
         rmSync(target, { force: true }); // 旧缓存（缺失/损坏场景）先清，再原子落位
         renameSync(tmp, target); // 同目录 rename，原子替换
         console.log("[pnpm] 引导完成：" + target);
       }
-      rmSync(tmpTgz, { force: true }); // 下载产物用完即清（缓存只留解压出的两文件）
+      // 完成标记最后落位：两文件已齐 → 标记写入即发布完成（cacheIntact 验收依据）
+      const markerPath = join(cacheDir, ".pnpm-ok");
+      const markerTmp = markerPath + "." + process.pid + "." + Date.now() + ".tmp";
+      writeFileSync(markerTmp, JSON.stringify({ sha512, files: digests }));
+      rmSync(markerPath, { force: true });
+      renameSync(markerTmp, markerPath);
+      rmSync(tmpTgz, { force: true }); // 下载产物用完即清（缓存只留两文件 + 标记）
       lastError = null;
       break;
     } catch (e) {
@@ -357,10 +373,30 @@ async function doEnsurePnpm(opts) {
   return entry;
 }
 
-// 缓存完整性：两引导文件存在即视为完整——下载经 tarball sha512 校验 + 逐文件原子
-// 落位（tmp + rename），不存在部分写入形态；文件缺失/被外部删除 → 重新走下载自愈。
+// 缓存完整性：完成标记 .pnpm-ok 存在且与当前期望一致——标记（两文件之后原子落位）
+// 记录 tarball sha512（须等于 pm 段 hash：同版本 hash 变更时旧文件作废重下）与两文件
+// sha256（重算比对：防篡改/截断/混合对）。任一不符（含旧版无标记缓存）→ 重下自愈。
 function cacheIntact(cacheDir) {
-  return existsSync(join(cacheDir, "pnpm.mjs")) && existsSync(join(cacheDir, "worker.js"));
+  let meta = null;
+  try {
+    meta = JSON.parse(readFileSync(join(cacheDir, ".pnpm-ok"), "utf8"));
+  } catch {
+    return false; // 无标记 / 标记损坏
+  }
+  if (!meta || typeof meta !== "object" || meta.sha512 !== PNPM_MANAGER.sha512) return false;
+  for (const shortName of ["pnpm.mjs", "worker.js"]) {
+    const digest = meta.files && meta.files[shortName];
+    if (typeof digest !== "string") return false;
+    try {
+      const actual = createHash("sha256")
+        .update(readFileSync(join(cacheDir, shortName)))
+        .digest("hex");
+      if (actual !== digest) return false;
+    } catch {
+      return false; // 文件缺失 / 读失败
+    }
+  }
+  return true;
 }
 
 // ---- runPnpm：spawn node（Electron 自带 node 或自定义 nodejsPath，每次 spawn 前解析）+ pnpm 入口 ----
@@ -469,11 +505,6 @@ export function isValidPkgSpec(spec) {
 // 但也不能被 dist-tag 规则放行（会装到非预期包）。
 const SEMVER_LOOSE_SHAPE_RE =
   /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
-
-// 严格 SemVer 判定（与 scripts/version.mjs 同款规则：核心组件与数字 prerelease
-// 标识符必须 0|[1-9]\d*，无前导零；非数字标识符须含至少一个字母或连字符）
-const SEMVER_STRICT_RE =
-  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 
 function isValidSemverSpec(s) {
   const m = String(s).match(SEMVER_STRICT_RE);
