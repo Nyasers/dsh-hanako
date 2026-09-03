@@ -7,6 +7,7 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "pack": "node scripts/pack.mjs",
+    "prepack": "node scripts/build.mjs",
     "version": "node scripts/version.mjs"
   },
   "dependencies": {

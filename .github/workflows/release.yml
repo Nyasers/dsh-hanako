@@ -96,7 +96,7 @@ jobs:
       - name: Install dev dependencies
         run: pnpm install --frozen-lockfile
 
-      # pack 内部自动 build（rspack）+ 复制交付清单 + zip + sha256
+      # pack 经 prepack 钩子自动前置 build（rspack）+ 复制交付清单 + zip + sha256
       - name: Package
         run: pnpm run pack
 

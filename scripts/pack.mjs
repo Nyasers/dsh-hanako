@@ -5,13 +5,12 @@
 // 交付物 = 代码 bundle（dist/）+ 配置 + 技能 + cordis 插件 + lockfile，零依赖（Agent pnpm i 装，
 // pnpm 运行时引导：tools/lib/pnpm.js ensurePnpm 下载单文件 pnpm.mjs 到数据目录 pnpm-dist/，
 // 供 tools/lib/install.js 部署 @deepseek-ai/dsh）。
-// 流程：build（rspack 单 bundle）→ 复制交付清单 → zip → SHA256。
-// 用法：node scripts/pack.mjs [version]（缺省用 package.json 的 version）
+// 流程：复制交付清单（prepack 钩子已先行 build）→ zip → SHA256。
+// 用法：pnpm run pack（prepack 自动前置 build；单独 node scripts/pack.mjs 要求 dist/ 已构建）
 // 产出：releases/dsh-hanako-v<version>.zip + .sha256；铺平目录 _tmp/pkg/（zip 中间原料，可清空）
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { ZipArchive } from "archiver";
 
@@ -32,15 +31,7 @@ if (version !== manifestVersion)
     `版本不一致：package.json ${version} ≠ manifest.json ${manifestVersion}（manifest 未同步，跑 scripts/version.mjs 或手动同步后再打包）`,
   );
 
-// 1. 构建 bundle
-console.log("[pack] build...");
-execFileSync(process.execPath, [join(ROOT, "scripts", "build.mjs")], {
-  cwd: ROOT,
-  stdio: "inherit",
-  env: { ...process.env, RSPACK_ENV: process.env.RSPACK_ENV || "" },
-});
-
-// 2. 静态项复制进 dist —— dist 即完整交付目录（bundle + manifest + skills + cordis 插件），
+// 1. 静态项复制进 dist —— dist 即完整交付目录（bundle + manifest + skills + cordis 插件），
 //    包根结构 = 标准插件形态（根 index.js + routes/ 壳，无 dist 这层目录）。
 //    app/（card.js/css 已 asset/source 内联进 bundle）与 routes/（壳由 build 生成）不再复制。
 const staticItems = [
@@ -70,7 +61,7 @@ for (const item of staticItems) {
   });
 }
 
-// 2.5 静态资产压缩（terser JS 纯语法级 + clean-css CSS 压缩，覆盖写回 dist 副本）
+// 2. 静态资产压缩（terser JS 纯语法级 + clean-css CSS 压缩，覆盖写回 dist 副本）
 //     cordis 插件（dist/cordis/node_modules/@dsh-hanako/*/index.js，由 build 从
 //     src-cordis 组装）被 dsh 运行时 import() 加载、client.js 被浏览器
 //     ModuleLoader 按 window.__ModuleLoader__.load 注册；均只做语法级压缩。
