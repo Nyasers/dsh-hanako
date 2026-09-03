@@ -38,7 +38,7 @@ import {
 // T7e+：dsh-run / dsh-cancel / dsh-approve 全并入 dsh-session（create/send/cancel/approve
 // 分支），文件保留为 session 内部实现模块（import 复用 execute），不单独注册；dsh_install
 // 已退役（自动链 + Bootstrap 自举承担）。宿主 Agent 面仅 dsh_session 单工具。
-import * as dshSession from "./tools/dsh-session.js";
+import * as dshSession from "./tools/session.js";
 // 宿主 task 体系接入（handler.abort → dsh session.cancel）：取消链路收归宿主 task
 // 协议（task:abort → handler.abort → session.cancel），dsh_cancel 不再直连取消
 import { callUnaryBus } from "./lib/protocol.js";

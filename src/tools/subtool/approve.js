@@ -10,7 +10,7 @@
 // /api/$events/result（callUnaryBus，clientId 由总线补齐），回投 { accepted }（ConnectionRpcResult
 // ok 转译），应答成功后恢复任务执行超时计时（审批等待不计入执行超时）。
 
-import { callUnaryBus } from "../lib/protocol.js";
+import { callUnaryBus } from "../../lib/protocol.js";
 
 export const name = "dsh_approve";
 

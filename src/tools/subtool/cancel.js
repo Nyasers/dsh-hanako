@@ -16,7 +16,7 @@
 // （dsh-run.js consume 末尾的取消兜底）。best-effort 止损：任务刚好自然完成时 cancel 的 accepted
 // 无副作用（事件循环已终态，cancel 幂等）。
 
-import { callUnaryBus } from "../lib/protocol.js";
+import { callUnaryBus } from "../../lib/protocol.js";
 
 export const name = "dsh_cancel";
 

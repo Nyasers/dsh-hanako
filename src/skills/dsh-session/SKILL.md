@@ -1,11 +1,11 @@
 ---
 name: dsh-session
-description: "dsh_session 工具手册（源码 tools/dsh-session.js 核对；合并原 dsh_run / dsh_cancel）。触发场景：提交 DSH 任务（action=create 新建会话+提交 / send 续已有会话，task/cwd 必填，超时/预设/推理强度/provider/model 可选，sessionId 即访问凭证）、取消任务（action=cancel，sessionId 必填，幂等）、查会话清单（action=list，解析 session_projcache，limit 默认 10）、凭 sessionId 取会话内容与最终结论（action=get，读会话 jsonl zstd 容器本地解压）、resume 复用会话（send 传上次 sessionId 即续）。需要提交/取消/查询 DSH 任务或会话前先读本技能。"
+description: "dsh_session 工具手册（源码 src/tools/dsh-session.js 核对；合并原 dsh_run / dsh_cancel / dsh_approve）。触发场景：提交 DSH 任务（action=create 新建会话+提交 / send 续已有会话，task/cwd 必填，超时/预设/推理强度/provider/model 可选，sessionId 即访问凭证）、取消任务（action=cancel，sessionId 必填，幂等）、查会话清单（action=list，解析 session_projcache，limit 默认 10）、凭 sessionId 取会话内容与最终结论（action=get，读会话 jsonl zstd 容器本地解压）、应答会话挂起审批（action=approve：sessionId/approvalId 必填，outcome=allowed-once/rejected，决策看 args 不听 reason，宿主审批适配应答经总线 respond 回投）、resume 复用会话（send 传上次 sessionId 即续）。需要提交/取消/查询/审批 DSH 任务或会话前先读本技能。"
 ---
 
 # dsh_session 工具手册
 
-DSH 会话全生命周期工具（合并原 `dsh_run` / `dsh_cancel` 能力）。权限 `external_side_effect`（external_llm_api，create/send 消耗宿主 provider 额度；cancel 改变会话状态）。实现 `tools/dsh-session.js`（list/get 本地实现 + create/send 复用 `tools/dsh-run.js` 的 execute + cancel 复用 `tools/dsh-cancel.js` 的 execute，三者不再独立注册）。
+DSH 会话全生命周期工具（合并原 `dsh_run` / `dsh_cancel` / `dsh_approve` 能力）。权限 `external_side_effect`（external_llm_api，create/send 消耗宿主 provider 额度；cancel/approve 改变会话/审批状态）。实现 `tools/dsh-session.js`（list/get 本地实现 + create/send 复用 `lib/dsh-run.js` 的 execute + cancel 复用 `lib/dsh-cancel.js` + approve 复用 `lib/dsh-approve.js`——三者是 session 内部实现模块，不再独立注册）。
 
 ## 参数契约
 
@@ -13,9 +13,11 @@ DSH 会话全生命周期工具（合并原 `dsh_run` / `dsh_cancel` 能力）�
 
 | 参数 | 类型 | 语义 |
 |---|---|---|
-| `action` | string | `list` / `get` / `create` / `send` / `cancel`（见下各节） |
+| `action` | string | `list` / `get` / `create` / `send` / `cancel` / `approve`（见下各节） |
 | `limit` | integer | 仅 list：返回条数（默认 10，有效 1~100） |
-| `sessionId` | string | get/send/cancel 必传（形如 `session-<uuid>`，取自回调/卡片/list；dsh-home 存在即读） |
+| `sessionId` | string | get/send/cancel/approve 必传（形如 `session-<uuid>`，取自回调/卡片/list；dsh-home 存在即读） |
+| `approvalId` | string | 仅 approve：审批 id（审批通知里带；同一任务可能挂起多个审批，逐个应答） |
+| `outcome` | enum | 仅 approve：`allowed-once`（放行单次，安全默认）/ `rejected`（拒绝该请求） |
 | `task` | string | create/send 必传：任务描述/消息文本 |
 | `cwd` | string | 仅 create 必传：沙箱工作目录（defaultCwd 配置已删除，每次调用显式指定） |
 | `timeout` | number | 仅 create/send：任务超时（秒），缺省用配置 defaultTimeoutSec（0/缺失回落 600s） |
@@ -48,6 +50,18 @@ DSH 会话全生命周期工具（合并原 `dsh_run` / `dsh_cancel` 能力）�
 - 总线 Unary RPC `session.cancel` → 任务以 aborted 终态收尾 → 唤醒 Agent
 - 卡死/误派/不再需要结果时止损用
 
+## action=approve：应答会话挂起审批（原 dsh_approve）
+
+- **sessionId + approvalId 必填**（审批通知里带；全链路唯一定位键 = 任务 sessionId，同键即应答该会话挂起的审批；同一任务可能挂起多个审批，逐个应答）
+- **outcome**：`allowed-once`（默认，安全默认值：放行单次仅本次操作）/ `rejected`（拒绝该请求）
+- **审批触发**：DSH agent 请求越界权限（approval/requested）→ 任务挂起，审批上下文存 `g.ops[sessionId].activeApprovals`；宿主经 deferred（interlude 型）投递 dsh-approval 通知，payload：`{ kind, rpcId, sessionId, approvalId, toolName, callId, reason, args, taskPreview }`（args = 工具调用参数原文，命令/路径）
+- **决策：看 args（具体执行了什么），不听 reason（model 自述不可尽信）**——合理放行，危险拒绝
+- **应答链路**：应答经总线 RPC（callUnaryBus）发 `method="respond"` → bus 翻译器自环调 `POST /api/$events/result`（eventId = 审批帧 eventId，outcome `{ kind: 'result', value }`）；总线未连接降级 HTTP 直连
+- **超时**：`approvalTimeoutSec`（config.json `global.approvalTimeoutSec` 优先，缺省 0=禁用）内无人应答自动 rejected（`auto: expired`）
+- **审批挂起暂停执行超时计时**（审批等待是外部决策，不计入任务超时；应答/超时后恢复）；应答成功/超时后任务继续跑至终态
+- **兜底**：DSH Web UI（webPort 默认 3080）人工处理仍可用
+- **错误语义**：任务不存在/已过期、审批不在待办列表（可能已应答/超时）、已应答勿重复应答、应答未接受（可能超时/他方处理）——按返回消息处理即可
+
 ## action=list：会话清单
 
 解析 `session_projcache.json`（dsh-home 唯一事实源）：`{ sessionId, title, cwd?, createdAt?, lastPromptAt?, usage?, turns?, steps?, llmMs? }`，按 lastPromptAt 降序取最近 N 条。纯本地读，不调 DSH web host。
@@ -61,9 +75,9 @@ projcache 元数据 + summary（jsonl 最后一条 assistant/message 的 text，
 - 提交任务：`create`（新任务）或 `send`（续上次 sessionId——先 list/get 确认会话）
 - 止损：`cancel`（卡死/误派）
 - 回看：`list`（清单）→ `get`（最终结论/内容）
+- 审批：收到 dsh-approval 通知后 `approve`（sessionId+approvalId+outcome，决策看 args 不听 reason）
 
 ## 关联
 
-- `dsh_install`：依赖安装/验证（DSH 未就绪时先装）
-- `dsh_approve`：审批应答（独立工具——权限应答语义正交；sessionId 同键）
-- 事件流/总线：`@dsh-hanako/bus`（消息总线，dshana.bus WS 服务端）
+- `dsh_install` 已退役：依赖安装由自动链 + Bootstrap 自举承担（无需手动工具）
+- 事件流/总线：`@dsh-hanako/bus`（消息总线，dshana.bus WS 服务端）；审批瀑布帧广播不区分会话（宿主按 sessionId 归属过滤尚未实现）
