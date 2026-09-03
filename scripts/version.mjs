@@ -250,9 +250,10 @@ function main() {
   // 2.5) pnpm-lock.yaml 不同步版本（见文件头：pnpm-lock 不含根包 version，bump 只同步
   //    package.json + manifest.json；lock 由 pnpm install 自动维护，不做机械对齐）
 
-  // 3) pack 验证（内含版本一致性强制校验：package.json == manifest.json == 打包版本，
-  //    不一致直接 fail；打包版本只读 package.json，不传参）。走 pnpm run pack 触发
-  //    prepack 钩子先行 build（pack 脚本本身已不含构建步骤）。
+  // 3) pack 验证（version 仅本地使用，打包只为验证正常产出：源码能 build + 打包链路通
+  //    + 版本一致性强制校验 package.json == manifest.json == 打包版本，不一致直接 fail；
+  //    打包版本只读 package.json，不传参）。走 pnpm run pack 触发 prepack 钩子先行
+  //    build——验证的是最新源码的全链路产出，而非复用旧 dist。
   run("pnpm run pack", "3/4 打包验证");
 
   // 4) git commit + annotated tag（CHANGELOG 由发版人自行维护，bump 前写好并提交；
