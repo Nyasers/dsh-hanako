@@ -383,6 +383,8 @@
       function pushPanel() {
         try {
           if (!hana || !hana.panel || !hana.panel.set) return;
+          if (!boot) return; // 快照未到（未知态）不推——避免把「未就绪」误报给宿主侧栏；
+          // 快照到达后必经 applyBoot → pushPanel 以真实状态补推
           var st = panelStatusView();
           hana.panel.set({
             sections: [
@@ -834,6 +836,8 @@
       if (document.body.getAttribute("data-view") === "ready") {
         readyReceived = true;
         attach();
+        refreshBoot(); // 服务端渲染 ready 时 boot 仍为 null：拉一次快照对齐侧栏面板状态
+        //（attach 首推被 boot 判空跳过；applyBoot(ready) 会以真实状态补推「运行中」）
         openReadyStream();
       } else {
         if (initBoot && typeof initBoot === "object") applyBoot(initBoot);
