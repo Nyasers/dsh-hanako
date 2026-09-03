@@ -9,11 +9,12 @@
     "build:src": "node src/build.js",
     "build:cordis": "node src-cordis/build.js",
     "syncver": "node scripts/syncver.mjs",
+    "tagver": "node scripts/tagver.mjs",
     "prepack": "pnpm run syncver && pnpm run build",
     "pack": "node scripts/pack.mjs",
     "prebump": "pnpm run build",
     "bump": "node scripts/bump.mjs",
-    "postbump": "pnpm run syncver && node scripts/postbump.mjs"
+    "postbump": "pnpm run syncver && pnpm run tagver"
   },
   "dependencies": {
     "@deepseek-ai/cordis": "4.0.2",

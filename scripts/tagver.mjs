@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// scripts/postbump.mjs — bump 收尾：git commit + annotated tag（版本文件提交）
-// 职责单一：postbump 实际做两件事——①同步（manifest + cordis 源 = 主，由前置 syncver
-// 完成：package.json scripts 编排 "postbump": "pnpm run syncver && node scripts/postbump.mjs"）
-// ②提交（本脚本）。只提交版本文件（package.json + manifest.json + cordis 包），
-// 若全无改动（未 bump 手跑/已同步提交过）跳过——防空 commit。
+// scripts/tagver.mjs — 版本提交命令（独立原子命令，与 syncver 对称）
+// 职责：git add 版本文件（package.json + manifest.json + cordis 包）+ commit
+// "chore: bump v…" + annotated tag v…。bump 编排引用（package.json 的 postbump =
+// "pnpm run syncver && pnpm run tagver"——同步与提交两个独立命令，postbump 仅编排），
+// 也可手动补跑（假定 syncver 已同步）。
+// 门禁：主版本相对 HEAD 未变化（未真实 bump / bump --dry-run / 工作区杂改动）即跳过
+// 提交——防空 commit（历史两次误提交事故根因）。
 // 这是仓库自定义 bump 编排（prebump/bump/postbump）的收尾，与 npm/pnpm version 生命
 // 周期无关——不要用 pnpm version / npm version 触发。
-// 手动补跑：node scripts/postbump.mjs（假定 syncver 已跑）。
-// 版本文件全集（含主 package.json）来自根级共享 version-common.mjs（与 syncver/bump 同源）
 import { versionCommitFiles } from "./version-common.mjs";
 import fs from "node:fs";
 import path from "node:path";
@@ -18,11 +18,11 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const run = (cmd, desc) => {
-  console.log("[postbump] " + desc + "...");
+  console.log("[tagver] " + desc + "...");
   try {
     execSync(cmd, { stdio: "inherit", cwd: ROOT, shell: true });
   } catch (e) {
-    console.error("[postbump] " + desc + " 失败: " + e.message);
+    console.error("[tagver] " + desc + " 失败: " + e.message);
     process.exit(1);
   }
 };
@@ -31,7 +31,7 @@ function main() {
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
   const version = pkg.version;
   if (typeof version !== "string" || !version) {
-    console.error("[postbump] package.json version 缺失");
+    console.error("[tagver] package.json version 缺失");
     process.exit(1);
   }
   // 硬门禁：仅当主版本相对 HEAD 确实变化（bump 真实改版）才提交——防 bump --dry-run /
@@ -45,22 +45,14 @@ function main() {
     /* HEAD 无 package.json（首提交前）→ 视为版本未变，走跳过 */
   }
   if (headVersion === version) {
-    console.log("[postbump] 主版本相对 HEAD 未变化（未真实 bump），跳过 git commit/tag");
+    console.log("[tagver] 主版本相对 HEAD 未变化（未真实 bump），跳过 git commit/tag");
     return;
   }
   const files = versionCommitFiles();
-  const diff = execSync("git status --porcelain -- " + files.join(" "), {
-    cwd: ROOT,
-    encoding: "utf8",
-  }).trim();
-  if (!diff) {
-    console.log("[postbump] 版本文件无改动（未 bump 或已提交），跳过 git commit/tag");
-    return;
-  }
   run("git add " + files.join(" "), "git add");
   run("git commit -m \"chore: bump v" + version + "\"", "git commit");
   run("git tag -a v" + version + " -m \"v" + version + "\"", "git tag -a v" + version);
-  console.log("\n[postbump] ✅ v" + version + " 提交完成（package.json + manifest.json + cordis 包已同步并提交）。推送（tag 触发 CI 发布）：");
+  console.log("\n[tagver] ✅ v" + version + " 提交完成（package.json + manifest.json + cordis 包已同步并提交）。推送（tag 触发 CI 发布）：");
   console.log("  git push origin master --tags");
 }
 
