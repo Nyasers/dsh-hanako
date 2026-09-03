@@ -15,7 +15,7 @@
 //   文本内联虚拟模块进模块图（规避 tsdown css-guard：虚拟 id 不以 .css 结尾——官方
 //   同款加 .mjs 后缀）。产物无源码内嵌内容字符串（全部走正常构建）。
 //
-// 消费方：scripts/build.mjs 编排（扫描各包 cordis.config.mjs → 本 preset build）。
+// 消费方：src-cordis/build.js（package.json build:cordis）编排。
 // tsdown 为 devDep（构建工具不进运行时依赖）。
 import { build } from "tsdown";
 import { dirname, join, resolve } from "node:path";

@@ -6,8 +6,8 @@
   "type": "module",
   "scripts": {
     "build": "pnpm run build:src && pnpm run build:cordis",
-    "build:src": "node scripts/build.mjs --src",
-    "build:cordis": "node scripts/build.mjs --cordis",
+    "build:src": "node src/build.js",
+    "build:cordis": "node src-cordis/build.js",
     "syncver": "node scripts/syncver.mjs",
     "prepack": "pnpm run syncver && pnpm run build",
     "pack": "node scripts/pack.mjs",

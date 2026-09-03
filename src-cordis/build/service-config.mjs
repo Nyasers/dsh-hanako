@@ -13,7 +13,7 @@
 // /* webpackIgnore */ 保留原生运行时导入。
 //
 // preset 签名：serviceBundle({ name, pkgDir, outDir, rules?, optimization? })，返回
-// rspack 单包配置对象（纯数据，不含 rspack import；rspack 本体由编排侧 scripts/build.mjs
+// rspack 单包配置对象（纯数据，不含 rspack import；rspack 本体由编排侧 src-cordis/build.js
 // 统一解析，RSPACK_ENV / 本地 node_modules 两路）。opts 覆盖口供特殊包逃生。
 import path from "node:path";
 import { fileURLToPath } from "node:url";

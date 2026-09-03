@@ -39,7 +39,8 @@ export default {
         // 模板语法见 template-loader.mjs 头注释（{{= it.xxx }} 等，it = render scope）。
         test: /\.jinja2$/, // 模板文件用 .jinja2 扩展名（避免静态检查器按 HTML 误报 {{= }} 语法）
         include: [path.join(root, "src", "assets")],
-        use: [path.join(root, "scripts", "template-loader.mjs")],
+        // src 域 loader（jinja2 编译专用，随 src：template-loader.mjs 与 rspack.config 同目录）
+        use: [path.join(root, "src", "template-loader.mjs")],
         // 显式 JS 模块类型：loader 输出 ESM 渲染函数，必须按 JS 解析（rspack 默认把未知
         // 扩展名当 asset module，import 会得到 { jinja2: ... } 命名对象而非默认导出函数）
         type: "javascript/esm", // 强制 ESM 语义：loader 输出 ESM（export default/具名），避免 rspack 对大模块走 CJS interop
