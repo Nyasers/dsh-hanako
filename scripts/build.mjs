@@ -71,7 +71,7 @@ const compiler = rspack(config);
 
 await new Promise((resolvePromise, reject) => {
   compiler.run((err, stats) => {
-    compiler.close(() => {});
+    compiler.close(() => { });
     if (err) return reject(err);
     if (stats?.hasErrors()) return reject(new Error(stats.toString({ errors: true })));
     console.log(stats?.toString({ colors: true, chunks: false, modules: false, assets: true }));
@@ -146,7 +146,7 @@ function extraTerser(root) {
       const rel = file.startsWith(join(ROOT, "dist")) ? file.slice(join(ROOT, "dist").length + 1) : file;
       console.log(
         "[build]   " + rel + ": " + before + " -> " + after + " bytes (" +
-          ((1 - after / before) * 100).toFixed(1) + "% 缩减)",
+        ((1 - after / before) * 100).toFixed(1) + "% 缩减)",
       );
     }
   })();
@@ -222,7 +222,7 @@ function buildCordisBundles(outRoot) {
       await new Promise((resolvePromise, reject) => {
         const compiler = rspack(cfg);
         compiler.run((err, stats) => {
-          compiler.close(() => {});
+          compiler.close(() => { });
           if (err) return reject(err);
           if (stats?.hasErrors()) return reject(new Error(stats.toString({ errors: true })));
           resolvePromise();
@@ -268,7 +268,7 @@ function assertNoStaticFileUrl(root) {
   if (offenders.length) {
     throw new Error(
       "构建产物残留静态 file:// 字面量（构建机路径泄漏）：\\n" +
-        offenders.slice(0, 10).join("\\n"),
+      offenders.slice(0, 10).join("\\n"),
     );
   }
   console.log("assert no static file:// literal -> ok");

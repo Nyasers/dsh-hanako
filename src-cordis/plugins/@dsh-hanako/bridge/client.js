@@ -208,7 +208,7 @@ window.__ModuleLoader__.load({
 						if (this.isGenerationActive(ac)) this.callSink(() => {
 							this.sinks.onConnected?.(host);
 						});
-					} catch {}
+					} catch { }
 					await failed;
 					if (!this.isRunning()) return;
 					if (manualAttempt) this.attempt = 0;
@@ -1382,30 +1382,38 @@ window.__ModuleLoader__.load({
 				});
 			};
 			toolTurn(60, "bash", "{\"command\":\"ls -la\\necho done\",\"description\":\"fixture 终端样本\",\"workdir\":\"/tmp/fixture\"}", "total 2\ndrwxr-xr-x fixture\n-rw-r--r-- demo.txt");
-			toolTurn(61, "write", "{\"file_path\":\"notes/demo.txt\",\"content\":\"hello fixture\\n\"}", "wrote notes/demo.txt", { diffs: [{
-				path: "notes/demo.txt",
-				oldText: null,
-				newText: "hello fixture\n"
-			}] });
-			toolTurn(62, "edit", "{\"file_path\":\"notes/demo.txt\",\"old_string\":\"hello\",\"new_string\":\"hello fixture\"}", "已编辑", { diffs: [{
-				path: "notes/demo.txt",
-				oldText: "hello",
-				newText: "hello fixture"
-			}] });
-			toolTurn(63, "write", "{\"file_path\":\"notes/new-demo.txt\",\"content\":\"hello fixture\\n\"}", "已写入", { diffs: [{
-				path: "notes/new-demo.txt",
-				oldText: null,
-				newText: "hello fixture\n"
-			}] });
-			toolTurn(64, "edit", "{\"file_path\":\"src/config.ts\",\"old_string\":\"const timeout = 30\",\"new_string\":\"const timeout = 60\"}", "已编辑", { diffs: [{
-				path: "src/config.ts",
-				oldText: "const timeout = 30",
-				newText: "const timeout = 60"
-			}, {
-				path: "src/config.ts",
-				oldText: "retries: 1",
-				newText: "retries: 3"
-			}] });
+			toolTurn(61, "write", "{\"file_path\":\"notes/demo.txt\",\"content\":\"hello fixture\\n\"}", "wrote notes/demo.txt", {
+				diffs: [{
+					path: "notes/demo.txt",
+					oldText: null,
+					newText: "hello fixture\n"
+				}]
+			});
+			toolTurn(62, "edit", "{\"file_path\":\"notes/demo.txt\",\"old_string\":\"hello\",\"new_string\":\"hello fixture\"}", "已编辑", {
+				diffs: [{
+					path: "notes/demo.txt",
+					oldText: "hello",
+					newText: "hello fixture"
+				}]
+			});
+			toolTurn(63, "write", "{\"file_path\":\"notes/new-demo.txt\",\"content\":\"hello fixture\\n\"}", "已写入", {
+				diffs: [{
+					path: "notes/new-demo.txt",
+					oldText: null,
+					newText: "hello fixture\n"
+				}]
+			});
+			toolTurn(64, "edit", "{\"file_path\":\"src/config.ts\",\"old_string\":\"const timeout = 30\",\"new_string\":\"const timeout = 60\"}", "已编辑", {
+				diffs: [{
+					path: "src/config.ts",
+					oldText: "const timeout = 30",
+					newText: "const timeout = 60"
+				}, {
+					path: "src/config.ts",
+					oldText: "retries: 1",
+					newText: "retries: 3"
+				}]
+			});
 			{
 				const turn = 65;
 				const callId = `fx-call-${turn}`;
@@ -3053,10 +3061,12 @@ window.__ModuleLoader__.load({
 					});
 					return {
 						ok: true,
-						value: { ref: {
-							id: projection.goal.id,
-							revision: projection.goal.revision
-						} }
+						value: {
+							ref: {
+								id: projection.goal.id,
+								revision: projection.goal.revision
+							}
+						}
 					};
 				},
 				edit(id, ref, request) {
@@ -4330,196 +4340,200 @@ window.__ModuleLoader__.load({
 					return sessionOk({ archivedSessionIds: [...archivedSessionIds] });
 				}
 			};
-			return { rpc: {
-				call(channel, endpoint, payload, signal) {
-					if (channel !== "/api") return Promise.reject(/* @__PURE__ */ new Error(`fixture connection RPC channel ${JSON.stringify(channel)} is unavailable`));
-					const args = payload.args;
-					const sessionId = args.agentId;
-					const callSignal = signal ?? new AbortController().signal;
-					const request = args.request;
-					switch (endpoint) {
-						case "commands/list": return Promise.resolve(commandRemotes.list(sessionId));
-						case "commands/execute": return Promise.resolve(commandRemotes.execute(sessionId, args.line, args.images ?? []));
-						case "fileReferences/list": return Promise.resolve(referenceRemotes.files(sessionId, args.query ?? ""));
-						case "sessionReferenceResolver/candidates": return Promise.resolve(referenceRemotes.sessions(sessionId, args.query ?? ""));
-						case "directoryPicker/pick": return Promise.resolve(directoryPickerRemotes.pick());
-						case "directoryPicker/list": return Promise.resolve(directoryPickerRemotes.list(args.path));
-						case "directoryPicker/createDirectory": return Promise.resolve(directoryPickerRemotes.createDirectory(args.path ?? "", args.name ?? ""));
-						case "goals/create": return Promise.resolve(goalRemotes.create(sessionId, {
-							objective: request?.objective,
-							...request?.maxGoalRounds === void 0 ? {} : { maxGoalRounds: request.maxGoalRounds }
-						}));
-						case "goals/edit": return Promise.resolve(goalRemotes.edit(sessionId, args.ref, request));
-						case "goals/pause": return Promise.resolve(goalRemotes.pause(sessionId, args.ref));
-						case "goals/resume": return Promise.resolve(goalRemotes.resume(sessionId, args.ref));
-						case "goals/complete": return Promise.resolve(goalRemotes.complete(sessionId, args.ref));
-						case "goals/clear": return Promise.resolve(goalRemotes.clear(sessionId, args.ref));
-						case "agentPresets/list": return Promise.resolve(presetRemotes.list());
-						case "agentPresets/select": return Promise.resolve(presetRemotes.select(sessionId, args.agentPreset));
-						case "agentPresets/read": return Promise.resolve(presetRemotes.read(args.agentPreset));
-						case "agentPresets/copy": return Promise.resolve(presetRemotes.copy(args.from, args.id));
-						case "agentPresets/deletePreset": return Promise.resolve(presetRemotes.deletePreset(args.id));
-						case "subagents/list": return Promise.resolve({
-							ok: true,
-							value: {
-								entries: [],
-								parentAvailable: true
-							}
-						});
-						case "subagents/prompt": return Promise.resolve({
-							ok: true,
-							value: { messageId: `fixture-message-${request.childSessionId}` }
-						});
-						case "subagents/interruptByParent": return Promise.resolve({
-							ok: true,
-							value: { accepted: true }
-						});
-						case "credentials/describe": return Promise.resolve(credentialRemotes.describe(args.refs ?? []));
-						case "credentials/set": return Promise.resolve(credentialRemotes.set(args.ref));
-						case "credentials/unset": return Promise.resolve(credentialRemotes.unset(args.ref));
-						case "settings/describe": return Promise.resolve(settingsRemotes.describe());
-						case "settings/canOpenAgentPresetDirectory": return Promise.resolve({
-							ok: true,
-							value: true
-						});
-						case "settings/openSettingsDocument": return Promise.resolve(settingsRemotes.openSettingsDocument());
-						case "settings/openAgentPresetDirectory": return Promise.resolve(settingsRemotes.openAgentPresetDirectory(args.agentPreset));
-						case "skills/list": {
-							const missing = requireRemoteSession(request);
-							if (missing !== void 0) return missing;
-							return sessionOk({ skills: [{
-								name: "fixture-demo",
-								description: "fixture 技能样本",
-								whenToUse: "仅供 UI 目录渲染验收",
-								modelInvocable: true
-							}, {
-								name: "fixture-user-only",
-								description: "fixture 仅用户技能样本",
-								modelInvocable: false
-							}] });
-						}
-						case "session/openWorkspacePath": return sessionOk({ opened: true });
-						case "session/canOpenWorkspacePath": return Promise.resolve({
-							ok: true,
-							value: true
-						});
-						case "session/modelCatalog": return Promise.resolve({
-							ok: true,
-							value: {
-								default: {
-									provider: "deepseek-official",
-									model: "deepseek-v4-flash"
-								},
-								routableProviders: [
-									"deepseek-official",
-									"openai",
-									"acme-gateway"
-								],
-								groups: fixtureModelGroups(),
-								failures: []
-							}
-						});
-						case "llm/listProviders": return Promise.resolve({
-							ok: true,
-							value: [
-								{
-									id: "deepseek-official",
-									name: "DeepSeek"
-								},
-								{
-									id: "openai",
-									name: "openai"
-								},
-								{
-									id: "acme-gateway",
-									name: "Acme Gateway"
+			return {
+				rpc: {
+					call(channel, endpoint, payload, signal) {
+						if (channel !== "/api") return Promise.reject(/* @__PURE__ */ new Error(`fixture connection RPC channel ${JSON.stringify(channel)} is unavailable`));
+						const args = payload.args;
+						const sessionId = args.agentId;
+						const callSignal = signal ?? new AbortController().signal;
+						const request = args.request;
+						switch (endpoint) {
+							case "commands/list": return Promise.resolve(commandRemotes.list(sessionId));
+							case "commands/execute": return Promise.resolve(commandRemotes.execute(sessionId, args.line, args.images ?? []));
+							case "fileReferences/list": return Promise.resolve(referenceRemotes.files(sessionId, args.query ?? ""));
+							case "sessionReferenceResolver/candidates": return Promise.resolve(referenceRemotes.sessions(sessionId, args.query ?? ""));
+							case "directoryPicker/pick": return Promise.resolve(directoryPickerRemotes.pick());
+							case "directoryPicker/list": return Promise.resolve(directoryPickerRemotes.list(args.path));
+							case "directoryPicker/createDirectory": return Promise.resolve(directoryPickerRemotes.createDirectory(args.path ?? "", args.name ?? ""));
+							case "goals/create": return Promise.resolve(goalRemotes.create(sessionId, {
+								objective: request?.objective,
+								...request?.maxGoalRounds === void 0 ? {} : { maxGoalRounds: request.maxGoalRounds }
+							}));
+							case "goals/edit": return Promise.resolve(goalRemotes.edit(sessionId, args.ref, request));
+							case "goals/pause": return Promise.resolve(goalRemotes.pause(sessionId, args.ref));
+							case "goals/resume": return Promise.resolve(goalRemotes.resume(sessionId, args.ref));
+							case "goals/complete": return Promise.resolve(goalRemotes.complete(sessionId, args.ref));
+							case "goals/clear": return Promise.resolve(goalRemotes.clear(sessionId, args.ref));
+							case "agentPresets/list": return Promise.resolve(presetRemotes.list());
+							case "agentPresets/select": return Promise.resolve(presetRemotes.select(sessionId, args.agentPreset));
+							case "agentPresets/read": return Promise.resolve(presetRemotes.read(args.agentPreset));
+							case "agentPresets/copy": return Promise.resolve(presetRemotes.copy(args.from, args.id));
+							case "agentPresets/deletePreset": return Promise.resolve(presetRemotes.deletePreset(args.id));
+							case "subagents/list": return Promise.resolve({
+								ok: true,
+								value: {
+									entries: [],
+									parentAvailable: true
 								}
-							]
-						});
-						case "llm/listConfigurableProviders": return Promise.resolve({
-							ok: true,
-							value: [
-								{
-									provider: "deepseek-official",
-									displayName: "DeepSeek",
-									settingsNs: "llm-deepseek",
-									settingsPath: []
-								},
-								{
-									provider: "openai",
-									displayName: "openai",
-									settingsNs: "llm-pi-ai",
-									settingsPath: ["providers", "openai"],
-									declared: false
-								},
-								{
-									provider: "anthropic",
-									displayName: "anthropic",
-									settingsNs: "llm-pi-ai",
-									settingsPath: ["providers", "anthropic"],
-									declared: false
-								},
-								{
-									provider: "acme-gateway",
-									displayName: "Acme Gateway",
-									settingsNs: "llm-pi-ai",
-									settingsPath: ["providers", "acme-gateway"],
-									declared: true
-								}
-							]
-						});
-						case "llm/discoverModels": return Promise.resolve({
-							ok: true,
-							value: fixtureModelGroups().flatMap((group) => group.models.map((model) => ({
-								id: model.id,
-								name: model.name
-							})))
-						});
-						case "settings/update": return Promise.resolve(settingsRemotes.update(args.ns));
-						case "settings/replace": return Promise.resolve(settingsRemotes.replace(args.ns));
-						case "settings/mutate": return Promise.resolve(settingsRemotes.mutate(args.ns));
-						case "session/list": return sessionApi.list(args._request);
-						case "session/search": return sessionApi.search(request, callSignal);
-						case "session/create": return sessionApi.create(request);
-						case "session/selectModel": return sessionApi.selectModel(request);
-						case "session/rename": return sessionApi.rename(request);
-						case "session/fork": return sessionApi.fork(request);
-						case "session/prompt": return sessionApi.prompt(request);
-						case "session/attachment": return sessionApi.attachment(request);
-						case "session/updateQueue": return sessionApi.updateQueue(request);
-						case "session/cancel": return sessionApi.cancel(request);
-						case "session/page": {
-							const page = request;
-							const pageSessionId = page.address.kind === "session" ? page.address.sessionId : page.address.childSessionId;
-							return sessionApi.history({
-								sessionId: pageSessionId,
-								throughSeq: page.throughSeq,
-								...page.beforeSeq === void 0 ? {} : { beforeSeq: page.beforeSeq },
-								...page.maxMessages === void 0 ? {} : { maxMessages: page.maxMessages }
 							});
+							case "subagents/prompt": return Promise.resolve({
+								ok: true,
+								value: { messageId: `fixture-message-${request.childSessionId}` }
+							});
+							case "subagents/interruptByParent": return Promise.resolve({
+								ok: true,
+								value: { accepted: true }
+							});
+							case "credentials/describe": return Promise.resolve(credentialRemotes.describe(args.refs ?? []));
+							case "credentials/set": return Promise.resolve(credentialRemotes.set(args.ref));
+							case "credentials/unset": return Promise.resolve(credentialRemotes.unset(args.ref));
+							case "settings/describe": return Promise.resolve(settingsRemotes.describe());
+							case "settings/canOpenAgentPresetDirectory": return Promise.resolve({
+								ok: true,
+								value: true
+							});
+							case "settings/openSettingsDocument": return Promise.resolve(settingsRemotes.openSettingsDocument());
+							case "settings/openAgentPresetDirectory": return Promise.resolve(settingsRemotes.openAgentPresetDirectory(args.agentPreset));
+							case "skills/list": {
+								const missing = requireRemoteSession(request);
+								if (missing !== void 0) return missing;
+								return sessionOk({
+									skills: [{
+										name: "fixture-demo",
+										description: "fixture 技能样本",
+										whenToUse: "仅供 UI 目录渲染验收",
+										modelInvocable: true
+									}, {
+										name: "fixture-user-only",
+										description: "fixture 仅用户技能样本",
+										modelInvocable: false
+									}]
+								});
+							}
+							case "session/openWorkspacePath": return sessionOk({ opened: true });
+							case "session/canOpenWorkspacePath": return Promise.resolve({
+								ok: true,
+								value: true
+							});
+							case "session/modelCatalog": return Promise.resolve({
+								ok: true,
+								value: {
+									default: {
+										provider: "deepseek-official",
+										model: "deepseek-v4-flash"
+									},
+									routableProviders: [
+										"deepseek-official",
+										"openai",
+										"acme-gateway"
+									],
+									groups: fixtureModelGroups(),
+									failures: []
+								}
+							});
+							case "llm/listProviders": return Promise.resolve({
+								ok: true,
+								value: [
+									{
+										id: "deepseek-official",
+										name: "DeepSeek"
+									},
+									{
+										id: "openai",
+										name: "openai"
+									},
+									{
+										id: "acme-gateway",
+										name: "Acme Gateway"
+									}
+								]
+							});
+							case "llm/listConfigurableProviders": return Promise.resolve({
+								ok: true,
+								value: [
+									{
+										provider: "deepseek-official",
+										displayName: "DeepSeek",
+										settingsNs: "llm-deepseek",
+										settingsPath: []
+									},
+									{
+										provider: "openai",
+										displayName: "openai",
+										settingsNs: "llm-pi-ai",
+										settingsPath: ["providers", "openai"],
+										declared: false
+									},
+									{
+										provider: "anthropic",
+										displayName: "anthropic",
+										settingsNs: "llm-pi-ai",
+										settingsPath: ["providers", "anthropic"],
+										declared: false
+									},
+									{
+										provider: "acme-gateway",
+										displayName: "Acme Gateway",
+										settingsNs: "llm-pi-ai",
+										settingsPath: ["providers", "acme-gateway"],
+										declared: true
+									}
+								]
+							});
+							case "llm/discoverModels": return Promise.resolve({
+								ok: true,
+								value: fixtureModelGroups().flatMap((group) => group.models.map((model) => ({
+									id: model.id,
+									name: model.name
+								})))
+							});
+							case "settings/update": return Promise.resolve(settingsRemotes.update(args.ns));
+							case "settings/replace": return Promise.resolve(settingsRemotes.replace(args.ns));
+							case "settings/mutate": return Promise.resolve(settingsRemotes.mutate(args.ns));
+							case "session/list": return sessionApi.list(args._request);
+							case "session/search": return sessionApi.search(request, callSignal);
+							case "session/create": return sessionApi.create(request);
+							case "session/selectModel": return sessionApi.selectModel(request);
+							case "session/rename": return sessionApi.rename(request);
+							case "session/fork": return sessionApi.fork(request);
+							case "session/prompt": return sessionApi.prompt(request);
+							case "session/attachment": return sessionApi.attachment(request);
+							case "session/updateQueue": return sessionApi.updateQueue(request);
+							case "session/cancel": return sessionApi.cancel(request);
+							case "session/page": {
+								const page = request;
+								const pageSessionId = page.address.kind === "session" ? page.address.sessionId : page.address.childSessionId;
+								return sessionApi.history({
+									sessionId: pageSessionId,
+									throughSeq: page.throughSeq,
+									...page.beforeSeq === void 0 ? {} : { beforeSeq: page.beforeSeq },
+									...page.maxMessages === void 0 ? {} : { maxMessages: page.maxMessages }
+								});
+							}
+							case "$events/result": return Promise.resolve(answerRemoteEvent(args));
+							case "workspace/create": return workspaceApi.create(request);
+							case "workspace/rename": return workspaceApi.rename(request);
+							case "workspace/delete": return workspaceApi.delete(request);
+							case "workspace/insertBefore": return workspaceApi.insertBefore(request);
+							case "workspace/insertSessionBefore": return workspaceApi.insertSessionBefore(request);
+							case "workspace/archiveSession": return workspaceApi.archiveSession(request);
+							default: return Promise.reject(/* @__PURE__ */ new Error(`fixture connection RPC endpoint ${JSON.stringify(endpoint)} is unavailable`));
 						}
-						case "$events/result": return Promise.resolve(answerRemoteEvent(args));
-						case "workspace/create": return workspaceApi.create(request);
-						case "workspace/rename": return workspaceApi.rename(request);
-						case "workspace/delete": return workspaceApi.delete(request);
-						case "workspace/insertBefore": return workspaceApi.insertBefore(request);
-						case "workspace/insertSessionBefore": return workspaceApi.insertSessionBefore(request);
-						case "workspace/archiveSession": return workspaceApi.archiveSession(request);
-						default: return Promise.reject(/* @__PURE__ */ new Error(`fixture connection RPC endpoint ${JSON.stringify(endpoint)} is unavailable`));
-					}
-				},
-				open(channel, endpoint, payload, signal) {
-					if (channel !== "/api") throw new Error(`fixture connection RPC channel ${JSON.stringify(channel)} is unavailable`);
-					const args = payload.args;
-					switch (endpoint) {
-						case "$events": return openRemoteEvents(signal);
-						case "session/control": return openControl(signal);
-						case "session/follow": return openFollow(args.request, signal);
-						case "workspace/follow": return openWorkspace(signal);
-						default: throw new Error(`fixture connection stream endpoint ${JSON.stringify(endpoint)} is unavailable`);
+					},
+					open(channel, endpoint, payload, signal) {
+						if (channel !== "/api") throw new Error(`fixture connection RPC channel ${JSON.stringify(channel)} is unavailable`);
+						const args = payload.args;
+						switch (endpoint) {
+							case "$events": return openRemoteEvents(signal);
+							case "session/control": return openControl(signal);
+							case "session/follow": return openFollow(args.request, signal);
+							case "workspace/follow": return openWorkspace(signal);
+							default: throw new Error(`fixture connection stream endpoint ${JSON.stringify(endpoint)} is unavailable`);
+						}
 					}
 				}
-			} };
+			};
 		}
 		/**
 		* Build the browser fixture transport from the current page's query switches.
@@ -4601,11 +4615,13 @@ window.__ModuleLoader__.load({
 					if (full.rpcId !== rpcId) throw new Error(`rpcId mismatch for ${endpoint}: sent ${rpcId}, got ${full.rpcId}`);
 					return full.result;
 				},
-				...openStream === void 0 ? {} : { open(channel, endpoint, payload, signal) {
-					assertTarget(channel, endpoint);
-					if (channel !== "/api") throw new Error(`connection: worker-local streams require the /api channel, got ${JSON.stringify(channel)}`);
-					return openStream(endpoint, payload, signal);
-				} }
+				...openStream === void 0 ? {} : {
+					open(channel, endpoint, payload, signal) {
+						assertTarget(channel, endpoint);
+						if (channel !== "/api") throw new Error(`connection: worker-local streams require the /api channel, got ${JSON.stringify(channel)}`);
+						return openStream(endpoint, payload, signal);
+					}
+				}
 			};
 		}
 		function parseConnectionResponse(value) {
@@ -4669,7 +4685,7 @@ window.__ModuleLoader__.load({
 		function watchBrowserNetwork(controller) {
 			const browser = globalThis.window;
 			const initiallyAvailable = browser?.navigator?.onLine;
-			if (browser === void 0 || initiallyAvailable === void 0) return () => {};
+			if (browser === void 0 || initiallyAvailable === void 0) return () => { };
 			const online = () => {
 				controller.setNetworkAvailable(true);
 			};
@@ -4792,9 +4808,11 @@ window.__ModuleLoader__.load({
 					};
 					owner = current;
 					controller.start();
-					return { stop: () => {
-						releaseOwner(current);
-					} };
+					return {
+						stop: () => {
+							releaseOwner(current);
+						}
+					};
 				}
 			};
 			ctx.provide("connection", handle);

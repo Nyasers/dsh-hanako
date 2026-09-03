@@ -101,12 +101,12 @@ export function apply(ctx, config) {
                 const connected =
                   bus && typeof bus.status === 'function'
                     ? (() => {
-                        try {
-                          return bus.status().connected === true
-                        } catch {
-                          return false
-                        }
-                      })()
+                      try {
+                        return bus.status().connected === true
+                      } catch {
+                        return false
+                      }
+                    })()
                     : false
                 // 断连→连上，或缓冲非空（上次补发未清完）：先补发缓冲（按序）——
                 // CodeRabbit：sendLine 失败保留的记录不能被后续 live 直发超越（后发先到

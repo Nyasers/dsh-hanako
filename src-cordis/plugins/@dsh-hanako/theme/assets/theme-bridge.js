@@ -53,7 +53,7 @@
       if (se && se.remove) se.remove();
     }
   }
-  function ask() { try { window.parent.postMessage({ dshHanaThemeRequest: true }, parentOrigin || "*"); } catch (e) {} }
+  function ask() { try { window.parent.postMessage({ dshHanaThemeRequest: true }, parentOrigin || "*"); } catch (e) { } }
   window.addEventListener("message", function (e) {
     // 来源校验：宿主壳页（window.parent）+ 匹配 origin——防第三方窗口伪造 dshHanaTheme
     if (e.source !== window.parent) return;
@@ -96,7 +96,7 @@
         applyOrRemove();
         maybeDropStatic();
       })
-      .catch(function () {});
+      .catch(function () { });
   }
   refreshPref();
   // 偏好实时化（vY→vZ：T7b 后 dsh 0.1.2 无 /api/events.host（旧 0.1.1 端点）——官方

@@ -359,13 +359,13 @@ function buildProviderRoutes() {
     if (prev.length > 0) {
       console.warn(
         "[dsh-run] 读取宿主 provider 配置失败，保留上次 routes：" +
-          result.errors.join("；"),
+        result.errors.join("；"),
       );
       return { routes: prev, skipped: result.skipped, errors: result.errors };
     }
     console.warn(
       "[dsh-run] 读取宿主 provider 配置失败（无上次缓存）：" +
-        result.errors.join("；"),
+      result.errors.join("；"),
     );
     return result;
   }

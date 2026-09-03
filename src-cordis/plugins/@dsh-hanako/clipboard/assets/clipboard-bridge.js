@@ -30,7 +30,7 @@
     var p;
     try { p = orig(text); } catch (e) { return bridgeCopy(text); }
     if (p && typeof p.then === "function") {
-      return p.then(function () {}, function () { return bridgeCopy(text); });
+      return p.then(function () { }, function () { return bridgeCopy(text); });
     }
     return bridgeCopy(text);
   };

@@ -391,8 +391,8 @@ export function apply(ctx, config) {
               }
               bridgeLog(
                 'dshana.bus 握手成功（' +
-                  (credAuthed ? '共享秘密已校验' : '未携带共享秘密，凭据方法拒绝') +
-                  '）',
+                (credAuthed ? '共享秘密已校验' : '未携带共享秘密，凭据方法拒绝') +
+                '）',
               )
               return
             }
@@ -472,7 +472,7 @@ export function apply(ctx, config) {
           // on：订阅消息分发（update.request / provider.refresh / update.result 等）；返回退订函数。
           // 与分发端一致：channel 映射为 ch:<channel> 后再挂监听（隔离保留事件）。
           on: (channel, cb) => {
-            if (typeof channel !== 'string' || typeof cb !== 'function') return () => {}
+            if (typeof channel !== 'string' || typeof cb !== 'function') return () => { }
             const key = 'ch:' + channel
             // 每个订阅回调独立异常隔离包装：一个监听器抛错不影响后续监听器执行
             // （EventEmitter 的 emit 同步串行调用，裸 cb 抛错会中断后续监听器）。
@@ -607,7 +607,7 @@ export function apply(ctx, config) {
                           },
                         },
                       }),
-                    }).catch(() => {})
+                    }).catch(() => { })
                   } catch {
                     /* 回投失败忽略（服务端超时自愈） */
                   }

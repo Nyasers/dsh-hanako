@@ -214,19 +214,19 @@ function resolveRouteModelsSimplified(request, deps) {
     const reasoningMeta =
       entry.reasoning === true
         ? {
-            reasoning: true,
-            thinkingLevelMap: {
-              off: "off",
-              minimal: null,
-              low: null,
-              medium: "medium",
-              high: "high",
-              xhigh: null,
-              ...(entry.thinkingLevelMap && entry.thinkingLevelMap.max === "max"
-                ? { max: "max" }
-                : {}),
-            },
-          }
+          reasoning: true,
+          thinkingLevelMap: {
+            off: "off",
+            minimal: null,
+            low: null,
+            medium: "medium",
+            high: "high",
+            xhigh: null,
+            ...(entry.thinkingLevelMap && entry.thinkingLevelMap.max === "max"
+              ? { max: "max" }
+              : {}),
+          },
+        }
         : null;
     return {
       id: entry.id,
@@ -380,7 +380,7 @@ export async function apply(ctx, config) {
           profiles,
           resolveApiKey,
           auth: {},
-          onReplayDegrade: () => {},
+          onReplayDegrade: () => { },
         });
       if (registration === null) {
         // 首次注册：空 routes（初始无 provider）不注册 adapter（无 provider 可注册），
@@ -473,10 +473,10 @@ export async function apply(ctx, config) {
                 refresh("宿主 push（总线）", { routes });
                 providerLog(
                   "收到 provider.refresh 事件（宿主 push" +
-                    (Array.isArray(p.routes)
-                      ? "，" + p.routes.length + " 条 routes"
-                      : "，路由缺失") +
-                    "）",
+                  (Array.isArray(p.routes)
+                    ? "，" + p.routes.length + " 条 routes"
+                    : "，路由缺失") +
+                  "）",
                 );
               }),
             );

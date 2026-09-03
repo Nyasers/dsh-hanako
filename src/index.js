@@ -213,7 +213,7 @@ export default class DshHanakoPlugin {
       if (typeof clearBootTimer === "function") clearBootTimer();
       if (typeof stopConfigWatch === "function") stopConfigWatch();
       if (g && typeof g.closeProcess === "function") {
-        Promise.resolve(g.closeProcess()).catch(() => {});
+        Promise.resolve(g.closeProcess()).catch(() => { });
       }
     });
 
@@ -399,10 +399,9 @@ export default class DshHanakoPlugin {
         g.boot.nextRetryAt = null;
         g.appendLog?.(
           "hana",
-          `[自动链] ${stageLabel}失败属不可自动恢复类（${klass}）：自动链停等，${
-            CONFIG_CONTINUE_CLASSES.has(klass)
-              ? "配置（nodejsPath 等）保存后自动续跑"
-              : "插件更新或重启宿主后自动续跑"
+          `[自动链] ${stageLabel}失败属不可自动恢复类（${klass}）：自动链停等，${CONFIG_CONTINUE_CLASSES.has(klass)
+            ? "配置（nodejsPath 等）保存后自动续跑"
+            : "插件更新或重启宿主后自动续跑"
           }，无需手动操作`,
         );
         if (CONFIG_CONTINUE_CLASSES.has(klass)) watchConfigForContinue();
@@ -446,7 +445,7 @@ export default class DshHanakoPlugin {
         g.appendLog?.(
           "hana",
           "[自动链] config 续跑 watch 建立失败（等重载/重启续跑）：" +
-            (e?.message || e),
+          (e?.message || e),
         );
       }
     };
@@ -457,7 +456,7 @@ export default class DshHanakoPlugin {
     // 不抛（调用方按未知可恢复退避，等安装真正结束后下一轮续跑）。
     const waitDepsSettled = async () => {
       const deadline = Date.now() + 300000;
-      for (;;) {
+      for (; ;) {
         const st = g.deps && g.deps.status;
         if (st !== "installing" && st !== "running") return true;
         if (Date.now() > deadline) return false;

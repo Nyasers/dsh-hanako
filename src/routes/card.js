@@ -306,7 +306,7 @@ export default function registerCardRoutes(app, ctx) {
   const base = "/api/plugins/" + ctx.pluginId;
 
   // 卡片页（iframe 内容）：sessionId+rpcId（重启恢复定位；op Map 退役后仅此可定位）
-    app.get("/card/op", (c) => {
+  app.get("/card/op", (c) => {
     const assets = CARD_ASSETS;
     const sessionId = String(c.req.query("sessionId") || "");
     const rpcId = String(c.req.query("rpcId") || "");
@@ -499,7 +499,7 @@ export default function registerCardRoutes(app, ctx) {
   }
 
   // 安装/升级卡片页（iframe 内容）：taskId 定位 g.depTasks 条目
-    app.get("/card/dep", (c) => {
+  app.get("/card/dep", (c) => {
     const assets = CARD_ASSETS;
     const taskId = String(c.req.query("taskId") || "");
     const hc = c.req.query("hana-css") || "";

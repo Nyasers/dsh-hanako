@@ -252,14 +252,14 @@ test("scope 漂移修复：错误链接 / 实体残留 → 重建指向 scopeSrc
   mkdirSync(join(profileDir, "node_modules"), { recursive: true });
   // 先造漂移：错误链接
   makeDirLink(wrong, join(profileDir, "node_modules", "@dsh-hanako"));
-  const out1 = ensureProfileSeeded({ profileDir, scopeSrc, seedDir, log: () => {} });
+  const out1 = ensureProfileSeeded({ profileDir, scopeSrc, seedDir, log: () => { } });
   assert.equal(out1, "linked");
   assertScopeLink(profileDir, scopeSrc);
   // 再造成实体残留（pnpm 重建等）
   rmSync(join(profileDir, "node_modules", "@dsh-hanako"), { recursive: true, force: true });
   mkdirSync(join(profileDir, "node_modules", "@dsh-hanako", "junk"), { recursive: true });
   writeFileSync(join(profileDir, "node_modules", "@dsh-hanako", "junk", "x.txt"), "residue");
-  const out2 = ensureProfileSeeded({ profileDir, scopeSrc, seedDir, log: () => {} });
+  const out2 = ensureProfileSeeded({ profileDir, scopeSrc, seedDir, log: () => { } });
   assert.equal(out2, "linked");
   assertScopeLink(profileDir, scopeSrc);
   assert.ok(!existsSync(join(profileDir, "node_modules", "@dsh-hanako", "junk", "x.txt")), "实体残留应被清理重建");
@@ -271,11 +271,11 @@ test("scope 缺失（pnpm 剪枝等）：不清理用户文件，只补链接", 
   const seedDir = makeSeedDir(root);
   const profileDir = profileDirOf(root);
   // 先种子出全新形态
-  ensureProfileSeeded({ profileDir, scopeSrc, seedDir, log: () => {} });
+  ensureProfileSeeded({ profileDir, scopeSrc, seedDir, log: () => { } });
   // 用户编辑 patch + pnpm 剪枝把 scope 链接删了（scope 路径整个不存在）
   writeFileSync(join(profileDir, "cordis.patch.yml"), "# 用户自装插件\n- insert:\n  - id: my-plugin\n    name: my-plugin\n[]\n");
   rmSync(join(profileDir, "node_modules"), { recursive: true, force: true });
-  const out = ensureProfileSeeded({ profileDir, scopeSrc, seedDir, log: () => {} });
+  const out = ensureProfileSeeded({ profileDir, scopeSrc, seedDir, log: () => { } });
   assert.equal(out, "linked");
   // 用户 patch 内容保留（未重种子覆盖）
   assert.equal(readFileSync(join(profileDir, "cordis.patch.yml"), "utf8"), "# 用户自装插件\n- insert:\n  - id: my-plugin\n    name: my-plugin\n[]\n", "用户 patch 不得被覆盖");
@@ -326,12 +326,12 @@ test("缺文件补齐 + 用户改动不覆盖", (t) => {
   const scopeSrc = makeScopeSrc(root);
   const seedDir = makeSeedDir(root);
   const profileDir = profileDirOf(root);
-  ensureProfileSeeded({ profileDir, scopeSrc, seedDir, log: () => {} });
+  ensureProfileSeeded({ profileDir, scopeSrc, seedDir, log: () => { } });
   // 用户编辑 patch、误删 cordis.yml
   const userPatch = "# 用户改动后的用户层\n[]\n";
   writeFileSync(join(profileDir, "cordis.patch.yml"), userPatch);
   rmSync(join(profileDir, "cordis.yml"));
-  const out = ensureProfileSeeded({ profileDir, scopeSrc, seedDir, log: () => {} });
+  const out = ensureProfileSeeded({ profileDir, scopeSrc, seedDir, log: () => { } });
   assert.equal(out, "ensured");
   assert.equal(readFileSync(join(profileDir, "cordis.patch.yml"), "utf8"), userPatch, "用户 patch 不得被覆盖");
   assert.equal(
@@ -388,7 +388,7 @@ test("真实模板冒烟：src-cordis/seed 四件套齐全、可解析、种子�
   const scopeSrc = makeScopeSrc(root);
   const seedDir = makeSeedDir(root, { useReal: true });
   const profileDir = profileDirOf(root);
-  const out = ensureProfileSeeded({ profileDir, scopeSrc, seedDir, log: () => {} });
+  const out = ensureProfileSeeded({ profileDir, scopeSrc, seedDir, log: () => { } });
   assert.equal(out, "linked");
   assertSeededFiles(profileDir, seedDir);
   // 辅助：seedDir 文件名与 SEED_NAMES 对齐（防 build 复制漏文件）

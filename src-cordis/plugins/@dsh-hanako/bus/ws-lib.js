@@ -87,7 +87,7 @@ export class WsConnection extends EventEmitter {
     this.readyState = READY_OPEN;
     // 基线 error 监听：EventEmitter 无 error 监听时抛未捕获异常，连接错误必须静默兜底
     // （调用方可再挂自己的 error 监听；本监听保证任何路径都不会因连接错误崩溃进程）
-    this.on("error", () => {});
+    this.on("error", () => { });
     this.remoteAddress =
       (socket.remoteAddress || "") +
       (socket.remotePort ? ":" + socket.remotePort : "");
@@ -373,15 +373,15 @@ export function handleUpgrade(req, socket, head, options = {}) {
     try {
       socket.end(
         "HTTP/1.1 " +
-          status +
-          " " +
-          text +
-          CRLF +
-          "Connection: close" +
-          CRLF +
-          "Content-Length: 0" +
-          CRLF +
-          CRLF,
+        status +
+        " " +
+        text +
+        CRLF +
+        "Connection: close" +
+        CRLF +
+        "Content-Length: 0" +
+        CRLF +
+        CRLF,
       );
     } catch {
       socket.destroy();
@@ -424,15 +424,15 @@ export function handleUpgrade(req, socket, head, options = {}) {
   try {
     socket.write(
       "HTTP/1.1 101 Switching Protocols" +
-        CRLF +
-        "Upgrade: websocket" +
-        CRLF +
-        "Connection: Upgrade" +
-        CRLF +
-        "Sec-WebSocket-Accept: " +
-        accept +
-        CRLF +
-        CRLF,
+      CRLF +
+      "Upgrade: websocket" +
+      CRLF +
+      "Connection: Upgrade" +
+      CRLF +
+      "Sec-WebSocket-Accept: " +
+      accept +
+      CRLF +
+      CRLF,
     );
   } catch (err) {
     onError?.(err);
