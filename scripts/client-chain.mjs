@@ -66,6 +66,7 @@ export async function buildClientBundles() {
       dts: false,
       clean: false, // 与 rspack 服务端半同目录：只写 client.js，不清理 index.js/package.json
       sourcemap: false,
+      minify: true, // 与 rspack 链 minimize 对齐：产物即时压缩（rolldown 压缩器）；pack terser 二次压缩兜底
       // loader 模块表注入 require 解析（官方 deps.neverBundle 语义）：requested 保持外部
       // （react / react/jsx-runtime），其余全部内联进 bundle
       deps: {
