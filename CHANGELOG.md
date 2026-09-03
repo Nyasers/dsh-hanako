@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.0.0-beta.3+dsh-0.1.2-rc.1（2026-09-03）
+
+- **pnpm 版本与引导单一事实源化**（PR #63）：`packageManager` 改 corepack 形态（`pnpm@11.25.0+sha512…`，版本 + tarball 完整性单一承载）。运行时引导从「dist 单文件下载 + 静态 sha256 校验」重写为「tarball 下载 + pm 段 sha512 校验 + 零依赖 tar 解压提取」（`extractPnpmFiles`，支持 PAX/GNU 头）——`PNPM_BOOTSTRAP` 静态配置（版本 + 文件 sha256）整体删除，升级 pnpm 只需 `corepack use` 刷 pm 段，pnpm.js 零改动。
+- **下载源四级化**：registry.npmjs.org 官方 → npmmirror（官方国内镜像）→ 腾讯云 / 华为云（第三方国内镜像，实测与官方逐字节同源）；sha512 校验兜底，内容不符自动换源。
+- **缓存完整性**（CodeRabbit Major 闭环）：`.pnpm-ok` 完成标记在两文件后原子落位（读侧不见混合对），标记绑定 pm 段 sha512 + 文件 sha256，命中重算比对（防同版本 hash 变更 / 篡改 / 截断）；版本解析过严格 SemVer（拒前导零 / 空标识符 / prerelease 数字前导零）。
+- **corepack 0.36.0 作 devDep**：Node 25+ 官方不再捆绑 corepack，hash 维护工具固定来源（devDep 不进运行时）。
+- 宿主 electron node 适配 v26.8.1；pnpm 11.24.0 → 11.25.0 运行时引导同步；源码注释去版本历史（演进记录归 git log）。
+
 ## v1.0.0-beta.2-hotfix.2+dsh-0.1.2-rc.1（2026-09-03）
 
 - **dsh 依赖跟进 0.1.2-alpha.5 → 0.1.2-rc.1**（PR #62）：上游 0.1.2 系列由 alpha 收敛至 RC（GitHub compare 核对为纯版本号阶段变更，无协议/API 变化）。版本号 build 段随依赖刷新 `+dsh-0.1.2-rc.1`，主体不 bump（`dsh` 子命令语义）。
