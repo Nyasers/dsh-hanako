@@ -1,12 +1,16 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// scripts/build.mjs — dsh-hanako 单 bundle 构建（收敛架构；构建脚本不随源码编译）
-// 产物：dist/index.js（单 bundle：生命周期+5 工具+lib+lifecycle+内联前端资源）
-//     + dist/routes/index.js 壳（宿主 routes/ 目录扫描，import bundle 导出转发）
-//     + dist/manifest.json（宿主 entry 指向 index.js）。插件本体零依赖打包。
+// scripts/build.mjs — dsh-hanako 构建（两源两产物，可分段执行）
+// 产物：
+//   src 半（build:src）：dist/index.js（插件本体单 bundle：生命周期+工具+lib+前端资源）
+//     + dist/routes/index.js 壳 + dist/manifest.json
+//   src-cordis 半（build:cordis）：dist/cordis/**（@dsh-hanako/* cordis 子插件包：
+//     service 半 rspack + client 半 tsdown，见 src-cordis/build preset）
 // 用法：
-//   node scripts/build.mjs                    # 本地已装 @rspack/core 时
+//   node scripts/build.mjs                # 全量（src + cordis）
+//   node scripts/build.mjs --src          # 只 src 半（主 bundle）
+//   node scripts/build.mjs --cordis       # 只 src-cordis 半（cordis 子插件，高频迭代快）
 //   RSPACK_ENV=<构建环境目录> node scripts/build.mjs   # 独立构建环境
 // 注意：@rspack/core 不声明为插件依赖（交付物零依赖），构建工具放独立构建环境或本机。
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -21,6 +25,11 @@ import { buildClientBundle } from "../src-cordis/build/client-config.mjs";
 import { minifyJs } from "./minify-assets.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+const MODE = process.argv.includes("--cordis")
+  ? "cordis"
+  : process.argv.includes("--src")
+    ? "src"
+    : "all";
 
 // rspack 解析：RSPACK_ENV 指向构建环境（推荐），否则本地 node_modules
 // rspack 2.x 为 ESM-only，动态 import（解析 exports/main 到实际入口文件）。
@@ -46,11 +55,11 @@ if (envDir) {
 }
 const rspack = rspackPkg.rspack ?? rspackPkg.default?.rspack;
 
-// 构建前收集会被 rspack 内联进 bundle 的全部源码 file:// URL（src/ 下全部 .js 模块），
-// 构建后产物里出现的这些字面量一律替换回 import.meta.url：rspack 会把 import.meta.url
-// 静态化为构建机上的源码绝对路径，分发到对方机器后路径失效。
-// 替换后 import.meta.url 指向 bundle 自身（dist/index.js），向上找 manifest.json 的
-// 定位逻辑（src/tools/lib/state.js 的 PLUGIN_ROOT）从 bundle 一步即达 dist 根，语义不变。
+// 构建前收集会被 rspack 内联进 bundle 的全部源码 file:// URL（src/ + src-cordis/ 下全部
+// .js 模块），构建后产物里出现的这些字面量一律替换回 import.meta.url：rspack 会把
+// import.meta.url 静态化为构建机上的源码绝对路径，分发到对方机器后路径失效。
+// 替换后 import.meta.url 指向 bundle 自身（dist/index.js 或 dist/cordis/<pkg>/index.js），
+// 向上找 manifest.json 的定位逻辑从 bundle 一步即达产物根，语义不变。
 const staticUrlToMeta = new Map();
 (function collectSource(urlRoot) {
   for (const name of fs.readdirSync(urlRoot)) {
@@ -67,18 +76,6 @@ const staticUrlToMeta = new Map();
     else if (p.endsWith(".js")) staticUrlToMeta.set(pathToFileURL(p).href, p);
   }
 })(ROOT);
-
-const compiler = rspack(config);
-
-await new Promise((resolvePromise, reject) => {
-  compiler.run((err, stats) => {
-    compiler.close(() => { });
-    if (err) return reject(err);
-    if (stats?.hasErrors()) return reject(new Error(stats.toString({ errors: true })));
-    console.log(stats?.toString({ colors: true, chunks: false, modules: false, assets: true }));
-    resolvePromise();
-  });
-});
 
 // ---- 构建后处理 ----
 // 1) 静态化路径字面量 → import.meta.url（运行时语义；压缩产物里是 "file:///..." 或 'file:///...'）
@@ -102,17 +99,6 @@ function walk(dir) {
     }
   }
 }
-walk(join(ROOT, "dist"));
-
-// 2) 写 dist/routes/index.js 壳（宿主扫描 routes/ 目录 → import bundle 具名导出转发）
-const p = join(ROOT, "dist", "routes", "index.js");
-const shell = 'import { pluginRoutes } from "../index.js";\nexport default pluginRoutes;\n';
-fs.outputFileSync(p, shell, "utf8");
-console.log("route shell -> routes/index.js");
-
-// 3) 拷贝 manifest.json（dist 根：state.js PLUGIN_ROOT 向上找 manifest.json 即达 dist 根）
-fs.copySync(join(ROOT, "manifest.json"), join(ROOT, "dist", "manifest.json"));
-console.log("manifest.json -> dist/");
 
 // 4) dist 整体额外 terser 压缩：rspack（swc）已压过一轮，这里再走 terser 做第二轮
 // （bundle 字符串资产 - 内联 HTML/CSS/JS 一并在内；引号统一/去多余空格/再 mangle）。
@@ -152,29 +138,57 @@ function extraTerser(root) {
     }
   })();
 }
-await extraTerser(join(ROOT, "dist"));
 
-// 4) 构建 cordis bundle 子插件包（dist/cordis）：从 src-cordis 构建出 bundle 化的
-//    @dsh-hanako/* 子插件包；src → 插件本体 bundle（dist/index.js，前述步骤）——两源两产物：
-//      dist/cordis/<8 包>/index.js
-//        ← 各包 service 半：源码入口经 rspack 打成 ESM bundle（preset 见
-//        src-cordis/build/service-config.mjs，配置随包走——各包自持构建描述
-//        cordis.config.mjs；内部模块合并、assets/ 独立资源 minify + asset/source
-//        内联、node 内建外部 import、具名导出保留）
-//      dist/cordis/<8 包>/{package.json, client.js?}
-//        ← 源包静态文件（package.json 恒复制；client.js 仅 bridge 保留散装复制——
-//        vendor 手写 __ModuleLoader__ bundle 无内容字符串不进打包链；settings 的
-//        client.js 为 ESM 源，由 client 半 preset 产物覆盖，不复制）
-//      dist/cordis/<pkg>/client.js（settings）
-//        ← client 半：tsdown closure-factory 自注册 bundle（preset 见
-//        src-cordis/build/client-config.mjs，学官方 clientBundle 预设）
-//      dist/cordis/dshana/{package.json, cordis.patch.yml}
-//        ← src-cordis 顶层（roster bundle 包：dsh.bundle.patch 声明，无 JS 入口不打包）
-//    profile 文件（manifest/用户层/pnpm-workspace/cordis.yml）不随产物分发——profile
-//    目录由运行时官方 initProfile 生成 + dsh boot prepareProfile 自维护
-//    （落位见 lifecycle.js ensureDshanaProfile → tools/lib/profile-seed.js）。
-//    插件 JS 不做 build 这轮 terser（rspack 已 minimize；pack.mjs 静态压缩步兜底二次压缩），
-//    故不在此遍历的 node_modules 跳过名单之外再压缩。
+// ==================== src 半（插件本体 bundle） ====================
+async function buildSrcPhase() {
+  const compiler = rspack(config);
+  await new Promise((resolvePromise, reject) => {
+    compiler.run((err, stats) => {
+      compiler.close(() => { });
+      if (err) return reject(err);
+      if (stats?.hasErrors()) return reject(new Error(stats.toString({ errors: true })));
+      console.log(stats?.toString({ colors: true, chunks: false, modules: false, assets: true }));
+      resolvePromise();
+    });
+  });
+
+  // 构建后处理：静态化路径回写（主 bundle 区）
+  walk(join(ROOT, "dist"));
+
+  // 2) 写 dist/routes/index.js 壳（宿主扫描 routes/ 目录 → import bundle 具名导出转发）
+  const p = join(ROOT, "dist", "routes", "index.js");
+  const shell = 'import { pluginRoutes } from "../index.js";\nexport default pluginRoutes;\n';
+  fs.outputFileSync(p, shell, "utf8");
+  console.log("route shell -> routes/index.js");
+
+  // 3) 拷贝 manifest.json（dist 根：state.js PLUGIN_ROOT 向上找 manifest.json 即达 dist 根）
+  fs.copySync(join(ROOT, "src", "manifest.json"), join(ROOT, "dist", "manifest.json")); // src 域构件（manifest 随 src 半产出）
+  console.log("manifest.json -> dist/");
+
+  // 4) 主 bundle 区额外 terser（rspack 已压一轮，二次压缩字符串资产）
+  await extraTerser(join(ROOT, "dist"));
+  console.log("build:src -> dist/");
+}
+
+// ==================== src-cordis 半（cordis 子插件包） ====================
+// 产物：
+//   dist/cordis/<8 包>/index.js
+//     ← 各包 service 半：源码入口经 rspack 打成 ESM bundle（preset 见
+//     src-cordis/build/service-config.mjs，配置随包走——各包自持构建描述
+//     cordis.config.mjs；内部模块合并、assets/ 独立资源 minify + asset/source
+//     内联、node 内建外部 import、具名导出保留）
+//   dist/cordis/<8 包>/{package.json, client.js?}
+//     ← 源包静态文件（package.json 恒复制；client.js 仅 bridge 保留散装复制——
+//     vendor 手写 __ModuleLoader__ bundle 无内容字符串不进打包链；settings 的
+//     client.js 为 ESM 源，由 client 半 preset 产物覆盖，不复制）
+//   dist/cordis/<pkg>/client.js（settings）
+//     ← client 半：tsdown closure-factory 自注册 bundle（preset 见
+//     src-cordis/build/client-config.mjs，学官方 clientBundle 预设）
+//   dist/cordis/dshana/{package.json, cordis.patch.yml}
+//     ← src-cordis 顶层（roster bundle 包：dsh.bundle.patch 声明，无 JS 入口不打包）
+// profile 文件（manifest/用户层/pnpm-workspace/cordis.yml）不随产物分发——profile
+// 目录由运行时官方 initProfile 生成 + dsh boot prepareProfile 自维护
+// （落位见 lifecycle.js ensureDshanaProfile → tools/lib/profile-seed.js）。
 function buildCordisStatic(srcRoot, outRoot) {
   fs.removeSync(outRoot);
   fs.ensureDirSync(outRoot);
@@ -268,19 +282,21 @@ async function buildClientHalves(packages, outRoot) {
   console.log(`cordis client 半（tsdown）-> ${pkgOutRoot}（${count} 个 closure-factory bundle）`);
 }
 
-const cordisPackages = await loadCordisPackageConfigs();
-await buildCordisStatic(join(ROOT, "src-cordis"), join(ROOT, "dist", "cordis"));
-await buildServiceHalves(cordisPackages, join(ROOT, "dist", "cordis"));
-await buildClientHalves(cordisPackages, join(ROOT, "dist", "cordis"));
+async function buildCordisPhase() {
+  const cordisPackages = await loadCordisPackageConfigs();
+  await buildCordisStatic(join(ROOT, "src-cordis"), join(ROOT, "dist", "cordis"));
+  await buildServiceHalves(cordisPackages, join(ROOT, "dist", "cordis"));
+  await buildClientHalves(cordisPackages, join(ROOT, "dist", "cordis"));
 
-// 4.5) cordis 子插件 bundle 同款回写：rspack 会把各包源码模块的 import.meta.url 静态化为
-// 构建机上的源码绝对路径（src-cordis/plugins/...），分发后路径失效——collectSource 现已
-// 涵盖 src-cordis（见上），这里对 dist/cordis 再跑一次 walk 回写 import.meta.url（产物
-// bundle 与散装时代同路径落位 node_modules/@dsh-hanako/<pkg>/index.js，语义不变：
-// createRequire(import.meta.url) 仍解析到插件包目录，app 的 frontend 多基座解析不受影响）
-walk(join(ROOT, "dist", "cordis"));
+  // cordis 子插件 bundle 同款回写：rspack 会把各包源码模块的 import.meta.url 静态化为
+  // 构建机上的源码绝对路径（src-cordis/plugins/...），分发后路径失效——collectSource 现已
+  // 涵盖 src-cordis（见上），这里对 dist/cordis 再跑一次 walk 回写 import.meta.url（产物
+  // bundle 落位 dist/cordis/<pkg>/index.js，createRequire(import.meta.url) 语义不变）
+  walk(join(ROOT, "dist", "cordis"));
+  console.log("build:cordis -> dist/cordis/");
+}
 
-
+// ==================== 主控 ====================
 // 6) 构建后强制校验：产物不得残留带引号的 file:// 字面量（构建机路径泄漏即失败）。
 // 回归防护：收集范围再全也有漏网可能，这里兜底——CI 出包残留即构建失败。
 function assertNoStaticFileUrl(root) {
@@ -306,6 +322,8 @@ function assertNoStaticFileUrl(root) {
   }
   console.log("assert no static file:// literal -> ok");
 }
-assertNoStaticFileUrl(join(ROOT, "dist"));
 
-console.log("build done ->", join(ROOT, "dist"));
+if (MODE !== "cordis") await buildSrcPhase();
+if (MODE !== "src") await buildCordisPhase();
+assertNoStaticFileUrl(join(ROOT, "dist"));
+console.log("build done（" + MODE + "）->", join(ROOT, "dist"));

@@ -19,16 +19,16 @@ import fs from "fs-extra";
 const require = createRequire(import.meta.url);
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 // 版本单一事实源：package.json（唯一来源，不支持命令行传版本——显式传版本容易与
-// manifest 不同步（历史教训）；版本同步用 scripts/version.mjs 自动化）
+// manifest 不同步（历史教训）；版本同步用 scripts/bump.mjs 自动化）
 const version = fs.readJsonSync(join(ROOT, "package.json")).version;
 if (!version) throw new Error("package.json version 缺失");
 
 // 防回归：版本一致性强制校验（历史曾手改只 bump package.json，manifest.json version 停在
 // 旧值，发布包内版本与 tag 不一致）。打包版本必须同时等于 manifest.json 的 version。
-const manifestVersion = fs.readJsonSync(join(ROOT, "manifest.json")).version;
+const manifestVersion = fs.readJsonSync(join(ROOT, "src", "manifest.json")).version;
 if (version !== manifestVersion)
   throw new Error(
-    `版本不一致：package.json ${version} ≠ manifest.json ${manifestVersion}（manifest 未同步，跑 scripts/version.mjs 或手动同步后再打包）`,
+    `版本不一致：package.json ${version} ≠ manifest.json ${manifestVersion}（manifest 未同步，跑 scripts/bump.mjs 或手动同步后再打包）`,
   );
 
 // 1. 静态项复制进 dist —— dist 即完整交付目录（bundle + manifest + skills + cordis 插件），
@@ -37,7 +37,8 @@ if (version !== manifestVersion)
 const staticItems = [
   "NOTICE",
   "package.json",
-  "manifest.json",
+  // manifest.json 已随 src 域移入 src/manifest.json（src 半构建产出 dist/manifest.json），
+  // 不再经根级静态复制
   "pnpm-workspace.yaml",
   "pnpm-lock.yaml",
   "skills",
@@ -62,7 +63,7 @@ for (const item of staticItems) {
 }
 
 // 1.5) cordis 包 version 一致性校验（防回归，与 manifest 校验对称）：cordis 包（roster
-//   bundle dshana + 8 子插件）version 与 manifest 同批由 scripts/version.mjs bump 同步
+//   bundle dshana + 8 子插件）version 与 manifest 同批由 scripts/bump.mjs bump 同步
 //   （单一事实源 = 主 package.json；源码 src-cordis 内随同步维护），pack 时读 dist 产物
 //   校验一致——手改/漏同步即出包版本漂移。
 function assertCordisDistVersions(outDir) {
@@ -75,7 +76,7 @@ function assertCordisDistVersions(outDir) {
     const j = fs.readJsonSync(pj);
     if (j.version !== version) {
       throw new Error(
-        `版本不一致：cordis 包 ${join("cordis", name, "package.json")} version ${j.version} ≠ package.json ${version}（跑 scripts/version.mjs 同步后再打包）`,
+        `版本不一致：cordis 包 ${join("cordis", name, "package.json")} version ${j.version} ≠ package.json ${version}（跑 scripts/bump.mjs 同步后再打包）`,
       );
     }
     count += 1;

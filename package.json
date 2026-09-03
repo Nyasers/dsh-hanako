@@ -5,12 +5,14 @@
   "packageManager": "pnpm@11.25.0+sha512.5cde925b4f075f725eb71fbae18a42ffe784524789f19b61c731cb8721ec28aaee160e01a8d5af4fedb2a42cdbf300efe23db356b0d4a17b4d63e11f8ab7c956",
   "type": "module",
   "scripts": {
-    "build": "node scripts/build.mjs",
-    "pack": "node scripts/pack.mjs",
-    "prepack": "node scripts/build.mjs",
-    "prebump": "pnpm run pack",
+    "build": "pnpm run build:src && pnpm run build:cordis",
+    "build:src": "node scripts/build.mjs --src",
+    "build:cordis": "node scripts/build.mjs --cordis",
+    "prepack": "node scripts/syncver.mjs",
+    "pack": "pnpm run build && node scripts/pack.mjs",
+    "prebump": "pnpm run build",
     "bump": "node scripts/bump.mjs",
-    "postbump": "node scripts/postbump.mjs"
+    "postbump": "pnpm run syncver && node scripts/postbump.mjs"
   },
   "dependencies": {
     "@deepseek-ai/cordis": "4.0.2",

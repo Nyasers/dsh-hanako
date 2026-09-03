@@ -59,6 +59,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { cordisPkgPaths } from "./version-common.mjs"; // 根级共享：cordis 包清单（版本域通用构件）
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const args = process.argv.slice(2);
@@ -190,22 +191,6 @@ function calcNewVersion(current, arg) {
   if (!ev) return null;
   ev.build = null;
   return formatSemver(ev);
-}
-
-// cordis 包清单（src-cordis 顶层 roster bundle + plugins/* 子插件 package.json，相对
-// ROOT）：version 与 manifest 同批在 postbump 同步（scripts/postbump.mjs）；cordis
-// 包随插件整体发版不独立发布，历史独立号废弃，version 仅元数据一致性（单一事实源 =
-// 主 package.json）
-function cordisPkgPaths() {
-  const out = ["src-cordis/package.json"];
-  const plugins = path.join(ROOT, "src-cordis", "plugins");
-  for (const name of fs.readdirSync(plugins)) {
-    const p = path.join(plugins, name);
-    if (!fs.statSync(p).isDirectory()) continue;
-    const pj = path.join(p, "package.json");
-    if (fs.existsSync(pj)) out.push(path.relative(ROOT, pj));
-  }
-  return out.sort();
 }
 
 function main() {
