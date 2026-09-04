@@ -104,8 +104,8 @@
     - id: locale
       name: '@deepseek-ai/dsh-client-locale'
 
-    - id: ui-layout
-      name: '@deepseek-ai/dsh-client-ui-layout'
+    # (ui-layout 已从 roster 移除——root 装配者由 @dsh-hanako/view 接管，见本文件
+    # @dsh-hanako/* 子插件区；其 client src 由 view 插件 vendor 构建期编译进自身 bundle)
 
     - id: ui-renderer
       name: '@deepseek-ai/dsh-client-ui-renderer'
@@ -242,3 +242,9 @@
     # 数据面走 bridge 免鉴权 /api + gateway remote.mux）
     - id: '@dsh-hanako/app'
       name: '@dsh-hanako/app'
+
+    # fpFullPanel 视图装配插件：替代官方 ui-layout 的 root 装配者角色——provide layout
+    # 服务（满足 ui-sidebar 等 inject 方）+ 注册 root = 官方 AppFrame（无参完整视图，
+    # 官方等价）；URL 三态（无参/main/sidebar）路由 V2/V3 扩展
+    - id: '@dsh-hanako/view'
+      name: '@dsh-hanako/view'
