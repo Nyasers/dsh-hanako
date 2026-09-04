@@ -5,7 +5,7 @@
 // 布局：领域专用随源码——cordis 域脚本/配置全在 src-cordis/（build/ preset + 每包
 // cordis.config.mjs 描述），共享工具（rspack 本体解析/URL 回写/terser/assert + 共享
 // minify-loader）在 scripts/ 根级。产物 dist/cordis/**：
-//   8 子插件：service 半 rspack（index.js bundle）+ client 半 tsdown（settings，closure-factory）
+//   9 子插件：service 半 rspack（index.js bundle）+ client 半 tsdown（settings/view 等，closure-factory）
 //   + dshana roster bundle（package.json + cordis.patch.yml）+ 静态 package.json/client.js
 // 用法：node src-cordis/build.js [RSPACK_ENV=<构建环境目录>]
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -118,6 +118,7 @@ async function buildClientHalves(packages, outRoot) {
       pkgDir,
       outDir: join(outRoot, name),
       externals: cfg.client.externals,
+      defines: cfg.client.defines,
     });
     count += 1;
   }

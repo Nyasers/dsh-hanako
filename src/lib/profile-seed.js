@@ -4,9 +4,9 @@
 // lib/profile-seed.js — dshana profile 运行时种子化/迁移/scope 链接（lib 提取）
 // 从 src/lifecycle.js ensureDshanaProfile 剥离的纯路径逻辑（设计 specs/current/
 // dshana-profile-bundle/spec.md D1/D2/D4/D5）：profile 目录（$DSH_HOME/profiles/dshana）
-// 由插件运行时初始化为用户自有真实目录（不再整树 junction 挂插件产物），8 个
+// 由插件运行时初始化为用户自有真实目录（不再整树 junction 挂插件产物），9 个
 // @dsh-hanako/* 子插件 + bundle @dsh-hanako/dshana 经单条 scope 目录链接暴露（scopeSrc =
-// PLUGIN_ROOT/cordis——9 包平铺于 cordis 资产根，链接名 @dsh-hanako 供 cordis 解析）。
+// PLUGIN_ROOT/cordis——10 包平铺于 cordis 资产根，链接名 @dsh-hanako 供 cordis 解析）。
 //
 // 官方生成工具（2026-09-04 定案）：profile 文件（manifest package.json / 用户层
 // cordis.patch.yml / pnpm-workspace.yaml）由 @deepseek-ai/dsh-app-boot 的 initProfile

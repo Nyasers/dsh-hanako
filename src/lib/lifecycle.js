@@ -376,7 +376,7 @@ function buildProviderRoutes() {
 // vX（dshana-profile-bundle 重构，spec：specs/current/dshana-profile-bundle/spec.md
 // D1/D2/D4/D5）：profile 目录改为运行时初始化的用户自有真实目录（用户可自装插件），
 // 不再整树 junction 挂插件产物。产物 = scope 树（dist/cordis/**，
-// 含 bundle @dsh-hanako/dshana 与 8 子插件，见 build.mjs buildCordis）：
+// 含 bundle @dsh-hanako/dshana 与 9 子插件，见 src-cordis/build.js buildCordis）：
 //   profileDir = $DSH_HOME/profiles/dshana：官方 initProfile 生成（manifest
 //   dsh.profile.bundles=[@deepseek-ai/dsh-base, @dsh-hanako/dshana]、用户层
 //   cordis.patch.yml 模板、pnpm-workspace.yaml；cordis.yml 空根由 dsh boot 自维护）+
@@ -397,7 +397,7 @@ export async function ensureDshanaProfile(cfg) {
   const g = getSingleton();
   const append = (msg) => g.appendLog?.("hana", msg);
   const srcRoot = join(PLUGIN_ROOT, "cordis"); // 打包产物 cordis/（scope 树形态：@dsh-hanako 平铺目录，无 node_modules 层）
-  const scopeSrc = srcRoot; // 产物 scope 根 = cordis 资产根（9 包平铺 dist/cordis/*，链接名 @dsh-hanako 供 cordis 解析）
+  const scopeSrc = srcRoot; // 产物 scope 根 = cordis 资产根（10 包平铺 dist/cordis/*，链接名 @dsh-hanako 供 cordis 解析）
   const dshHome = join(cfg.dataDir, "dsh-home");
   // 官方生成工具 initProfile（@deepseek-ai/dsh-app-boot 导出，与 loadLayeredEnv 同模块）：
   // 复用 loadInprocDsh 拿 appBoot（dsh 依赖缺失/版本无 initProfile 时无法官方生成 →

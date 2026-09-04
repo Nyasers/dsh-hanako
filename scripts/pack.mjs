@@ -62,7 +62,7 @@ for (const item of staticItems) {
 }
 
 // 1.5) cordis 包 version 一致性校验（防回归，与 manifest 校验对称）：cordis 包（roster
-//   bundle dshana + 8 子插件）version 与 manifest 同批由 version-hook（pnpm version 发版
+//   bundle dshana + 9 子插件）version 与 manifest 同批由 version-hook（pnpm version 发版
 //   流程）同步（单一事实源 = 主 package.json；源码 src-cordis 内随同步维护），pack 时读 dist 产物
 //   校验一致——手改/漏同步即出包版本漂移。
 function assertCordisDistVersions(outDir) {
@@ -71,11 +71,11 @@ function assertCordisDistVersions(outDir) {
   if (!fs.pathExistsSync(cordisRoot)) {
     throw new Error("cordis 产物缺失（dist/cordis 不存在）：先跑 pnpm run build 再打包");
   }
-  // 完整性：必需 9 包（roster bundle dshana + 8 子插件）全部存在且 package.json 版本一致——
+  // 完整性：必需 10 包（roster bundle dshana + 9 子插件）全部存在且 package.json 版本一致——
   // 缺失/部分产物（含 count=0）一律拒包，防 build 失败后残留部分 dist 被误打包
   const required = [
     "dshana",
-    "app", "bridge", "bus", "clipboard", "logger", "provider", "settings", "theme",
+    "app", "bridge", "bus", "clipboard", "logger", "provider", "settings", "theme", "view",
   ];
   let count = 0;
   for (const name of required) {
