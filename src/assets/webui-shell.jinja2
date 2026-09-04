@@ -368,40 +368,8 @@
               return fetch(hanaApiUrl(path), Object.assign({}, init || {}, { headers: headers }));
             },
           },
-          panel: {
-            set: function (props) {
-              // 面板不可用（宿主无 functionPanel / 未响应）时静默降级
-              return hanaRequest("hana.panel.set", props, 4000).catch(function () { return { accepted: 0, dropped: [] }; });
-            },
-          },
         };
       })();
-      // ---- 功能面板（status 常驻；actions 段已退役——T4 无手动入口）----
-      function panelStatusView() {
-        var st = { word: "未就绪", tone: "danger", delta: "自动进行中" };
-        if (!boot) return st;
-        if (boot.ready) { st.word = "运行中"; st.tone = "success"; st.delta = "端口 " + panelPort; return st; }
-        if (viewOf(boot) === "action") { st.word = "需要处理"; st.delta = "自举暂停"; return st; }
-        var d = boot.deps || {};
-        if (d.status === "installing" || d.status === "running") { st.word = "自举中"; st.tone = "warning"; st.delta = "依赖安装/核对"; return st; }
-        if (boot.phase === "booting") { st.word = "自举中"; st.tone = "warning"; st.delta = "启动 Web Host"; return st; }
-        st.word = "自举中"; st.tone = "warning";
-        return st;
-      }
-      function pushPanel() {
-        try {
-          if (!hana || !hana.panel || !hana.panel.set) return;
-          if (!boot) return; // 快照未到（未知态）不推——避免把「未就绪」误报给宿主侧栏；
-          // 快照到达后必经 applyBoot → pushPanel 以真实状态补推
-          var st = panelStatusView();
-          hana.panel.set({
-            sections: [
-              { kind: "status", id: "dshana-status", label: "DSHana", value: st.word, delta: st.delta, deltaTone: st.tone },
-            ],
-            refresh: { intervalMs: 30000 },
-          }).catch(function () { /* 面板不可用静默降级 */ });
-        } catch (err) { /* 面板不可用静默降级 */ }
-      }
       // 监听 dsh iframe（跨源）发来的复制请求 → 宿主能力 → 回执
       window.addEventListener("message", function (e) {
         var m = e.data;
@@ -622,7 +590,6 @@
           clearClocks();
           clearReadyTimer();
           if (!readyReceived) { mountReady(); }
-          pushPanel();
           return;
         }
         readyReceived = false; // 非 ready 快照：撤销就绪标志，使后续 ready 恢复时能完整走 mountReady（data-view 恢复 + attach）
@@ -637,7 +604,6 @@
         else stopInstallTick();
         startRetryClock();
         armFallbackTimer();
-        pushPanel();
       }
       var bootRefreshing = false; // 快照拉取防并发（事件风暴/安装 tick/兜底共用）
       function refreshBoot() {
@@ -676,7 +642,6 @@
           frame.src = "http://127.0.0.1:{{= it.port }}/";
         }
         startThemePush();
-        pushPanel();
       }
       // ---- 事件流（/webui/events，SSE 式 chunked）----
       var streamAbort = null;
