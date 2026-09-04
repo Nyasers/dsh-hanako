@@ -25,8 +25,13 @@
 //     sidebar = SidebarOnlyFrame（V2：fp 面板 embedUrl 纯侧栏——单列容器 + 仅 sidebar
 //               子槽；SidebarRoot/workspaces/settings 子槽 occupant 走 roster 官方
 //               bundle，详见 SidebarOnlyFrame.tsx 文件头）
-//   V2 边界如实记录（不做 V4 预实现，见 SidebarOnlyFrame.tsx「已知限制」）：
-//     sidebar.settings modal（1080x700）在本 iframe 内溢出 → 跨边联动属 V4；
+//   联动（V4 跨边联动协议，见 sync-bridge.js 文件头——实现/时序/防回环记录全在那里）：
+//     effect 3 选中态桥：仅 main/sidebar 视图激活（inject 'sessions' 拿 ClientSessions，
+//     订阅其 list store current + BroadcastChannel 'dshana.sync'；握手 boot:true / isRemote
+//     静默 / pending 补开 / clear 双向，见 sync-bridge.js）。full 不参与桥。
+//     settings 跨边（open-settings）：官方 bundle 无干净拦截面（调研结论：不可行，待上游
+//     支持），V4 不落地其拦截，详见 sync-bridge.js 头「settings 跨边」段与交付 2。
+//   V2 边界如实记录：
 //     SidebarRoot rail toggle 只翻转 layout store 偏好（本帧不读 store 几何），无视觉效果；
 //     sidebar 无 rail 折叠语义（collapsed 恒 false）。
 //
@@ -67,6 +72,7 @@ import { AppFrame } from "./vendor/AppFrame.tsx";
 import { SidebarOnlyFrame } from "./SidebarOnlyFrame.tsx";
 import { MainFrame } from "./MainFrame.tsx";
 import { createLayoutStore } from "./vendor/stores.ts";
+import { createSessionSyncBridge } from "./sync-bridge.js";
 import { LayoutController } from "./vendor/service.ts";
 import { ThemePresenter } from "./vendor/theme-presenter.ts";
 
@@ -142,9 +148,11 @@ function frameForView(view) {
 }
 
 // ---- 客户端服务注入：slots（root 注册）+ theme（ThemePresenter 快照）+ locale（t）----
-// 与官方 ui-layout client/index.ts 相同；package.json dsh.client.inject 依官方 ui-layout
-// 的依赖方声明（locale/ui-renderer/ui-session/ui-theme，行到达序见 module graph edges）。
-const inject = ["slots", "theme", "locale"];
+// + sessions（V4 跨边联动桥数据源：ctx.sessions.list current 订阅，见 sync-bridge.js 挂载
+// 点选型 B；官方 ui-session 同款经 inject 'sessions' 拿 ClientSessions 实例——provider 为
+// api-session-controller client，行到达序见 module graph edges）。
+// 与官方 ui-layout client/index.ts 相同的部分：slots/theme/locale。
+const inject = ["slots", "theme", "locale", "sessions"];
 
 /**
  * 客户端插件主体：provide layout 服务 + 注册 root（按视图选型帧：full=AppFrame（官方
@@ -199,6 +207,15 @@ function apply(ctx) {
       presenter.dispose();
     };
   }, "@dsh-hanako/view: theme presenter");
+
+  // effect 3（V4 跨边联动协议）：选中态桥。仅 main/sidebar 视图激活（readView 结果判定——
+  // 无参 full = 官方等价形态不参与桥，见 sync-bridge.js 文件头）；subscribe ctx.sessions.list
+  // current + BroadcastChannel 广播/接收（握手/防回环/clear/pending 全在 sync-bridge.js）。
+  // settings 跨边（open-settings）：调研结论为官方 bundle 无干净拦截面（V4 不可行，待上游），
+  // 本 effect 不建 settings 分支——记录见 sync-bridge.js 头与 SidebarOnlyFrame.tsx 已知限制。
+  if (view === MAIN || view === SIDEBAR) {
+    ctx.effect(() => createSessionSyncBridge(ctx), "@dsh-hanako/view: 跨边联动桥（选中态 sync）");
+  }
 }
 
 export { apply, inject };

@@ -32,9 +32,14 @@
 //  - 唯一交互残留：SidebarRoot 顶行 rail toggle（panel 图标）点击 → ctx.layout
 //    .toggleSidebar() 只翻转 layout store 偏好（本帧不读 store 几何，无视觉效果）。
 //
-// 已知限制（如实记录，不做 V4 预实现）：
-//  - sidebar.settings occupant（ui-settings-general）点击会弹全视口 1080x700 设置
-//    modal，在本 iframe 内必然溢出——跨边联动（modal 改在主页打开）属 V4 联动协议。
+// 已知限制（如实记录）：
+//  - V4 联动协议落地后（client.js effect 3 + sync-bridge.js）：sidebar 视图的会话选中经
+//    BroadcastChannel 与 main 主页跨边同步（双向 select/clear/握手）；会话增删/重命名/
+//    workspace 列表走 dsh 数据面天然一致，不走桥。
+//  - sidebar.settings occupant（ui-settings-general）的 trigger → 1080x700 modal 打开是
+//    SettingsRoot 组件内本地态，官方无可编程 open/关闭面、main 视图无其宿主（无侧栏）、
+//    槽规则封死干净拦截面——V4 调研结论 = 跨边不可行（待上游支持），本地弹出溢出保持
+//    现状并记录（见 sync-bridge.js 头「settings 跨边」段）。
 //  - main 视图为 V3 修正（client.js：自组 MainFrame 减法式——.dv_frame 只留
 //    .dv_centerCol + .dv_detailsCol、无 sidebar，见 MainFrame.tsx），本帧只服务 sidebar 视图。
 import { useEffect, useRef, useState } from 'react'
