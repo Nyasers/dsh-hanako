@@ -74,6 +74,7 @@
         "id": "dshana-sidebar",
         "title": "DSHana Sidebar",
         "route": "/sidebar",
+        "cardForm": "flush",
         "pageOf": "dshana"
       }
     ]
