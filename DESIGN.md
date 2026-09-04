@@ -40,10 +40,13 @@ Hana 宿主进程
 
 ## DSH Web UI（DSHana 标签页）
 
-配置 `webPort`（默认 3080）时插件加载即**进程内 boot**，DSHana 以整页卡片注册（manifest `contributes.cards[]`，id `dshana`，route `/webui`），卡片 iframe 内嵌 `http://127.0.0.1:<webPort>/`（根路径，免鉴权）：
+配置 `webPort`（默认 3080）时插件加载即**进程内 boot**，DSHana 以**父子双卡**注册（manifest
+`contributes.cards[]`：主卡 id `dshana` route `/main`（realization:page + siteNavEntry）；子卡 id
+`dshana-sidebar` route `/sidebar`、`pageOf: "dshana"`——宿主 functionPanel route 参数落地前的
+过渡表达），每卡壳页 iframe 内嵌 `http://127.0.0.1:<webPort>/?dshana-view=<view>`（同源免鉴权）：
 
 - **三态自举页（Bootstrap 壳，T4）**：按总线连接状态判定——已连接直接渲染 iframe；未连接渲染自举页，数据源 = `GET /webui/boot-state`（T3 单一状态出口）+ `GET /webui/events` 事件流（ready/pending/diag-changed/theme-pref）：booting（阶段时间线 + 安装实时日志 + 退避信息）/ action-needed（errorClass 人话 + 操作步骤 + 自动续跑/停等说明）/ ready（iframe 直嵌）。**页面无任何手动按钮**
-- **功能面板（functionPanel）**：仅 status 段（web host 状态：运行中/自举中/需要处理），actions 段已随手动入口退役（T5）
+- **父子双卡视图装配（V5 过渡）**：主卡 dshana 直嵌 main 视图（`?dshana-view=main`，选中态桥 receive）；子卡 dshana-sidebar 直嵌纯侧栏视图（`?dshana-view=sidebar`，emit）——URL 参数驱动装配与桥角色（`@dsh-hanako/view` readView / sync-bridge），单向下行分落两卡；子卡不声明 realization/siteNavEntry/fpFullPanel（宿主 schema：声明 pageOf 的卡 realization 会被删，显式不声明最干净）。旧 manifest 的 fpFullPanel/functionPanel（embedUrl 侧栏）已摘除，fp 集成待宿主 route 参数支持后议
 - **iframe 主题桥**：壳页 postMessage 回传宿主主题 vars → 注入的 theme 插件写 body 层 `!important` 覆盖（`--dsw-alias-*` + `--dsw-specific-*` token 映射，无静态主题表）；DSH 偏好 `system`（默认）跟随宿主明暗 + 配色，`light`/`dark` 用原生；偏好变更经 3s 轻量轮询 `settings/describe` 实时重评（旧 events.host WS 端点已随 DSH 0.1.2 退役）
 
 ### DSHana 设置分页
