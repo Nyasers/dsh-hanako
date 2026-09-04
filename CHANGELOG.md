@@ -1,120 +1,154 @@
 # Changelog
 
-## v1.0.0-beta.4+dsh-0.1.2-rc.1（2026-09-03）
+## [1.0.0-beta.4+dsh-0.1.2-rc.1](https://github.com/Nyasers/dsh-hanako/compare/v1.0.0-beta.3%2Bdsh-0.1.2-rc.1...v1.0.0-beta.4%2Bdsh-0.1.2-rc.1) (2026-09-03)
 
-- **dshana profile 用户插件化**（PR #64，spec：dshana-profile-bundle）：src-cordis 翻转 `@dsh-hanako/dshana` roster bundle——8 子插件保持独立包并上双链构建（rspack 服务端 ESM bundle + tsdown client 闭包工厂，资产经 asset/source 内联，弃运行时 fs 读文件），bundle 包只带 cordis.patch.yml 挂载；用户可自装 cordis 插件（tests/cordis-user-plugin 覆盖）。
-- **profile 随包归一**：官方 initProfile 生成真实目录 + scope 链接（`node_modules/@dsh-hanako` → 插件 cordis），manifest 每次 ensure 归一（期望 bundles + CLI 追加项保留）；`cordis.patch.yml` 用户资产化（缺失生成极简模板、存在绝不覆写）；seed 整树退役，老 junction 形态自动迁移。
-- **工具收敛宿主面单 `dsh_session`**：subtool 源码架构（`tools/session.js` 分派壳 + `tools/subtool/{run,query,cancel,approve}.js` 各导 execute）；dsh_install 退役（依赖安装由自动链 + Bootstrap 自举承担）；SKILL 收敛为 dsh-hanako + dsh-session。
-- **布局随源码域**：manifest/skills/rspack.config 归 src（build:src 产出），构建 preset 与每包 cordis.config 归 src-cordis，跨域共享留 scripts；源码/产物单层平铺，`@dsh-hanako` scope 语义保留。
-- **发版版本体系**：bump（算号写主单一事实源）→ postbump（syncver 同步 manifest + 9 cordis 源、tagver HEAD 版本门禁 + tag preflight）；cordis 包 version 与主版本同批随主同步，pack 对必需 9 包 fail-closed 完整性校验（缺/残拒包）。
-- **CodeRabbit 三轮闭环**：bridge 事件循环客户端断开全链路容错（clientClosed + AbortError 抑制）、profile 迁移 symlink unlinkSync、protocol HTTP fallback 超时、SKILL 编码恢复（无 BOM/UTF-8）、事件过滤边界如实标注（瀑布帧无会话标识，事件源侧标注列为后续）。
+### Features
 
-## v1.0.0-beta.3+dsh-0.1.2-rc.1（2026-09-03）
+* **build:** cordis 子插件两条构建链——src-cordis 产出 bundle 化子插件包（学 dsh） ([f8a5cfa](https://github.com/Nyasers/dsh-hanako/commit/f8a5cfa758a4dbfe410df725e14ac922a7a0ca65))
+* **build:** tsdown client 链开 minify——产物即时压缩（与 rspack 链 minimize 对齐） ([0399f63](https://github.com/Nyasers/dsh-hanako/commit/0399f634bfad87fcd70b4717787248ed8670df51))
+* **profile:** manifest 随包归一 + profile-seed 归位 src/lib/ ([44a609d](https://github.com/Nyasers/dsh-hanako/commit/44a609dc09c1d4b1569a0be7c3d8ca0ed48873f0))
+* **version:** cordis 包 version 与 manifest 同批同步——单一事实源 = 主 package.json ([1b8dab1](https://github.com/Nyasers/dsh-hanako/commit/1b8dab1e2ea7e450daca76837ee2a5976e6773ed))
 
-- **pnpm 版本与引导单一事实源化**（PR #63）：`packageManager` 改 corepack 形态（`pnpm@11.25.0+sha512…`，版本 + tarball 完整性单一承载）。运行时引导从「dist 单文件下载 + 静态 sha256 校验」重写为「tarball 下载 + pm 段 sha512 校验 + 零依赖 tar 解压提取」（`extractPnpmFiles`，支持 PAX/GNU 头）——`PNPM_BOOTSTRAP` 静态配置（版本 + 文件 sha256）整体删除，升级 pnpm 只需 `corepack use` 刷 pm 段，pnpm.js 零改动。
-- **下载源四级化**：registry.npmjs.org 官方 → npmmirror（官方国内镜像）→ 腾讯云 / 华为云（第三方国内镜像，实测与官方逐字节同源）；sha512 校验兜底，内容不符自动换源。
-- **缓存完整性**（CodeRabbit Major 闭环）：`.pnpm-ok` 完成标记在两文件后原子落位（读侧不见混合对），标记绑定 pm 段 sha512 + 文件 sha256，命中重算比对（防同版本 hash 变更 / 篡改 / 截断）；版本解析过严格 SemVer（拒前导零 / 空标识符 / prerelease 数字前导零）。
-- **corepack 0.36.0 作 devDep**：Node 25+ 官方不再捆绑 corepack，hash 维护工具固定来源（devDep 不进运行时）。
-- 宿主 electron node 适配 v26.8.1；pnpm 11.24.0 → 11.25.0 运行时引导同步；源码注释去版本历史（演进记录归 git log）。
+### Bug Fixes
 
-## v1.0.0-beta.2-hotfix.2+dsh-0.1.2-rc.1（2026-09-03）
+* CodeRabbit 二轮 4 条闭环 + SKILL 编码恢复 ([5ffad77](https://github.com/Nyasers/dsh-hanako/commit/5ffad770280a61e8e68e2e8ccf95c3a5dcab2e11))
+* CodeRabbit review 八条闭环 ([d7d01ab](https://github.com/Nyasers/dsh-hanako/commit/d7d01ab57402be3e9e9d07faf62ba2be457ebeeb))
+* **diag:** boot ENOENT 统一归 restart-needed——不区分 dsh 更新还是布局/缓存陈旧，重启宿主先验 ([32ef980](https://github.com/Nyasers/dsh-hanako/commit/32ef98041250f5ffa0a7bff06e9795531bd7c6cb))
+* **scripts:** syncver 注册 + prepack 归 build + postbump HEAD 门禁；rspack.config 归 src 根 ([36b95a7](https://github.com/Nyasers/dsh-hanako/commit/36b95a7864ab6da1cc6ceac465751f17f4e00e56))
+* **ui:** 自举页日志滚动区无滚动条 + 固定滚底；restart-needed 指引文案通用化 ([33cb0c2](https://github.com/Nyasers/dsh-hanako/commit/33cb0c292e926a18dd088bb1320dd220b6a16e3e))
 
-- **dsh 依赖跟进 0.1.2-alpha.5 → 0.1.2-rc.1**（PR #62）：上游 0.1.2 系列由 alpha 收敛至 RC（GitHub compare 核对为纯版本号阶段变更，无协议/API 变化）。版本号 build 段随依赖刷新 `+dsh-0.1.2-rc.1`，主体不 bump（`dsh` 子命令语义）。
-- **packageManager** pnpm `11.24.0` → `11.25.0`（随 lockfile 同步）。
+## [1.0.0-beta.3+dsh-0.1.2-rc.1](https://github.com/Nyasers/dsh-hanako/compare/v1.0.0-beta.2-hotfix.2%2Bdsh-0.1.2-rc.1...v1.0.0-beta.3%2Bdsh-0.1.2-rc.1) (2026-09-03)
 
-## v1.0.0-beta.2-hotfix.2+dsh-0.1.2-alpha.5（2026-09-03）
+### Bug Fixes
 
-- **/webui 刷新侧栏误报未就绪**（PR #61）：服务端渲染 ready 时客户端 boot 变量仍为 null，`attach()` 首推面板即按默认「未就绪」报给宿主侧栏，且无恢复机制（事件流不重放旧态）→ 卡死未就绪。修复：`pushPanel()` 未知态（boot=null）不推，快照到达后经 `applyBoot` 补推真实状态；初始化 ready 路径补 `refreshBoot()` 快照对齐。
-- **ready 状态机回退与首次快照重试**（#61 后续，CodeRabbit Major）：非 ready 快照撤销 `readyReceived`（防回退到 booting 后无法再完整走 mountReady 恢复）；boot 首次快照失败 3 次有界重试（5/10/15s），避免侧栏停留未知态。
-- **侧栏状态标签** `DSH web host` → `DSHana`。
-- **.prettierignore** 排除 `*.jinja2`：模板混合 HTML/CSS/JS/eta 标签非标准语法，格式化器会把 `{{= }}` 当花括号块拆行破坏（2026-09-03 工作区事故；顺带还原事故中混入的 1000+ 行格式噪声，仅保留实质改动）。
+* CodeRabbit 四轮意见闭环——严格 SemVer、单次读取、marker 原子缓存 ([e28986e](https://github.com/Nyasers/dsh-hanako/commit/e28986ee3914bedb693aa8f285a1605d2aa2843d))
 
-## v1.0.0-beta.2-hotfix.1+dsh-0.1.2-alpha.5（2026-09-03）
+## [1.0.0-beta.2-hotfix.2+dsh-0.1.2-alpha.5](https://github.com/Nyasers/dsh-hanako/compare/v1.0.0-beta.2-hotfix.1%2Bdsh-0.1.2-alpha.5...v1.0.0-beta.2-hotfix.2%2Bdsh-0.1.2-alpha.5) (2026-09-03)
 
-- **去除 pnpm ndjson reporter**（PR #57）：pnpm 安装改原生文本输出——ndjson 解析层（PNPM_STAGE_DESC / pnpmNdjsonLineToText 等六函数 + makePipe 逐行 JSON 转换）实际未驱动任何结构化展示（Bootstrap 壳页直显文本日志），白付复杂度，整体移除（−211 行）。行规范化/跨 chunk 重组/emitLog/tail 语义保留；失败错误提取 pnpmErrorTail 改原生文本尾部直取（每流各限 ≤300）。T1 错误分类链路输入形态不变（特征码在原生文本同样命中）。
-- **version.mjs 预览期版本规则**（PR #58）：build metadata 由剥离改为保留，且**恒承载 dsh 依赖段**（`+dsh-<dependencies.@deepseek-ai/dsh>`，脚本自动计算不接受自定义，版本号一眼可见跑在哪个 dsh）。bump 语义：功能改动 bump β 号、bug 修复 `-hotfix.N`、新增 `dsh` 子命令（主体不动只刷新 build 段——只跟 dsh 依赖升级时不占 hotfix）。背景：GitHub prerelease 字典序把 alpha.10 排到 alpha.6 前，改 beta 并减少 bump 级别。
+### Bug Fixes
 
-## v1.0.0-beta.2（2026-09-02）
+* /webui 刷新时侧栏误报未就绪——初始化 ready 路径补快照对齐 + 未知态不推面板 ([63fc445](https://github.com/Nyasers/dsh-hanako/commit/63fc445090cd688e9bed740f9c878c4fc4320c96))
+* ready 状态机补回退与首次快照重试——非 ready 快照撤销 readyReceived + boot-state 失败 3 次有界重试 ([c316af1](https://github.com/Nyasers/dsh-hanako/commit/c316af19886c3256f739b74ab8b4d458ee7dbe48))
 
-- **自动链状态机化 T2**（PR #55，spec：dsh-deps-zero-intervention）：一次性启动链升级为持久状态机，状态存单例 `g.boot`——phase 流转 ensure-deps（依赖幂等安装，失败按 errorClass 决策）→ waiting（退避等下一尝试 / 不可恢复停等条件变化）→ booting（startWebHost）→ ready（收敛）。可恢复失败（network/environment/unknown/native-toolchain）后台退避重试 30s→2m→10m→30m（cap，插件生命周期内持续）；不可恢复类（macos-signature/declaration/restart-needed）停等 + 通知一次，macos-signature 挂 config.json watch（保存即自动续跑）；同一失败原因只通知一次。卸载/重载安全（unloaded 标记覆盖全部异步边界 + 清退避定时/config watch）。
-- **自举状态快照端点 T3**：新增 `GET /webui/boot-state`——g.boot 状态机 + g.deps（T1 errorClass/guidance）+ g.web 就绪收敛成单一状态出口 `{ phase, ready, deps:{status,errorClass,guidance,error,version,logTail}, boot:{attempt,nextRetryAt,errorClass,guidance,lastError}, web:{ready,lastError} }`（字段全显式空值兜底）；失败决策 guidance 随 `g.boot.guidance` 持久（index.js/state.js 极小联动）。
-- **Bootstrap 自举壳页重写 T4**：DSHana 标签页从「诊断壳 + 手动操作面板」重写为三态自举页——booting（阶段时间线 + 安装实时日志尾滚动 + 退避倒计时）/ action-needed（errorClass 人话 + 明确操作步骤 + 自动续跑/停等说明，原始错误折叠详情）/ ready（iframe 直嵌现状保留）。数据源 = boot-state 快照 + /webui/events 事件流；删除功能面板 actions 段、t1/t2 诊断卡片、门禁链与全部手动按钮。
-- **手动入口退役 + 路由清理 T5**：删除 `/webui/start`、`/webui/install-deps`、`/webui/verify-deps`、`/webui/health` 路由；`collectWebDiagnostics` / `buildDepsDiagCheck` / `buildProcessDiagCheck` / `pickProcessFix` / `readLogTail` 及挂载/readDiagnostics/probeHost 整体退役删除（浏览器侧 checks 展示层废弃，日志诊断保留会话文件）；/webui/events 的 diagnostics 载荷事件收敛为 `diag-changed` 信号（无载荷，壳页刷新 boot-state）。
-- **文档同步 T6**：README 安装引导改全自动（无手动按钮/人工 pnpm 指引移除）、排错按 errorClass/三态；dsh-hanako/dsh-install SKILL 同步现状（verify 静态核对语义、自动链、页面三态）；DESIGN 依赖生命周期章节 + 已知限制补「dsh 升级需重启宿主」。
+## [1.0.0-beta.2-hotfix.1+dsh-0.1.2-alpha.5](https://github.com/Nyasers/dsh-hanako/compare/v1.0.0-beta.2...v1.0.0-beta.2-hotfix.1%2Bdsh-0.1.2-alpha.5) (2026-09-02)
 
-## v1.0.0-beta.1（2026-09-02）
+### Bug Fixes
 
-- **依赖零干预 T1：错误分类器**（PR #50，spec：dsh-deps-zero-intervention）：新增 `src/tools/lib/errclass.js` 纯函数 `classifyInstallError`——install 失败从「只看 exit 1」升级为六类 errorClass（network / macos-signature / native-toolchain / declaration / environment / unknown）+ 一句中文 guidance，匹配优先级从具体到一般。`run()` 失败结构化 throw（message 可读、原始 stdout/stderr 尾 + 退出码附 Error）；外层 catch 归类存 `g.deps.errorClass`；声明非法分支同步产出 declaration；新尝试起点清旧分类。回归样本四类全收（koffi ELIFECYCLE / ENOENT 缓存残留 / typert 133 / 网络断），ENOENT 归属 unknown 已论证。引入项目首个单测（Node 内置 node:test，零新依赖），14 用例覆盖特征/优先级/回归/容错。CodeRabbit 两轮闭环：分类器分层判定（tail 决定性 + milestoneLog 兜底），最终 registry 尝试决定分类。
-- **boot 失败提示识别跨 dsh 版本升级需重启**（PR #51/#52）：实装验证发现升级缓存残留（进程内 ESM 缓存命中旧 dsh，boot 读已删 .pnpm 路径 ENOENT）只落兑底文案。pickProcessFix 新增检测分支：依赖可用（deps.ok 门控，含当前 installed 态）且错误含 ENOENT + `.pnpm/@deepseek-ai+dsh@` 路径 → 「检测到跨版本升级，请重启 Hana」；清理诊断/报错中已退役 dsh-pkg 手动安装引导文案。门控数据源两轮修正：verified（verify running 瞬时态会误杀）→ deps.ok。
-- **诊断错误滚动全文 + 修复指引匹配不截断**（PR #53）：诊断卡错误区改为会话日志尾部滚动视图（`readLogTail` 只读 ≤16KiB，日志文件单一来源，不为 UI 另存内存副本）；`pickProcessFix` 匹配用完整 webLastError（截断窗口会丢错误首行特征——实装验证根因）；启动新尝试作废旧退出记录（lastExit 不再遮蔽当前启动失败的修复指引）。
-- **verify 去 spawn：静态核对取代运行级冒烟**（PR #54）：`verifyDepsSmoke` 不再 spawn `node cliBin --version`——冒烟绕宿主 ESM 缓存验「干净进程可加载」，与真实故障（缓存命中旧版）不同路，验过 ≠ 能跑。退化为静态核对（cliBin 存在且为常规文件 + 磁盘版本 === 插件声明，秒回无子进程）；磁盘完整性由 pnpm install（唯一保留的子进程）保证，可运行性由 boot（进程内同路）裁决；diagnosis running 瞬时窗口根除。子进程面收敛：spawn 只留 pnpm install。
+* pnpmErrorTail 每流各限 ≤300（CodeRabbit PR [#57](https://github.com/Nyasers/dsh-hanako/issues/57)） ([19196d6](https://github.com/Nyasers/dsh-hanako/commit/19196d671a0d8517f9d572a317a5725f76ddc3e0))
 
-## v1.0.0-alpha.9（2026-09-02）
+## [1.0.0-beta.2](https://github.com/Nyasers/dsh-hanako/compare/v1.0.0-beta.1...v1.0.0-beta.2) (2026-09-02)
 
-- **node 代理改回插件根部署**（PR #46）：修复 koffi 等原生依赖 install script 找不到 node（`ELIFECYCLE: 'node' is not recognized`，全新安装必现）。根因是 T7d 过渡期漂移——部署目标 dsh-pkg → 插件根时 node 代理被单独写去数据目录 pnpm-proxy，而 pnpm run 的 PATH 首部仍指插件根；代理改回随部署目录走（写插件根），与 PATH 前缀同源绑定同一常量，此类漂移结构上不再可能。兼容清理旧 pnpm-proxy 残留；`.gitignore` 忽略运行期 `/node.cmd`、`/node`。
-- **dsh 依赖跟进 0.1.2-alpha.4 → 0.1.2-alpha.5**（PR #47）：上游修复从 `0.1.1-rc.2` / `0.1.2-alpha.3` 升级时应用可能启动失败或会话列表标题丢失（纯修复版，无协议/API 变化）。
-- **minimumReleaseAgeExclude 组织级 glob**（PR #47）：214 条 `@deepseek-ai/dsh-*@0.1.2-alpha.X` 版本条目压成一行 `@deepseek-ai/*`（pnpm ≥10.17 patterns；dsh monorepo 全树同发版，逐版本 age 豁免无意义；以后 dsh 发版免维护名单）。
+### Features
 
-## v1.0.0-alpha.8（2026-09-02）
+* T2 自动链状态机 + 退避重试调度器 ([d2ccc16](https://github.com/Nyasers/dsh-hanako/commit/d2ccc163c1dfcbbbfc9b64c784d50d8f5fedd5b3))
+* T3 自举状态快照端点 ([e648cff](https://github.com/Nyasers/dsh-hanako/commit/e648cffc704de5cbbbf39597b037d9f154a22d6c))
+* T4 Bootstrap 自举壳页重写 ([c8ad0ce](https://github.com/Nyasers/dsh-hanako/commit/c8ad0ce14f744f9ddf42de06c92017b5b8d1f065))
+* T5 手动入口退役 + 路由清理 ([ad60f69](https://github.com/Nyasers/dsh-hanako/commit/ad60f69df9caeff45066259dae13e65cfbc7ab3a))
 
-- **onStartUp 启动前自动安装一次依赖（加载即自愈）**（PR #45）：插件激活时在拉起 web host（WebUI/总线就绪点）之前自动跑一次依赖安装——幂等：cliBin 在且已装版本 === 插件声明 + 运行级冒烟通过 → 秒过跳过；缺失/版本漂移/依赖图不完整才真跑 `pnpm install --prod`（官方源失败自动重试 npmmirror），装好再拉起，冷启动即装完即用，无需人工 dsh_install / 标签页自装。
-- **启动链健壮性**（CodeRabbit 三轮全闭环）：挂载探测失败（>1s）不放弃自动链——后台延后等待（60s 兜底、1s 间隔）挂载后补跑同一启动链；启动自动链感知插件卸载/重载（unloaded 标记覆盖全部延迟启动 await 边界），卸载即静默放弃，不残留悬挂 web host；安装失败/能力缺失不阻断启动尝试（webLastError → 工具调用/标签页可靠重试）。
-- **文档同步**：README 安装引导（自动安装为首选，标签页/工具人工安装降级为兑底路径）；dsh-hanako SKILL 依赖部署章节补启动自动安装现状。
+### Bug Fixes
 
-## v1.0.0-alpha.7（2026-09-02）
+* 壳页 hanaApiUrl 正则转义 + retry 时钟读 boot.boot.nextRetryAt（CodeRabbit PR [#56](https://github.com/Nyasers/dsh-hanako/issues/56)） ([8d9fff5](https://github.com/Nyasers/dsh-hanako/commit/8d9fff5a03b6b8ceaea2e0bfa150f053516fb34a))
 
-- **双轮询事件化**（PR #42）：`/webui/health` 与 `settings/describe` 两个 3s 轮询端点改为事件驱动，消除轮询开销；settings/theme 同步适配事件通道；补齐事件流全生命周期与终态发布逻辑。
-- **settings 版本卡文案简化 + T7d 死代码清理**（PR #43）：简化 settings 版本卡更新相关文案（+18/-60）；清理 T7d 残留约 246 行更新交互死代码；收紧未安装判断为 falsy、删不可达 error 分支。
-- **CodeRabbit review 修复**：install 终态双锁恢复（verify 嵌套锁归还 + installing 外层锁恢复 + 终态先写 error 再 notify）；install 成功终态清空 verify 失败遗留的 error；设置页注释对齐。
+## [1.0.0-beta.1](https://github.com/Nyasers/dsh-hanako/compare/v1.0.0-alpha.9...v1.0.0-beta.1) (2026-09-02)
 
-## v1.0.0-alpha.6（2026-09-02）
+### Features
 
-- **删除 defaultCwd 配置**（PR #41）：cwd 改为 `dsh_session create` 每次调用必传显式指定，无配置回退；`send`（resume）沿用会话已有 cwd，不传 cwd 自动从 `session.list` 查询继承。`manifest.json` 删除 `defaultCwd` 设置项，`config.js` 移除 `resolveDefaultCwd` 函数。
-- **interlude 插话语义修正**：实测 interlude 型 deferred 在回合结束时才落地，不能预插入时间线；`wake.js` 注释/对应 SKILL 口径统一（保留唤醒语义，不承诺回合内插话）；`registerDeferredWake` 统一带 `interlude: true` 标记（预置宿主插话能力，后续宿主演进自动继承）。
-- **bus 翻译器修复**：`session.list` 参数名映射 `_request`（DSH 0.1.2 上游 `session/*` 大多声明 `request`，仅 `session/list` 用 `_request`，统一包 `request` 被网关 `arguments-invalid` 拒绝，导致 resume 查询会话 cwd 时提交失败）。
-- **lockfile 同步**：`@deepseek-ai/dsh` 版本 `0.1.2-alpha.3` → `0.1.2-alpha.4`；`pnpm-workspace.yaml` 补 `minimumReleaseAgeExclude`（214 个 dsh 0.1.2-alpha.4 包，通过 supply-chain 检查）。
-- **pack 打包 lockfile**：固定版本语义下 `pnpm-lock.yaml` 随包分发（`pack.mjs` `staticItems` 纳入）。
-- **CodeRabbit review 修复**：自动超时拒绝失败后 `finally` 恢复执行超时（否则 `catch` 吞错后 `_resume()` 不调，审批等待超时暂停永不恢复）；resume 时 `task:register meta.cwd` 存实际会话目录（非空串）；8 条文档 Minor 修正（前提描述、进程边界、字段名、示例等）。
+* 错误分类器 errclass（T1） ([2920dc8](https://github.com/Nyasers/dsh-hanako/commit/2920dc836df51ad90501824752b9f40809881c19))
 
-## v1.0.0-alpha.5（2026-09-02）
+### Bug Fixes
 
-- **T7b 步骤 5：spawn 分支整体退役**（PR #40 之一）：删 bootSpawn（child_process.spawn + --expose-internals）+ WEB_PROCESS_MODE 逃生开关；ensureWebHost 唯一形态 = 进程内 runProfile；waitWebReady 去 spawn 快速失败分支；closeProcess 唯一 dispose 路径。保留：verifyDepsSmoke 冒烟 + pnpm install 子进程（D6 解耦设计）。
-- **dsh-pkg 退役 + 更新/检查链整链移除**：部署目标 dsh-pkg → 插件根（pnpm install --prod 按插件声明，无部署声明副本，版本单一事实源 = 插件声明本身）；version/tag 逃生门移除；updateDsh / checkDshUpdate / check.js / resolveDshTag / /webui/check-update / /webui/update-dsh 全删；dsh_install 收敛 install/verify；settings 版本卡去更新功能（只显示本地版本）。实机成本：插件根 pnpm install --prod ≈19s（store 硬链接）。
-- **@dsh-hanako 子插件改名**：api-bridge → bridge（数据面桥）、bridge → bus（消息总线，与宿主 bus.js 对称）、web-app → app（WebUI 载体）。
-- **工具收敛（T7e）**：dsh_session 全生命周期（list/get/create/send/cancel，合并 dsh_run + dsh_cancel）；HANAKO_TOOLS = [dshSession, dshInstall, dshApprove]（approve 独立：权限应答语义正交）。
-- **文档清理**：CHANGELOG legacy 清理；SKILL description 去版本标记（Agent 调用不关心迭代史）；dsh-install/dsh-run/dsh-cancel SKILL 收敛。
+* 错误分类只看最终 registry 尝试（CodeRabbit PR [#50](https://github.com/Nyasers/dsh-hanako/issues/50)） ([d49f3db](https://github.com/Nyasers/dsh-hanako/commit/d49f3dbf7fb23ff2dceddeae834c9e75bb061a81))
+* 清理诊断/报错中已退役 dsh-pkg 手动安装引导文案 ([546d154](https://github.com/Nyasers/dsh-hanako/commit/546d1549c9e0abc645a7562d1329f0affffeb5b6))
+* 升级残留门控改用 deps.ok，规避 verify running 瞬时态误落兜底 ([5286e99](https://github.com/Nyasers/dsh-hanako/commit/5286e995f614888d7837a7ed0bf7195b83efac40))
+* 升级残留门控改用当前 deps 诊断 verified（含 installed 态），防包缺失误判（CodeRabbit PR [#51](https://github.com/Nyasers/dsh-hanako/issues/51)） ([50e0cd6](https://github.com/Nyasers/dsh-hanako/commit/50e0cd670aaa27e864e36a91e68c406123673b31))
+* 升级残留提示加依赖验证门控，防安装不完整误引导（CodeRabbit PR [#51](https://github.com/Nyasers/dsh-hanako/issues/51)） ([71ce4fd](https://github.com/Nyasers/dsh-hanako/commit/71ce4fdef57ac734e82a87d4817cd4be8e56f671))
+* 新启动尝试作废旧退出记录，防 lastExit 遮蔽当前启动失败（CodeRabbit PR [#53](https://github.com/Nyasers/dsh-hanako/issues/53)） ([a98f97e](https://github.com/Nyasers/dsh-hanako/commit/a98f97ef37809c9867b3706ce377a87e352ecc43))
+* 诊断卡错误改日志尾部滚动区（errLog 按行渲染，匹配用完整错误） ([2f1c5c3](https://github.com/Nyasers/dsh-hanako/commit/2f1c5c35c0fa45ac690579862d29a5c656334d3e))
+* boot 失败提示识别跨 dsh 版本升级需重启（pickProcessFix） ([6e95b15](https://github.com/Nyasers/dsh-hanako/commit/6e95b157e6e18500399294e18ff4414774409719))
+* cliBin 核对应验 isFile + 清理运行级文案残留（CodeRabbit PR [#54](https://github.com/Nyasers/dsh-hanako/issues/54)） ([1be331c](https://github.com/Nyasers/dsh-hanako/commit/1be331cc5d4e52ba3bb418dae21eb59ca5d0bcf7))
 
-## v1.0.0-alpha.4（2026-09-01）
+## [1.0.0-alpha.9](https://github.com/Nyasers/dsh-hanako/compare/v1.0.0-alpha.8...v1.0.0-alpha.9) (2026-09-02)
 
-- **T7b 进程内 boot dsh + 免鉴权 WebUI + 根路径 serve**（feat/t7b-inproc-boot，PR #39）。
-- **进程内 boot**：ensureWebHost 分派 bootInproc（runProfile 在宿主进程内拉起 dsh，3080 归宿主进程，无独立 dsh 子进程）；动态 import 带 webpackIgnore（rspack 编译改写绕行）；closeProcess 改 ctx.fiber.dispose()；app-boot 定位双保险（createRequire + .pnpm 枚举）。
-- **拔鉴权墙**：新增 @dsh-hanako/api-bridge（免鉴权 connection 等价服务 + /api HTTP 载体，requestRejection 恒 undefined 免 401/403）；gateway/api-* 插件零改动激活；remote.mux 由 gateway 自带自动放行。
-- **WebUI 根路径**：web-app 改 registerFallback serve 官方 dist 到根路径（删 /webui/ 前缀 + URL 改写）；iframe 直嵌根路径（去 ?dshReload bust）。
-- **client 侧 connection 载体**：vendored 官方 dsh-client-connection@0.1.2-alpha.3 client bundle（id 改写，dsh.client 声明）——浏览器侧 provide connection，client boot 从 40 pending 恢复。
-- settings/theme 适配 dsh 0.1.2（modelCatalog RPC、settings/describe、3s 轮询替代 events.host WS）。
-- CodeRabbit 两轮全修（就绪失败回收、install smoke 强校验、bus 竞态、logger 保序等 12 条）+ lockfile 同步（frozen-lockfile 修复）。
-验证：进程内 boot + dsh_run 闭环（hello-dshana-t7b）+ WebUI 200 + 免鉴权数据面全通；CI/Release 全绿。
+### Bug Fixes
 
+* node 代理改回插件根部署，与 PATH 前缀同源（修复 install script 找不到 node） ([7fb33a4](https://github.com/Nyasers/dsh-hanako/commit/7fb33a403119b8367d7de9903de0c82461bb292e))
 
-## v1.0.0-alpha.3（2026-08-31）
+## [1.0.0-alpha.8](https://github.com/Nyasers/dsh-hanako/compare/v1.0.0-alpha.7...v1.0.0-alpha.8) (2026-09-02)
 
-- **contributes.settings → configuration**：宿主 0.810.0 插件运行时读取的是 `contributes.configuration`（properties 平铺），`contributes.settings`（v2 包裹层）声明不生效——manifest 设置项（webPort/defaultCwd/approvalTimeoutSec/defaultTimeoutSec/nodejsPath）一直没被宿主加载，设置页改配置存不进去。改回 `configuration` 后 5 项设置真正生效（对齐宿主运行时契约）。
-- **撤回 dshTag 设置项**：dist-tag 由 registry 动态返回（`pnpm view dist-tags`），静态字符串手输不合理；撤回 configuration 声明，改由 @dsh-hanako/settings 页 DSH 版本卡片动态拉取列表做选择器（后续落地）。运行时支持保留：`config.json global.dshTag` + `resolveDshTag` 三阶回退（默认 latest），check/install 基线照常工作。
-验证：configuration 键名实测生效（设置项加载 + 写入 config.json）；dshTag 不在宿主设置 UI 出现（等 settings 动态选择器）；commit GPG 签名。
-升级注意：`dshTag` 不再出现在宿主设置 UI（config.json 手写仍有效，默认 latest）；manifest 设置项（webPort 等 5 项）自本版起真正生效。
+### Features
 
-## v1.0.0-alpha.2（2026-08-31）
+* onStartUp 启动 web host 前自动安装一次依赖（加载即自愈） ([524e930](https://github.com/Nyasers/dsh-hanako/commit/524e930d5a651ab3b556a87b4081e8140d4aa7af))
 
-- **工具合并**：`dsh_install` 扩展为 install/verify/check/update 四合一（`dsh_update` 移除，无兼容别名，skills/文档全量同步）；deferred wake meta.type 统一 "dsh-install"，卡片 kind 保留 install|update 区分标题；并发防护双独立 → 共享互斥。
-- **指定版本 + dist-tag 基线**：`version`（具体版本号）优先于 `tag`（dist-tag），缺省回退配置基线 `dshTag`（config.json global + manifest settings，默认 latest）；`lib/check.js` 升级为 HTTP 直查 registry 根包 JSON 的 dist-tags 全量映射（官方源→npmmirror 兜底，15s 超时），check 返回 `{ localVersion, distTags, baselineTag, baselineVersion, updateAvailable, error? }`（latestVersion 保留兼容别名）；能力层 `installDepsFromPlugin` 缺省 spec 回退配置基线（webui 路由/设置页总线调用同遵循，单一事实源）。设置页「DSH 版本」卡片检查仍直查 latest，与宿主 dshTag 基线非 latest 时结果可能不同（文案/文档已澄清）。
-- **version.mjs 支持 npm semver**：完整 semver 解析（major.minor.patch[-pre][+build]），递增对齐 node-semver——patch 有 prerelease 毕业不递增、minor/major 在低段为 0 且有 prerelease 时毕业不递增（1.0.0-alpha.1 → 1.0.0）、新增 prerelease/pre 子命令（保留 preid 递增末段，无 pre 时 x.y.(z+1)-0）；严格 semver 校验（核心组件与数字 prerelease 标识符 0|[1-9]\d*，拒前导零）；dry-run 豁免工作区干净检查。
-- **CodeRabbit review 修复**：install/update 共享依赖操作互斥（`g.depBusy` 同步段预留、wait/异步双路径释放，能力层守卫保留覆盖 webui 路由）；spec 注入面校验（`isValidPkgSpec`：仅严格 SemVer 或含字母 dist-tag，拒 npm:alias/github:/file:/路径与前导零版本形状）；`compareSemver` prerelease 按 SemVer §11.4 逐标识符比较（数字数值/非数字字典序/数字<非数字/长短）；DESIGN/SKILL/client 基线差异澄清 + webui 路由标注兼容端点。
-- 验证：build（rspack + terser + assert）通过；version.mjs 各档 dry-run 符合预期（1.0.0-alpha.1：patch/minor/major 均毕业 1.0.0、prerelease → 1.0.0-alpha.2；非法输入 01.0.0/1.0.0-alpha.01/npm:foo 拒绝）；isValidPkgSpec 22 用例全 PASS；commit GPG 签名（主上下文收口）。
-- 升级注意：`dsh_update` 工具已移除，改用 `dsh_install`（action=check/update）；新增 `dshTag` 设置项（dist-tag 基线，默认 latest，version 参数优先于 tag 优先于基线）。
+### Bug Fixes
 
-## v1.0.0-alpha.1（2026-08-31）
+* 挂载延迟时不放弃启动自动链，后台延后等待补跑（CodeRabbit） ([d3848a8](https://github.com/Nyasers/dsh-hanako/commit/d3848a821235ed6735707d8203f00f577b3739d0))
+* 启动自动链感知插件卸载/重载，卸载后不再拉起 web host（CodeRabbit） ([114e9c1](https://github.com/Nyasers/dsh-hanako/commit/114e9c1ad3ede0783267db6627e97e0c6aec9aeb))
+* unload 守卫覆盖全部延迟启动 await 边界（CodeRabbit 第 3 轮） ([4095600](https://github.com/Nyasers/dsh-hanako/commit/4095600f8458566c48a8092ebc635a357fd497e7))
 
-- **manifestVersion 1 → 2（v2 应用体系）**：contributes.configuration → contributes.settings（properties 包进 schema，v2 settings 结构）；cards 删 type/icon（v2 卡片白名单 Kae 无此二字段，声明会 throw）+ 新增 siteNavEntry: true + fpFullPanel: true；network 字段全在 v2 白名单（Dae）；v2 顶层强制 manifestVersion===2、id 必须等于部署目录名（apps/<id>/）；v1 的 C3t builtin-only 拒绝不适用于 v2 白名单（siteNavEntry/fpFullPanel 社区应用可声明，liliMozi 官方探针 fp-full-probe 验证）。
-- **全占页样式 + 版本**：cardForm framed→flush / titlebar solid→translucent（fpFullPanel 全占风格，探针同款）；version 0.25.0 → 1.0.0-alpha.1（v2 时代）；.nvmrc Node 24 → 26。
-- 验证：v2 声明按宿主 0.810.0 bundle 校验逻辑逐字段核对（YBt 顶层 / EBt settings / UBt cards 白名单 / GBt network 白名单）；实装验证 fpFullPanel 生效（独占页面，宿主侧栏被 Full FP 面板取代）。
-- 升级注意：DSHana 由 v1 插件形态过渡到 v2 应用形态（apps/ 部署），功能（入口 cordis 化 / tools/routes 迁移 / embedUrl 嵌 DSH WebUI sidebar）后续落地；宿主侧栏将被 Full FP 面板取代，DSHana 页面切换为整页卡（system 活动条隐掉）。
+## [1.0.0-alpha.7](https://github.com/Nyasers/dsh-hanako/compare/v1.0.0-alpha.6...v1.0.0-alpha.7) (2026-09-02)
+
+### Features
+
+* 双轮询事件化——settings/describe 与 /webui/health 改事件驱动 ([51a3666](https://github.com/Nyasers/dsh-hanako/commit/51a3666687478d9556338b0d1f23170b4dab140c))
+
+### Bug Fixes
+
+* 按 CodeRabbit 意见补齐事件流生命周期与终态发布 ([8ed5787](https://github.com/Nyasers/dsh-hanako/commit/8ed57875def8cf1d8ff5d4406433a32f60eb3391))
+* 恢复 installing 外层锁后补 notifyDepsChanged（CodeRabbit） ([58b9799](https://github.com/Nyasers/dsh-hanako/commit/58b979926321f2140be866017f01f13742a242ba))
+* install 成功终态清空 verify 失败写入的 error（CodeRabbit） ([2024167](https://github.com/Nyasers/dsh-hanako/commit/2024167fa2798e4e1db42a65de8d47a513d85bf2))
+* verify 嵌套于 install 时恢复 installing 外层锁（CodeRabbit） ([15ba3b1](https://github.com/Nyasers/dsh-hanako/commit/15ba3b1cac2c65c81190ced9ffc24e0285252602))
+* verify 终态先写 error 再 notify（CodeRabbit） ([25d93cf](https://github.com/Nyasers/dsh-hanako/commit/25d93cfa976706c6681cc30f376c46a2b0d8b0bc))
+
+## [1.0.0-alpha.6](https://github.com/Nyasers/dsh-hanako/compare/v1.0.0-alpha.5...v1.0.0-alpha.6) (2026-09-02)
+
+### Features
+
+* **approval:** 宿主审批链路接入 + 应答双 bug 修复 ([4b5ed9c](https://github.com/Nyasers/dsh-hanako/commit/4b5ed9c1c6c22c1f84888f5ed47df69f4b0eaefc))
+* upgrade dsh to 0.1.2-alpha.4 ([5a57752](https://github.com/Nyasers/dsh-hanako/commit/5a5775225a297c52ae8bf7ce670c49347c7461ca))
+* **wake:** registerDeferredWake 统一带 interlude 标记——预置宿主插话能力 ([2db190c](https://github.com/Nyasers/dsh-hanako/commit/2db190cd0aa6ef9a7e56af3a536bd6fa2c0c8d74))
+
+### Bug Fixes
+
+* 处理 CodeRabbit review 中的有效意见 ([b10b9f3](https://github.com/Nyasers/dsh-hanako/commit/b10b9f3406782b47a9accea42182ad1042629774))
+* **bus:** session.list 参数名映射 _request——DSH 0.1.2 上游不一致 ([c4dcf9b](https://github.com/Nyasers/dsh-hanako/commit/c4dcf9b22c7e9659d0e8d8754852bbd78b521ef9))
+
+## [1.0.0-alpha.5](https://github.com/Nyasers/dsh-hanako/compare/v1.0.0-alpha.4...v1.0.0-alpha.5) (2026-09-01)
+
+### Features
+
+* **bridge:** 新增 launchToken method（进程内 BrowserAuth 直读） ([10c879d](https://github.com/Nyasers/dsh-hanako/commit/10c879d8368048b571740190e7ce179bfd568a21))
+* **cordis:** dshana profile 运行时挂载——dist/cordis 整体落位为 \/profiles/dshana，补 [@dsh-hanako](https://github.com/dsh-hanako) 子插件 insert 与 agent-presets default ([aead203](https://github.com/Nyasers/dsh-hanako/commit/aead203d5a27cc5ade83679820a0281ee3165bd1))
+* **cordis:** dshana profile 运行时挂载——dist/cordis 整体落位为 \/profiles/dshana，补 [@dsh-hanako](https://github.com/dsh-hanako) 子插件 insert 与 agent-presets default ([44d2d89](https://github.com/Nyasers/dsh-hanako/commit/44d2d89b9b2bfea1c48c10fbc3a17a2e2d54d8c9))
+* **dsh-run:** 事件流走总线闭环，dsh_run 在 0.1.2 下完整可用 ([b1e369d](https://github.com/Nyasers/dsh-hanako/commit/b1e369dd595b6d66e35c684aa9d0aa9623e09487))
+* **dsh-run:** openMux 重写为 remote.mux + \（dsh 0.1.2 事件流） ([80a19d9](https://github.com/Nyasers/dsh-hanako/commit/80a19d90cd994cf37ad6297294da02f1311e5262))
+* **lifecycle:** T7b 进程内 boot dsh + 免鉴权 api-bridge + WebUI 根路径 ([8923e0e](https://github.com/Nyasers/dsh-hanako/commit/8923e0e8185ce33f4958455d42788eecce0e1d8b))
+* **provider:** 适配 dsh 0.1.2 LlmAdapter 契约，复用官方 PiAiAdapter ([ee166a0](https://github.com/Nyasers/dsh-hanako/commit/ee166a06f9226d30beae94b8b25b8d1536d651e8))
+* **webui:** fork 官方 web-app 子插件架构（@dsh-hanako/web-app） ([40babc4](https://github.com/Nyasers/dsh-hanako/commit/40babc40ff446949b4329ddd60c2c1ebc9055bd0))
+
+### Bug Fixes
+
+* **ci:** pnpm-lock.yaml 同步 T7a dsh/cordis 声明（frozen-lockfile 校验修复） ([933a952](https://github.com/Nyasers/dsh-hanako/commit/933a952bb8a64f06dcae0ef77d2f2c48c5ed7083))
+* **cordis:** CodeRabbit 审查意见落地——凭据保护/快照回滚/abort 清理/文档对齐 ([a35c980](https://github.com/Nyasers/dsh-hanako/commit/a35c980d9859528a4f00cae3392c2f3bd24b4947))
+* **cordis:** dshana profile 改用 dsh-web-app bundle——补齐官方 client roster 修复 boot pending ([59d9dea](https://github.com/Nyasers/dsh-hanako/commit/59d9deaff713945763e8dddf8e8b3f05c431e303))
+* **review:** CodeRabbit 二轮 3 条（evtDisposed 重查 / update-stream 状态回查 / BFF 注释） ([7dd463f](https://github.com/Nyasers/dsh-hanako/commit/7dd463fd6e147974dd85b0ac6e45b24fda76e62d))
+* **review:** CodeRabbit PR[#39](https://github.com/Nyasers/dsh-hanako/issues/39) 全量落地（8 actionable + 1 nitpick） ([fd332a0](https://github.com/Nyasers/dsh-hanako/commit/fd332a0fcc395e0ff11e659e456c9e1ed5ddcb83))
+* **webui:** client 侧 connection 载体 + settings/theme 适配 dsh 0.1.2 + iframe 根路径 ([c11833f](https://github.com/Nyasers/dsh-hanako/commit/c11833f165bc4887a40c93f15d6254f1cc644df5))
+
+## [1.0.0-alpha.3](https://github.com/Nyasers/dsh-hanako/compare/v1.0.0-alpha.2...v1.0.0-alpha.3) (2026-08-31)
+
+### Bug Fixes
+
+* contributes.settings 改回 configuration（宿主 0.810.0 运行时读 configuration，settings 声明不生效，设置项含 dshTag 一直未加载） ([02c8f1e](https://github.com/Nyasers/dsh-hanako/commit/02c8f1e8b4303d2dca216924de99d6afeec58196))
+
+## [1.0.0-alpha.2](https://github.com/Nyasers/dsh-hanako/compare/v1.0.0-alpha.1...v1.0.0-alpha.2) (2026-08-31)
+
+### Features
+
+* 合并 dsh_install/dsh_update 四合一 + 版本/tag 指定 + dist-tag 基线 + version.mjs semver ([5cdc1b1](https://github.com/Nyasers/dsh-hanako/commit/5cdc1b1efd8e64a43f6ba90b60ac0f064c45dbd2))
+* 全占页声明样式 + 版本号 v1.0.0-alpha.1 ([562aed6](https://github.com/Nyasers/dsh-hanako/commit/562aed6329c62b43cd068d7c948fcbd00da4b3e5))
+* DSHana 迁移 contributes.cards + functionPanel ([b02168a](https://github.com/Nyasers/dsh-hanako/commit/b02168af87adf1d87c344fa9bf654f423e462471))
+* DSHana 声明迁移 v2（manifestVersion 2 + fpFullPanel/siteNavEntry） ([3b72bb8](https://github.com/Nyasers/dsh-hanako/commit/3b72bb82052fdfdc0058fab8de51734f9a0f171c))
+
+### Bug Fixes
+
+* CodeRabbit review 修复——install/update 互斥、spec 注入校验、SemVer prerelease 比较、version.mjs 严格化与毕业逻辑、文档同步 ([7eba3be](https://github.com/Nyasers/dsh-hanako/commit/7eba3bee448748c1959922092abcb49fee1e0d7b))
