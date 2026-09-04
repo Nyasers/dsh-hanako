@@ -67,6 +67,19 @@
 //   态，对端无保留地址则无法 open（ClientSessions.open → manager.select 对未知 id 抛错，
 //   本桥以 byId 成员检查 + try/catch 兜底并记录），该导航面不桥（延续 view-layouts：
 //   catalog/树浏览属各端浏览态）。需要时扩展 select 消息带地址 + 对端 catalog 加载。
+// · 同值短路（降噪）：远端 select 目标与本地 current 一致时不 open（handleRemoteSelect
+//   非 boot 分支 ours===id → adopt 返回；boot 分支字典序 !(id>ours) 同值也短路）——
+//   避免冗余 list.set 风暴（见下官方竞态放大因子）。
+// · 【官方竞态，待上游】AgentPresetSeatController（ui-agent-preset，seat-store/apply）在
+//   会话 scope（ctx.inject ['conversation','sessions',…]）上订阅 sessions.list，任何
+//   list.set（含非 current 变化的投影）都触发 seat.apply() → currentSession() 读
+//   scope.sessions。会话切换时旧 scope 的 dropScope（fiber.dispose）异步，若 list.set
+//   通知落在 scope 销毁窗口内 → apply 在 inactive context 读 sessions 抛
+//   「cannot get required service in inactive context」（uncaught in promise，功能不阻断，
+//   console 噪音）。V4 跨实例联动放大触发频率（多实例都 open → list.set 风暴）。桥侧
+//   同值短路已尽量降噪；必要切换（值真不同）无法避免。上游修法建议：seat.apply 前 guard
+//   scope active（ctx.scope.active/等效），或 effect cleanup 先退订再 dispose。本仓库不
+//   patch 官方 bundle。
 // · 无参 full 实例不参与桥（client.js readView 结果判定）；full 与 main/sidebar 并存时：
 //   main/sidebar 之间照常联动，full 的选中不向外发也不接受（full = 官方等价形态，
 //   官方语义即 per-window 独立选中，行为如实记录）。
