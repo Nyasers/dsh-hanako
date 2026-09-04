@@ -31,8 +31,10 @@
 //     接收端（receive，远端 → 本地 open/clear 应用，不外发）；full 不参与（readView 判定）。
 //     实现见 sync-bridge.js（createSessionSyncBridge(ctx, mode) 按视图角色分派；双向→
 //     单向下行的收敛记录、与 view-layouts 定稿的偏差在 sync-bridge.js 头）。
-//     settings 跨边（open-settings）：官方 bundle 无干净拦截面（调研结论：不可行，待上游
-//     支持），V4 不落地其拦截，详见 sync-bridge.js 头「settings 跨边」段与交付 2。
+//     settings 跨边（feat/settings-cross-edge 落地，V4「不可行」结论的突破尝试）：sidebar
+//     footer 官方 settings trigger 点击被 DOM capture 拦截 → 桥发 open-settings → main
+//     程序 click 隐藏宿主（data-sidebar-settings-host）内官方 trigger 打开 modal。无官方
+//     改动/无 React hack；机制与边界见 sync-bridge.js 头「settings 跨边」段。
 //   V2 边界如实记录：
 //     SidebarRoot rail toggle 只翻转 layout store 偏好（本帧不读 store 几何），无视觉效果；
 //     sidebar 无 rail 折叠语义（collapsed 恒 false）。
@@ -246,17 +248,53 @@ function apply(ctx) {
   // 接收端（receive）、full 不参与（readView 结果判定——无参 full 是宿主外等价形态，
   // 见 sync-bridge.js 文件头角色段）。角色语义：切换现实源只有 sidebar，故 bridge 只做
   // sidebar → main 单向下行；main 无切换 UI（无反向源），full 不建桥。settings 跨边
-  // （open-settings）：调研结论为官方 bundle 无干净拦截面（V4 不可行，待上游），本
-  // effect 不建 settings 分支——记录见 sync-bridge.js 头与 SidebarOnlyFrame.tsx 已知限制。
+  // （feat/settings-cross-edge）：sidebar 帧内官方 settings trigger 点击 DOM capture 拦截
+  // → requestOpenSettings（桥发 open-settings）；main 收 → 程序 click 隐藏宿主 trigger
+  // 打开官方 modal（宿主 = MainFrame data-sidebar-settings-host，见 MainFrame.tsx 例外
+  // 段）。拦截命中面 button[aria-haspopup=dialog] 在 sidebar 帧内唯一（侦察记录）。
   if (view === SIDEBAR) {
-    ctx.effect(
-      () => createSessionSyncBridge(ctx, BRIDGE_MODE_EMIT),
-      "@dsh-hanako/view: 跨边联动桥（sidebar → emit 发射端）",
-    );
+    ctx.effect(() => {
+      const bridge = createSessionSyncBridge(ctx, BRIDGE_MODE_EMIT);
+      const onClickCapture = (event) => {
+        const target = event && event.target;
+        if (!(target instanceof Element)) return;
+        const trigger = target.closest && target.closest('button[aria-haspopup="dialog"]');
+        if (trigger === null) return;
+        // 官方 SettingsRoot onClick（setOpen(true)）在 React 委托层（root 容器 bubble），
+        // document capture + stopImmediatePropagation 先行挡掉 → 本地不弹窄栏 modal。
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        if (typeof bridge.requestOpenSettings === "function") bridge.requestOpenSettings();
+      };
+      document.addEventListener("click", onClickCapture, true);
+      return () => {
+        document.removeEventListener("click", onClickCapture, true);
+        bridge();
+      };
+    }, "@dsh-hanako/view: 跨边联动桥（sidebar → emit 发射端）+ settings trigger 拦截转发");
   } else if (view === MAIN) {
     ctx.effect(
-      () => createSessionSyncBridge(ctx, BRIDGE_MODE_RECEIVE),
-      "@dsh-hanako/view: 跨边联动桥（main → receive 接收端）",
+      () => createSessionSyncBridge(ctx, BRIDGE_MODE_RECEIVE, {
+        // settings 跨边：sidebar 请求 → main 打开官方设置。程序 click 隐藏宿主内官方
+        // trigger（aria-haspopup=dialog）→ SettingsRoot onClick setOpen(true)（modal
+        // fixed 全视口覆盖 main；DOM 在宿主容器内，fixed 不受祖先 overflow 裁剪——无
+        // transform 链）。宿主未 mount（occupant 链慢/异常）→ warn + 丢（不炸桥）。
+        onOpenSettings: () => {
+          let host = null;
+          try {
+            host = document.querySelector("[data-sidebar-settings-host]");
+          } catch { /* 查询异常忽略 */ }
+          const button = host === null ? null : host.querySelector('button[aria-haspopup="dialog"]');
+          if (button !== null) {
+            button.click();
+            return;
+          }
+          if (typeof console !== "undefined") {
+            console.warn("[dshana.sync] open-settings: settings host not mounted yet");
+          }
+        },
+      }),
+      "@dsh-hanako/view: 跨边联动桥（main → receive 接收端）+ settings 打开",
     );
   }
 }

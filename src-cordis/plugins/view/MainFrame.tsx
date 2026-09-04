@@ -17,10 +17,18 @@
 // 不重复注 style）。DOM = .frame（inline gridTemplateColumns 两列）> (.centerCol >
 // conversation 槽) + (.detailsCol > SessionProvider > details 槽)；shell.overlay 槽照常
 // 在 frame 内 overlayLayer 渲染（AppFrame 同构）。sidebar 槽在 client.js MAIN_CHILDREN
-// 中**声明但本帧不渲染**（声明保 ui-sidebar 直接 register 不炸——它是 register 非 inject
-// 惰性，槽不声明会抛错致 client 链崩，实机踩过；渲染端不调 renderSlot('sidebar') →
+// 中**声明且本帧隐藏渲染**：声明保 ui-sidebar 直接 register 不炸（它是 register 非 inject
+// 惰性，槽不声明会抛错致 client 链崩，实机踩过）；渲染端不调 renderSlot('sidebar') →
 // occupant 挂载不渲染，SidebarRoot 与 rail 图标条不进入 DOM）；本帧也不 import
 // ui-sidebar/primitives 源码。
+//
+// 例外（feat/settings-cross-edge 隐藏宿主）：sidebar 槽**隐藏渲染**到屏幕外 fixed 容器
+// （data-sidebar-settings-host）——SidebarRoot 全家挂载（官方 full 视图 sidebar+
+// conversation 同帧并存即官方常态，无新增冲突面；流内容被容器 overflow:hidden 裁剪不可
+// 见），仅作 sidebar.settings occupant（SettingsRoot）的 mount 宿主：modal 为 fixed 全视口
+// （SettingsRoot.module.css .overlay），DOM 虽在宿主内但 fixed 不受祖先 overflow 裁剪
+// （无 transform 链）→ main 收到 open-settings 后程序 click 宿主内官方 trigger
+// （button[aria-haspopup=dialog]）即官方打开。详见 sync-bridge.js 头「settings 跨边」。
 //
 // 几何（两列自解，不用官方三列 computeColumns——其解含 sidebar 列，sidebar=0 也会解出
 // SIDEBAR_COLLAPSED 56px rail 占宽，不可用；窄视口折叠语义 SIDEBAR_AUTO_COLLAPSE 属
@@ -53,7 +61,7 @@ import css from './vendor/AppFrame.module.css'
  * （与官方 AppFrame 同源框架 shares；子槽并集不含 sidebar——main 无 sidebar 渲染点）。 */
 export type MainFrameProps =
   & PropsRuntime<'root'>
-  & PropsRenderSlots<'conversation' | 'details' | 'shell.overlay'>
+  & PropsRenderSlots<'conversation' | 'details' | 'shell.overlay' | 'sidebar'>
   & PropsStore<ReturnType<typeof createLayoutStore>>
   & PropsLocale<'common'>
 
@@ -228,6 +236,16 @@ export function MainFrame({
       </div>
       {/* 仅 details 拖拽 handle（sidebar 无 rail/列，不存在 resize）。 */}
       {detailsWidth > 0 && <DragHandle side="details" left={viewport - detailsWidth} onStart={onDetailsStart} onDrag={onDetailsDrag} onEnd={onDragEnd} />}
+      {/* settings 跨边隐藏宿主（见文件头「例外」段）：屏幕外 fixed 容器不占 grid 位、
+          无视觉；SidebarRoot 全家在此挂载（官方 full 同帧并存常态），流内容被 overflow
+          hidden 裁剪，仅 settings modal 宿主可见（fixed 全视口不受裁）。data 标记供
+          client.js 定位宿主内官方 trigger。 */}
+      <div
+        data-sidebar-settings-host=""
+        style={{ position: "fixed", left: -10000, top: 0, width: 280, height: 600, overflow: "hidden" }}
+      >
+        {renderSlot("sidebar", { collapsed: false, width: 280 })}
+      </div>
     </div>
   )
 }

@@ -84,12 +84,17 @@ function makeSessions(initialIds = []) {
  *   · receive 核心的 post 若被调用（= receive 误广播本地变化）→ 抛错。
  * 用户级动作直达 sessions store（真实 ui 路径，桥只旁听 list），不经核心回调。
  */
-function makeOneWay() {
+function makeOneWay(opts = {}) {
   const bus = { posts: [], queued: [] };
   const eS = makeSessions(); // sidebar（发射端）sessions
   const rS = makeSessions(); // main（接收端）sessions
   const remoteOpens = [];
   const remoteClears = [];
+  // settings 跨边：receive 端 onOpenSettings 计数（工厂默认收集；用例可传自定义）。
+  const settingsOpens = [];
+  const onOpenSettings = typeof opts.onOpenSettings === "function"
+    ? opts.onOpenSettings
+    : () => { settingsOpens.push(1); };
   const emit = {
     sessions: eS,
     core: createSyncCore({
@@ -109,6 +114,7 @@ function makeOneWay() {
       open: (id) => { remoteOpens.push(id); rS.open(id); },
       clear: () => { remoteClears.push(1); rS.clear(); },
       post: () => { throw new Error("receive core must not broadcast local changes"); },
+      onOpenSettings,
     }),
     _receive: (msg) => receive.core.receive(msg),
   };
@@ -122,7 +128,7 @@ function makeOneWay() {
     assert.ok(bus.queued.length === 0, "bus did not quiesce within " + max + " rounds (echo loop?)");
   }
   return {
-    eS, rS, emit, receive, remoteOpens, remoteClears,
+    eS, rS, emit, receive, remoteOpens, remoteClears, settingsOpens,
     posts: bus.posts,
     currentE: () => eS.current(),
     currentR: () => rS.current(),
@@ -386,4 +392,82 @@ test("mode 校验（缺省/非法抛错）+ 接线层（降级 noop / 真 channe
     assert.equal(typeof dispose, "function");
     dispose();
   }
+});
+
+test("settings 跨边：emit requestOpenSettings → post open-settings → receive 路由 onOpenSettings；receive 本地 request 直开不 post", () => {
+  const h = makeOneWay();
+  h.eS.ready(["s1"]);
+  h.rS.ready(["s1"]);
+  // sidebar（emit）请求 → 桥发 open-settings 消息（不进会话选中流）。
+  h.emit.core.requestOpenSettings();
+  assert.equal(h.posts.length, 1, "emit request → 恰一条消息");
+  assert.deepEqual(h.posts[0], { v: 1, type: "open-settings" }, "消息形态 = OPEN_SETTINGS_MESSAGE");
+  assert.equal(h.settingsOpens.length, 0, "未 deliver 前 receive 端未触发");
+  h.deliver();
+  assert.equal(h.settingsOpens.length, 1, "receive 收到 open-settings → onOpenSettings 触发");
+  // receive 本地 request：不 post（跟随方无对端），直接本地开。
+  h.receive.core.requestOpenSettings();
+  assert.equal(h.posts.length, 1, "receive request 不产生消息");
+  assert.equal(h.settingsOpens.length, 2, "receive request = 本地直开");
+  // emit 端收到 open-settings（不应发生——发射端不订阅）→ no-op。
+  h.emit.core.receive({ v: 1, type: "open-settings" });
+  assert.equal(h.settingsOpens.length, 2, "emit receive no-op");
+  // 会话选中流不受 open-settings 影响（receive 端不误 open/clear）。
+  assert.equal(h.currentR(), undefined, "open-settings 不触发会话选中变化");
+});
+
+test("settings 跨边：非协议/坏消息不触发 onOpenSettings；dispose 后请求面停摆", () => {
+  const opened = [];
+  const h = makeOneWay({ onOpenSettings: () => { opened.push(1); } });
+  h.eS.ready(["s1"]);
+  h.rS.ready(["s1"]);
+  h.receive._receive({ v: 1, type: "open-settings" });
+  h.receive._receive({ v: 2, type: "open-settings" });
+  h.receive._receive({ type: "open-settings" });
+  h.receive._receive({ v: 1, type: "open-document" });
+  assert.equal(opened.length, 1, "仅 v:1 open-settings 触发（其余忽略）");
+  h.emit.core.requestOpenSettings();
+  assert.equal(h.posts.length, 1);
+  h.emit.core.dispose();
+  h.emit.core.requestOpenSettings();
+  assert.equal(h.posts.length, 1, "dispose 后 request 停摆");
+});
+
+test("settings 跨边：emit requestOpenSettings → post open-settings → receive 路由 onOpenSettings；receive 本地 request 直开不 post", () => {
+  const h = makeOneWay();
+  h.eS.ready(["s1"]);
+  h.rS.ready(["s1"]);
+  // sidebar（emit）请求 → 桥发 open-settings 消息（不进会话选中流）。
+  h.emit.core.requestOpenSettings();
+  assert.equal(h.posts.length, 1, "emit request → 恰一条消息");
+  assert.deepEqual(h.posts[0], { v: 1, type: "open-settings" }, "消息形态 = OPEN_SETTINGS_MESSAGE");
+  assert.equal(h.settingsOpens.length, 0, "未 deliver 前 receive 端未触发");
+  h.deliver();
+  assert.equal(h.settingsOpens.length, 1, "receive 收到 open-settings → onOpenSettings 触发");
+  // receive 本地 request：不 post（跟随方无对端），直接本地开。
+  h.receive.core.requestOpenSettings();
+  assert.equal(h.posts.length, 1, "receive request 不产生消息");
+  assert.equal(h.settingsOpens.length, 2, "receive request = 本地直开");
+  // emit 端收到 open-settings（不应发生——发射端不订阅）→ no-op。
+  h.emit.core.receive({ v: 1, type: "open-settings" });
+  assert.equal(h.settingsOpens.length, 2, "emit receive no-op");
+  // 会话选中流不受 open-settings 影响（receive 端不误 open/clear）。
+  assert.equal(h.currentR(), undefined, "open-settings 不触发会话选中变化");
+});
+
+test("settings 跨边：非协议/坏消息不触发 onOpenSettings；dispose 后请求面停摆", () => {
+  const opened = [];
+  const h = makeOneWay({ onOpenSettings: () => { opened.push(1); } });
+  h.eS.ready(["s1"]);
+  h.rS.ready(["s1"]);
+  h.receive._receive({ v: 1, type: "open-settings" });
+  h.receive._receive({ v: 2, type: "open-settings" });
+  h.receive._receive({ type: "open-settings" });
+  h.receive._receive({ v: 1, type: "open-document" });
+  assert.equal(opened.length, 1, "仅 v:1 open-settings 触发（其余忽略）");
+  h.emit.core.requestOpenSettings();
+  assert.equal(h.posts.length, 1);
+  h.emit.core.dispose();
+  h.emit.core.requestOpenSettings();
+  assert.equal(h.posts.length, 1, "dispose 后 request 停摆");
 });
