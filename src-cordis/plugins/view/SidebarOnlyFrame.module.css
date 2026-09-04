@@ -1,0 +1,7 @@
+/* 单列 sidebar 帧（?dshana-view=sidebar 根容器）：占满 fp 面板 iframe viewport，
+   高 100% + overflow 兜底；sidebar 列（SidebarRoot）自带填充与内嵌滚动区。 */
+.frame {
+  height: 100%;
+  overflow: hidden;
+  background: var(--dsw-alias-bg-base);
+}
