@@ -71,8 +71,9 @@
         "siteNavEntry": true,
         "fpFullPanel": true,
         "functionPanel": {
-          "id": "dshana-panel",
-          "label": "DSHana"
+          "id": "dshana-sidebar",
+          "label": "DSHana",
+          "embedUrl": "http://127.0.0.1:3080/?dshana-view=sidebar"
         }
       }
     ]
