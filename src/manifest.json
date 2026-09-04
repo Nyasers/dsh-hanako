@@ -64,17 +64,18 @@
       {
         "id": "dshana",
         "title": "DSHana",
-        "route": "/webui",
+        "route": "/main",
         "cardForm": "flush",
         "titlebar": "translucent",
         "realization": "page",
-        "siteNavEntry": true,
-        "fpFullPanel": true,
-        "functionPanel": {
-          "id": "dshana-sidebar",
-          "label": "DSHana",
-          "embedUrl": "http://127.0.0.1:3080/?dshana-view=sidebar"
-        }
+        "siteNavEntry": true
+      },
+      {
+        "id": "dshana-sidebar",
+        "title": "DSHana Sidebar",
+        "route": "/sidebar",
+        "cardForm": "flush",
+        "pageOf": "dshana"
       }
     ]
   }

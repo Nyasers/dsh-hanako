@@ -36,7 +36,7 @@ config.json 由宿主设置界面生成、**不随包分发**，缺省全部可�
 
 ## DSHana 标签页（Bootstrap 三态自举页，T4）
 
-标签页（`/webui`）按 `boot-state` 渲染三态，**无任何可点的启动/安装/检测按钮**（手动入口已随 T5 退役）：
+标签页（主卡 DSHana route `/main`；子卡 dshana-sidebar route `/sidebar`、`pageOf: dshana`——两卡同壳页按 `?dshana-view=<view>` 装配视图：main 视图 = 接收端 receive、sidebar 视图 = 发射端 emit）按 `boot-state` 渲染三态，**无任何可点的启动/安装/检测按钮**（手动入口已随 T5 退役）：
 
 1. **booting（自举中）**：阶段时间线（依赖就绪 → 启动 Web Host → 就绪）+ 依赖安装实时日志尾滚动 + 重试信息（第 N 次 / 下次自动重试时刻）。自动推进中，等即可。
 2. **action-needed（需要处理）**：自动链暂停。页面给出 **errorClass 人话 + 明确操作步骤**（如配置 nodejsPath、装编译工具链、清理磁盘）+ 「自动续跑中/停等」说明（区分可恢复退避重试中 vs 需重启宿主/等条件）；原始错误折叠「详情」。用户只做页面所述环境动作，**完成后自动续跑**。

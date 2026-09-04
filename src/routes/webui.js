@@ -1,11 +1,16 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// routes/webui.js — dsh-hanako 插件页：contributes.cards（realization:page）内嵌 dsh Web UI
-//   GET /webui            插件页：ready（总线已连接）直嵌 dsh Web UI iframe；未 ready 渲染
-//                         Bootstrap 三态自举页（booting/action-needed/ready，见 webui-shell 头注释；
-//                         数据源 = GET /webui/boot-state + /webui/events 事件流；
-//                         功能面板 functionPanel 仅 status 常驻，无操作段）
+// routes/webui.js — dsh-hanako 宿主页面：父子双卡（宿主 functionPanel route 参数落地前的
+// 过渡表达——contributes.cards 两张卡各嵌一个同源 3080 iframe，?dshana-view=<view> 驱动视图）
+//   GET /main            主卡（cards[0] dshana，realization:page）：ready（总线已连接）直嵌
+//                         main 视图 iframe（?dshana-view=main，选中态桥接收端 receive）；
+//                         未 ready 渲染 Bootstrap 三态自举页（booting/action-needed/ready，
+//                         见 webui-shell 头注释；数据源 = GET /webui/boot-state + /webui/events
+//                         事件流）
+//   GET /sidebar         侧栏子卡（cards[1] dshana-sidebar，pageOf: "dshana"）：同壳页按 view
+//                         参数化——?dshana-view=sidebar = 纯侧栏视图（发射端 emit）；自举页/
+//                         boot-state/events 与主卡共用（路由只差 iframe 的 view 参数）
 //   GET /webui/boot-state  自举状态快照（T3 spec：dsh-deps-zero-intervention）——单一状态出口：
 //                         g.boot 状态机 + g.deps（含 T1 errorClass/guidance）+ g.web 就绪收敛成
 //                         { phase, ready, deps, boot, web } 三段 JSON，三态可渲染；Bootstrap
@@ -84,7 +89,7 @@ function busReady() {
  *
  * 返回结构（值域与缺省语义）：
  *   phase     状态机阶段 ensure-deps|waiting|booting|ready（g.boot.phase；未跑过 = ensure-deps）
- *   ready     web host 就绪 = g.web.ready（boot 收敛）或总线已连接（busReady，与 /webui
+ *   ready     web host 就绪 = g.web.ready（boot 收敛）或总线已连接（busReady，与页面
  *             渲染同源判定）；停机/重启窗口由 /webui/events pending/ready 事件驱动页面翻转
  *   deps      { status, errorClass, guidance, error, version, logTail }
  *               status     g.deps.status：idle|installing|running|ok|error
@@ -184,13 +189,17 @@ function readBootState() {
   }
 }
 
-/** 插件页 HTML 壳：ready=true 直接内联 iframe；否则渲染自举页（三态 Bootstrap 壳，
- * 见 assets/webui-shell.jinja2 头注释；T4 spec：dsh-deps-zero-intervention）。
+/** 页面壳（主卡 /main 与子卡 /sidebar 共用）：ready=true 直接内联 iframe；否则渲染
+ * 自举页（三态 Bootstrap 壳，见 assets/webui-shell.jinja2 头注释；T4 spec：
+ * dsh-deps-zero-intervention）。
  * colorScheme：按宿主 hana-theme 映射的 color-scheme（dark/light）。dsh 主题为
  * system 时通过 prefers-color-scheme 解析，Chromium 会让跨源 iframe 继承父页面
  * 的 color-scheme，因此 dsh 会跟随宿主主题；dsh 内显式选了 light/dark 则不受影响。
  * boot：未就绪时服务端取一次自举状态快照（readBootState，T3 单一状态出口）作首帧
- * 渲染数据（JSON 对象或 null）；壳页随后以 /webui/events 事件驱动刷新本快照。 */
+ * 渲染数据（JSON 对象或 null）；壳页随后以 /webui/events 事件驱动刷新本快照。
+ * view：视图标识（"main" | "sidebar"，父子双卡由注册路由决定）→ 透传给壳页拼 iframe
+ * URL 查询参数 ?dshana-view=<view>。白名单外/缺失 → viewQuery 空串（iframe 无参 root
+ * = full 整页视图，仅调试兜底——宿主双卡路由恒带 view，正常不可达；3080 直开仍无参）。 */
 function buildShell({
   ready,
   hcLink,
@@ -199,6 +208,7 @@ function buildShell({
   port,
   colorScheme,
   boot,
+  view,
 }) {
   // dsh-frame 保持裸嵌（曾尝试显式声明 sandbox/allow 绕过宿主沙箱，实测跨源继承链
   // 下内层声明无法生效，属无效方案已回滚，见 CHANGELOG）。
@@ -211,6 +221,10 @@ function buildShell({
   const initBoot = boot
     ? JSON.stringify(boot).replace(/<\//g, "<\\/")
     : "null";
+  // 父子双卡视图参数化：view 白名单（main/sidebar）外一律空串 → 壳页 iframe 无参 root
+  // = full 整页视图（调试/兜底；宿主双卡路由恒带 view，正常不可达）
+  const viewQuery =
+    view === "main" || view === "sidebar" ? "?dshana-view=" + view : "";
   // HTML 模板来自 src/assets/webui-shell.jinja2（asset/source 内联，占位符保留）；
   // 渲染函数由 template-loader 在构建期生成（doT），scope 直接作 it 传入。
   return webuiShellHtml({
@@ -223,6 +237,8 @@ function buildShell({
     api,
     initBoot,
     port,
+    view,
+    viewQuery,
   });
 }
 
@@ -233,7 +249,10 @@ export default function registerWebuiRoutes(app, ctx) {
     ctx && typeof ctx.config === "object" && ctx.config ? ctx.config : {};
   const port = Number(cfg.webPort) || 3080;
 
-  // 插件页：按总线连接状态判定就绪——已连接直接渲染 iframe；未连接渲染 Bootstrap
+  // 页面（父子双卡，见文件头）：主卡 /main 与子卡 /sidebar 共用同一壳页与自举逻辑，仅
+  // iframe 的 view 参数不同（/main → main 视图 = 接收端 receive；/sidebar → sidebar 视图
+  // = 发射端 emit；URL ?dshana-view=<view> 驱动视图装配与桥角色，见 src-cordis/plugins/view
+  // readView 与 sync-bridge.js）。就绪判定：已连接直接渲染 iframe；未连接渲染 Bootstrap
   // 自举页（三态：booting/action-needed/ready，壳页订阅 /webui/events 事件流 + 刷新
   // /webui/boot-state 驱动）。不再服务端 probeHost（就绪事件化，probeHost 仅诊断路径
   // 使用）。未就绪时服务端同步取一次自举状态快照（readBootState，首屏即渲染三态）；
@@ -242,7 +261,7 @@ export default function registerWebuiRoutes(app, ctx) {
   // /webui/boot-state（T3 单一状态出口），SPA 全部资源由 @dsh-hanako/app 子插件
   // （dsh 3080）iframe 同源直嵌提供，无浏览器端劫持/改写。
 
-  app.get("/webui", async (c) => {
+  const page = (view) => async (c) => {
     // 壳页：iframe 直嵌 @dsh-hanako/app 子插件（dsh 3080）serve 的 fork SPA——
     // iframe 内同源（资源/API/SSE/WS 全由子插件提供，免鉴权，无劫持无 token/PSS）；
     // 宿主只做页面壳：就绪事件化 / 自举状态 / 主题与剪贴板桥（全部在壳页 JS 里）。
@@ -264,9 +283,12 @@ export default function registerWebuiRoutes(app, ctx) {
         port,
         colorScheme,
         boot,
+        view,
       }),
     );
-  });
+  };
+  app.get("/main", page("main"));
+  app.get("/sidebar", page("sidebar"));
 
   // 就绪事件流（GET /webui/events，SSE 式 chunked）——壳页事件化的宿主推送通道
   // （就绪/停机/自举状态变化/主题偏好，全部事件驱动；壳页收到后刷新 /webui/boot-state

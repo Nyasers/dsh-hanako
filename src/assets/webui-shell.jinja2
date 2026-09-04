@@ -636,10 +636,15 @@
         // 事件驱动的就绪（bus ready / 父窗口握手）可能早于快照：异步拉一次对齐面板/状态
         if (!(boot && boot.ready === true)) refreshBoot();
       }
+      // iframe src 按视图参数化（父子双卡过渡方案）：it.viewQuery 由服务端路由决定——
+      // /main → "?dshana-view=main"（main 视图 = 接收端 receive）、/sidebar →
+      // "?dshana-view=sidebar"（纯侧栏视图 = 发射端 emit），两卡各自直嵌同源 3080；
+      // viewQuery 空串（view 缺失/白名单外）＝无参 root = full 整页视图——仅调试兜底
+      // （宿主双卡路由恒带 view，正常不可达；3080 直开仍是无参 full）。
       function attach() {
         var wasPending = document.body.getAttribute("data-view") !== "ready";
         if (wasPending || !frame.getAttribute("src")) {
-          frame.src = "http://127.0.0.1:{{= it.port }}/";
+          frame.src = "http://127.0.0.1:{{= it.port }}/{{= it.viewQuery }}";
         }
         startThemePush();
       }
