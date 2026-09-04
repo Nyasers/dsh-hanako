@@ -213,6 +213,26 @@ export function MainFrame({
   }, [actions])
   const productTitle = process.env.DSH_CLIENT_TITLE ?? t('brand.localBuild')
 
+  // settings 宿主键盘可达性（CodeRabbit 闭环）：隐藏子树若可被顺序导航 Tab 到，焦点指示
+  // 会消失到屏幕外。动态 inert——容器默认 inert（子树不可 Tab/不可点），仅当官方
+  // settings dialog（role=dialog）挂载时解除（modal 打开后焦点/交互官方管理，主诉为关闭
+  // 态漫游 Tab 丢焦点）；MutationObserver 监控容器内 dialog 出现/消失同步切换。
+  const settingsHostRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    const host = settingsHostRef.current
+    /* v8 ignore next -- effect 运行期 ref 恒已挂载（host 无条件渲染）。 */
+    if (host === null) return
+    host.inert = true
+    const updateInert = () => {
+      const hasDialog = host.querySelector('[role="dialog"]') !== null
+      if (hasDialog !== host.inert) return // inert === !hasDialog 已一致
+      host.inert = !hasDialog
+    }
+    const observer = new MutationObserver(updateInert)
+    observer.observe(host, { childList: true, subtree: true })
+    return () => { observer.disconnect() }
+  }, [])
+
   return (
     <div
       ref={frameRef}
@@ -245,8 +265,10 @@ export function MainFrame({
           容器 SC 内；conversation 的 positive z 元素（tabs z1、composerSeat z7）在文档级
           第 7 层 → 盖过整个容器（用户实测输入框层级在设置之上）。修法 = 容器自身提升
           z-index（1000，与官方 overlay 同层语义）：容器 SC 整体提到文档高层层叠，内部
-          modal 正常盖 conversation；屏幕外定位不受 z 影响。 */}
+          modal 正常盖 conversation；屏幕外定位不受 z 影响。
+          键盘可达性：容器默认 inert（见上 effect），dialog 挂载时自动解除。 */}
       <div
+        ref={settingsHostRef}
         data-sidebar-settings-host=""
         style={{ position: "fixed", left: -10000, top: 0, width: 280, height: 600, overflow: "hidden", zIndex: 1000 }}
       >

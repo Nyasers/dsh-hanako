@@ -273,29 +273,50 @@ function apply(ctx) {
       };
     }, "@dsh-hanako/view: 跨边联动桥（sidebar → emit 发射端）+ settings trigger 拦截转发");
   } else if (view === MAIN) {
-    ctx.effect(
-      () => createSessionSyncBridge(ctx, BRIDGE_MODE_RECEIVE, {
+    // settings 跨边 pending 重试（CodeRabbit 闭环）：sidebar 请求到达时宿主 trigger 可能
+    // 未挂载（occupant 链异步——SidebarRoot 挂载晚于桥激活）——一次查询丢弃会让 dialog
+    // 永不打开。修：短轮询重试（300ms 间隔，上限 50 次 ≈15s），宿主 trigger 出现即
+    // click；effect disposer 清理轮询（桥销毁/视图卸载不留定时器）。
+    ctx.effect(() => {
+      let openTimer = null;
+      const tryOpenSettings = () => {
+        let host = null;
+        try {
+          host = document.querySelector("[data-sidebar-settings-host]");
+        } catch { /* 查询异常忽略 */ }
+        const button = host === null ? null : host.querySelector('button[aria-haspopup="dialog"]');
+        if (button !== null) {
+          button.click();
+          return true;
+        }
+        return false;
+      };
+      const clearTimer = () => {
+        if (openTimer !== null) {
+          clearInterval(openTimer);
+          openTimer = null;
+        }
+      };
+      const bridge = createSessionSyncBridge(ctx, BRIDGE_MODE_RECEIVE, {
         // settings 跨边：sidebar 请求 → main 打开官方设置。程序 click 隐藏宿主内官方
         // trigger（aria-haspopup=dialog）→ SettingsRoot onClick setOpen(true)（modal
         // fixed 全视口覆盖 main；DOM 在宿主容器内，fixed 不受祖先 overflow 裁剪——无
-        // transform 链）。宿主未 mount（occupant 链慢/异常）→ warn + 丢（不炸桥）。
+        // transform 链）。宿主未 mount → 短轮询重试（不炸桥、不丢请求）。
         onOpenSettings: () => {
-          let host = null;
-          try {
-            host = document.querySelector("[data-sidebar-settings-host]");
-          } catch { /* 查询异常忽略 */ }
-          const button = host === null ? null : host.querySelector('button[aria-haspopup="dialog"]');
-          if (button !== null) {
-            button.click();
-            return;
-          }
-          if (typeof console !== "undefined") {
-            console.warn("[dshana.sync] open-settings: settings host not mounted yet");
-          }
+          if (tryOpenSettings()) return;
+          if (openTimer !== null) return; // 已在重试中
+          let tries = 0;
+          openTimer = setInterval(() => {
+            tries += 1;
+            if (tryOpenSettings() || tries >= 50 /* ~15s */) clearTimer();
+          }, 300);
         },
-      }),
-      "@dsh-hanako/view: 跨边联动桥（main → receive 接收端）+ settings 打开",
-    );
+      });
+      return () => {
+        clearTimer();
+        bridge();
+      };
+    }, "@dsh-hanako/view: 跨边联动桥（main → receive 接收端）+ settings 打开（pending 重试）");
   }
 }
 
