@@ -213,24 +213,56 @@ export function MainFrame({
   }, [actions])
   const productTitle = process.env.DSH_CLIENT_TITLE ?? t('brand.localBuild')
 
-  // settings 宿主键盘可达性（CodeRabbit 闭环）：隐藏子树若可被顺序导航 Tab 到，焦点指示
-  // 会消失到屏幕外。动态 inert——容器默认 inert（子树不可 Tab/不可点），仅当官方
-  // settings dialog（role=dialog）挂载时解除（modal 打开后焦点/交互官方管理，主诉为关闭
-  // 态漫游 Tab 丢焦点）；MutationObserver 监控容器内 dialog 出现/消失同步切换。
+  // settings 宿主键盘可达性 + 焦点陷阱（CodeRabbit 闭环）：
+  //   · 动态 inert——容器默认 inert（屏幕外子树不进 Tab 顺序、不可点），仅当官方
+  //     settings dialog（role=dialog）挂载时解除（MutationObserver 监控同步切换）。
+  //   · 焦点陷阱（CR 二轮）：官方 SettingsPanel 只 focus close + Escape，无 Tab trap
+  //     （上游官方缺陷，aria-modal 不自动 trap，vendor 不动不改官方）——dialog 打开期间
+  //     document keydown capture 拦 Tab/Shift+Tab：焦点在 dialog 内首/尾时 wrap（WAI
+  //     APG modal dialog 语义），焦点逃逸 dialog/宿主（异常进入屏幕外控件）→ 拉回
+  //     dialog 首元素。dialog 关闭（卸载）后监听空转（host 内无 dialog 即 return）。
   const settingsHostRef = useRef<HTMLDivElement | null>(null)
   useEffect(() => {
     const host = settingsHostRef.current
     /* v8 ignore next -- effect 运行期 ref 恒已挂载（host 无条件渲染）。 */
     if (host === null) return
     host.inert = true
+    const hasOpenDialog = () => host.querySelector('[role="dialog"]') !== null
+    const FOCUSABLE =
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Tab' || !hasOpenDialog()) return
+      const dialog = host.querySelector('[role="dialog"]')
+      const focusables = dialog === null ? [] : [...dialog.querySelectorAll<HTMLElement>(FOCUSABLE)]
+      if (focusables.length === 0) return
+      const first = focusables[0]
+      const last = focusables[focusables.length - 1]
+      const active = document.activeElement
+      if (event.shiftKey) {
+        // Shift+Tab：焦点在首元素（或不在 dialog 内——异常逃逸）→ wrap 到末元素。
+        if (active === first || !host.contains(active)) {
+          event.preventDefault()
+          last.focus()
+        }
+      } else if (active === last || !host.contains(active)) {
+        // Tab：末元素 → wrap 回首元素；焦点逃逸 host（应不可达——host 为含 dialog
+        // 的子树，且 dialog 打开时 host 非 inert）→ 拉回 dialog 首元素。
+        event.preventDefault()
+        first.focus()
+      }
+    }
+    document.addEventListener('keydown', onKeyDown, true)
     const updateInert = () => {
-      const hasDialog = host.querySelector('[role="dialog"]') !== null
+      const hasDialog = hasOpenDialog()
       if (hasDialog !== host.inert) return // inert === !hasDialog 已一致
       host.inert = !hasDialog
     }
     const observer = new MutationObserver(updateInert)
     observer.observe(host, { childList: true, subtree: true })
-    return () => { observer.disconnect() }
+    return () => {
+      observer.disconnect()
+      document.removeEventListener('keydown', onKeyDown, true)
+    }
   }, [])
 
   return (
