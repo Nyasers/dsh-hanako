@@ -30,7 +30,9 @@
 //   5. tag preflight（v<完整版> 已存在 → 拒绝重复发版）
 //   6. git add 版本文件全集 + CHANGELOG → commit "chore: bump v<完整版>" → annotated tag v<完整版>
 //
-// 门禁/职责沿袭 scripts/tagver.mjs（已并入本脚本）；push 手动（tag 触发 CI 发布）。
+// 门禁/职责沿袭 scripts/tagver.mjs（已并入本脚本）：HEAD 版本门禁 + tag preflight（本地 ref
+//  + 远程 origin ls-remote，防克隆未 fetch 远程 tag 导致孤儿 bump commit）；push 手动
+// （--atomic 分支与 tag 同成败，tag 触发 CI 发布）。
 import fs from "node:fs";
 import path from "node:path";
 import { execSync } from "node:child_process";
@@ -76,26 +78,50 @@ function main() {
     console.error("[version-hook] 完整版相对 HEAD 未变化（" + full + "），拒绝 commit/tag——确需重发先删旧 tag 或先提交功能改动");
     process.exit(1);
   }
-  // 5) tag preflight：目标 tag 已存在则 fail-before（不 staging、不 commit）
+  // 5) tag preflight：目标 tag 本地或远程已存在则 fail-before（不 staging、不 commit）
   const tagRef = "refs/tags/v" + full;
+  // 5a) 本地 ref 检查（防同仓库重复发版）
   try {
     const existing = execSync("git rev-parse -q --verify " + tagRef, {
       cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
     }).trim();
     if (existing) {
-      console.error("[version-hook] tag " + tagRef + " 已存在（" + existing.slice(0, 12) + "），拒绝重复发版——如确需重打先删旧 tag");
+      console.error("[version-hook] 本地 tag " + tagRef + " 已存在（" + existing.slice(0, 12) + "），拒绝重复发版——如确需重打先删旧 tag");
       process.exit(1);
     }
   } catch {
-    /* tag 不存在：正常，继续 */
+    /* 本地 tag 不存在：正常，继续 */
+  }
+  // 5b) 远程 ref 检查（防克隆未 fetch 远程 tag——本地无但 origin 已有，push 时 tag 冲突会
+  //     留下无 tag 的孤儿 bump commit）：无 origin remote 时跳过（纯本地仓库场景），
+  //     remote 存在但 ls-remote 失败（网络不可达）→ fail-closed 中止——发版必须能确认远端状态
+  let hasOrigin = true;
+  try {
+    execSync("git remote get-url origin", { cwd: ROOT, stdio: ["ignore", "pipe", "ignore"] });
+  } catch {
+    hasOrigin = false;
+  }
+  if (hasOrigin) {
+    try {
+      const remoteTags = execSync("git ls-remote --tags origin", {
+        cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+      });
+      if (remoteTags.split(/\r?\n/).some((l) => l.includes(tagRef))) {
+        console.error("[version-hook] 远程 origin 已存在 tag " + tagRef + "（本地未 fetch 到）——拒绝重复发版，先 git fetch --tags 核对");
+        process.exit(1);
+      }
+    } catch (e) {
+      console.error("[version-hook] 无法查询远程 origin tags（网络不可达？）" + e.message.trim() + "——发版前必须确认远端 tag 状态，中止");
+      process.exit(1);
+    }
   }
   // 6) add 版本文件全集（package.json + manifest + cordis 包）+ CHANGELOG → commit → tag
   const files = [...versionCommitFiles(), "CHANGELOG.md"];
   run("git add " + files.join(" "), "git add 版本文件 + CHANGELOG");
   run("git commit -m \"chore: bump v" + full + "\"", "git commit");
   run("git tag -a \"v" + full + "\" -m \"v" + full + "\"", "git tag -a v" + full);
-  console.log("\n[version-hook] ✅ v" + full + " 提交完成（package.json + manifest.json + cordis 包 + CHANGELOG 同步并提交，tag 已打）。推送（tag 触发 CI 发布）：");
-  console.log("  git push origin master --tags");
+  console.log("\n[version-hook] ✅ v" + full + " 提交完成（package.json + manifest.json + cordis 包 + CHANGELOG 同步并提交，tag 已打）。推送（tag 触发 CI 发布，--atomic 保证分支与 tag 同成败）：");
+  console.log("  git push --atomic origin master --tags");
 }
 
 main();
