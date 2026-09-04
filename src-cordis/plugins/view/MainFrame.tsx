@@ -3,7 +3,9 @@
 //
 // MainFrame —— main 视图（?dshana-view=main）的 root 帧组件（fpFullPanel V3 修正）。
 //
-// 角色：main = 无侧栏「主页」视图（V4 联动协议的宿主主页端）。V3 旧版（16293c5）以官方
+// 角色：main = 无侧栏「主页」视图（V4 联动协议的宿主主页端——单向收敛后为选中态桥的
+// receive 接收端：接收 sidebar 下行 select/clear 应用到本地，本地变化不回发，见
+// sync-bridge.js 头）。V3 旧版（16293c5）以官方
 // AppFrame + createMainLayoutStore(init sidebar:0) 实现——实机验证发现官方
 // panels.sidebar=0 的语义是 **56px rail 折叠态**（SidebarRoot 仍在，可展开 280），并非
 // 「隐藏 sidebar」。用户裁定：main 要**真无侧栏**（无 rail、无 SidebarRoot）——按

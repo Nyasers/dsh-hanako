@@ -33,9 +33,10 @@
 //    .toggleSidebar() 只翻转 layout store 偏好（本帧不读 store 几何，无视觉效果）。
 //
 // 已知限制（如实记录）：
-//  - V4 联动协议落地后（client.js effect 3 + sync-bridge.js）：sidebar 视图的会话选中经
-//    BroadcastChannel 与 main 主页跨边同步（双向 select/clear/握手）；会话增删/重命名/
-//    workspace 列表走 dsh 数据面天然一致，不走桥。
+//  - V4 联动单向收敛后（client.js effect 3 + sync-bridge.js）：sidebar 视图 = 发射端——
+//    会话选中变化经 BroadcastChannel 下行广播（含启动握手 boot 宣告），main 主页接收并
+//    open 跟随（receive），反向不回发（main 无切换 UI）；full 不参与桥。会话增删/重命名/
+//    workspace 列表走 dsh 数据面天然一致，不走桥（详见 sync-bridge.js 头「单向收敛」段）。
 //  - sidebar.settings occupant（ui-settings-general）的 trigger → 1080x700 modal 打开是
 //    SettingsRoot 组件内本地态，官方无可编程 open/关闭面、main 视图无其宿主（无侧栏）、
 //    槽规则封死干净拦截面——V4 调研结论 = 跨边不可行（待上游支持），本地弹出溢出保持
