@@ -83,6 +83,36 @@ import { ThemePresenter } from "./vendor/theme-presenter.ts";
 // 无参 = 完整三列视图（主页面默认，等价官方 ui-layout 激活态）；
 // main = 无侧栏主视图（V3 修正：MainFrame 减法式——center + details 两列，真无 sidebar）；
 // sidebar = 纯侧栏视图（V2，manifest functionPanel.embedUrl 指向本页带该参数）。
+// ---- 白屏自愈（运行中产物热覆盖 → dsh 客户端热重载 view 插件 → root 注册窗口 →
+// RootOutlet 抛 SlotAssemblyError 白屏；React 树存活但 root 注册已随旧 fiber 清空）----
+// 捕获特征错误自动 reload（等同手动刷新：干净重启后 bundle rev 稳定不再触发）。
+// 防抖 30s：避免热重载风暴下反复刷。幂等（模块单例，多次 apply 只挂一次监听）。
+const ROOT_ASSEMBLY_ERROR_MARK = "renderSlot('root') before any 'root' registration";
+let rootHealInstalled = false;
+let lastRootHealReloadAt = 0;
+function watchRootSelfHeal() {
+  if (rootHealInstalled || typeof window === "undefined") return;
+  rootHealInstalled = true;
+  const isTarget = (msg) =>
+    typeof msg === "string" && msg.indexOf(ROOT_ASSEMBLY_ERROR_MARK) !== -1;
+  const maybeReload = () => {
+    const now = Date.now();
+    if (now - lastRootHealReloadAt < 30000) return; // 防抖
+    lastRootHealReloadAt = now;
+    try {
+      location.reload();
+    } catch { /* reload 失败忽略（页面已在卸载） */ }
+  };
+  window.addEventListener("error", (e) => {
+    if (isTarget(e && e.message)) maybeReload();
+  });
+  window.addEventListener("unhandledrejection", (e) => {
+    const r = e && e.reason;
+    const msg = r && (typeof r.message === "string" ? r.message : String(r));
+    if (isTarget(msg)) maybeReload();
+  });
+}
+
 const FULL = "full";
 const MAIN = "main"; // V3 修正（真无侧栏主视图：MainFrame，结构无 sidebar 列/槽）
 const SIDEBAR = "sidebar"; // V2（fp 面板 embedUrl 纯侧栏）
@@ -164,6 +194,7 @@ const inject = ["slots", "theme", "locale", "sessions"];
  * @param ctx - 客户端根 context。
  */
 function apply(ctx) {
+  watchRootSelfHeal();
   const view = readView();
   const layout = new LayoutController();
   const { component: RootView, children, store } = frameForView(view);
