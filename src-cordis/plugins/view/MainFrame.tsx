@@ -14,9 +14,11 @@
 // vendor/AppFrame.module.css；同 bundle 幂等注入，full/main/sidebar 引用同一 vendor css
 // 不重复注 style）。DOM = .frame（inline gridTemplateColumns 两列）> (.centerCol >
 // conversation 槽) + (.detailsCol > SessionProvider > details 槽)；shell.overlay 槽照常
-// 在 frame 内 overlayLayer 渲染（AppFrame 同构）。sidebar 槽由 client.js MAIN_CHILDREN
-// **不声明**（declaring is claiming）→ ui-sidebar occupant 不注册不挂载，SidebarRoot 与
-// rail 图标条不存在；本帧也不 import ui-sidebar/primitives 源码。
+// 在 frame 内 overlayLayer 渲染（AppFrame 同构）。sidebar 槽在 client.js MAIN_CHILDREN
+// 中**声明但本帧不渲染**（声明保 ui-sidebar 直接 register 不炸——它是 register 非 inject
+// 惰性，槽不声明会抛错致 client 链崩，实机踩过；渲染端不调 renderSlot('sidebar') →
+// occupant 挂载不渲染，SidebarRoot 与 rail 图标条不进入 DOM）；本帧也不 import
+// ui-sidebar/primitives 源码。
 //
 // 几何（两列自解，不用官方三列 computeColumns——其解含 sidebar 列，sidebar=0 也会解出
 // SIDEBAR_COLLAPSED 56px rail 占宽，不可用；窄视口折叠语义 SIDEBAR_AUTO_COLLAPSE 属
@@ -98,6 +100,16 @@ function DragHandle(props: { side: 'details'; left: number; onStart: () => void;
     callbacks.current.onEnd()
   }, [])
 
+  const onPointerCancel = useCallback(() => {
+    // pointercancel：浏览器接管手势（平移/缩放/触屏打断）——同一指针流不再有
+    // pointerup，capture 已隐式释放（onPointerUp 的 hasPointerCapture 守卫会提前
+    // return，不能复用）。cleanup 必须照跑：残留 rAF/ dragging 会把帧卡在拖拽态
+    // （data-dragging 不褪、过渡不恢复）。流的最后位置无意义，不补最后一拍 drag。
+    if (frame.current !== null) { cancelAnimationFrame(frame.current); frame.current = null }
+    setDragging(false)
+    callbacks.current.onEnd()
+  }, [])
+
   return (
     <div
       className={css.handle}
@@ -107,6 +119,7 @@ function DragHandle(props: { side: 'details'; left: number; onStart: () => void;
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
+      onPointerCancel={onPointerCancel}
     />
   )
 }
