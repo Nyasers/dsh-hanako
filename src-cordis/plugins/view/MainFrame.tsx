@@ -239,10 +239,16 @@ export function MainFrame({
       {/* settings 跨边隐藏宿主（见文件头「例外」段）：屏幕外 fixed 容器不占 grid 位、
           无视觉；SidebarRoot 全家在此挂载（官方 full 同帧并存常态），流内容被 overflow
           hidden 裁剪，仅 settings modal 宿主可见（fixed 全视口不受裁）。data 标记供
-          client.js 定位宿主内官方 trigger。 */}
+          client.js 定位宿主内官方 trigger。
+          层叠陷阱（实机定案）：position:fixed 元素**总是创建 stacking context**（无论
+          z-index）——容器 z-auto 沉层叠第 6 层，容器内 modal overlay 的 z1000 被压扁在
+          容器 SC 内；conversation 的 positive z 元素（tabs z1、composerSeat z7）在文档级
+          第 7 层 → 盖过整个容器（用户实测输入框层级在设置之上）。修法 = 容器自身提升
+          z-index（1000，与官方 overlay 同层语义）：容器 SC 整体提到文档高层层叠，内部
+          modal 正常盖 conversation；屏幕外定位不受 z 影响。 */}
       <div
         data-sidebar-settings-host=""
-        style={{ position: "fixed", left: -10000, top: 0, width: 280, height: 600, overflow: "hidden" }}
+        style={{ position: "fixed", left: -10000, top: 0, width: 280, height: 600, overflow: "hidden", zIndex: 1000 }}
       >
         {renderSlot("sidebar", { collapsed: false, width: 280 })}
       </div>
