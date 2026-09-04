@@ -213,25 +213,31 @@ export function MainFrame({
   }, [actions])
   const productTitle = process.env.DSH_CLIENT_TITLE ?? t('brand.localBuild')
 
-  // settings 宿主键盘可达性 + 焦点陷阱（CodeRabbit 闭环）：
-  //   · 动态 inert——容器默认 inert（屏幕外子树不进 Tab 顺序、不可点），仅当官方
-  //     settings dialog（role=dialog）挂载时解除（MutationObserver 监控同步切换）。
-  //   · 焦点陷阱（CR 二轮）：官方 SettingsPanel 只 focus close + Escape，无 Tab trap
-  //     （上游官方缺陷，aria-modal 不自动 trap，vendor 不动不改官方）——dialog 打开期间
-  //     document keydown capture 拦 Tab/Shift+Tab：焦点在 dialog 内首/尾时 wrap（WAI
-  //     APG modal dialog 语义），焦点逃逸 dialog/宿主（异常进入屏幕外控件）→ 拉回
-  //     dialog 首元素。dialog 关闭（卸载）后监听空转（host 内无 dialog 即 return）。
+  // settings 宿主键盘可达性 + 焦点陷阱（CodeRabbit 闭环；性能纪律——不挂全树观察）：
+  //   · 动态 inert：容器默认 inert（屏幕外子树不进 Tab 顺序、不可点）。dialog 开闭态 =
+  //     官方 trigger 按钮 aria-expanded（SettingsRoot 渲染属性，open 同步）——单元素
+  //     attributes 观察（attributeFilter aria-expanded）跟踪开闭，**不做全树 subtree
+  //     观察**（SidebarRoot 全家的列表/DOM 活动零触发，避免常驻性能负担）。trigger 未挂
+  //     （occupant 链早期）时用一次性全树观察等它出现，出现即转 attributes 并断开。
+  //   · 焦点陷阱：官方 SettingsPanel 只 focus close + Escape，无 Tab trap（上游缺陷，
+  //     vendor 不动不改官方）——dialog 打开期间 document keydown capture 拦 Tab/Shift+Tab：
+  //     dialog 内 focusable 首尾 wrap（WAI APG modal 语义），焦点逃逸 host → 拉回首元素。
+  //     keydown handler 仅 Tab 键 + open 态才做查询（其余按键一次比较即 return）。
   const settingsHostRef = useRef<HTMLDivElement | null>(null)
   useEffect(() => {
     const host = settingsHostRef.current
     /* v8 ignore next -- effect 运行期 ref 恒已挂载（host 无条件渲染）。 */
     if (host === null) return
     host.inert = true
-    const hasOpenDialog = () => host.querySelector('[role="dialog"]') !== null
     const FOCUSABLE =
       'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    let trigger = host.querySelector('button[aria-haspopup="dialog"]')
+    let attrObserver: MutationObserver | null = null
+    let treeObserver: MutationObserver | null = null
+    const openState = () => trigger !== null && trigger.getAttribute('aria-expanded') === 'true'
+    const syncInert = () => { host.inert = !openState() }
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Tab' || !hasOpenDialog()) return
+      if (event.key !== 'Tab' || !openState()) return
       const dialog = host.querySelector('[role="dialog"]')
       const focusables = dialog === null ? [] : [...dialog.querySelectorAll<HTMLElement>(FOCUSABLE)]
       if (focusables.length === 0) return
@@ -245,23 +251,35 @@ export function MainFrame({
           last.focus()
         }
       } else if (active === last || !host.contains(active)) {
-        // Tab：末元素 → wrap 回首元素；焦点逃逸 host（应不可达——host 为含 dialog
-        // 的子树，且 dialog 打开时 host 非 inert）→ 拉回 dialog 首元素。
+        // Tab：末元素 → wrap 回首元素；焦点逃逸 host（应不可达）→ 拉回 dialog 首元素。
         event.preventDefault()
         first.focus()
       }
     }
-    document.addEventListener('keydown', onKeyDown, true)
-    const updateInert = () => {
-      const hasDialog = hasOpenDialog()
-      if (hasDialog !== host.inert) return // inert === !hasDialog 已一致
-      host.inert = !hasDialog
+    const attachAttr = () => {
+      if (trigger === null) return
+      attrObserver = new MutationObserver(syncInert)
+      attrObserver.observe(trigger, { attributes: true, attributeFilter: ['aria-expanded'] })
+      syncInert()
     }
-    const observer = new MutationObserver(updateInert)
-    observer.observe(host, { childList: true, subtree: true })
+    document.addEventListener('keydown', onKeyDown, true)
+    if (trigger !== null) {
+      attachAttr()
+    } else {
+      // trigger 未挂（occupant 链早期）：一次性全树观察等它出现，出现即转 attributes。
+      treeObserver = new MutationObserver(() => {
+        trigger = host.querySelector('button[aria-haspopup="dialog"]')
+        if (trigger === null) return
+        treeObserver?.disconnect()
+        treeObserver = null
+        attachAttr()
+      })
+      treeObserver.observe(host, { childList: true, subtree: true })
+    }
     return () => {
-      observer.disconnect()
       document.removeEventListener('keydown', onKeyDown, true)
+      attrObserver?.disconnect()
+      treeObserver?.disconnect()
     }
   }, [])
 
