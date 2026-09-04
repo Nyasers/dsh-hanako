@@ -73,8 +73,8 @@ function mapSessionItems(sessions) {
   return items;
 }
 
-// cwd-key 编码：cwd 绝对路径 → "--" + 路径段按 "-" 连接 + "--"（如 E:\Hanako\workspace →
-// --E-Hanako-workspace--，与 dsh session-persistence 落盘目录命名一致）
+// cwd-key 编码：cwd 绝对路径 → "--" + 路径段按 "-" 连接 + "--"（如 D:\work\proj →
+// --D--work--proj--，与 dsh session-persistence 落盘目录命名一致）
 function encodeCwdKey(cwd) {
   const clean = String(cwd ?? "").replace(":", "").replace(/[\\/]/g, "-");
   return "--" + clean + "--";
