@@ -3,7 +3,7 @@
 //
 // @dsh-hanako/view 前端 client 模块（装配核心）。
 //
-// 角色（fpFullPanel V1→V2）：替代官方 ui-layout 的「root 装配者」。官方 ui-layout 从
+// 角色（fpFullPanel V1→V3）：替代官方 ui-layout 的「root 装配者」。官方 ui-layout 从
 // cordis.patch.yml roster 移除（其 AppFrame 不再抢 root），本插件接管同一套装配：
 //   inject = ['slots', 'theme', 'locale']（与官方 ui-layout client/index.ts 完全一致——
 //   slots=内置槽注册、theme=ui-theme 服务（ThemePresenter 数据源）、locale=ui-locale 服务）
@@ -13,14 +13,18 @@
 //        ui-layout 后必须由本插件 provide 等价服务。
 //     ② ctx.slots.register(root 条目, <视图组件>)——root 槽 single 语义先注册 wins，
 //        ui-layout 移除后本插件是唯一 root 注册方；register 同携四/单子槽声明 +
-//        store（createLayoutStore）+ inject 钩子 attachPanels（开放问题 2 结论）。
+//        store（视图共用官方 createLayoutStore——main 无 sidebar 几何消费面后不再需要
+//        初始态覆写，createMainLayoutStore 退役，见下）+ inject 钩子 attachPanels
+//        （开放问题 2 结论）。
 //     ③ ctx.effect(ThemePresenter)——主题快照投影 document（同官方第二 effect）。
 //   视图矩阵（frameForView 选型；URL 参数 ?dshana-view=<view>，无参 = full）：
 //     full    = 官方 AppFrame（四子槽，官方等价；无参主页面默认）
+//     main    = 自组 MainFrame（V3 修正，减法式——.dv_frame 只留 .dv_centerCol +
+//               .dv_detailsCol，无 .sidebarCol；修正 16293c5「AppFrame + sidebar:0」=
+//               rail 56 折叠态而非隐藏，见 MainFrame.tsx 文件头与下）
 //     sidebar = SidebarOnlyFrame（V2：fp 面板 embedUrl 纯侧栏——单列容器 + 仅 sidebar
 //               子槽；SidebarRoot/workspaces/settings 子槽 occupant 走 roster 官方
 //               bundle，详见 SidebarOnlyFrame.tsx 文件头）
-//     main    = V3 未实现，回退 full（warn）
 //   V2 边界如实记录（不做 V4 预实现，见 SidebarOnlyFrame.tsx「已知限制」）：
 //     sidebar.settings modal（1080x700）在本 iframe 内溢出 → 跨边联动属 V4；
 //     SidebarRoot rail toggle 只翻转 layout store 偏好（本帧不读 store 几何），无视觉效果；
@@ -61,16 +65,18 @@
 
 import { AppFrame } from "./vendor/AppFrame.tsx";
 import { SidebarOnlyFrame } from "./SidebarOnlyFrame.tsx";
+import { MainFrame } from "./MainFrame.tsx";
 import { createLayoutStore } from "./vendor/stores.ts";
 import { LayoutController } from "./vendor/service.ts";
 import { ThemePresenter } from "./vendor/theme-presenter.ts";
 
-// ---- view 参数读取（URL 三态路由；V2 已实现 full/sidebar，main 回退 full）----
+// ---- view 参数读取（URL 三态路由；V3 三态齐：full/main/sidebar）----
 // 官方 boot 不管 query，本插件直接读 location.search 的 ?dshana-view=<view>；
 // 无参 = 完整三列视图（主页面默认，等价官方 ui-layout 激活态）；
+// main = 无侧栏主视图（V3 修正：MainFrame 减法式——center + details 两列，真无 sidebar）；
 // sidebar = 纯侧栏视图（V2，manifest functionPanel.embedUrl 指向本页带该参数）。
 const FULL = "full";
-const MAIN = "main"; // V3（无侧栏主视图，本期回退 full）
+const MAIN = "main"; // V3 修正（真无侧栏主视图：MainFrame，结构无 sidebar 列/槽）
 const SIDEBAR = "sidebar"; // V2（fp 面板 embedUrl 纯侧栏）
 
 function readView() {
@@ -89,11 +95,11 @@ function readView() {
 }
 
 // root 条目的子槽声明。FULL = 官方 ui-layout client/index.ts 逐字四子槽（frame 的
-// 排他渲染权威）；SIDEBAR 只声明 sidebar——declaring is claiming：conversation/details/
-// shell.overlay 不声明则其 ui-* occupant（ui-conversation/ui-chat 等，经 slots.inject
-// 等待声明生命周期）子树不注册不挂载；数据/服务面（sessions/workspaces 等）是 service
-// 不依赖槽，照常激活。sidebar 槽内部子槽（brand/workspaces/settings/footer.action）由
-// occupant（ui-sidebar）自身的 register 声明，不受本表收窄影响。
+// 排他渲染权威）；MAIN（无侧栏主视图）与 FULL 差一子槽——不含 sidebar；SIDEBAR 只声明
+// sidebar。declaring is claiming：未声明的槽其 ui-* occupant（ui-sidebar 等，经
+// slots.inject 等待声明生命周期）子树不注册不挂载；数据/服务面（sessions/workspaces
+// 等）是 service 不依赖槽，照常激活。sidebar 槽内部子槽（brand/workspaces/settings/
+// footer.action）由 occupant（ui-sidebar）自身的 register 声明，不受本表收窄影响。
 const FULL_CHILDREN = {
   sidebar: { kind: "single", scope: "root" },
   conversation: { kind: "single", scope: "session-maybe" },
@@ -104,14 +110,35 @@ const SIDEBAR_CHILDREN = {
   sidebar: { kind: "single", scope: "root" },
 };
 
-// 视图 → root 组件装配选择。
-//   - full：官方 AppFrame（等价官方 ui-layout 激活）
-//   - sidebar（V2）：SidebarOnlyFrame（单列容器 + 官方 SidebarRoot 经 sidebar 槽渲染）
-//   - main：V3 未实现 → 回退 AppFrame 完整视图（warn，行为安全）
+// main 视图子槽声明：conversation/details/shell.overlay + **sidebar**（scope 与 FULL 同）。
+// sidebar 槽必须声明：ui-sidebar 是**直接 register**（非 ui-chat 那种 inject 惰性）——
+// 槽不声明则其 slots.register('sidebar') 抛错、整个 client 链加载失败（实机踩过）。
+// 渲染端为自组 MainFrame（减法式，.frame 只留 center/details 列），**不调
+// renderSlot('sidebar')** → ui-sidebar occupant 挂载但从不渲染，SidebarRoot/rail 图标
+// 条不进入 DOM（声明保注册、渲染决定有无）。
+const MAIN_CHILDREN = {
+  sidebar: { kind: "single", scope: "root" },
+  conversation: { kind: "single", scope: "session-maybe" },
+  details: { kind: "single", scope: "session" },
+  "shell.overlay": { kind: "list", scope: "root" },
+};
+
+// createMainLayoutStore 退役（V3 修正动因——rail ≠ 隐藏）：16293c5 曾用官方 AppFrame +
+// init sidebar:0 的 createMainLayoutStore 实现 main，实机验证官方 panels.sidebar=0 语义
+// = **56px rail 折叠态**（computeColumns 解出 SIDEBAR_COLLAPSED 56，SidebarRoot 仍在、
+// 可展开 280），不是「隐藏 sidebar」。修正后 main 用自组 MainFrame：.frame 结构上无
+// sidebar 列/槽（sidebar 槽不声明 → occupant 不挂载），store 无 sidebar 几何消费面——
+// 回归官方 createLayoutStore 即可（details 初始 0 官方默认，open/close 语义照旧）。
+
+// 视图 → root 装配选择：{ component, children, store }（store = 该视图 root 条目的排他
+// store 工厂，三视图同用官方 createLayoutStore；children = 子槽声明，declaring is
+// claiming 保 register 不炸）。full = 官方 AppFrame 四子槽；main = 自组 MainFrame +
+// 四子槽声明（sidebar 声明保 ui-sidebar register，渲染端不调 renderSlot('sidebar') →
+// 无 rail DOM）；sidebar（V2）= SidebarOnlyFrame + 仅 sidebar 子槽。
 function frameForView(view) {
-  if (view === FULL) return { component: AppFrame, children: FULL_CHILDREN };
-  if (view === SIDEBAR) return { component: SidebarOnlyFrame, children: SIDEBAR_CHILDREN };
-  return { component: AppFrame, children: FULL_CHILDREN }; // V3 main 回退：完整视图兜底
+  if (view === FULL) return { component: AppFrame, children: FULL_CHILDREN, store: createLayoutStore }
+  if (view === MAIN) return { component: MainFrame, children: MAIN_CHILDREN, store: createLayoutStore }
+  return { component: SidebarOnlyFrame, children: SIDEBAR_CHILDREN, store: createLayoutStore }
 }
 
 // ---- 客户端服务注入：slots（root 注册）+ theme（ThemePresenter 快照）+ locale（t）----
@@ -120,24 +147,15 @@ function frameForView(view) {
 const inject = ["slots", "theme", "locale"];
 
 /**
- * 客户端插件主体：provide layout 服务 + 注册 root（按视图选型帧：full=AppFrame、
- * sidebar=SidebarOnlyFrame）+ theme DOM 投影。
+ * 客户端插件主体：provide layout 服务 + 注册 root（按视图选型帧：full=AppFrame（官方
+ * 四子槽）、main=MainFrame（减法式两列无侧栏）、sidebar=SidebarOnlyFrame（单列）；store
+ * 三视图共用官方 createLayoutStore）+ theme DOM 投影。
  * @param ctx - 客户端根 context。
  */
 function apply(ctx) {
   const view = readView();
   const layout = new LayoutController();
-  const { component: RootView, children } = frameForView(view);
-  if (view === MAIN) {
-    // V3 未实现 main 视图：回退完整视图（行为 = 官方等价），实机无感。
-    try {
-      console.warn(
-        "[@dsh-hanako/view] dshana-view=main 尚未实现（V2 含 full/sidebar），本次回退官方完整视图",
-      );
-    } catch {
-      /* 日志失败不阻断 */
-    }
-  }
+  const { component: RootView, children, store } = frameForView(view);
 
   // effect 1：layout 服务 + root 注册（open question 2 结论的 ①②③ 一个 register 全给：
   // provide 用 ctx.reflect（官方同款），register 携 children/store/inject-钩子 attachPanels）。
@@ -148,9 +166,10 @@ function apply(ctx) {
         name: "root",
         locale: "common",
         children,
-        // 排他 store 席位：工厂本身（框架按条目实例化，AppFrame 经 useStore/actions 标准
-        // props 拿实例）——与官方 register 同语义（stores.ts 工厂）。
-        store: createLayoutStore,
+        // 排他 store 席位：官方 createLayoutStore 工厂（三视图同用，frameForView 携带）。
+        // 框架按条目铸 handle 并实例化，帧组件经 useStore/actions 标准 props 拿实例——
+        // 与官方 register 同语义（stores.ts 工厂）。
+        store,
         // 钩子唯一副作用 = 把 root store 的 bound actions 接给 ctx.layout 门面（官方
         // attachPanels 语义；会话/业务动作属各占位者，不在此接）。
         inject: (actions) => {
