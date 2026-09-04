@@ -183,13 +183,17 @@ export function createSyncCore(opts) {
   /** 列表订阅回调（createSnapshotStore subscribe 无参回调，侦听器自读快照）。 */
   function onListChanged() {
     if (disposed) return;
-    const snap = list.getSnapshot();
-    maybeApplyPending();
+    // 先 gate booted（phase 判定不依赖后续快照），再 maybeApplyPending——pending 补开
+    // （远端 select 目标本端暂缺 → open）会改变 current/sentValue，之后必须重读快照，
+    // 否则 value 取自补开前的旧快照，sentValue 与真实 current 脱节（后续误标 live
+    // 广播 + 忽略 boot 致对端无法收敛）。
     const firstReady = !booted;
     if (!booted) {
-      if (snap.phase !== 'ready') return;
+      if (list.getSnapshot().phase !== 'ready') return;
       booted = true;
     }
+    maybeApplyPending();
+    const snap = list.getSnapshot();
     const value = currentOf(snap);
     // 值去重：与上次已同步值一致 → 不广播（含对端冗余回声终止点）。
     if (sentAnything && value === sentValue) return;

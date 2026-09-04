@@ -212,6 +212,10 @@ test("pending 补开：远端 select 先于本端 baseline 到达 → baseline �
   deliver();
   await flush();
   assert.equal(b.current(), "late", "B 在 baseline 后补开 A 宣告的会话");
+  // 补开落定后 sentValue 必须与真实 current 对齐（CodeRabbit #70）：snap 若取自
+  // maybeApplyPending 之前会脱节——后续无关 list 通知误标 live 广播 + 忽略 boot 致
+  // 对端无法收敛。
+  assert.equal(b.core._debug().sentValue, "late", "pending 补开后 sentValue 与 current 对齐");
   a.core.dispose(); b.core.dispose();
 });
 
