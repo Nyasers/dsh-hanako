@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// scripts/version-common.mjs — 版本域共享模块（根级通用：bump/syncver/postbump 复用）
+// scripts/version-common.mjs — 版本域共享模块（根级通用：version-hook/syncver/changelog 复用）
 // 布局原则：跨脚本共享/流程性构件放根级（scripts/），领域特有随源码（src-cordis/build）。
 // 提供 cordis 包清单（src-cordis 顶层 roster bundle + plugins/*）与派生同步目标
-// （manifest + cordis 包）——版本单一事实源 = 主 package.json（bump 是改版本唯一入口，
-// 派生同步见 scripts/syncver.mjs）。
+// （manifest + cordis 包）——版本单一事实源 = 主 package.json（pnpm version 是改版本唯一入口，
+// 派生同步见 scripts/syncver.mjs，git 收口见 scripts/version-hook.mjs）。
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -31,7 +31,7 @@ export function derivedVersionTargets() {
   return ["src/manifest.json", ...cordisPkgPaths()];
 }
 
-// 版本文件全集（含主 package.json——postbump 提交范围用：bump 已改主待提交）
+// 版本文件全集（含主 package.json——version-hook 提交范围用：pnpm version 已改主待收口）
 export function versionCommitFiles() {
   return ["package.json", ...derivedVersionTargets()];
 }
