@@ -61,6 +61,25 @@ export function SidebarOnlyFrame(props: {
   // ResizeObserver 首报即校正为容器实测宽；宿主面板宽度可调，观察持续跟随。
   const [width, setWidth] = useState(() => window.innerWidth)
 
+  // sidebar 减法（logoRow）：fp 窄栏顶部品牌 logo 行（SidebarRoot logoRow——wide 态 = brand/
+  // New Session 快捷）在宿主 fp 面板冗余，剪除。官方 class 为 css-modules hash_local 产物
+  // （如 hHd-Xa_logoRow），local 名后缀稳定 → [class$="_logoRow"] 属性后缀匹配不受 hash
+  // 变化影响；作用域限定本帧 data-sidebar-frame，不影响 full 视图的 sidebar 列。
+  // 样式动态注入（style 标签 + !important 压官方 css 注入序），卸载即清。
+  useEffect(() => {
+    if (typeof document === 'undefined') return
+    const tagId = 'dshana-sidebar-subtract-logoRow'
+    if (document.querySelector('style[data-dshana-subtract="' + tagId + '"]') !== null) return
+    const tag = document.createElement('style')
+    tag.dataset.dshanaSubtract = tagId
+    tag.textContent =
+      '[data-sidebar-frame] [class$="_logoRow"] { display: none !important }'
+    document.head.appendChild(tag)
+    return () => {
+      try { if (tag.parentNode) tag.parentNode.removeChild(tag) } catch { /* 已脱离 */ }
+    }
+  }, [])
+
   // 容器框级测量（同 AppFrame frame 自测语义：rAF 节流 + 取边框盒宽）。
   useEffect(() => {
     const el = frameRef.current
@@ -82,7 +101,12 @@ export function SidebarOnlyFrame(props: {
   }, [])
 
   return (
-    <div ref={frameRef} className={css.frame} style={{ gridTemplateColumns: 'minmax(0, 1fr)' }}>
+    <div
+      ref={frameRef}
+      className={css.frame}
+      data-sidebar-frame=""
+      style={{ gridTemplateColumns: 'minmax(0, 1fr)' }}
+    >
       {/* 减法：.frame 内只留官方 .sidebarCol 列（fill/边框/裁剪上下文与 full 视图 sidebar
           列同构），center/details 列从结构上减除；sidebar 槽渲染点 collapsed 恒 false
           （fp 面板唯一内容面，无 rail 语义），width = 容器实测宽直通 SidebarRoot。 */}
