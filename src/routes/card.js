@@ -118,8 +118,18 @@ function rebuildOpFromLog(dataDir, sessionId, rpcId) {
     else if (ev.type === "user/message" && ev.data?.source?.kind === "user")
       prompts.push(ev);
   }
-  const idx = prompts.findIndex((u) => u.data?.source?.rpcId === rpcId);
-  if (idx < 0) return null;
+  let idx = prompts.findIndex((u) => u.data?.source?.rpcId === rpcId);
+  if (idx < 0) {
+    // ACP 通道兑底：ACP 会话的 jsonl 里 user/message 无 source.rpcId（ACP 协议无
+    // requestId 概念——rpcId 是 HTTP client-request 信封才注入的宿主侧键）。特征 =
+    // 全部 user prompt 都无 rpcId——此时退化取最后一个 prompt（最近任务，当前任务
+    // 卡片场景即命中）；HTTP 会话（prompt 带 rpcId）匹配失败仍判不存在（原行为）。
+    if (prompts.length && prompts.every((u) => u.data?.source?.rpcId == null)) {
+      idx = prompts.length - 1;
+    } else {
+      return null;
+    }
+  }
   const prompt = prompts[idx];
   const startSeq = prompt.seq;
   const endSeq = idx + 1 < prompts.length ? prompts[idx + 1].seq : Infinity;
