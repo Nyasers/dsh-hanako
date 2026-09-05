@@ -62,26 +62,41 @@ export async function mountAcp(ctx, { dshHome, emitLog }) {
   const log = (msg) => {
     try { emitLog?.("hana", "[dsh acp] " + msg); } catch { /* noop */ }
   };
-  // ---- L4：审批反向应答（request_permission）----
-  // DSH agent 越界/敏感工具调用 → ctx approval/request → dsh-acp 插件转
-  // session/request_permission 请求发 client（options: allow-once / reject-once，映射
-  // 见 dsh-acp index.ts requestPermission）。宿主应答 = onRequest handler 返回
-  // { outcome }——本 handler 挂起等宿主决策：审批上下文存 g.ops.activeApprovals
-  //（approve.js dsh_approve 工具查同一表——ap._respond resolve 本 pending）；超时
-  // 自动拒绝（approvalTimeoutSec）；无活动任务（op 缺失/终态）默认拒绝（安全）。
-  async function handleRequestPermission({ params, requestId }) {
+  // ---- L4：审批应答（approval/request ctx global waterfall）----
+  // DSH agent 越界/敏感工具 → ApprovalService.decide → ctx.waterfall(scopeTarget(agent),
+  // 'approval/request', req, ...)——agent-scope 过滤，普通 ctx.on（无 global）因 context
+  // filter 收不到（实证：宿主与 dsh-acp 的无 scope ctx.on 均静默；dsh-acp 的
+  // request_permission 转发也因此从不触发）。EventOptions.global: true = 无视 context
+  // filter 收所有 agent 的 scope 事件。listener 返回 ApprovalOutcome（allowed-once /
+  // rejected / cancelled / unavailable）= 认领请求（不调 next）——宿主决策即审批结果，
+  // 零端口（不经 ACP request_permission / HTTP respond）。
+  // req: { agent, toolName, callId?, reason?, signal? }（ApprovalRequestEvent）。
+  async function approvalAnswerer(req, next) {
     const g = getSingleton();
-    const sessionId = params && params.sessionId;
-    const callId = params && params.toolCall && params.toolCall.toolCallId;
+    const sessionId =
+      req && req.agent && req.agent.session ? req.agent.session.id : null;
+    const callId = (req && req.callId) || null;
     const cached = callId ? toolCache.get(callId) : null;
-    const approvalId = String(
-      requestId ?? callId ?? "req-" + Date.now(),
-    );
+    const toolName =
+      (req && req.toolName) || (cached && cached.name) || "tool";
+    const approvalId = String(callId || "req-" + Date.now());
+    try {
+      g?.appendLog?.(
+        "hana",
+        `[dsh acp] 审批请求收到（session=${String(sessionId || "?").slice(0, 12)} tool=${toolName} id=${approvalId.slice(0, 24)}）`,
+      );
+    } catch { /* 日志失败不阻断 */ }
     const op =
       g && typeof g.ops?.get === "function" ? g.ops.get(sessionId) : null;
     if (!op || !Array.isArray(op.activeApprovals)) {
-      // 无活动任务/协调条目缺失（任务已终态/未知会话）：默认拒绝（安全）
-      return { outcome: { outcome: "selected", optionId: "reject-once" } };
+      // 无活动任务/协调条目缺失（任务已终态/未知会话）：认领并默认拒绝（安全）
+      try {
+        g?.appendLog?.(
+          "hana",
+          `[dsh acp] 审批无活动任务（op=${op ? "有但无表" : "无"}）——默认拒绝`,
+        );
+      } catch { /* 日志失败不阻断 */ }
+      return "rejected";
     }
     let settle = null;
     const pending = new Promise((resolve) => {
@@ -91,9 +106,9 @@ export async function mountAcp(ctx, { dshHome, emitLog }) {
       approvalId,
       eventId: approvalId,
       sessionId,
-      toolName: (cached && cached.name) || "tool",
-      callId: callId ?? null,
-      reason: null,
+      toolName,
+      callId,
+      reason: (req && req.reason) || null,
       args: cached ? cached.args : null,
       status: "pending",
       requestedAt: new Date().toISOString(),
@@ -102,17 +117,31 @@ export async function mountAcp(ctx, { dshHome, emitLog }) {
         const s = settle;
         settle = null;
         try {
-          s({
-            outcome: {
-              outcome: "selected",
-              optionId:
-                outcomeStr === "allowed-once" ? "allow-once" : "reject-once",
-            },
-          });
+          s(outcomeStr === "rejected" ? "rejected" : "allowed-once");
         } catch { /* 已 settle 忽略 */ }
       },
     };
     op.activeApprovals.push(approval);
+    try {
+      g?.appendLog?.(
+        "hana",
+        `[dsh acp] 审批已挂起（id=${approvalId.slice(0, 24)}）——等宿主应答`,
+      );
+    } catch { /* 日志失败不阻断 */ }
+    // 审批请求取消（会话 abort/cancel）→ 返回 cancelled（waterfall 认领）
+    const signal = req && req.signal;
+    const onAbort = () => {
+      try {
+        approval._respond("cancelled");
+        approval.status = "answered";
+        approval.outcome = "cancelled";
+        approval.answeredAt = new Date().toISOString();
+      } catch { /* 忽略 */ }
+    };
+    if (signal) {
+      if (signal.aborted) onAbort();
+      else signal.addEventListener("abort", onAbort, { once: true });
+    }
     // 超时自动拒绝（approvalTimeoutSec 秒无人应答；0/不可读 = 禁用）
     try {
       const ats = resolveApprovalTimeoutSec({ dataDir: g?.dataDir });
@@ -127,7 +156,7 @@ export async function mountAcp(ctx, { dshHome, emitLog }) {
         }, ats * 1000);
         approval._cancelTimer = () => clearTimeout(timer);
       }
-    } catch { /* 超时表不可用禁用（等待 approve.js/会话终局兑底） */ }
+    } catch { /* 超时表不可用禁用 */ }
     // 宿主 Agent 审批通知（interlude 插话——bus/sessionPath/rpcId/task 经 op 条目
     // 由 run.js createOpEntry 提交上下文补齐；通知失败不阻断——审批仍可经 dsh_approve）
     try {
@@ -140,6 +169,14 @@ export async function mountAcp(ctx, { dshHome, emitLog }) {
       });
     } catch { /* 通知失败不阻断 */ }
     return pending;
+  }
+  // 注册 global waterfall listener（无视 agent-scope filter——收所有审批）；返回 outcome
+  // = 认领（不调 next——审批服务 decide 拿宿主决策）。
+  try {
+    ctx.on("approval/request", approvalAnswerer, { global: true });
+    log("审批应答已挂（approval/request global listener）");
+  } catch (e) {
+    log("审批应答挂载失败：" + ((e && e.message) || e));
   }
 
   // 依赖沿 DSH 树解析（dsh realpath → dsh-acp-app → dsh-acp + SDK——见文件头注释），
@@ -183,7 +220,7 @@ export async function mountAcp(ctx, { dshHome, emitLog }) {
   });
   log("插件已挂载（provider=" + (acpConfig.provider || "?") + " model=" + (acpConfig.model || "?") + "）");
   // 宿主侧 client：注册 session/update 通知缓冲（指令进展事件）与审批反向应答
-  //（L4：request_permission——DSH agent 越界/敏感工具审批，见 handleRequestPermission）。
+  //（L4：审批应答——ctx approval/request global waterfall，见 approvalAnswerer）。
   // update 同时缓存 tool_call 的 title/rawInput（审批决策信息源——request_permission
   // 请求只带 toolCallId，name/args 从 tool_call update 补）。
   const updateQueue = [];
@@ -192,6 +229,14 @@ export async function mountAcp(ctx, { dshHome, emitLog }) {
   const clientApp = createAcpClientApp({ name: "dsh-hanako-host" })
     .onNotification(methods.client.session.update, ({ params }) => {
       const update = params && params.update;
+      try {
+        const sid = (params && params.sessionId) || "?";
+        const ut = (update && update.sessionUpdate) || "?";
+        getSingleton()?.appendLog?.(
+          "hana",
+          `[dsh acp] session/update 收到（session=${String(sid).slice(0, 12)} type=${ut}）`,
+        );
+      } catch { /* 日志失败不阻断 */ }
       if (update && typeof update === "object" && update.sessionUpdate === "tool_call") {
         if (update.toolCallId) {
           let args = null;
@@ -214,11 +259,7 @@ export async function mountAcp(ctx, { dshHome, emitLog }) {
       if (updateWaiters.length) updateWaiters.shift()(params);
       else updateQueue.push(params);
       return Promise.resolve();
-    })
-    .onRequest(
-      methods.client.session.requestPermission,
-      handleRequestPermission,
-    );
+    });
   const connection = clientApp.connect(clientStream);
   const client = connection.agent;
   // initialize 握手验证（协议面通 = 挂载成功门槛；失败抛错由调用方降级）。
