@@ -244,10 +244,6 @@ function buildShell({
 
 export default function registerWebuiRoutes(app, ctx) {
   const base = "/api/plugins/" + ctx.pluginId;
-  // 端口：manifest 默认 + 用户配置合并后的 ctx.config；非对象容错回退 3080
-  const cfg =
-    ctx && typeof ctx.config === "object" && ctx.config ? ctx.config : {};
-  const port = Number(cfg.webPort) || 3080;
 
   // 页面（父子双卡，见文件头）：主卡 /main 与子卡 /sidebar 共用同一壳页与自举逻辑，仅
   // iframe 的 view 参数不同（/main → main 视图 = 接收端 receive；/sidebar → sidebar 视图
@@ -262,10 +258,14 @@ export default function registerWebuiRoutes(app, ctx) {
   // （dsh 3080）iframe 同源直嵌提供，无浏览器端劫持/改写。
 
   const page = (view) => async (c) => {
-    // 壳页：iframe 直嵌 @dsh-hanako/app 子插件（dsh 3080）serve 的 fork SPA——
+    // 壳页：iframe 直嵌 @dsh-hanako/app 子插件（DSH server）serve 的 fork SPA——
     // iframe 内同源（资源/API/SSE/WS 全由子插件提供，免鉴权，无劫持无 token/PSS）；
     // 宿主只做页面壳：就绪事件化 / 自举状态 / 主题与剪贴板桥（全部在壳页 JS 里）。
     const ready = busReady();
+    // 随机端口（listen 0 语义，2026-09-06）：实际端口 boot 后写 g.web.port；渲染时动态
+    // 解析（ready 后 g.web 必在，port 已读回）。3080 仅为理论兜底（无 webPort 配置项了）。
+    const g = globalThis.__dshHanako;
+    const port = g?.web?.port || 3080;
     const hc = c.req.query("hana-css") || "";
     const th = c.req.query("hana-theme") || "inherit";
     const hcLink = hc ? `<link rel="stylesheet" href="${esc(hc)}">` : "";

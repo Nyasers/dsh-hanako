@@ -654,7 +654,10 @@ export async function ensureWebHost(cfg) {
   // 写 process.env.DSHANA_BUS_SECRET（同进程共享，bridge 读）；重启即换新 secret。
   g.busSecret = randomUUID();
   mkdirSync(cfg.dataDir, { recursive: true });
-  const port = Number(cfg.webPort) || 3080;
+  // 随机端口（listen 0 语义，2026-09-06 refactor/random-port）：webPort 配置项已删，
+  // DSH 以 port 0 boot（系统分配空闲端口），boot 后从 webServer service 读回实际监听端口
+  // （resolveActualPort）写 g.web.port——总线/探测/iframe 全链跟随实际端口。
+  const port = 0;
   // 当前会话日志 = 时间戳会话文件（index.js onload 已初始化单例 g.logPath）。
   // 单例优先；index.js 未初始化（冷启动边缘）时兜底自建。写进 web/logLastExit/错误消息供诊断。
   const logPath = g.logPath || newWebLogPath(cfg.dataDir);
@@ -665,6 +668,24 @@ export async function ensureWebHost(cfg) {
   return bootInproc(cfg, { pkgDir, dshHome, port, logPath });
 }
 // ---- T7b：进程内 boot dsh（动态 import + runProfile，webserver 保留在进程内 bind）----
+/** 读回 webServer service 的实际监听端口（listen 0 语义：系统分配后从此取真实端口）。
+ * 官方 service.port getter = 实际监听端口；防御性 fallback 探 _server.address()。
+ * 读不到返回 0（保持 port 0 → waitWebReady 探测超时显式失败，属异常路径）。 */
+function resolveActualPort(web) {
+  try {
+    const ctx = web && web.ctx;
+    if (!ctx) return 0;
+    const svc = typeof ctx.get === "function" ? ctx.get("webServer") : ctx.webServer;
+    if (!svc) return 0;
+    if (typeof svc.port === "number" && svc.port > 0) return svc.port;
+    const srv = svc._server || (svc.server && svc.server._server);
+    if (srv && typeof srv.address === "function") {
+      const a = srv.address();
+      if (a && typeof a === "object" && a.port) return a.port;
+    }
+  } catch { /* 读端口失败走 0 */ }
+  return 0;
+}
 async function bootInproc(cfg, { pkgDir, dshHome, port, logPath }) {
   const g = getSingleton();
   const emitLog = (src, d) => {
@@ -704,12 +725,20 @@ async function bootInproc(cfg, { pkgDir, dshHome, port, logPath }) {
       });
       web.ctx = r.ctx;
       web.shutdown = r.shutdown;
-      emitLog("hana", `[dsh web] 进程内 boot 完成（ctx=${!!r.ctx} shutdown=${typeof r?.shutdown}，webserver ${port} 存活）`);
+      // port 0（listen 0 语义）：系统分配随机端口，boot 后从官方 webServer service 读回
+      // 实际监听端口（官方 service.port getter = 实际监听端口）。读回失败（服务未暴露）
+      // 保持 0——waitWebReady 探测会超时并给出带 stderr 的诊断，属异常路径显式失败。
+      const actual = resolveActualPort(web);
+      if (actual > 0 && actual !== port) {
+        web.port = actual;
+        emitLog("hana", `[dsh web] 随机端口已分配：${actual}`);
+      }
+      emitLog("hana", `[dsh web] 进程内 boot 完成（ctx=${!!r.ctx} shutdown=${typeof r?.shutdown}，webserver ${web.port} 存活）`);
       // 就绪探测必须与 boot 同 try：就绪失败（超时/握手失败）时 web.ctx 仍持有
       // 进程内 cordis 树 + 占用端口——不回收则 g.web 被 ensureWebHost 清掉后引用
       // 丢失，重试必 EADDRINUSE 直到重启 Hana（CodeRabbit Major：spawn 路径可杀子进程
       // 自愈，进程内路径必须显式 dispose）。
-      return await waitWebReady(web, port, emitLog, cfg);
+      return await waitWebReady(web, web.port, emitLog, cfg);
     } catch (e) {
       web.bootError = e;
       web.stderr = String(e?.stack || e?.message || e).slice(0, STDERR_CAP);
