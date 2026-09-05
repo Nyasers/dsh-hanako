@@ -284,6 +284,12 @@ export async function translateRpcRequest(req, port, reply) {
 // ---- 插件 apply：注册 upgrade 路由 + 提供 dshanaBus 服务（全程容错，降级不阻断）----
 export function apply(ctx, config) {
   try {
+    // 模块级 logger（翻译器等模块级函数诊断用）
+    try {
+      moduleLogger = ctx.logger || null
+    } catch {
+      moduleLogger = null
+    }
     // launchToken：从 connection 服务（HostConnectionService）的 BrowserAuth 读
     // （dsh 0.1.2+ 浏览器鉴权进程令牌），自环 RPC 用它换 cookie。旧版 dsh 无此
     // 服务 → 保持空，自环免鉴权兼容（改造前行为）。
@@ -492,8 +498,25 @@ export function apply(ctx, config) {
             ready: !!conn && conn.readyState === 1,
             path: BUS_PATH,
           }),
-          // 宿主下发的配置（未下发返回 null——settings/provider 据此报「总线配置未就绪」）
-          getConfig: () => (busConfig ? { ...busConfig } : null),
+          // 宿主下发的配置（总线形态：握手后 config 帧下发）。总线退役（refactor/
+          // bus-inproc）后宿主不再连 dshana.bus——同进程形态兑底：读 process.env
+          //（宿主 boot 前注入 DSHANA_ROOT = DSH 包与依赖根（插件根）/ DSHANA_HOME =
+          // 宿主数据目录；DSH_HOME 官方名 = DSHANA_HOME/dsh-home），settings/
+          // provider/app 的 dshPkgDir/dataDir 消费不再依赖总线 config。env 也缺
+          //（极端情况）返回 null（调用方原有「未就绪」语义保留）。
+          getConfig: () => {
+            if (busConfig) return { ...busConfig };
+            const envDshPkgDir = process.env.DSHANA_ROOT;
+            const envDataDir = process.env.DSHANA_HOME;
+            if (typeof envDshPkgDir === 'string' && envDshPkgDir) {
+              return {
+                dshPkgDir: envDshPkgDir,
+                dataDir:
+                  typeof envDataDir === 'string' && envDataDir ? envDataDir : null,
+              };
+            }
+            return null;
+          },
         }
         // ---- 总线 RPC 接线：订阅宿主 rpc.request → 翻译器执行 → 回投 rpc.result ----
         // service.on 的监听器异常隔离是每回调包装（新订阅沿用该模式）；翻译器内部

@@ -544,23 +544,31 @@ async function loadInprocDsh(pkgDir) {
 }
 
 // ---- T7b 进程内 boot：进程级 env 管理 ----
-// 进程内形态 dsh 与宿主同进程：boot 前把 DSH_HOME / DSHANA_BUS_SECRET 写入
-// process.env（dsh 侧 loadProfile / resolveDshHome / bridge 凭据读同一 env，
-// 与 spawn 注入子进程 env 语义等价），dispose 后恢复原值（不留污染）。
-let inprocEnv = null; // { DSH_HOME?, DSHANA_BUS_SECRET? } 原值快照（undefined = 未设置）
-function setInprocEnv(dshHome, busSecret) {
+// 进程内形态 dsh 与宿主同进程：boot 前把 DSH_HOME（官方契约，dsh 运行时
+// resolveDshHome/loadProfile 读）/ DSHANA_ROOT（DSH 包与依赖根 = 插件根，
+// loadDeps 基座与版本/资源路径）/ DSHANA_HOME（数据家目录 = 宿主 dataDir，
+// settings 的 update-status/dataDir 消费）/ DSHANA_BUS_SECRET 写入 process.env
+//（与 spawn 注入子进程 env 语义等价），dispose 后恢复原值（不留污染）。
+// 总线 config 下发退役后，DSH 侧 dshanaBus.getConfig() 的兑底即读这三个 env
+//（同进程直给，不再依赖总线握手）。
+let inprocEnv = null; // { DSH_HOME?, DSHANA_ROOT?, DSHANA_HOME?, DSHANA_BUS_SECRET? } 原值快照
+function setInprocEnv(dshHome, dataDir, dshPkgDir, busSecret) {
   inprocEnv = {
     DSH_HOME: process.env.DSH_HOME,
+    DSHANA_ROOT: process.env.DSHANA_ROOT,
+    DSHANA_HOME: process.env.DSHANA_HOME,
     DSHANA_BUS_SECRET: process.env.DSHANA_BUS_SECRET,
   };
   process.env.DSH_HOME = dshHome;
+  process.env.DSHANA_ROOT = dshPkgDir;
+  process.env.DSHANA_HOME = dataDir;
   process.env.DSHANA_BUS_SECRET = busSecret;
 }
 function restoreInprocEnv() {
   if (!inprocEnv) return;
   const prev = inprocEnv;
   inprocEnv = null;
-  for (const k of ["DSH_HOME", "DSHANA_BUS_SECRET"]) {
+  for (const k of ["DSH_HOME", "DSHANA_ROOT", "DSHANA_HOME", "DSHANA_BUS_SECRET"]) {
     if (prev[k] === undefined) delete process.env[k];
     else process.env[k] = prev[k];
   }
@@ -706,10 +714,14 @@ async function bootInproc(cfg, { pkgDir, dshHome, port, logPath }) {
     disposed: false,
     bootError: null,
   };
-  // 进程内形态：dsh 与宿主同进程——boot 前把 DSH_HOME / DSHANA_BUS_SECRET 写入
-  // process.env（dsh 侧 loadProfile / resolveDshHome / bridge 凭据读同一 env，
-  // 与 spawn 注入子进程 env 语义等价），dispose 后恢复（见 closeProcess / restoreInprocEnv）。
-  setInprocEnv(dshHome, g.busSecret);
+  // 进程内形态：dsh 与宿主同进程——boot 前把 DSH_HOME / DSHANA_ROOT /
+  // DSHANA_HOME / DSHANA_BUS_SECRET 写入 process.env（dsh 侧 loadProfile /
+  // resolveDshHome / settings-provider 的 config 兑底（dshanaBus.getConfig 无总线
+  // 时读 env）/ bridge 凭据读同一 env，与 spawn 注入子进程 env 语义等价），dispose
+  // 后恢复（见 closeProcess / restoreInprocEnv）。DSHANA_ROOT = DSH 包与依赖根
+  //（插件根，loadDeps 基座），DSHANA_HOME = 宿主 dataDir——同进程直给，不再依赖
+  // 总线 config 下发（总线已退役）。
+  setInprocEnv(dshHome, cfg.dataDir, cfg.dshPkgDir || pkgDir, g.busSecret);
   const readyPromise = (async () => {
     try {
       const { profileBoot, bootEntry, appBoot, appBootEntry } = await loadInprocDsh(pkgDir);
