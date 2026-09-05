@@ -238,7 +238,19 @@ export function MainFrame({
     const syncInert = () => {
       const open = openState()
       host.inert = !open
-      if (!open && document.activeElement instanceof HTMLElement && host.contains(document.activeElement)) {
+      if (open) {
+        // 官方 open 焦点（SettingsPanel useEffect focus close）在 React effect 跑——早于
+        // 本 attr observer 解除 inert → focus 被 inert 静默阻止，焦点滞留原文档（跨 iframe
+        // 场景 = sidebar 卡焦点未转移）。inert 解除后主动把焦点移进 dialog（首个 focusable
+        // ——nav 首行/close 同属 dialog 内，WAI modal 语义：打开时焦点进 dialog）。跨 iframe
+        // 焦点转移由浏览器处理（focus 跨文档）。已在内（官方 focus 成功）则不动。
+        const dialog = host.querySelector('[role="dialog"]')
+        const first = dialog === null
+          ? null
+          : dialog.querySelector<HTMLElement>(FOCUSABLE)
+        const activeInHost = document.activeElement !== null && host.contains(document.activeElement)
+        if (first !== null && !activeInHost) first.focus()
+      } else if (document.activeElement instanceof HTMLElement && host.contains(document.activeElement)) {
         // 官方 close 恢复焦点到 trigger（SettingsRoot wasOpen→focus），main 视图 trigger
         // 在屏幕外宿主内 → 焦点指示消失、Tab 卡住。移出宿主：blur → 焦点落 body，
         // 下次 Tab 从文档序正常进入可见 UI（宿主 inert 已被跳过）。
