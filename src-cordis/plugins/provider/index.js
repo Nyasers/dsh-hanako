@@ -460,54 +460,38 @@ export async function apply(ctx, config) {
       }
     };
 
-    // ---- 宿主 push 通知（dshana.bus 消息总线）----
-    ctx.inject(["dshanaBus"], (busCtx) => {
-      busCtx.effect(() => {
-        const disposers = [];
+    // ---- 宿主 push 通知（总线退役后 ctx 事件：cordis ctx.on 直收，宿主经
+    // g.web.ctx.emit('dshana/provider-push') 广播——见 src/lib/lifecycle.js
+    // pushProviderRoutes）----
+    ctx.on("dshana/provider-push", (payload) => {
+      try {
+        const p = payload && typeof payload === "object" ? payload : {};
+        const routes = Array.isArray(p.routes) ? p.routes : null;
+        refresh("宿主 push（ctx）", { routes });
+        providerLog(
+          "收到 provider-push 事件（宿主 push（ctx）" +
+            (Array.isArray(p.routes)
+              ? "，" + p.routes.length + " 条 routes"
+              : "，路由缺失") +
+            "）",
+        );
+      } catch (e) {
         try {
-          if (busCtx.dshanaBus && typeof busCtx.dshanaBus.on === "function") {
-            disposers.push(
-              busCtx.dshanaBus.on("provider.refresh", (payload) => {
-                const p = payload && typeof payload === "object" ? payload : {};
-                const routes = Array.isArray(p.routes) ? p.routes : null;
-                refresh("宿主 push（总线）", { routes });
-                providerLog(
-                  "收到 provider.refresh 事件（宿主 push" +
-                  (Array.isArray(p.routes)
-                    ? "，" + p.routes.length + " 条 routes"
-                    : "，路由缺失") +
-                  "）",
-                );
-              }),
-            );
-            try {
-              if (typeof busCtx.dshanaBus.emit === "function") {
-                busCtx.dshanaBus.emit("provider.refresh.request", {});
-              }
-            } catch {
-              /* 请求失败不阻断（宿主补推兜底） */
-            }
-          }
-        } catch (e) {
-          try {
-            ctx.logger?.warn?.(
-              "[@dsh-hanako/provider] provider.refresh 订阅失败：" + (e?.message || e),
-            );
-          } catch {
-            /* 日志失败不阻断 */
-          }
+          ctx.logger?.warn?.(
+            "[@dsh-hanako/provider] provider-push 处理失败：" + (e?.message || e),
+          );
+        } catch {
+          /* 日志失败不阻断 */
         }
-        return () => {
-          for (const dispose of disposers) {
-            try {
-              dispose();
-            } catch {
-              /* 清理失败不阻断 */
-            }
-          }
-        };
-      });
+      }
     });
+    // 订阅建立后请求重放（覆盖宿主首批 push 早于本订阅的窗口）：ctx.emit 请求，宿主
+    // ctx.on('dshana/provider-refresh-request') 收后重推
+    try {
+      ctx.emit("dshana/provider-refresh-request", {});
+    } catch {
+      /* 请求失败不阻断（宿主就绪点已主动推） */
+    }
 
     // 启动 snapshot 置空：首个 provider 由宿主 web host 就绪后主动 push 填上。
     // 兼容旧版 config.routesJSON（旧 patch 注入残留）仍可作初始 snapshot。

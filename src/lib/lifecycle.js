@@ -66,7 +66,7 @@ import {
 // 种子模板为独立文件 src-cordis/seed（构建期复制 dist/cordis/seed）；设计
 // specs/current/dshana-profile-bundle/spec.md）：
 import { ensureProfileSeeded } from "./profile-seed.js";
-import { connectBus, closeBus, setBusConfigProvider } from "./bus.js";
+import { closeBus } from "./bus.js";
 
 const STDERR_CAP = 8192;
 const PORT_READY_TIMEOUT_MS = 60000; // web host 端口就绪等待上限
@@ -799,30 +799,14 @@ async function waitWebReady(web, port, emitLog, cfg) {
         web.ready = true;
         // 新进程就绪：清掉上次退出记录（持久字段只反映最近一次退出）
         g.webLastExit = null;
-        // dshana.bus 消息总线：同一就绪点连接（bridge 段随 patch 挂载，子插件注册了
-        // /api/dshana.bus upgrade 路由）。connectBus 幂等 + 内部退避重连（连接失败不阻断
-        // dsh 启动——更新请求信道降级：settings 报「消息总线未连接」，check-version 走 dsh 侧
-        // 直查不受影响）。不 await，页面/任务不阻塞。
-        try {
-          connectBus({ webPort: port });
-          // bus.ready 补推接线（幂等，只挂一次）：总线连接成功后如有待补推 routes
-          // 立即补推（connectBus 是异步建连，pushProviderRoutes 在握手前调用必然
-          // 未送达记 pending——补推监听必须与 connectBus 同一就绪点挂上，否则工具
-          // 路径（ensureWebHost）不经过 startWebHostFromPlugin 时待补推永不到达）。
-          wireProviderPushOnBusReady();
-          // config 下发 provider（替代 patch config 注入）：hello-ok 后自动发 config 帧
-          // （dshPkgDir/dataDir），settings/provider 子插件经 dshanaBus.getConfig() 取路径。
-          // 每次握手重发，覆盖 web host 重启后新 bridge 实例。
-          setBusConfigProvider(() => ({
-            dshPkgDir: cfg.dshPkgDir || resolveDshPkgDir(cfg),
-            dataDir: cfg.dataDir,
-          }));
-        } catch (e) {
-          g.appendLog?.("hana", "[dshana.bus] 连接失败：" + (e?.message || e));
-        }
-        // provider 路由推送走总线（替代 /api/hana-provider.refresh HTTP push，任务 G）：
-        // 唯一新进程就绪点主动推一次最新 routes（任意 spawn 路径都保证有初始 push）；
-        // bus 未连接（hello-ok 未到）时记待补推，bus.ready 后自动补推——覆盖连接窗口期。
+        // 总线退役（refactor/bus-inproc 修正 B，2026-09-06）：宿主不再连 dshana.bus WS——
+        // 指令走 HTTP RPC（callUnary 直连 /api）、事件走 cordis ctx 直订。provider 路由
+        // push 与 config 下发随之 ctx 化（provider-refresh-request ctx 订阅 + ctx.emit
+        // provider-push，见 pushProviderRoutes / wireProviderPushCtx）。connectBus /
+        // setBusConfigProvider 已停调（closeBus 在 closeProcess 防御保留，未连时 no-op）。
+        // provider 路由推送：唯一新进程就绪点主动推一次最新 routes（ctx.emit 广播，
+        // provider 插件 ctx.on 收——纯数据注册无 HTTP 上下文依赖，实测方向可靠）。
+        wireProviderPushCtx();
         pushProviderRoutes();
         return web;
       };
@@ -864,8 +848,12 @@ const PROVIDER_SYNC_DEBOUNCE_MS = 300;
 let providerPushPending = false; // bus 未连接期间待补推标志（模块级单例）
 function pushProviderRoutes() {
   const g = getSingleton();
-  const bus = g.dshanaBus;
-  if (!bus || typeof bus.emit !== "function") {
+  // 总线退役（refactor/bus-inproc 修正 B）：provider push 改 cordis ctx 事件广播
+  // （DSH 侧 provider 插件 ctx.on('dshana/provider-push') 收；cordis 事件全向——
+  // 任意 ctx emit 触发任意 ctx on，实测可靠）。ctx 不可用（boot 未完成/异常）记
+  // providerPushPending，wireProviderPushCtx 的 request 订阅补推时清除。
+  const ctx = g?.web?.ctx;
+  if (!ctx || typeof ctx.emit !== "function") {
     providerPushPending = true;
     return;
   }
@@ -881,46 +869,45 @@ function pushProviderRoutes() {
     }
     return;
   }
-  const delivered = bus.emit("provider.refresh", { routes: host.routes });
-  if (delivered) {
+  try {
+    ctx.emit("dshana/provider-push", { routes: host.routes });
     providerPushPending = false;
     try {
-      g.appendLog?.("hana", "[dsh-run] provider 路由已经总线推送（" + host.routes.length + " 条 routes）");
+      g.appendLog?.("hana", "[dsh-run] provider 路由已 ctx 推送（" + host.routes.length + " 条 routes）");
     } catch {
       /* 日志失败不阻断 */
     }
-    console.log("[dsh-run] provider 路由已经总线推送（" + host.routes.length + " 条 routes）");
-  } else {
-    // 未送达（bus 未连接/未握手）：记待补推，bus.ready 后自动补推
+  } catch (e) {
     providerPushPending = true;
     try {
-      g.appendLog?.("hana", "[dsh-run] provider 路由总线推送未送达（bus 未连接），标记待补推");
+      g.appendLog?.("hana", "[dsh-run] provider 路由 ctx 推送失败：" + (e?.message || e));
     } catch {
       /* 日志失败不阻断 */
     }
   }
 }
 // bus.ready 补推接线（幂等，只挂一次）：总线连接成功后如有待补推 routes 立即补推。
-// 另订阅 dsh 侧 provider 插件的 provider.refresh.request 就绪握手（CodeRabbit 时序意见）：
-// 子插件订阅建立后显式请求重放最新 routes——覆盖「宿主首批 push 早于子插件订阅建立」
-// 的窗口（loadDeps/effect 未完成时首批 provider.refresh 事件丢失，provider 卡
-// empty-snapshot）。收到请求即重推（pushProviderRoutes 内部未送达记 pending，
-// bus.ready 后自动补推，无需在此重复判 pending）。
+// provider.refresh.request 的 ctx 订阅（幂等，只挂一次）：DSH 侧 provider 插件订阅建立后
+// 显式请求重放最新 routes（覆盖「宿主首批 push 早于子插件订阅」窗口）。总线退役后
+// request 经 ctx 事件（provider 插件 ctx.emit('dshana/provider-refresh-request')），宿主
+// ctx.on 收 → 重推（ctx 不可用（boot 边缘）记 providerPushPending，ctx 就绪后首推清除）。
 let providerPushWired = false;
-function wireProviderPushOnBusReady() {
+function wireProviderPushCtx() {
   if (providerPushWired) return;
-  providerPushWired = true;
   const g = getSingleton();
-  if (g.dshanaBus && typeof g.dshanaBus.on === "function") {
-    g.dshanaBus.on("provider.refresh.request", () => {
+  const ctx = g?.web?.ctx;
+  if (!ctx || typeof ctx.on !== "function") return;
+  providerPushWired = true;
+  try {
+    ctx.on("dshana/provider-refresh-request", () => {
       pushProviderRoutes();
     });
-    g.dshanaBus.on("bus.ready", () => {
-      if (providerPushPending) {
-        providerPushPending = false;
-        pushProviderRoutes();
-      }
-    });
+  } catch (e) {
+    try {
+      g.appendLog?.("hana", "[dsh-run] provider-refresh-request ctx 订阅失败：" + (e?.message || e));
+    } catch {
+      /* 日志失败不阻断 */
+    }
   }
 }
 function ensureProviderPushWatch(cfg) {
@@ -1068,8 +1055,8 @@ getSingleton().startWebHost = async function startWebHostFromPlugin(
     await ensureWebHost(cfg);
     // web host 就绪后建立宿主侧 provider 跟随 push watch（幂等：先清理旧 watch 再建）
     ensureProviderPushWatch(cfg);
-    // bus.ready 补推接线（幂等）：总线连接成功后如有待补推 routes 立即补推
-    wireProviderPushOnBusReady();
+    // provider-refresh-request ctx 订阅（幂等）：provider 插件订阅建立后请求重放 routes
+    wireProviderPushCtx();
     // 首批 provider 的初始 push 已收敛进 ensureWebHost（唯一就绪点，bus 就绪后自动
     // 送达或待补推），此处不再重复推；后续每次 resource.changed 经防抖 watch 增量 push。
     // DSH 更新请求 v0.22.1 起由子插件经 dshana.bus 消息总线直投（connectBus 已

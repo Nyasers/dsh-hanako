@@ -364,8 +364,42 @@ export default function registerWebuiRoutes(app, ctx) {
           if (closed) return;
           send({ type: "diag-changed" });
         };
-        // 订阅总线本机事件（bus.ready / bus.disconnect / events 转发）
+        // 订阅总线本机事件（bus.ready / bus.disconnect / events 转发）——总线退役
+        // （refactor/bus-inproc 修正 B）后宿主不再连 dshana.bus：ready/pending 由下方
+        // 初始推（打开时 g.web.ready）+ 壳页 boot-state 刷新兑底驱动；此处订阅仅当
+        // 旧形态总线仍存在时挂（兼容残留），不存在即跳过。
         const g = globalThis.__dshHanako;
+        // 打开时已就绪（常态：卡在 boot 完成后打开）→ 立即推 ready，壳页即挂载；
+        // 未就绪（自举页场景）不推——壳页靠 boot-state 刷新兑底挂载（applyBoot ready
+        // → mountReady，见 webui-shell），事件流仅作 diag-changed/theme-pref 载体。
+        if (busReady()) {
+          send({ type: "ready" });
+        }
+        // DSH 设置变更转发（theme-pref）：settings/document-updated 的 ui-theme 命名空间
+        // = 主题偏好变更，推给壳页转告注入脚本重读偏好（事件驱动替代 3s 轮询
+        // settings/describe）。事件源：ctx.on 直订优先（DSH Host 事件源头 = cordis ctx）；
+        // ctx 不可用兑底总线 events（旧形态 bridge 转发）。
+        const themeFromFrame = (frame) => {
+          if (closed) return;
+          if (!frame || frame.type !== "emit") return;
+          if (
+            frame.event === "settings/document-updated" &&
+            Array.isArray(frame.args) &&
+            frame.args[0] === "ui-theme"
+          ) {
+            send({
+              type: "theme-pref",
+              ns: "ui-theme",
+              revision: frame.args[1] ?? null,
+            });
+          }
+        };
+        const themeCtxOff = subscribeDshCtxEmitEvents(themeFromFrame);
+        if (themeCtxOff) {
+          unsubs.push(themeCtxOff);
+        } else if (g && g.dshanaBus && typeof g.dshanaBus.on === "function") {
+          unsubs.push(g.dshanaBus.on("events", themeFromFrame));
+        }
         if (g && g.dshanaBus && typeof g.dshanaBus.on === "function") {
           unsubs.push(
             g.dshanaBus.on("bus.ready", () => {
@@ -381,32 +415,6 @@ export default function registerWebuiRoutes(app, ctx) {
               send({ type: "pending" });
             }),
           );
-          // DSH 设置变更转发（theme-pref）：settings/document-updated 的 ui-theme 命名空间
-          // = 主题偏好变更，推给壳页转告注入脚本重读偏好（事件驱动替代 3s 轮询
-          // settings/describe）。事件源：ctx.on 直订优先（refactor/bus-inproc 总线内置化——
-          // DSH Host 事件源头 = cordis ctx，总线只是载波）；ctx 不可用兑底总线 events
-          // （bridge 订阅转发）。
-          const themeFromFrame = (frame) => {
-            if (closed) return;
-            if (!frame || frame.type !== "emit") return;
-            if (
-              frame.event === "settings/document-updated" &&
-              Array.isArray(frame.args) &&
-              frame.args[0] === "ui-theme"
-            ) {
-              send({
-                type: "theme-pref",
-                ns: "ui-theme",
-                revision: frame.args[1] ?? null,
-              });
-            }
-          };
-          const themeCtxOff = subscribeDshCtxEmitEvents(themeFromFrame);
-          if (themeCtxOff) {
-            unsubs.push(themeCtxOff);
-          } else if (g && g.dshanaBus && typeof g.dshanaBus.on === "function") {
-            unsubs.push(g.dshanaBus.on("events", themeFromFrame));
-          }
         }
         // 挂钩 web host 启动失败通知（lifecycle startWebHostFromPlugin catch 调用）。
         // 每次模块加载都重新赋值 notifyWebStartFailed（不设 __webStartFailedHooked 守卫）：
