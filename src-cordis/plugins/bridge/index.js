@@ -310,6 +310,44 @@ const connection = {
   },
 }
 
+/**
+ * 进程内一元 RPC 分发服务（总线内置化第二刀 refactor/bus-inproc）：bus 翻译器/宿主直调
+ * 时绕过 /api HTTP 载体（fetch 自环依赖端口 + cookie 换发），直接经 interceptor 分发
+ * （同 dispatchApiRpc 的 handler 调用 + 错误翻译语义）。payload 为信封 payload（bus 翻译
+ * 器已包装 { args } / { request } 等 Remote 信封）；endpoint 为斜杠格式（/api 路径段）。
+ */
+const rpcDispatcher = {
+  async call(endpoint, payload, signal) {
+    const interceptor = interceptors.get(API_PATH)
+    if (interceptor === undefined || !interceptor.matches(endpoint)) {
+      return {
+        ok: false,
+        error: {
+          code: 'api-bridge/not-found',
+          message: 'no interceptor for endpoint ' + String(endpoint),
+          details: {},
+        },
+      }
+    }
+    try {
+      const value = await interceptor.handler(
+        endpoint,
+        payload ?? {},
+        signal || new AbortController().signal,
+      )
+      return { ok: true, value }
+    } catch (e) {
+      return {
+        ok: false,
+        error: {
+          code: 'api-bridge/dispatch',
+          message: String((e && e.message) || e),
+          details: {},
+        },
+      }
+    }
+  },
+}
 /** 独立 channel 路由分发（非 /api channel，防御实现：信封语义同 /api）。 */
 async function handleChannelReq(req, res, channel) {
   const handler = handleRoutes.get(channel)
@@ -353,6 +391,9 @@ export function apply(ctx, config) {
     // connection 服务在 apply 同步段 provide（与官方 Service 基类构造即注册同语义，
     // 保证 gateway 的 inject(['connection']) 回调不落空）。
     const provideDisposer = ctx.provide('connection', connection)
+    // 进程内一元 RPC 分发服务（总线内置化第二刀）：同同步段 provide——bus 翻译器 ctx
+    // 收口直调（不再 fetch 自环依赖端口），宿主 callUnaryBus 进程内通道的 DSH 侧终点。
+    const provideRpcDisposer = ctx.provide('apiRpcDispatcher', rpcDispatcher)
     ctx.inject(['webServer'], (webCtx) => {
       webCtx.effect(() => {
         const disposers = []
@@ -388,6 +429,11 @@ export function apply(ctx, config) {
             } catch {
               /* 注销失败忽略 */
             }
+          }
+          try {
+            provideRpcDisposer()
+          } catch {
+            /* 注销失败忽略 */
           }
           try {
             provideDisposer()

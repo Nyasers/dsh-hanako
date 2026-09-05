@@ -110,6 +110,13 @@ let authCookieInflight = null
 // （$events/result）需要它定位事件流——宿主侧无 launchToken 源无从得知，由
 // 本总线事件流持有（apply 的 evtConnect ready 回调赋值）。
 let evtClientId = ''
+// 进程内 RPC 分发服务引用（总线内置化第二刀 refactor/bus-inproc）：bridge provide
+// 'apiRpcDispatcher'（apply 同步段），bus 经 ctx.inject 动态注入（不阻塞激活）。
+// 注入成功 → 翻译器 Unary/respond 直调 dispatcher（免自环 fetch 依赖端口 + cookie）；
+// 未注入（bridge 未激活/旧版）→ 降级原自环 fetch 路径，行为不变。
+let rpcDispatcherRef = null
+// 模块级 logger（apply 注入 ctx.logger；翻译器模块级函数日志用——bridgeLog 是 apply 闭包）
+let moduleLogger = null
 
 /** 自环 RPC 鉴权 cookie（dsh 0.1.2+ /api/* 需浏览器 cookie，无则 401）。
  * launchToken 经 GET /?token= 换发 signed cookie（authorizeIndex 流程，本机回环）；
@@ -205,6 +212,13 @@ export async function translateRpcRequest(req, port, reply) {
         eventId: p.eventId,
         outcome: p.outcome,
       }
+      // 进程内优先（总线内置化第二刀）：dispatcher 直调 $events/result interceptor
+      // （免自环 fetch 依赖端口）；未注入降级原 fetch 路径
+      if (rpcDispatcherRef && typeof rpcDispatcherRef.call === 'function') {
+        const rr = await rpcDispatcherRef.call('$events/result', { args })
+        reply({ reqId, ok: true, value: { accepted: rr.ok === true } })
+        return
+      }
       const res = await fetch(base + '/api/$events/result', {
         method: 'POST',
         headers,
@@ -246,6 +260,34 @@ export async function translateRpcRequest(req, port, reply) {
     const args = isSession
       ? { [isSessionList ? '_request' : 'request']: { ...(req.payload || {}), requestId: reqId } }
       : req.payload
+    // 进程内优先（总线内置化第二刀）：dispatcher 直调 interceptor（免自环 fetch 依赖
+    // 端口 + cookie 换发）；未注入（bridge 未激活/旧版）降级原 fetch 路径
+    if (rpcDispatcherRef && typeof rpcDispatcherRef.call === 'function') {
+      const r = await rpcDispatcherRef.call(endpoint, { args })
+      if (r.ok) {
+        reply({ reqId, ok: true, value: r.value })
+        return
+      }
+      const e = r.error || {}
+      try {
+        moduleLogger?.info?.(
+          '[@dsh-hanako/bus] RPC dispatcher 失败：method=' +
+            method +
+            ' code=' +
+            (e.code || 'unknown') +
+            ' msg=' +
+            ((e.message || '') + '').slice(0, 300),
+        )
+      } catch {
+        /* 日志失败不阻断 */
+      }
+      reply({
+        reqId,
+        ok: false,
+        error: { code: e.code || 'unknown', message: e.message || '' },
+      })
+      return
+    }
     const res = await fetch(base + '/api/' + endpoint, {
       method: 'POST',
       headers,
@@ -536,6 +578,72 @@ export function apply(ctx, config) {
             },
           )
         })
+
+        // ---- 进程内 RPC 收口（总线内置化第二刀 refactor/bus-inproc）：宿主经 ctx
+        // 直发指令（免 WS/端口）——宿主与 DSH 同进程同 ctx，宿主 ctx.emit(
+        // 'dshana/inproc-request', { reqId, method, payload }) → 这里 ctx.on 收 →
+        // translateRpcRequest（dispatcher 直调 bridge interceptor，免自环 fetch）→
+        // ctx.emit('dshana/inproc-result') 回投。WS 总线路径保留（兜底/外部连接）。
+        // apiRpcDispatcher 动态 inject（不阻塞激活：bridge 未激活时 ref 为空，翻译器
+        // 降级自环 fetch，行为不变）。
+        const onInprocRequest = (frame) => {
+          try {
+            const req =
+              frame && typeof frame === 'object' && frame.req ? frame.req : frame
+            try {
+              bridgeLog(
+                'inproc-request 收到：reqId=' +
+                  ((req && req.reqId) || '?') +
+                  ' method=' +
+                  ((req && req.method) || '?'),
+              )
+            } catch {
+              /* 诊断日志失败不阻断 */
+            }
+            if (
+              !req ||
+              typeof req.reqId !== 'string' ||
+              !req.reqId ||
+              typeof req.method !== 'string'
+            ) {
+              return
+            }
+            translateRpcRequest(
+              req,
+              httpCtx.webServer && typeof httpCtx.webServer.port === 'number'
+                ? httpCtx.webServer.port
+                : undefined,
+              (out) => {
+                try {
+                  ctx.emit('dshana/inproc-result', out)
+                } catch {
+                  bridgeLog('inproc-result 回投失败（reqId=' + ((out && out.reqId) || '?') + '）')
+                }
+              },
+            ).catch(() => {
+              bridgeLog('inproc-request 翻译失败（reqId=' + ((req && req.reqId) || '?') + '）')
+            })
+          } catch {
+            bridgeLog('inproc-request 收帧异常（已忽略）')
+          }
+        }
+        // cordis 事件冒泡方向：插件子 ctx emit 冒泡到根，宿主（持 g.web.ctx = 根）收得到；
+        // 宿主在根 emit **不下行**到插件子 ctx——收口必须挂根层（ctx.root，cordis 插件 ctx
+        // 的根引用；无 root（即根自身）兑底 ctx）才能收到宿主 ctx.emit。回投 emit 在子 ctx
+        // 发 → 冒泡到根 → 宿主 ctx.on（根层）收 ✓（与 DSH 内部 emit 同向）。
+        const rootCtx = ctx.root || ctx
+        try {
+          ctx.inject(['apiRpcDispatcher'], (dispCtx) => {
+            try {
+              rpcDispatcherRef = dispCtx.get?.('apiRpcDispatcher') || null
+            } catch {
+              rpcDispatcherRef = null
+            }
+          })
+          rootCtx.on('dshana/inproc-request', onInprocRequest)
+        } catch (e) {
+          bridgeLog('进程内 RPC 收口接线失败：' + ((e && e.message) || e))
+        }
 
         // ---- 事件流订阅（remote.mux + $events）：bridge 在 dsh 进程内代宿主订阅，
         // 经总线 events 频道转发——宿主无需 WS 连接/鉴权（launchToken 在进程内
