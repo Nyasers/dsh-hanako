@@ -235,7 +235,16 @@ export function MainFrame({
     let attrObserver: MutationObserver | null = null
     let treeObserver: MutationObserver | null = null
     const openState = () => trigger !== null && trigger.getAttribute('aria-expanded') === 'true'
-    const syncInert = () => { host.inert = !openState() }
+    const syncInert = () => {
+      const open = openState()
+      host.inert = !open
+      if (!open && document.activeElement instanceof HTMLElement && host.contains(document.activeElement)) {
+        // 官方 close 恢复焦点到 trigger（SettingsRoot wasOpen→focus），main 视图 trigger
+        // 在屏幕外宿主内 → 焦点指示消失、Tab 卡住。移出宿主：blur → 焦点落 body，
+        // 下次 Tab 从文档序正常进入可见 UI（宿主 inert 已被跳过）。
+        document.activeElement.blur()
+      }
+    }
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Tab' || !openState()) return
       const dialog = host.querySelector('[role="dialog"]')
