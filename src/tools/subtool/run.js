@@ -111,13 +111,18 @@ const toolCallCache = new Map();
 // 误判为完成）。前提：同一 sessionId 多轮 prompt（resume 复用会话）时条目被当轮覆盖——
 // dsh 会话串行（上一轮终态 finally 已删条目），当轮条目语义正确。
 
-function createOpEntry(sessionId) {
+function createOpEntry(sessionId, meta) {
   const g = getSingleton();
   // 协调态最小化：task/sessionId/approvalPending 均不再存（task 原文在 jsonl user/message，
-  // sessionId 即键，approvalPending 由 activeApprovals 是否有 pending 项推出）
+  // sessionId 即键，approvalPending 由 activeApprovals 是否有 pending 项推出）。
+  // ACP 审批协调补充（L4）：sessionPath/task/rpcId 供 acp-mount 的 request_permission
+  // handler 投递 interlude 审批通知（notifyApprovalWake 需要宿主会话关联）。
   g.ops.set(sessionId, {
     activeApprovals: [],
     cancelledRequested: false,
+    sessionPath: meta?.sessionPath ?? null,
+    task: meta?.task ?? null,
+    rpcId: meta?.rpcId ?? null,
   });
   return sessionId;
 }
@@ -590,7 +595,11 @@ function submitTask(
       // 同 sessionId 多轮 prompt（resume 复用会话）时条目被当轮覆盖：dsh 会话串行
       // （上一轮终态 finally 已删条目），当轮条目语义正确。
       taskRpcId = promptMeta.rpcId || "";
-      createOpEntry(sessionId);
+      createOpEntry(sessionId, {
+        sessionPath,
+        task: taskText,
+        rpcId: taskRpcId,
+      });
       // 宿主 task 体系接入：任务注册（type: 'dsh'，taskId = sessionId——取消链路经宿主
       // task:abort → handler.abort → session.cancel，Agent 取消统一走宿主 task 能力，
       // dsh_cancel 不再直连）。注册失败不阻断任务（宿主面板不可见，任务照跑；终态同步

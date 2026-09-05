@@ -20,6 +20,9 @@ import { readFileSync, realpathSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
+import { getSingleton } from "./state.js";
+import { notifyApprovalWake } from "./wake.js";
+import { resolveApprovalTimeoutSec } from "./config.js";
 
 // ACP 运行时依赖定位：@deepseek-ai/dsh-acp（插件本体）与 @agentclientprotocol/sdk
 // 随 DSH 依赖树存在（@deepseek-ai/dsh → @deepseek-ai/dsh-acp-app → dsh-acp，SDK 是
@@ -59,6 +62,86 @@ export async function mountAcp(ctx, { dshHome, emitLog }) {
   const log = (msg) => {
     try { emitLog?.("hana", "[dsh acp] " + msg); } catch { /* noop */ }
   };
+  // ---- L4：审批反向应答（request_permission）----
+  // DSH agent 越界/敏感工具调用 → ctx approval/request → dsh-acp 插件转
+  // session/request_permission 请求发 client（options: allow-once / reject-once，映射
+  // 见 dsh-acp index.ts requestPermission）。宿主应答 = onRequest handler 返回
+  // { outcome }——本 handler 挂起等宿主决策：审批上下文存 g.ops.activeApprovals
+  //（approve.js dsh_approve 工具查同一表——ap._respond resolve 本 pending）；超时
+  // 自动拒绝（approvalTimeoutSec）；无活动任务（op 缺失/终态）默认拒绝（安全）。
+  async function handleRequestPermission({ params, requestId }) {
+    const g = getSingleton();
+    const sessionId = params && params.sessionId;
+    const callId = params && params.toolCall && params.toolCall.toolCallId;
+    const cached = callId ? toolCache.get(callId) : null;
+    const approvalId = String(
+      requestId ?? callId ?? "req-" + Date.now(),
+    );
+    const op =
+      g && typeof g.ops?.get === "function" ? g.ops.get(sessionId) : null;
+    if (!op || !Array.isArray(op.activeApprovals)) {
+      // 无活动任务/协调条目缺失（任务已终态/未知会话）：默认拒绝（安全）
+      return { outcome: { outcome: "selected", optionId: "reject-once" } };
+    }
+    let settle = null;
+    const pending = new Promise((resolve) => {
+      settle = resolve;
+    });
+    const approval = {
+      approvalId,
+      eventId: approvalId,
+      sessionId,
+      toolName: (cached && cached.name) || "tool",
+      callId: callId ?? null,
+      reason: null,
+      args: cached ? cached.args : null,
+      status: "pending",
+      requestedAt: new Date().toISOString(),
+      _respond: (outcomeStr) => {
+        if (!settle) return;
+        const s = settle;
+        settle = null;
+        try {
+          s({
+            outcome: {
+              outcome: "selected",
+              optionId:
+                outcomeStr === "allowed-once" ? "allow-once" : "reject-once",
+            },
+          });
+        } catch { /* 已 settle 忽略 */ }
+      },
+    };
+    op.activeApprovals.push(approval);
+    // 超时自动拒绝（approvalTimeoutSec 秒无人应答；0/不可读 = 禁用）
+    try {
+      const ats = resolveApprovalTimeoutSec({ dataDir: g?.dataDir });
+      if (ats > 0) {
+        const timer = setTimeout(() => {
+          try {
+            approval._respond("rejected");
+            approval.status = "answered";
+            approval.outcome = "rejected";
+            approval.answeredAt = new Date().toISOString();
+          } catch { /* 忽略 */ }
+        }, ats * 1000);
+        approval._cancelTimer = () => clearTimeout(timer);
+      }
+    } catch { /* 超时表不可用禁用（等待 approve.js/会话终局兑底） */ }
+    // 宿主 Agent 审批通知（interlude 插话——bus/sessionPath/rpcId/task 经 op 条目
+    // 由 run.js createOpEntry 提交上下文补齐；通知失败不阻断——审批仍可经 dsh_approve）
+    try {
+      await notifyApprovalWake({
+        bus: g && g.bus,
+        sessionPath: op.sessionPath,
+        rpcId: op.rpcId || "",
+        approval,
+        task: op.task || "",
+      });
+    } catch { /* 通知失败不阻断 */ }
+    return pending;
+  }
+
   // 依赖沿 DSH 树解析（dsh realpath → dsh-acp-app → dsh-acp + SDK——见文件头注释），
   // 与 DSH 运行时同物理包实例（非 bundle 内联）；动态加载不阻塞模块加载（闭环）。
   const dshReal = realpathSync(
@@ -99,15 +182,43 @@ export async function mountAcp(ctx, { dshHome, emitLog }) {
     apply: (inner) => acp.apply(inner, { ...acpConfig, stream: agentStream }),
   });
   log("插件已挂载（provider=" + (acpConfig.provider || "?") + " model=" + (acpConfig.model || "?") + "）");
-  // 宿主侧 client：注册 session/update 通知缓冲（指令进展事件；L2 指令通道接入后消费）
+  // 宿主侧 client：注册 session/update 通知缓冲（指令进展事件）与审批反向应答
+  //（L4：request_permission——DSH agent 越界/敏感工具审批，见 handleRequestPermission）。
+  // update 同时缓存 tool_call 的 title/rawInput（审批决策信息源——request_permission
+  // 请求只带 toolCallId，name/args 从 tool_call update 补）。
   const updateQueue = [];
   const updateWaiters = [];
+  const toolCache = new Map(); // toolCallId → { name, args }
   const clientApp = createAcpClientApp({ name: "dsh-hanako-host" })
     .onNotification(methods.client.session.update, ({ params }) => {
+      const update = params && params.update;
+      if (update && typeof update === "object" && update.sessionUpdate === "tool_call") {
+        if (update.toolCallId) {
+          let args = null;
+          if (update.rawInput !== undefined) {
+            try {
+              args =
+                typeof update.rawInput === "string"
+                  ? update.rawInput
+                  : JSON.stringify(update.rawInput);
+            } catch {
+              args = String(update.rawInput ?? "");
+            }
+          }
+          toolCache.set(update.toolCallId, {
+            name: typeof update.title === "string" ? update.title : "tool",
+            args,
+          });
+        }
+      }
       if (updateWaiters.length) updateWaiters.shift()(params);
       else updateQueue.push(params);
       return Promise.resolve();
-    });
+    })
+    .onRequest(
+      methods.client.session.requestPermission,
+      handleRequestPermission,
+    );
   const connection = clientApp.connect(clientStream);
   const client = connection.agent;
   // initialize 握手验证（协议面通 = 挂载成功门槛；失败抛错由调用方降级）。

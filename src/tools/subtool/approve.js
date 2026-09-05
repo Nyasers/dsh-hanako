@@ -87,13 +87,26 @@ async function doExecute(input, ctx) {
     eventId: ap.eventId,
     outcome: { kind: "result", value: outcome },
   };
-  // 经总线 rpc.request method="respond" 发送（bus 翻译器自环 /api/$events/result，
-  // clientId 由总线事件流补齐；回投 { accepted } = ConnectionRpcResult.ok 转译）
-  const j = await callUnaryBus("respond", body);
-  if (!j || !j.accepted) {
-    throw new Error(
-      `审批应答未接受（${(j && j.reason) || "unknown"}）：可能已超时或被其他方处理，任务侧会自行感知`,
-    );
+  if (typeof ap._respond === "function") {
+    // ACP 会话审批（feat/acp-channel L4）：审批请求经 request_permission 反向到宿主
+    // client（acp-mount onRequest handler），本工具应答 = resolve 该挂起（optionId
+    // allow-once/reject-once 映射）——agent 即收决策，不碰 HTTP respond。
+    await ap._respond(outcome);
+    if (typeof ap._cancelTimer === "function") {
+      try {
+        ap._cancelTimer();
+      } catch {
+        /* 超时表清理失败忽略 */
+      }
+    }
+  } else {
+    // HTTP/旧形态会话审批：client-response 信封经 /api/respond（/api/$events/result）
+    const j = await callUnaryBus("respond", body);
+    if (!j || !j.accepted) {
+      throw new Error(
+        `审批应答未接受（${(j && j.reason) || "unknown"}）：可能已超时或被其他方处理，任务侧会自行感知`,
+      );
+    }
   }
 
   ap.status = "answered";
