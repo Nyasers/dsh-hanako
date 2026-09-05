@@ -103,15 +103,27 @@ async function callUnaryBus(method, payload, signal, meta) {
     : payload;
   const payload2 = { args: inner };
   // ACP 内部通道优先（feat/acp-channel，端口只剩 UI 消费）：web.acp.client 就绪时
-  // session.create/prompt 走 ACP（进程内 JSON-RPC，零端口）——session 指令面中与
-  // 任务链直接相关的两个；其余（selectModel/cancel/list）HTTP 兑底（同 DSH 会话，
-  // gateway 层操作与 ACP 建会话兼容）。
-  if (method === "session.create" || method === "session/create") {
-    const acp = acpClient();
-    if (acp) return await acpCreate(acp, method, payload, signal);
-  } else if (method === "session.prompt" || method === "session/prompt") {
-    const acp = acpClient();
-    if (acp) return await acpPrompt(acp, method, payload, signal);
+  // session 指令面全部走 ACP（进程内 JSON-RPC，零端口）：create（new/resume）/
+  // prompt（fire）/ list（run.js resume 查 cwd）/ selectModel（set_config_option）/ cancel
+  //（notification）。HTTP /api 仅剩 respond（审批应答——L4 反向 request 未接前）兑底
+  // 与 WebUI 数据面消费。
+  const acp = acpClient();
+  if (acp) {
+    if (method === "session.create" || method === "session/create") {
+      return await acpCreate(acp, method, payload, signal);
+    }
+    if (method === "session.prompt" || method === "session/prompt") {
+      return await acpPrompt(acp, method, payload, signal);
+    }
+    if (method === "session.list" || method === "session/list") {
+      return await acpList(acp, method, payload, signal);
+    }
+    if (method === "session.selectModel" || method === "session/selectModel") {
+      return await acpSelect(acp, method, payload, signal);
+    }
+    if (method === "session.cancel" || method === "session/cancel") {
+      return await acpCancel(acp, method, payload, signal);
+    }
   }
   return callUnary(base, endpoint, payload2, signal, meta);
 }
@@ -172,6 +184,70 @@ async function acpPrompt(acp, method, payload, signal) {
       } catch { /* 日志失败不阻断 */ }
     },
   );
+  return { accepted: true };
+}
+
+// ACP session.list：ACP list 无 projections——返回全量轻量会话
+//（sessions: [{ sessionId, cwd }]）。映射宿主 items 结构（run.js resume 分支消费
+// item.sessionId/cwd——同字段直通）。
+async function acpList(acp, method, payload, signal) {
+  const client = acp.client;
+  const methods = acp.methods;
+  const res = await client.request(methods.agent.session.list, {}, { signal });
+  const sessions =
+    res && Array.isArray(res.sessions) ? res.sessions : [];
+  return { items: sessions };
+}
+
+// ACP session.selectModel：set_config_option({ configId: "model", value })——ACP 的
+// model option value = JSON.stringify([provider, model])（model-control.ts 的
+// modelValue 编码，无需预枚举）。reasoningEffort 附加 set reasoning_effort（effort id
+// 字符串；模型不支持时失败静默——对齐原 HTTP 的 model-unavailable 降级重试语义，
+// ACP 层内直接降级）。model 真失败（provider/model 不在目录）抛错。
+async function acpSelect(acp, method, payload, signal) {
+  const client = acp.client;
+  const methods = acp.methods;
+  const sid = payload && payload.sessionId;
+  if (!sid) throw new Error("dsh session.selectModel 缺 sessionId");
+  const provider = payload && payload.provider;
+  const model = payload && payload.model;
+  if (!provider || !model)
+    throw new Error("dsh session.selectModel 缺 provider/model");
+  await client.request(
+    methods.agent.session.setConfigOption,
+    { sessionId: sid, configId: "model", value: JSON.stringify([provider, model]) },
+    { signal },
+  );
+  const effort = payload && payload.reasoningEffort;
+  if (effort) {
+    try {
+      await client.request(
+        methods.agent.session.setConfigOption,
+        { sessionId: sid, configId: "reasoning_effort", value: String(effort) },
+        { signal },
+      );
+    } catch (e) {
+      // effort 不被该模型接受：已选模型生效，effort 用模型默认（对齐 HTTP 降级）
+      try {
+        getSingleton()?.appendLog?.(
+          "hana",
+          "[dsh-rpc] ACP reasoning_effort 降级（模型默认）：" +
+            ((e && e.message) || e),
+        );
+      } catch { /* 日志失败不阻断 */ }
+    }
+  }
+  return { ok: true };
+}
+
+// ACP session.cancel：notification（无响应）——投递后即返回（取消请求已送达 DSH）；
+// notify 同步抛错（连接断/序列化失败）时转普通错误（HTTP 兑底由调用方/上层处理）。
+async function acpCancel(acp, method, payload, signal) {
+  const client = acp.client;
+  const methods = acp.methods;
+  const sid = payload && payload.sessionId;
+  if (!sid) throw new Error("dsh session.cancel 缺 sessionId");
+  client.notify(methods.agent.session.cancel, { sessionId: sid });
   return { accepted: true };
 }
 
