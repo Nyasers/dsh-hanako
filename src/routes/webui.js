@@ -368,11 +368,14 @@ export default function registerWebuiRoutes(app, ctx) {
         // （refactor/bus-inproc 修正 B）后宿主不再连 dshana.bus：ready/pending 由下方
         // 初始推（打开时 g.web.ready）+ 壳页 boot-state 刷新兑底驱动；此处订阅仅当
         // 旧形态总线仍存在时挂（兼容残留），不存在即跳过。
-        const g = globalThis.__dshHanako;
         // 打开时已就绪（常态：卡在 boot 完成后打开）→ 立即推 ready，壳页即挂载；
         // 未就绪（自举页场景）不推——壳页靠 boot-state 刷新兑底挂载（applyBoot ready
         // → mountReady，见 webui-shell），事件流仅作 diag-changed/theme-pref 载体。
-        if (busReady()) {
+        // 就绪判定 = web host boot 收敛（g.web.ready，ACP/进程内 boot 形态）或旧形态
+        // 总线已连接（总线退役前兼容残留——退役后恒 false，不影响）。此前仅判
+        // busReady() 导致总线退役后打开壳页收不到 ready 事件（靠轮询兑底慢显示）。
+        const g = globalThis.__dshHanako;
+        if ((g && g.web && g.web.ready === true) || busReady()) {
           send({ type: "ready" });
         }
         // DSH 设置变更转发（theme-pref）：settings/document-updated 的 ui-theme 命名空间
