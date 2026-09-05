@@ -318,42 +318,66 @@ function submitTask(
     let pendingFailure = null;
 
     const consume = (async () => {
+      // finishFromProjection：终态统一收尾（HTTP 会话经 api-session/status running=false，
+      // ACP 会话不经 session-controller——经 session/event 的 turn/end 帧）。两者共读会话
+      // 投影（projcache）：title 作为 collected 输出 + tokenUsage 汇总 → outcome。
+      const finishFromProjection = () => {
+        const proj = readSessionProjection(cfg.dataDir, sessionId);
+        if (proj) {
+          const pv = proj.record?.rows;
+          const title = pv?.title?.val ?? null;
+          if (typeof title === "string" && title && !collected) {
+            collected = title;
+            blocksSeq.push({ type: "text", text: title });
+          }
+          const tu = pv?.tokenUsage?.val;
+          if (tu) {
+            usageTotal = usageTotal || {};
+            const totals = tu.totals || {};
+            if (totals.uncachedInputTokens != null)
+              usageTotal.inputTokens = totals.uncachedInputTokens;
+            if (totals.outputTokens != null)
+              usageTotal.outputTokens = totals.outputTokens;
+            if (totals.cacheReadTokens != null)
+              usageTotal.cacheReadTokens = totals.cacheReadTokens;
+          }
+        }
+        outcome = pendingFailure
+          ? { stopReason: "error", failure: pendingFailure }
+          : { stopReason: "end_turn" };
+      };
       try {
         for await (const frame of openMux(base, ac.signal)) {
           // ---- dsh 0.1.2 事件帧适配（openMux 产出 emit/waterfall）----
           // 0.1.2 的 $events 只广播 api-session/*（added/removed/status/error/activity），
           // 无 assistant/chunk/turn 内容事件——内容经会话投影（projcache）读取。
+          // ACP 会话的事件走 session/event 通用广播（不经 session-controller）——
+          // turn/end 即终态（与 api-session/status false 同义，双通道互不冲突先到先收）。
           if (frame.type === "emit") {
             const ev = frame.event;
             const args = Array.isArray(frame.args) ? frame.args : [];
+            if (ev === "session/event") {
+              const [session, evObj] = args;
+              const sid = session && (session.id ?? null);
+              if (sid !== sessionId) continue;
+              if (!evObj || typeof evObj.type !== "string") continue;
+              if (evObj.type === "turn/end") {
+                finishFromProjection();
+                return; // 终态：turn 回合结束（projcache 已写 title/stats）
+              }
+              if (evObj.type === "assistant/message") {
+                // 0.1.2 内容走 projcache（title 已收）——消息帧不重复收集；若 proj 缺
+                // title 可在此兜底（暂无需要，保留分支便于后续扩展）
+                continue;
+              }
+              continue;
+            }
             if (ev === "api-session/status") {
               const [sid, running] = args;
               if (sid !== sessionId) continue;
               if (running !== false) continue; // 运行中：等待终态
               // 终态：agent 回合结束（status false）。结果从会话投影读取。
-              const proj = readSessionProjection(cfg.dataDir, sessionId);
-              if (proj) {
-                const pv = proj.record?.rows;
-                const title = pv?.title?.val ?? null;
-                if (typeof title === "string" && title && !collected) {
-                  collected = title;
-                  blocksSeq.push({ type: "text", text: title });
-                }
-                const tu = pv?.tokenUsage?.val;
-                if (tu) {
-                  usageTotal = usageTotal || {};
-                  const totals = tu.totals || {};
-                  if (totals.uncachedInputTokens != null)
-                    usageTotal.inputTokens = totals.uncachedInputTokens;
-                  if (totals.outputTokens != null)
-                    usageTotal.outputTokens = totals.outputTokens;
-                  if (totals.cacheReadTokens != null)
-                    usageTotal.cacheReadTokens = totals.cacheReadTokens;
-                }
-              }
-              outcome = pendingFailure
-                ? { stopReason: "error", failure: pendingFailure }
-                : { stopReason: "end_turn" };
+              finishFromProjection();
               return; // 0.1.2：status false 即终态
             } else if (ev === "api-session/error") {
               const [sid, message] = args;

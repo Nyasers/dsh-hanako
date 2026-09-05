@@ -21,6 +21,9 @@
 import { getSingleton } from "./state.js";
 
 // emit 模式白名单（与官方 remote-events 的 mode:"emit" 项对齐；waterfall 项不在此）
+// session/event = DSH 会话事件通用广播（turn/start、step/start、assistant/message、
+// turn/end 等，jsonl 同源）：api-session/* 是 HTTP 网关（session-controller）转发面，
+// ACP 会话不经 session-controller——宿主直订 session/event 才能收 ACP 会话的活动/终态。
 const CTX_EMIT_EVENTS = [
   "agent-preset/selected",
   "api-session/activity",
@@ -37,6 +40,7 @@ const CTX_EMIT_EVENTS = [
   "cordis/inspect-query",
   "cordis/inspect-query-resolved",
   "llm/adapters-updated",
+  "session/event",
   "settings/document-updated",
 ];
 
