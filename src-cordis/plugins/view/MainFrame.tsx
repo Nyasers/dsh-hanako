@@ -17,10 +17,18 @@
 // 不重复注 style）。DOM = .frame（inline gridTemplateColumns 两列）> (.centerCol >
 // conversation 槽) + (.detailsCol > SessionProvider > details 槽)；shell.overlay 槽照常
 // 在 frame 内 overlayLayer 渲染（AppFrame 同构）。sidebar 槽在 client.js MAIN_CHILDREN
-// 中**声明但本帧不渲染**（声明保 ui-sidebar 直接 register 不炸——它是 register 非 inject
-// 惰性，槽不声明会抛错致 client 链崩，实机踩过；渲染端不调 renderSlot('sidebar') →
+// 中**声明且本帧隐藏渲染**：声明保 ui-sidebar 直接 register 不炸（它是 register 非 inject
+// 惰性，槽不声明会抛错致 client 链崩，实机踩过）；渲染端不调 renderSlot('sidebar') →
 // occupant 挂载不渲染，SidebarRoot 与 rail 图标条不进入 DOM）；本帧也不 import
 // ui-sidebar/primitives 源码。
+//
+// 例外（feat/settings-cross-edge 隐藏宿主）：sidebar 槽**隐藏渲染**到屏幕外 fixed 容器
+// （data-sidebar-settings-host）——SidebarRoot 全家挂载（官方 full 视图 sidebar+
+// conversation 同帧并存即官方常态，无新增冲突面；流内容被容器 overflow:hidden 裁剪不可
+// 见），仅作 sidebar.settings occupant（SettingsRoot）的 mount 宿主：modal 为 fixed 全视口
+// （SettingsRoot.module.css .overlay），DOM 虽在宿主内但 fixed 不受祖先 overflow 裁剪
+// （无 transform 链）→ main 收到 open-settings 后程序 click 宿主内官方 trigger
+// （button[aria-haspopup=dialog]）即官方打开。详见 sync-bridge.js 头「settings 跨边」。
 //
 // 几何（两列自解，不用官方三列 computeColumns——其解含 sidebar 列，sidebar=0 也会解出
 // SIDEBAR_COLLAPSED 56px rail 占宽，不可用；窄视口折叠语义 SIDEBAR_AUTO_COLLAPSE 属
@@ -53,7 +61,7 @@ import css from './vendor/AppFrame.module.css'
  * （与官方 AppFrame 同源框架 shares；子槽并集不含 sidebar——main 无 sidebar 渲染点）。 */
 export type MainFrameProps =
   & PropsRuntime<'root'>
-  & PropsRenderSlots<'conversation' | 'details' | 'shell.overlay'>
+  & PropsRenderSlots<'conversation' | 'details' | 'shell.overlay' | 'sidebar'>
   & PropsStore<ReturnType<typeof createLayoutStore>>
   & PropsLocale<'common'>
 
@@ -205,6 +213,97 @@ export function MainFrame({
   }, [actions])
   const productTitle = process.env.DSH_CLIENT_TITLE ?? t('brand.localBuild')
 
+  // settings 宿主键盘可达性 + 焦点陷阱（CodeRabbit 闭环；性能纪律——不挂全树观察）：
+  //   · 动态 inert：容器默认 inert（屏幕外子树不进 Tab 顺序、不可点）。dialog 开闭态 =
+  //     官方 trigger 按钮 aria-expanded（SettingsRoot 渲染属性，open 同步）——单元素
+  //     attributes 观察（attributeFilter aria-expanded）跟踪开闭，**不做全树 subtree
+  //     观察**（SidebarRoot 全家的列表/DOM 活动零触发，避免常驻性能负担）。trigger 未挂
+  //     （occupant 链早期）时用一次性全树观察等它出现，出现即转 attributes 并断开。
+  //   · 焦点陷阱：官方 SettingsPanel 只 focus close + Escape，无 Tab trap（上游缺陷，
+  //     vendor 不动不改官方）——dialog 打开期间 document keydown capture 拦 Tab/Shift+Tab：
+  //     dialog 内 focusable 首尾 wrap（WAI APG modal 语义），焦点逃逸 host → 拉回首元素。
+  //     keydown handler 仅 Tab 键 + open 态才做查询（其余按键一次比较即 return）。
+  const settingsHostRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    const host = settingsHostRef.current
+    /* v8 ignore next -- effect 运行期 ref 恒已挂载（host 无条件渲染）。 */
+    if (host === null) return
+    host.inert = true
+    const FOCUSABLE =
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    let trigger = host.querySelector('button[aria-haspopup="dialog"]')
+    let attrObserver: MutationObserver | null = null
+    let treeObserver: MutationObserver | null = null
+    const openState = () => trigger !== null && trigger.getAttribute('aria-expanded') === 'true'
+    const syncInert = () => {
+      const open = openState()
+      host.inert = !open
+      if (open) {
+        // 官方 open 焦点（SettingsPanel useEffect focus close）在 React effect 跑——早于
+        // 本 attr observer 解除 inert → focus 被 inert 静默阻止，焦点滞留原文档（跨 iframe
+        // 场景 = sidebar 卡焦点未转移）。inert 解除后主动把焦点移进 dialog（首个 focusable
+        // ——nav 首行/close 同属 dialog 内，WAI modal 语义：打开时焦点进 dialog）。跨 iframe
+        // 焦点转移由浏览器处理（focus 跨文档）。已在内（官方 focus 成功）则不动。
+        const dialog = host.querySelector('[role="dialog"]')
+        const first = dialog === null
+          ? null
+          : dialog.querySelector<HTMLElement>(FOCUSABLE)
+        const activeInHost = document.activeElement !== null && host.contains(document.activeElement)
+        if (first !== null && !activeInHost) first.focus()
+      } else if (document.activeElement instanceof HTMLElement && host.contains(document.activeElement)) {
+        // 官方 close 恢复焦点到 trigger（SettingsRoot wasOpen→focus），main 视图 trigger
+        // 在屏幕外宿主内 → 焦点指示消失、Tab 卡住。移出宿主：blur → 焦点落 body，
+        // 下次 Tab 从文档序正常进入可见 UI（宿主 inert 已被跳过）。
+        document.activeElement.blur()
+      }
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Tab' || !openState()) return
+      const dialog = host.querySelector('[role="dialog"]')
+      const focusables = dialog === null ? [] : [...dialog.querySelectorAll<HTMLElement>(FOCUSABLE)]
+      if (focusables.length === 0) return
+      const first = focusables[0]
+      const last = focusables[focusables.length - 1]
+      const active = document.activeElement
+      if (event.shiftKey) {
+        // Shift+Tab：焦点在首元素（或不在 dialog 内——异常逃逸）→ wrap 到末元素。
+        if (active === first || !host.contains(active)) {
+          event.preventDefault()
+          last.focus()
+        }
+      } else if (active === last || !host.contains(active)) {
+        // Tab：末元素 → wrap 回首元素；焦点逃逸 host（应不可达）→ 拉回 dialog 首元素。
+        event.preventDefault()
+        first.focus()
+      }
+    }
+    const attachAttr = () => {
+      if (trigger === null) return
+      attrObserver = new MutationObserver(syncInert)
+      attrObserver.observe(trigger, { attributes: true, attributeFilter: ['aria-expanded'] })
+      syncInert()
+    }
+    document.addEventListener('keydown', onKeyDown, true)
+    if (trigger !== null) {
+      attachAttr()
+    } else {
+      // trigger 未挂（occupant 链早期）：一次性全树观察等它出现，出现即转 attributes。
+      treeObserver = new MutationObserver(() => {
+        trigger = host.querySelector('button[aria-haspopup="dialog"]')
+        if (trigger === null) return
+        treeObserver?.disconnect()
+        treeObserver = null
+        attachAttr()
+      })
+      treeObserver.observe(host, { childList: true, subtree: true })
+    }
+    return () => {
+      document.removeEventListener('keydown', onKeyDown, true)
+      attrObserver?.disconnect()
+      treeObserver?.disconnect()
+    }
+  }, [])
+
   return (
     <div
       ref={frameRef}
@@ -228,6 +327,24 @@ export function MainFrame({
       </div>
       {/* 仅 details 拖拽 handle（sidebar 无 rail/列，不存在 resize）。 */}
       {detailsWidth > 0 && <DragHandle side="details" left={viewport - detailsWidth} onStart={onDetailsStart} onDrag={onDetailsDrag} onEnd={onDragEnd} />}
+      {/* settings 跨边隐藏宿主（见文件头「例外」段）：屏幕外 fixed 容器不占 grid 位、
+          无视觉；SidebarRoot 全家在此挂载（官方 full 同帧并存常态），流内容被 overflow
+          hidden 裁剪，仅 settings modal 宿主可见（fixed 全视口不受裁）。data 标记供
+          client.js 定位宿主内官方 trigger。
+          层叠陷阱（实机定案）：position:fixed 元素**总是创建 stacking context**（无论
+          z-index）——容器 z-auto 沉层叠第 6 层，容器内 modal overlay 的 z1000 被压扁在
+          容器 SC 内；conversation 的 positive z 元素（tabs z1、composerSeat z7）在文档级
+          第 7 层 → 盖过整个容器（用户实测输入框层级在设置之上）。修法 = 容器自身提升
+          z-index（1000，与官方 overlay 同层语义）：容器 SC 整体提到文档高层层叠，内部
+          modal 正常盖 conversation；屏幕外定位不受 z 影响。
+          键盘可达性：容器默认 inert（见上 effect），dialog 挂载时自动解除。 */}
+      <div
+        ref={settingsHostRef}
+        data-sidebar-settings-host=""
+        style={{ position: "fixed", left: -10000, top: 0, width: 280, height: 600, overflow: "hidden", zIndex: 1000 }}
+      >
+        {renderSlot("sidebar", { collapsed: false, width: 280 })}
+      </div>
     </div>
   )
 }

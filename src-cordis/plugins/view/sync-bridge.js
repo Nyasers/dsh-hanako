@@ -138,14 +138,31 @@
 // · BroadcastChannel 按 origin+name 广播：127.0.0.1:3080 单 dsh 运行时内安全；同端口
 //   不可并存第二运行时（绑定冲突），跨 profile/跨端口不同源不串扰。
 //
-// ── settings 跨边（V4 设计第 4 项）调研结论（记录，详见交付 2）──
-// ui-settings-general（sidebar.settings occupant）的 trigger → modal（1080x700）打开是
-// SettingsRoot 组件内 useState 本地态，无服务/事件/store 可编程打开；shell 仅存在于
-// ui-sidebar occupant 子树内（main 视图 V3 无侧栏 → occupant 不挂载，无宿主）；槽规则
-// （ui-slots：slot key 全局限单声明者；single occupant 同 priority 二次注册抛；shadow
-// occupant 子槽声明与官方重复即抛）封死所有干净拦截面。→ V4 落地 settings 跨边不可行，
-// 记为待上游支持。本模块预留 open-settings 消息形态常量，待官方提供 root 可挂 settings
-// shell 槽位或可编程 open 服务后启用（见 OPEN_SETTINGS_MESSAGE）。
+// ── settings 跨边（V4 设计第 4 项）──
+// V4 调研结论：官方 SettingsRoot 打开态是组件本地 useState，无服务/事件/store 可编程
+// open；settings shell 仅存在于 ui-sidebar occupant 子树内（main 视图 V3 无侧栏 →
+// occupant 不挂载，无宿主）；槽规则封死替换拦截面——结论为不可行，记为待上游。
+// feat/settings-cross-edge（本分支）落地**无官方改动的转发方案**（V4 结论的突破尝试）：
+//   · sidebar 视图（fp 窄栏）：官方 settings trigger（footer，SettingsRoot 渲染的
+//     button[aria-haspopup=dialog]，onClick=setOpen(true)）点击被 DOM capture 层拦截
+//     （stopImmediatePropagation 挡官方 setOpen）→ requestOpenSettings() 经本频道发
+//     { v:1, type:'open-settings' } → main 打开（窄栏 modal 不可用，main 宽页承载）。
+//   · main 视图：MainFrame 增加**隐藏 sidebar 槽宿主**（屏幕外容器 renderSlot('sidebar')
+//     → SidebarRoot 全家挂载——官方 full 视图 sidebar+conversation 同帧并存即官方常态，
+//     无新增冲突面——流内容裁剪不可见，仅作 sidebar.settings occupant 的 mount 宿主）；
+//     收到 open-settings → 程序 click 宿主内官方 trigger（aria-haspopup=dialog）→ 官方
+//     setOpen(true) → modal（SettingsRoot.module.css .overlay position:fixed 全视口，
+//     DOM 虽在宿主容器内但 fixed 不受祖先 overflow 裁剪，无 transform 链）覆盖 main
+//     视口正常显示。全程无官方源码改动、无 React 内部 hack、vendor 不动。
+//   消息形态：OPEN_SETTINGS_MESSAGE 自 V4 预留至此启用（协议 v:1 内新 type）；
+//   requestOpenSettings 暴露在桥返回面（emit 端发对端；receive 端本地直接开——
+//   对称语义，main 本地无人调）。已知边界（如实记录）：
+//   · sidebar 独立使用（无 main 并存）时点设置无接收者 → 无反应（fp 双卡形态
+//     sidebar+main 成对即常态；单卡场景记录为已知限制）。
+//   · 拦截命中面 = button[aria-haspopup=dialog]：sidebar 帧内唯一 dialog trigger 即
+//     settings trigger（ui-workspace 无 dialog trigger、agent-preset/model-select 等在
+//     conversation/details 槽——sidebar 视图不渲染），误伤面为零（侦察记录）。
+//   · 宿主 trigger 未 mount（occupant 链慢/异常）→ warn + 丢（不炸桥）。
 //
 // ================== 纯核心（可 node 单测，见 tests/sync-bridge.test.mjs）==================
 
@@ -189,7 +206,7 @@ function currentOf(snap) {
  * @returns {{ dispose: () => void, receive: (msg: object) => void }} 销毁句柄 + 远端入口。
  */
 export function createSyncCore(opts) {
-  const { list, open, clear, post, mode } = opts;
+  const { list, open, clear, post, mode, onOpenSettings } = opts;
   assertBridgeMode(mode);
   const RECEIVE = mode === BRIDGE_MODE_RECEIVE;
   /** list 就绪（首个 host baseline 投影）标志。 */
@@ -315,6 +332,12 @@ export function createSyncCore(opts) {
       return;
     }
     if (msg.type === "clear") handleRemoteClear();
+    if (msg.type === "open-settings") {
+      // settings 跨边：main（receive）收到 sidebar 的打开请求 → 本地打开官方设置
+      // modal（回调 = client.js 程序 click 宿主 trigger）。回调缺失（未接线）时静默
+      // 忽略——协议容忍单向订阅者。
+      if (typeof onOpenSettings === "function") onOpenSettings();
+    }
   }
 
   function handleRemoteSelect(id) {
@@ -365,6 +388,16 @@ export function createSyncCore(opts) {
     },
     /** 远端消息入口（浏览器载体/测试邮袋共用；emit 端 no-op）。 */
     receive: onRemoteMessage,
+    /** 请求对端打开设置（settings 跨边）：emit = 发 open-settings 消息；receive = 本地
+     *  直接开（对称语义——receive 端是跟随方无对端可发，本地开即最终效果）。 */
+    requestOpenSettings() {
+      if (disposed) return;
+      if (mode === BRIDGE_MODE_EMIT) {
+        post(OPEN_SETTINGS_MESSAGE);
+      } else if (typeof onOpenSettings === "function") {
+        onOpenSettings();
+      }
+    },
     // 测试/诊断内省面（非公开 API；生产不依赖）。
     _debug() {
       return { mode, booted, sentAnything, sentValue, pendingId };
@@ -386,18 +419,21 @@ export const SYNC_CHANNEL = "dshana.sync";
  * @param {'emit'|'receive'} mode - 方向/角色（见 assertBridgeMode）。
  * @returns {() => void} disposer。
  */
-export function createSessionSyncBridge(ctx, mode) {
+export function createSessionSyncBridge(ctx, mode, extra) {
   assertBridgeMode(mode);
   const sessions = ctx.sessions;
+  const onOpenSettings = extra !== null && typeof extra === "object" && typeof extra.onOpenSettings === "function"
+    ? extra.onOpenSettings
+    : undefined;
   if (sessions === undefined || sessions.list === undefined) {
     // sessions 服务未就绪理论上不发生（inject 'sessions' 已等 provider）；
     // 防御性降级 = 无联动（等同 full 视图语义），不抛。
-    return () => {};
+    return noopBridge(onOpenSettings);
   }
   const channel = createChannel();
   if (channel === null) {
     // 无 BroadcastChannel 环境（node e2e 等）：桥不激活。
-    return () => {};
+    return noopBridge(onOpenSettings);
   }
   const core = createSyncCore({
     mode,
@@ -405,15 +441,16 @@ export function createSessionSyncBridge(ctx, mode) {
     open: (id) => sessions.open(id),
     clear: () => sessions.clear(),
     post: (msg) => channel.post(msg),
+    onOpenSettings,
   });
   if (mode === BRIDGE_MODE_RECEIVE) {
     // receive：频道消息 → 核心应用。emit：不订阅（发射端不收远端，见文件头）。
     channel.onMessage((msg) => core.receive(msg));
   }
-  return () => {
+  return attachRequest(() => {
     channel.close();
     core.dispose();
-  };
+  }, core);
 }
 
 /** BroadcastChannel 载体封装（channel 缺失/null 时静默降级）。 */
@@ -467,7 +504,23 @@ function createChannel() {
   };
 }
 
-// ---- settings 跨边协议预留（V4 交付 2 结论：上游不可行，见模块头）----
-// 待官方提供 root 可挂 settings shell 槽位或可编程 open/close 服务后，sidebar 视图经
-// 本频道发 { v:1, type:'open-settings' }，main 视图据此打开官方 settings modal。
+// ---- settings 跨边协议（OPEN_SETTINGS_MESSAGE 自 V4 预留至此启用；机制与边界见
+// 文件头「settings 跨边」段）----
+// sidebar（emit）requestOpenSettings → 本频道发 { v:1, type:'open-settings' }；
+// main（receive）核心路由 → onOpenSettings 回调 → 本地打开官方设置 modal。
 export const OPEN_SETTINGS_MESSAGE = { v: 1, type: "open-settings" };
+
+/** 降级桥（sessions 缺失/channel 不可用）：disposer no-op + requestOpenSettings 本地
+ *  直接开（回调存在时）——与正常桥的 receive 端语义对齐。 */
+function noopBridge(onOpenSettings) {
+  const disposer = () => {};
+  if (typeof onOpenSettings === "function") disposer.requestOpenSettings = onOpenSettings;
+  return disposer;
+}
+
+/** 把 core 的 requestOpenSettings 面挂到 disposer 函数上（调用方既可直接 return 当
+ *  effect disposer，也可拿 .requestOpenSettings 发打开请求——sidebar 拦截用）。 */
+function attachRequest(disposer, core) {
+  disposer.requestOpenSettings = () => core.requestOpenSettings();
+  return disposer;
+}
