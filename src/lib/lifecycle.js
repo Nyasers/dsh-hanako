@@ -67,6 +67,7 @@ import {
 // specs/current/dshana-profile-bundle/spec.md）：
 import { ensureProfileSeeded } from "./profile-seed.js";
 import { closeBus } from "./bus.js";
+import { mountAcp } from "./acp-mount.js";
 
 const STDERR_CAP = 8192;
 const PORT_READY_TIMEOUT_MS = 60000; // web host 端口就绪等待上限
@@ -746,6 +747,24 @@ async function bootInproc(cfg, { pkgDir, dshHome, port, logPath }) {
         emitLog("hana", `[dsh web] 随机端口已分配：${actual}`);
       }
       emitLog("hana", `[dsh web] 进程内 boot 完成（ctx=${!!r.ctx} shutdown=${typeof r?.shutdown}，webserver ${web.port} 存活）`);
+      // ACP 内部通讯通道挂载（feat/acp-channel）：DSH ctx 上挂 dsh-acp 插件（内存双工
+      // stream，零端口零 stdio），宿主侧 client 单例挂 web.acp——指令通道内部化的
+      // 载体（HTTP /api 兑底保留至 L2 迁移完成）。挂载/握手失败不阻断 boot（WebUI
+      // 主链不依赖 ACP），warn 降级。
+      try {
+        const acpApi = await mountAcp(r.ctx, {
+          dshHome,
+          emitLog,
+        });
+        web.acp = acpApi;
+        emitLog("hana", "[dsh web] ACP 内部通道就绪（web.acp）");
+      } catch (e) {
+        web.acp = null;
+        emitLog(
+          "warn",
+          `[dsh web] ACP 挂载失败（降级：指令走 HTTP /api）：${(e && e.message) || e}`,
+        );
+      }
       // 就绪探测必须与 boot 同 try：就绪失败（超时/握手失败）时 web.ctx 仍持有
       // 进程内 cordis 树 + 占用端口——不回收则 g.web 被 ensureWebHost 清掉后引用
       // 丢失，重试必 EADDRINUSE 直到重启 Hana（CodeRabbit Major：spawn 路径可杀子进程
