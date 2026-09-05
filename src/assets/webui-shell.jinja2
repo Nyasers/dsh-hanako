@@ -589,7 +589,14 @@
         if (view === "ready") {
           clearClocks();
           clearReadyTimer();
-          if (!readyReceived) { mountReady(); }
+          if (!readyReceived) {
+            mountReady();
+          } else {
+            // 已 ready 后的快照刷新（端口读回/变化）：重跑 attach——attach 内按当前
+            // boot.web.port 判 src（端口一致不重设、变化则重载到真实端口），否则随机
+            // 端口场景 iframe 会停在服务端固化的兑底端口（见 attach 注释）
+            attach();
+          }
           return;
         }
         readyReceived = false; // 非 ready 快照：撤销就绪标志，使后续 ready 恢复时能完整走 mountReady（data-view 恢复 + attach）
@@ -638,13 +645,21 @@
       }
       // iframe src 按视图参数化（父子双卡过渡方案）：it.viewQuery 由服务端路由决定——
       // /main → "?dshana-view=main"（main 视图 = 接收端 receive）、/sidebar →
-      // "?dshana-view=sidebar"（纯侧栏视图 = 发射端 emit），两卡各自直嵌同源 3080；
-      // viewQuery 空串（view 缺失/白名单外）＝无参 root = full 整页视图——仅调试兜底
-      // （宿主双卡路由恒带 view，正常不可达；3080 直开仍是无参 full）。
+      // "?dshana-view=sidebar"（纯侧栏视图 = 发射端 emit），两卡各自直嵌 DSH server
+      // （随机端口形态：实际端口 boot 后写 g.web.port → boot-state web.port，attach 时
+      // 优先取快照端口；服务端模板 port 仅为兜底——自举页渲染时端口可能未定，固化即错）；
+      // viewQuery 空串（view 缺失/白名单外）＝无参 root = full 整页视图——仅调试兜底。
       function attach() {
         var wasPending = document.body.getAttribute("data-view") !== "ready";
-        if (wasPending || !frame.getAttribute("src")) {
-          frame.src = "http://127.0.0.1:{{= it.port }}/{{= it.viewQuery }}";
+        var viewQuery = {{= JSON.stringify(it.viewQuery) }};
+        var port =
+          (boot && boot.web && boot.web.port) || {{= JSON.stringify(it.port) }};
+        var target = "http://127.0.0.1:" + port + "/" + viewQuery;
+        var cur = frame.getAttribute("src");
+        // 已有 src 且端口一致：不重设（防 applyBoot/事件反复重载 iframe）；端口变化
+        // （自举页固化兑底 → 快照真实端口）重设 src，iframe 重载到正确端口。
+        if (wasPending || !cur || cur.indexOf("127.0.0.1:" + port) === -1) {
+          frame.src = target;
         }
         startThemePush();
       }

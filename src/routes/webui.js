@@ -137,7 +137,7 @@ function readBootState() {
       guidance: null,
       lastError: null,
     },
-    web: { ready: false, lastError: null },
+    web: { ready: false, port: null, lastError: null },
   });
   try {
     const g = globalThis.__dshHanako;
@@ -180,6 +180,12 @@ function readBootState() {
       },
       web: {
         ready: webReady,
+        // 实际监听端口（随机端口 listen 0 语义，boot 后读回）：iframe src 客户端拼装用——
+        // 服务端渲染自举页时端口可能未定，端口固进模板会钉死 3080 兑底（attach 错端口）
+        port:
+          g.web && typeof g.web.port === "number" && g.web.port > 0
+            ? g.web.port
+            : null,
         lastError: tail(g.webLastError, 800),
       },
     };
