@@ -46,6 +46,7 @@
 
 // 插件页 HTML 壳（构建期 template-loader 经 doT 编译为自包含渲染函数，运行时零依赖）
 import { render as webuiShellHtml } from "../assets/webui-shell.jinja2";
+import { subscribeDshCtxEmitEvents } from "../lib/dsh-events.js";
 
 // ---- 就绪事件流订阅者（web host 启动失败通知；lifecycle.js 调 g.notifyWebStartFailed）----
 // 多个壳页 tab 可同时订阅；Set 保存，流关闭时移除。notifyWebStartFailed 每次模块加载
@@ -380,26 +381,32 @@ export default function registerWebuiRoutes(app, ctx) {
               send({ type: "pending" });
             }),
           );
-          // DSH 设置变更转发（bridge $events 订阅 → 总线 events 频道 → 这里过滤）：
-          // settings/document-updated 的 ui-theme 命名空间 = 主题偏好变更，推给壳页
-          // 转告注入脚本重读偏好（事件驱动替代 3s 轮询 settings/describe）。
-          unsubs.push(
-            g.dshanaBus.on("events", (frame) => {
-              if (closed) return;
-              if (!frame || frame.type !== "emit") return;
-              if (
-                frame.event === "settings/document-updated" &&
-                Array.isArray(frame.args) &&
-                frame.args[0] === "ui-theme"
-              ) {
-                send({
-                  type: "theme-pref",
-                  ns: "ui-theme",
-                  revision: frame.args[1] ?? null,
-                });
-              }
-            }),
-          );
+          // DSH 设置变更转发（theme-pref）：settings/document-updated 的 ui-theme 命名空间
+          // = 主题偏好变更，推给壳页转告注入脚本重读偏好（事件驱动替代 3s 轮询
+          // settings/describe）。事件源：ctx.on 直订优先（refactor/bus-inproc 总线内置化——
+          // DSH Host 事件源头 = cordis ctx，总线只是载波）；ctx 不可用兑底总线 events
+          // （bridge 订阅转发）。
+          const themeFromFrame = (frame) => {
+            if (closed) return;
+            if (!frame || frame.type !== "emit") return;
+            if (
+              frame.event === "settings/document-updated" &&
+              Array.isArray(frame.args) &&
+              frame.args[0] === "ui-theme"
+            ) {
+              send({
+                type: "theme-pref",
+                ns: "ui-theme",
+                revision: frame.args[1] ?? null,
+              });
+            }
+          };
+          const themeCtxOff = subscribeDshCtxEmitEvents(themeFromFrame);
+          if (themeCtxOff) {
+            unsubs.push(themeCtxOff);
+          } else if (g && g.dshanaBus && typeof g.dshanaBus.on === "function") {
+            unsubs.push(g.dshanaBus.on("events", themeFromFrame));
+          }
         }
         // 挂钩 web host 启动失败通知（lifecycle startWebHostFromPlugin catch 调用）。
         // 每次模块加载都重新赋值 notifyWebStartFailed（不设 __webStartFailedHooked 守卫）：

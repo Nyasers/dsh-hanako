@@ -21,6 +21,7 @@
 // 见 dsh-run.js 头注释），不在此归并。
 
 import { getSingleton } from "./state.js";
+import { subscribeDshCtxEmitEvents } from "./dsh-events.js";
 
 // ---- HTTP RPC 客户端（dsh web /api 网关，fetch 载波）----
 // Unary：POST /api/<method>，body = { type:"client-request", rpcId, method, payload }
@@ -203,13 +204,11 @@ async function respondDirect(base, payload, signal) {
 // 且宿主侧无 launchToken 源，已废弃）。
 
 async function* openMux(base, signal) {
-  // dsh 0.1.2：宿主不直连 remote.mux——bridge 在 dsh 进程内订阅 $events 并经
-  // dshana.bus events 频道转发（ready/emit/waterfall），这里纯总线消费。
+  // 事件源：进程内 boot 下宿主与 DSH 同 ctx（g.web.ctx），DSH Host 事件源头 = cordis ctx
+  // （官方 dsh-api-remotes remoteEventSource 即 ctx.on 直订），remote.mux WS / dshana.bus
+  // 只是载波（refactor/bus-inproc：总线内置化第一刀——事件链路 ctx.on 直订优先，免
+  // WS/总线绕圈；ctx 不可用回退总线 events，端口形态零行为差异）。
   const g = getSingleton();
-  const bus = g?.dshanaBus;
-  if (!bus || typeof bus.on !== "function") {
-    throw new Error("dshana.bus 不可用，无法订阅 DSH 事件流");
-  }
   const queue = [];
   const waiters = [];
   let off = null;
@@ -218,13 +217,23 @@ async function* openMux(base, signal) {
   const onFrame = (payload) => {
     if (!payload || typeof payload.type !== "string") return;
     if (payload.type === "ready") {
-      ready = true; // bridge 事件流就绪信号，不投上层
+      ready = true; // 事件流就绪信号（总线模式 bridge 就绪帧），不投上层
       return;
     }
     if (waiters.length) waiters.shift()(payload);
     else queue.push(payload);
   };
-  off = bus.on("events", onFrame);
+  off = subscribeDshCtxEmitEvents(onFrame);
+  if (off) {
+    ready = true; // ctx 直订：订阅成功即就绪（无 bridge ready 帧等待）
+  } else {
+    // ctx 不可用（boot 未完成边缘/异常形态）：回退总线 events（bridge 转发）
+    const bus = g?.dshanaBus;
+    if (!bus || typeof bus.on !== "function") {
+      throw new Error("dshana.bus 不可用，无法订阅 DSH 事件流");
+    }
+    off = bus.on("events", onFrame);
+  }
   if (signal?.aborted) {
     aborted = true;
     off();
