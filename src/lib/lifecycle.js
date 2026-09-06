@@ -674,6 +674,11 @@ export async function ensureWebHost(cfg) {
   // 目录 → dist/cordis），否则 dsh loadProfile 会抛「profile
   // does not exist」。
   await ensureDshanaProfile(cfg);
+  // g.web 被替换/重建（含 closeProcess 回收后重拉，CodeRabbit #6）：换新实例前重置
+  // providerPushWired——旧 ctx 的 provider-refresh-request 订阅已随旧 ctx dispose 失效，
+  // 若不移除 true 标志，新 ctx 就绪点不会再接线（markReady 里 wire 被短路），新 ctx 的
+  // ctx.on 订阅丢失 → provider 路由补推/home 就绪首推接收不到。此处清位让新实例重接。
+  providerPushWired = false;
   return bootInproc(cfg, { pkgDir, dshHome, port, logPath });
 }
 // ---- T7b：进程内 boot dsh（动态 import + runProfile，webserver 保留在进程内 bind）----
@@ -928,12 +933,17 @@ function wireProviderPushCtx() {
   const g = getSingleton();
   const ctx = g?.web?.ctx;
   if (!ctx || typeof ctx.on !== "function") return;
-  providerPushWired = true;
   try {
     ctx.on("dshana/provider-refresh-request", () => {
       pushProviderRoutes();
     });
+    // ctx.on 成功后才置位（CodeRabbit #6）：订阅建立失败时保持 false，下次就绪点可重试
+    //（否则置位后失败永不重接本实例的订阅）。新 web 实例重建时已在上方 ensureWebHost
+    // 清零 providerPushWired，新 ctx 就绪会重新接线。
+    providerPushWired = true;
   } catch (e) {
+    // 订阅失败：不置位（保持可重试），仅记日志
+    providerPushWired = false;
     try {
       g.appendLog?.("hana", "[dsh-run] provider-refresh-request ctx 订阅失败：" + (e?.message || e));
     } catch {
