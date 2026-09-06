@@ -28,6 +28,7 @@ import cardJs from "../assets/card.js";
 // 卡片页面 HTML 模板（构建期 template-loader 经 doT 编译为自包含渲染函数）
 import { render as cardOpHtml } from "../assets/card-op.jinja2";
 import { render as cardDepHtml } from "../assets/card-dep.jinja2";
+import { subscribeDshCtxEmitEvents } from "../lib/dsh-events.js";
 
 const CARD_ASSETS = { css: cardCss, js: cardJs };
 
@@ -117,8 +118,18 @@ function rebuildOpFromLog(dataDir, sessionId, rpcId) {
     else if (ev.type === "user/message" && ev.data?.source?.kind === "user")
       prompts.push(ev);
   }
-  const idx = prompts.findIndex((u) => u.data?.source?.rpcId === rpcId);
-  if (idx < 0) return null;
+  let idx = prompts.findIndex((u) => u.data?.source?.rpcId === rpcId);
+  if (idx < 0) {
+    // ACP 通道兑底：ACP 会话的 jsonl 里 user/message 无 source.rpcId（ACP 协议无
+    // requestId 概念——rpcId 是 HTTP client-request 信封才注入的宿主侧键）。特征 =
+    // 全部 user prompt 都无 rpcId——此时退化取最后一个 prompt（最近任务，当前任务
+    // 卡片场景即命中）；HTTP 会话（prompt 带 rpcId）匹配失败仍判不存在（原行为）。
+    if (prompts.length && prompts.every((u) => u.data?.source?.rpcId == null)) {
+      idx = prompts.length - 1;
+    } else {
+      return null;
+    }
+  }
   const prompt = prompts[idx];
   const startSeq = prompt.seq;
   const endSeq = idx + 1 < prompts.length ? prompts[idx + 1].seq : Infinity;
@@ -330,8 +341,10 @@ export default function registerCardRoutes(app, ctx) {
   });
 
   // SSE 推送源（卡片主链路）：先推 baseline（jsonl 恢复快照，含全量 output），
-  // 再对每个连接开一条到 DSH events.mux 的 WebSocket（openMux 同款），过滤
-  // frame.sessionId === 本连接 sessionId 的帧，以 event 事件原样转发；连接关闭时关 WS。
+  // 再对每个连接订阅一次 DSH 会话事件（进程内 ctx 直订——ACP 内部通道下会话事件走
+  // session/event 通用广播，DSH WS events.mux 只转 api-session/*（HTTP 网关面），ACP
+  // 会话不在其上——直订同一事件源零 WS/端口绕圈），过滤 sessionId === 本连接会话的帧，
+  // 以 event 事件转译转发；连接关闭时退订。
   app.get("/ops/stream", (c) => {
     const sessionId = String(c.req.query("sessionId") || "");
     const rpcId = String(c.req.query("rpcId") || "");
@@ -341,11 +354,8 @@ export default function registerCardRoutes(app, ctx) {
     const g = globalThis.__dshHanako;
     const baseline = readOp({ sessionId, rpcId, timeoutMs }, true);
     if (!baseline) return c.json({ ok: false, error: "任务记录不存在" }, 404);
-    // web host 端口：单例优先（运行中 dsh web），否则配置兜底
-    const web = g?.web;
-    const port = web?.port || Number(ctx?.config?.webPort) || 3080;
 
-    let ws = null;
+    let offEvents = null; // ctx 进程内订阅退订函数（替代 WS events.mux）
     const stream = new ReadableStream({
       start(controller) {
         const enc = new TextEncoder();
@@ -363,10 +373,13 @@ export default function registerCardRoutes(app, ctx) {
         const closeAll = () => {
           if (closed) return;
           closed = true;
-          try {
-            if (ws) ws.close();
-          } catch {
-            /* 已关 */
+          if (typeof offEvents === "function") {
+            try {
+              offEvents();
+            } catch {
+              /* 已退订 */
+            }
+            offEvents = null;
           }
           try {
             controller.close();
@@ -376,50 +389,47 @@ export default function registerCardRoutes(app, ctx) {
         };
         // a) 基线快照（jsonl 恢复；运行中窗口归一化为 running + 部分输出）
         send("baseline", baseline);
-        // b) 转发 DSH 实时事件：events.mux WebSocket（与 tools/dsh-run.js openMux 同款连接）
+        // b) 转发 DSH 实时事件：进程内 ctx 直订（session/event 通用广播——jsonl 同源，
+        // 含 turn/start、assistant/chunk、assistant/message、turn/end 等；card.js 前端已
+        // 原生消费该帧格式）。emit 帧 {type:"emit",event,args} 的 session/event 参数为
+        // [session, evObj]——转译 {type:"session/event", event: evObj, sessionId: session.id}
+        // 投卡片。
         try {
-          if (typeof WebSocket !== "function")
-            throw new Error("宿主环境无全局 WebSocket，无法订阅 DSH 事件流");
-          ws = new WebSocket(`ws://127.0.0.1:${port}/api/events.mux`);
-          ws.onmessage = (ev) => {
-            let frame = {};
-            let envelope = null;
-            try {
-              envelope = JSON.parse(ev.data);
-              frame = envelope?.payload || envelope || {};
-            } catch {
-              return;
-            }
-            // server-request 信封（approval/requested 等应答类帧）：外层 rpcId 补进 frame
+          offEvents = subscribeDshCtxEmitEvents((frame) => {
             if (
-              envelope &&
-              typeof envelope === "object" &&
-              typeof envelope.rpcId === "string" &&
-              typeof frame.rpcId !== "string"
-            ) {
-              frame.rpcId = envelope.rpcId;
-            }
-            if (!frame || typeof frame.type !== "string") return;
-            if (frame.sessionId && frame.sessionId !== sessionId) return; // 只转发本连接会话的帧
-            send("event", frame);
-          };
-          ws.onerror = () => {
-            /* 错误由 onclose 收尾 */
-          };
-          ws.onclose = () => closeAll();
+              !frame ||
+              frame.type !== "emit" ||
+              frame.event !== "session/event"
+            )
+              return;
+            const args = Array.isArray(frame.args) ? frame.args : [];
+            const [session, evObj] = args;
+            const sid = session && (session.id ?? null);
+            if (!sid || sid !== sessionId) return; // 只转发本连接会话的帧
+            if (!evObj || typeof evObj.type !== "string") return;
+            send("event", {
+              type: "session/event",
+              event: evObj,
+              sessionId: sid,
+            });
+          });
+          if (!offEvents)
+            throw new Error("ctx 未就绪，无法订阅 DSH 会话事件");
         } catch (e) {
-          // WS 建立失败：基线已推送，结束流（卡片侧 EventSource 会自动重连 / 兜底 /ops/status）
+          // ctx 订阅失败（boot 边缘/异常形态）：基线已推送，结束流（卡片侧
+          // EventSource 自动重连 / 兜底 /ops/status jsonl 恢复路径）
           closeAll();
         }
       },
       cancel() {
-        // 卡片断开（EventSource.close / 页面卸载）：关 WS 释放连接
-        if (ws) {
+        // 卡片断开（EventSource.close / 页面卸载）：退订 ctx 事件释放连接
+        if (typeof offEvents === "function") {
           try {
-            ws.close();
+            offEvents();
           } catch {
-            /* 已关 */
+            /* 已退订 */
           }
+          offEvents = null;
         }
       },
     });

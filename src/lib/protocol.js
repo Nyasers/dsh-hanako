@@ -2,25 +2,30 @@
 // Copyright (c) 2026 Nyasers
 //
 // tools/lib/protocol.js — dsh web /api 网关协议层共用模块（lib 提取）
-// 从 tools/dsh-run.js 剥离的协议/纯函数：总线 RPC 客户端（指令面收敛进 dshana.bus）、
-// HTTP RPC 兜底、事件流（WS mux）、文本提取。dsh-run.js 与 dsh-session.js 静态 import。
+// 从 tools/dsh-run.js 剥离的协议/纯函数：Unary RPC（ACP 优先，HTTP 兑底）、事件流
+// （ctx 直订 + 总线 events 兑底）、文本提取。
 //
-// 归类说明：callUnary / callUnaryBus / nextRpcId / openMux 是 dsh web host /api 网关的
-// 传输协议（Unary RPC + WebSocket 事件流）。v0.23.x 起 Unary RPC 指令面（session.create /
-// prompt / selectModel / cancel + respond 审批应答）经 dshana.bus 总线收发（callUnaryBus，
-// 总线优先、HTTP 兜底）；events.mux 事件流保持直连（流式高吞吐 + 实时审批帧不适合事件
-// 通道，见收敛边界注释）。textFromChunk / textFromMessageBlocks 是同一网关事件帧的
-// 文本提取面（assistant/chunk、assistant/message 的载荷提取）。两者同属"与 dsh web
-// 通信的线上协议"一条线，收敛在一个 protocol.js 里（若拆 format.js 反而让 callUnary
-// 与它消费的事件帧解析分处两文件，语义更散）。
+// 归类说明（feat/acp-channel，2026-09-06）：宿主↔DSH 通讯两条通道——
+//   指令 = ACP 进程内直连（Agent Client Protocol：宿主与 DSH 同进程，boot 时挂
+//   @deepseek-ai/dsh-acp 插件 + 内存双工 Web Streams，宿主侧 client 单例挂 web.acp；
+//   session.create/new/resume 与 prompt 走 ACP——官方 JSON-RPC 面，零端口零 stdio；
+//   ctx 不可用/ACP 未挂载时兑底 HTTP RPC）；
+//   事件 = cordis ctx.on 直订（DSH Host 事件源头，见 dsh-events.js——ACP 只管指令，
+//   事件仍 ctx 直订，与 ACP 插件的 ctx 订阅并存 fan-out）。
+// callUnaryBus 为兼容名（调用方 tools/* 不变）。respond（审批应答）走 respondDirect
+// （client-response 信封直发 /api/respond，低频面暂留 HTTP）；selectModel/cancel/list
+// 同留 HTTP（同 DSH 会话 gateway 层操作与 ACP 兼容）。
 //
-// 消费方：tools/dsh-run.js submitTask（事件循环 / session.create / session.prompt /
-// session.selectModel / session.cancel 全经此层）+ tools/dsh-cancel.js / tools/dsh-approve.js
-// （callUnaryBus）+ tools/dsh-session.js（get 模式 textFromMessageBlocks 提取会话最终结论）。
-// routes/card.js 另有一份独立 openMux 事件流实现，但它不 import 本模块（是独立实现，
-// 见 dsh-run.js 头注释），不在此归并。
-
+// 事件流 openMux：进程内 boot 下宿主与 DSH 同 ctx，ctx.on 直订优先（订阅注册成功 ≠
+// producer 就绪——就绪 = host boot 收敛 g.web.ready 或总线 ready 帧/ctx 首帧，见 openMux
+// 内 ready 判定，CodeRabbit 第二轮 #4）；ctx 不可用（boot 边缘）回退总线 events（WS 总线
+// 退役前兑底保留）；ctx 订阅存在时同样保留总线兜底至 producer 可用确认。
+//
+// textFromChunk / textFromMessageBlocks 是事件帧文本提取面（assistant/chunk、
+// assistant/message 载荷）。消费方：tools/dsh-run.js submitTask + tools/dsh-approve.js
+// / dsh-session.js（get 模式）。routes/card.js 另有一份独立 openMux（不 import 本模块）。
 import { getSingleton } from "./state.js";
+import { subscribeDshCtxEmitEvents } from "./dsh-events.js";
 
 // ---- HTTP RPC 客户端（dsh web /api 网关，fetch 载波）----
 // Unary：POST /api/<method>，body = { type:"client-request", rpcId, method, payload }
@@ -29,15 +34,17 @@ function nextRpcId() {
   return `r_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-// HTTP fallback fetch 超时（总线不可用时直连 dsh 的降级路径不能无限挂）：无 caller
-// signal 时用 BUS_RPC_TIMEOUT_MS；有则 AbortSignal.any 合并（任一触发即中止）
+const HTTP_RPC_TIMEOUT_MS = 60000; // HTTP RPC 默认超时（响应丢失兜底，防挂死）
+
+// RPC fetch 超时：无 caller signal 时用 HTTP_RPC_TIMEOUT_MS；有则 AbortSignal.any 合并
 function rpcTimeoutSignal(signal) {
-  const t = AbortSignal.timeout(BUS_RPC_TIMEOUT_MS);
+  const t = AbortSignal.timeout(HTTP_RPC_TIMEOUT_MS);
   return signal ? AbortSignal.any([signal, t]) : t;
 }
 
 async function callUnary(base, method, payload, signal, meta) {
-  const rpcId = nextRpcId();
+  const rpcId =
+    (meta && typeof meta === "object" && meta.rpcId) || nextRpcId();
   // meta.rpcId 回传：rpcId 由宿主生成（client-request 信封），dsh 侧以此写 jsonl
   // user/message 的 data.source.rpcId——生成即有效，提前设置使失败/拒绝路径也能拿到
   //（成功路径同值），供调用方在提交失败时保留 rpcId 关联（sessionId+rpcId 定位轮次）。
@@ -61,129 +68,256 @@ async function callUnary(base, method, payload, signal, meta) {
   return full.result.value;
 }
 
-// ---- 总线 RPC（dshana.bus，Unary RPC 指令面收敛）----
-// v0.23.x 起 Unary RPC 指令面（session.create / prompt / selectModel / cancel + respond 审批
-// 应答）经 dshana.bus 总线收发：宿主 emit rpc.request（payload = { reqId, method, payload }），
-// dsh 进程内 @dsh-hanako/bridge 翻译器自环调 /api/<method> 后回投 rpc.result（payload =
-// { reqId, ok, value? } 或 { reqId, ok:false, error }），宿主按 reqId 配对等待。
-// 总线优先、HTTP 兜底：总线未连接（emit 返回 false 或 dshanaBus 未就绪）时降级回退
-// callUnary（HTTP），保可用性并 appendLog 记录降级（events.mux 事件流仍直连，不进总线）。
-// 收敛边界：数据面（events.mux 流式 chunk/审批帧/终态）与 /api/host.describe 就绪探测
-// （发生在 connectBus 之前的鸡生蛋）保留 HTTP 直连，见 lifecycle.js 注释。
-const BUS_RPC_TIMEOUT_MS = 60000; // 总线 RPC 默认超时（响应丢失/桥接异常兜底，防 pending 挂死）
-
-// callUnaryBus 的 pending 表（reqId → { resolve, reject, timer, method }）与 rpc.result
-// 订阅（模块级惰性接线一次，宿主侧 bus.js 的 on 是裸 EventEmitter 分发，无 ch: 前缀）
-const rpcPending = new Map();
-let rpcResultWired = false;
-
-function wireRpcResult() {
-  if (rpcResultWired) return;
-  const g = getSingleton();
-  const bus = g?.dshanaBus;
-  if (!bus || typeof bus.on !== "function") return;
-  rpcResultWired = true;
-  bus.on("rpc.result", (payload) => {
-    if (!payload || typeof payload !== "object" || typeof payload.reqId !== "string") return;
-    const entry = rpcPending.get(payload.reqId);
-    if (!entry) return; // 未知 reqId（已超时清理/垃圾帧）：忽略
-    // 清理（clearTimeout/delete/移除 abort 监听）统一在 settle 内做——
-    // 不能在 resolve/reject 前先 delete，否则 settle 的 pending 校验会误判已 settle 而跳过。
-    if (payload.ok) {
-      entry.resolve(payload.value);
-    } else {
-      const e = payload.error || {};
-      entry.reject(
-        new Error("dsh " + entry.method + " 失败：" + (e.code || "unknown") + " " + (e.message || "")),
-      );
-    }
-  });
-}
-
-// 降级路径的 base 来源：web host 单例（调用方通常已 ensureWebHost / hostBase 校验就绪）
+// 指令 base 来源：web host 单例（调用方通常已 ensureWebHost / hostBase 校验就绪）
 function rpcBusBase(g) {
   const web = g?.web;
   if (web?.ready && web.port) return "http://127.0.0.1:" + web.port;
   throw new Error("DSH web host 未就绪（callUnaryBus 降级路径）");
 }
 
-// 总线 Unary RPC：method/payload 同 callUnary；signal 支持中止（总线路径下
-// AbortError 语义与 fetch 一致）；meta 成功时回传 rpcId（与 callUnary 同）。
+// Unary RPC 指令面统一入口（feat/acp-channel：ACP 优先，HTTP 信封兑底）——
+// session.create（新建/resume）与 prompt 走 ACP 内部通道（web.acp.client）；其余方法
+// 走 HTTP /api（信封翻译：点号 → 斜杠 endpoint + session/* 的 args 信封
+// request/_request 包装 + requestId 注入——直连缺这层会 404 与 gateway 校验失败）。
 async function callUnaryBus(method, payload, signal, meta) {
+  const base = rpcBusBase(getSingleton());
+  if (method === "respond") {
+    return respondDirect(base, payload, signal);
+  }
   const reqId = nextRpcId();
-  // meta.rpcId 提前回传（同 callUnary 语义：reqId 宿主生成、dsh 侧写 jsonl
-  // data.source.rpcId）——总线路径成功/失败/超时/中止都保留 rpcId 关联；降级路径由
-  // callUnary 内部的 meta.rpcId 覆盖为实际 HTTP rpcId。
   if (meta && typeof meta === "object") meta.rpcId = reqId;
-  const g = getSingleton();
-  const bus = g?.dshanaBus;
-  // 总线优先：dshanaBus 就绪且 emit 送达（bus.js sendFrame 排队成功才 true——
-  // 未连接/未握手返回 false）才走总线；否则降级 HTTP 兜底（保可用性）。
-  let queued = false;
-  if (bus && typeof bus.emit === "function") {
-    try {
-      wireRpcResult(); // 先接线再发（响应经 WS 异步到达，接线必先于回投）
-      queued = bus.emit("rpc.request", { reqId, method, payload });
-    } catch {
-      queued = false;
+  const endpoint = method.includes(".") ? method.replace(/\./g, "/") : method;
+  const isSession =
+    method.startsWith("session.") || method.startsWith("session/");
+  const isSessionList =
+    method === "session.list" || method === "session/list";
+  // gateway 信封（HTTP 兑底路径）：payload 必须恰含一个 plain-object args 字段
+  //（{ args: <Remote payload> }）——session/* 的 Remote payload 按 descriptor 参数名
+  // 包 request/_request（session.list 用 _request）并注入 requestId（jsonl 定位键）；
+  // 非 session 方法裸 payload 透传（respond 已走 respondDirect 分支）。
+  const inner = isSession
+    ? {
+        [isSessionList ? "_request" : "request"]: {
+          ...(payload || {}),
+          requestId: reqId,
+        },
+      }
+    : payload;
+  const payload2 = { args: inner };
+  // ACP 内部通道优先（feat/acp-channel，端口只剩 UI 消费）：web.acp.client 就绪时
+  // session 指令面全部走 ACP（进程内 JSON-RPC，零端口）：create（new/resume）/
+  // prompt（fire）/ list（run.js resume 查 cwd）/ selectModel（set_config_option）/ cancel
+  //（notification）。HTTP /api 仅剩 respond（审批应答——L4 反向 request 未接前）兑底
+  // 与 WebUI 数据面消费。
+  const acp = acpClient();
+  if (acp) {
+    if (method === "session.create" || method === "session/create") {
+      return await acpCreate(acp, method, payload, signal);
+    }
+    if (method === "session.prompt" || method === "session/prompt") {
+      return await acpPrompt(acp, method, payload, signal);
+    }
+    if (method === "session.list" || method === "session/list") {
+      return await acpList(acp, method, payload, signal);
+    }
+    if (method === "session.selectModel" || method === "session/selectModel") {
+      return await acpSelect(acp, method, payload, signal);
+    }
+    if (method === "session.cancel" || method === "session/cancel") {
+      return await acpCancel(acp, method, payload, signal);
     }
   }
-  if (!queued) {
-    // 降级路径：总线未连接/未握手 → 回退现 callUnary（HTTP），错误语义与直连一致
-    try {
-      g?.appendLog?.(
-        "hana",
-        "[dshana.bus] rpc.request 未送达（总线未连接），" + method + " 降级走 HTTP",
-      );
-    } catch {
-      /* 日志失败不阻断 */
-    }
-    if (method === "respond") {
-      // respond 是 client-response 信封（rpcId 路由 web host pending 表，payload 已是
-      // { type:"client-response", rpcId, result } 原样信封）——不能用 callUnary 的
-      // client-request 信封（会再包一层，dsh /api/respond 校验失败）。总线不可用时
-      // 直发 HTTP，信封语义与总线路径（bridge 翻译器 respond 特殊处理）一致。
-      return respondDirect(rpcBusBase(g), payload, signal);
-    }
-    return callUnary(rpcBusBase(g), method, payload, signal, meta);
-  }
-  // 总线路径：pending 配对等待 rpc.result（超时/中止清理防泄漏）
-  return new Promise((resolve, reject) => {
-    const settle = (fn, value) => {
-      if (rpcPending.get(reqId) !== entry) return; // 已 settle：忽略迟到事件
-      clearTimeout(entry.timer);
-      rpcPending.delete(reqId);
-      signal?.removeEventListener("abort", onAbort);
-      fn(value);
-    };
-    const onAbort = () => {
-      settle(
-        reject,
-        Object.assign(new Error("已取消"), { name: "AbortError" }),
-      );
-    };
-    const entry = {
-      method,
-      meta,
-      resolve: (value) => settle(resolve, value),
-      reject: (err) => settle(reject, err),
-      timer: null,
-    };
-    entry.timer = setTimeout(() => {
-      settle(
-        reject,
-        new Error("dsh " + method + " 总线 RPC 超时（" + BUS_RPC_TIMEOUT_MS / 1000 + "s）"),
-      );
-    }, BUS_RPC_TIMEOUT_MS);
-    entry.timer.unref?.();
-    rpcPending.set(reqId, entry);
-    if (signal?.aborted) onAbort();
-    else signal?.addEventListener("abort", onAbort, { once: true });
-  });
+  return callUnary(base, endpoint, payload2, signal, meta);
 }
 
-// respond 审批应答直发（client-response 信封原样 POST /api/respond）：总线不可用时的
-// 降级路径。响应 rpcReceipt { accepted, reason? }，调用方校验 j.accepted 语义不变。
+// 取 ACP client 单例（boot 挂载成功才有；挂载失败/未 boot 返回 null → HTTP 兑底）
+function acpClient() {
+  try {
+    const acp = getSingleton()?.web?.acp;
+    return acp && acp.client && typeof acp.client.request === "function" ? acp : null;
+  } catch {
+    return null;
+  }
+}
+
+// ACP session.create（新建/续会话）：newSession/resumeSession。ACP 返回
+// { sessionId, configOptions }——映射回原接口的 { sessionId }（调用方再取字段）。
+// agentPreset 无 ACP 对应字段（忽略——用 DSH 全局默认 preset）。
+async function acpCreate(acp, method, payload, signal) {
+  const client = acp.client;
+  const methods = acp.methods;
+  const sid = payload && payload.sessionId;
+  const params = {
+    ...(payload && payload.cwd ? { cwd: String(payload.cwd) } : {}),
+    mcpServers: [],
+  };
+  const res = sid
+    ? await client.request(methods.agent.session.resume, { sessionId: sid, ...params }, { signal })
+    : await client.request(methods.agent.session.new, params, { signal });
+  try {
+    getSingleton()?.appendLog?.("hana", `[dsh-rpc] ACP ${sid ? "resume" : "new"} 会话 ${res.sessionId}`);
+  } catch { /* 日志失败不阻断 */ }
+  // effort 默认保持：session 建立后补 set reasoning_effort（ACP 会话 initial selection
+  // 只带 provider/model——settings 的 reasoningEffort 不经 ACP 插件 config 传递，落
+  // model 默认 = Default）。effort = 工具显式传（payload.reasoningEffort）?? boot 读
+  // settings 的默认（g.acpDefaultEffort——acp-mount readDefaultModel）。模型不支持
+  //（effort 枚举不在 efforts 列表）set 抛 AcpModelConfigError——catch 静默降级
+  //（effort 落该模型默认——「有的模型不支持该参数」的兜底）。
+  try {
+    const g0 = getSingleton();
+    const effort =
+      (payload && payload.reasoningEffort) ||
+      (g0 && g0.acpDefaultEffort) ||
+      null;
+    if (effort) {
+      try {
+        await client.request(
+          methods.agent.session.setConfigOption,
+          {
+            sessionId: res.sessionId,
+            configId: "reasoning_effort",
+            value: String(effort),
+          },
+          { signal },
+        );
+        try {
+          getSingleton()?.appendLog?.(
+            "hana",
+            "[dsh-rpc] ACP effort 已设：" + String(effort) +
+              "（session=" + String(res.sessionId).slice(0, 12) + "）",
+          );
+        } catch { /* 日志失败不阻断 */ }
+      } catch (e) {
+        try {
+          getSingleton()?.appendLog?.(
+            "hana",
+            "[dsh-rpc] ACP reasoning_effort 降级（模型默认）：" +
+              ((e && e.message) || e),
+          );
+        } catch { /* 日志失败不阻断 */ }
+      }
+    }
+  } catch { /* effort 读取/设置失败不阻断会话创建 */ }
+  return { sessionId: res.sessionId };
+}
+
+// ACP session.prompt：ACP 协议是请求-响应（服务端 drain 到 turn 完才回）——宿主提交
+// 语义 = fire-and-forget：发出请求立即返回 { accepted: true }（结果由事件流 openMux
+// 终态判定，run.js 原逻辑复用）；挂起的 request 在 turn 完 resolve，错误吞（事件流
+// 已判终态/超时兜底——admission 失败无事件流时靠 run.js 超时暴露，错误记诊断日志）。
+async function acpPrompt(acp, method, payload, signal) {
+  const client = acp.client;
+  const methods = acp.methods;
+  const content = Array.isArray(payload && payload.content) ? payload.content : [];
+  const params = { sessionId: payload.sessionId, prompt: content };
+  try {
+    getSingleton()?.appendLog?.("hana", `[dsh-rpc] ACP prompt（fire，session=${payload.sessionId}）`);
+  } catch { /* 日志失败不阻断 */ }
+  const pending = client.request(methods.agent.session.prompt, params);
+  pending.then(
+    () => {},
+    (err) => {
+      // 终态错误：正常 turn 完成路径事件流已判终——此处仅诊断；admission 失败
+      //（sessionId 无效/参数错——快 reject）也会落这里，任务由 run.js 超时暴露。
+      try {
+        getSingleton()?.appendLog?.(
+          "hana",
+          "[dsh-rpc] ACP prompt 终态失败：" + ((err && err.message) || err),
+        );
+      } catch { /* 日志失败不阻断 */ }
+    },
+  );
+  return { accepted: true };
+}
+
+// ACP session.list：ACP list 无 projections——返回全量轻量会话
+//（sessions: [{ sessionId, cwd }]）。映射宿主 items 结构（run.js resume 分支消费
+// item.sessionId/cwd——同字段直通）。
+async function acpList(acp, method, payload, signal) {
+  const client = acp.client;
+  const methods = acp.methods;
+  const res = await client.request(methods.agent.session.list, {}, { signal });
+  const sessions =
+    res && Array.isArray(res.sessions) ? res.sessions : [];
+  return { items: sessions };
+}
+
+// ACP session.selectModel：set_config_option({ configId: "model", value })——ACP 的
+// model option value = JSON.stringify([provider, model])（model-control.ts 的
+// modelValue 编码，无需预枚举）。reasoningEffort 附加 set reasoning_effort（effort id
+// 字符串；模型不支持时失败静默——对齐原 HTTP 的 model-unavailable 降级重试语义，
+// ACP 层内直接降级）。model 真失败（provider/model 不在目录）抛错。
+async function acpSelect(acp, method, payload, signal) {
+  const client = acp.client;
+  const methods = acp.methods;
+  const sid = payload && payload.sessionId;
+  if (!sid) throw new Error("dsh session.selectModel 缺 sessionId");
+  const provider = payload && payload.provider;
+  const model = payload && payload.model;
+  if (!provider || !model)
+    throw new Error("dsh session.selectModel 缺 provider/model");
+  await client.request(
+    methods.agent.session.setConfigOption,
+    { sessionId: sid, configId: "model", value: JSON.stringify([provider, model]) },
+    { signal },
+  );
+  // 默认 effort 保持（宿主 set model 会冲掉 DSH settings 的 reasoningEffort——
+  // readDefaultModel 读到存 g.acpDefaultEffort；任务显式传的优先）。模型不支持的
+  // effort（枚举不在 efforts 列表）set 抛 AcpModelConfigError——catch 静默降级
+  //（effort 落该模型默认）——「有的模型不支持该参数」的兜底。
+  const g0 = getSingleton();
+  const effort =
+    (payload && payload.reasoningEffort) ||
+    (g0 && g0.acpDefaultEffort) ||
+    null;
+  if (effort) {
+    try {
+      await client.request(
+        methods.agent.session.setConfigOption,
+        { sessionId: sid, configId: "reasoning_effort", value: String(effort) },
+        { signal },
+      );
+      try {
+        getSingleton()?.appendLog?.(
+          "hana",
+          "[dsh-rpc] ACP effort 已设：" + String(effort) +
+            "（session=" + String(sid).slice(0, 12) + "）",
+        );
+      } catch { /* 日志失败不阻断 */ }
+    } catch (e) {
+      // effort 不被该模型接受：已选模型生效，effort 用模型默认（对齐 HTTP 降级）
+      try {
+        getSingleton()?.appendLog?.(
+          "hana",
+          "[dsh-rpc] ACP reasoning_effort 降级（模型默认）：" +
+            ((e && e.message) || e),
+        );
+      } catch { /* 日志失败不阻断 */ }
+    }
+  }
+  return { ok: true };
+}
+
+// ACP session.cancel：notification（无响应）——发送到传输后即返回（取消请求已送达 DSH）。
+// CodeRabbit #7 judgement：ACP notify 虽是 fire-and-forget（服务端不回 ack），但 SDK 的
+// notify 返回 promise，其 settle = JSON-RPC notify 帧**写入传输完成**（内存双工 stream 写
+// 失败立即 reject；不依赖服务端响应 → 不会挂起）。因此值得 await：写入/序列化失败时错误
+// 沿 callUnaryBus 的既有错误路径抛出（调用方多为 best-effort 已 catch 忽略——index.js/
+// run.js 兜底捕获——不再静默吞掉「取消未送达」帧错误）。Service sendNotification 语义确认
+//（dist/acp.js AcpContext.notify→sendNotification）。
+async function acpCancel(acp, method, payload, signal) {
+  const client = acp.client;
+  const methods = acp.methods;
+  const sid = payload && payload.sessionId;
+  if (!sid) throw new Error("dsh session.cancel 缺 sessionId");
+  // await notify：写传输失败（连接断/stream 已 error）→ 此处 reject → callUnaryBus 抛错，
+  // 取消未达不再被误报为 accepted。
+  await client.notify(methods.agent.session.cancel, { sessionId: sid });
+  return { accepted: true };
+}
+
+// respond 审批应答直发（client-response 信封原样 POST /api/respond）。响应 rpcReceipt
+// { accepted, reason? }，调用方校验 j.accepted 语义不变。
 async function respondDirect(base, payload, signal) {
   const res = await fetch(`${base}/api/respond`, {
     method: "POST",
@@ -195,39 +329,55 @@ async function respondDirect(base, payload, signal) {
   return await res.json();
 }
 
-// ---- 事件流（dsh 0.1.2：宿主不直连 remote.mux，经 dshana.bus 消费）----
-// bridge 在 dsh 进程内订阅 remote.mux + $events（launchToken 在 BrowserAuth，
-// ensureAuthCookie 换发无竞态），经总线 events 频道转发帧：ready（就绪信号）/ emit
-// （api-session/* 广播）/ waterfall（审批等，bridge 已回投 next）。宿主 openMux 纯
-// 总线订阅——无 WS 连接、无 cookie 管理（直连 remote.mux 的 cookie 换发有启动竞态
-// 且宿主侧无 launchToken 源，已废弃）。
+// ---- 事件流（refactor/bus-inproc：ctx.on 直订优先，总线 events 兜底）----
+// DSH Host 事件源头 = cordis ctx（官方 dsh-api-remotes remoteEventSource 即 ctx.on 直订），
+// remote.mux WS / dshana.bus 只是载波。进程内 boot 下宿主 ctx.on 直订同一事件源，
+// 零 WS/总线绕圈；ctx 不可用（boot 边缘）回退总线 events（总线退役前兜底保留）。
 
 async function* openMux(base, signal) {
-  // dsh 0.1.2：宿主不直连 remote.mux——bridge 在 dsh 进程内订阅 $events 并经
-  // dshana.bus events 频道转发（ready/emit/waterfall），这里纯总线消费。
   const g = getSingleton();
-  const bus = g?.dshanaBus;
-  if (!bus || typeof bus.on !== "function") {
-    throw new Error("dshana.bus 不可用，无法订阅 DSH 事件流");
-  }
   const queue = [];
   const waiters = [];
-  let off = null;
+  let off = null; // ctx 直订退订（off 为空时 = 总线单订退订）
+  let busOff = null; // ctx 订阅存在时的总线 events 兜底退订（producer 可用前保留）
   let ready = false;
   let aborted = false; // abort 已触发标志：唤醒 waiters 后供循环检查（防 abort 后新建 waiter 挂死）
   const onFrame = (payload) => {
     if (!payload || typeof payload.type !== "string") return;
     if (payload.type === "ready") {
-      ready = true; // bridge 事件流就绪信号，不投上层
+      ready = true; // 事件流就绪信号（总线模式 bridge 就绪帧），不投上层
       return;
     }
     if (waiters.length) waiters.shift()(payload);
     else queue.push(payload);
   };
-  off = bus.on("events", onFrame);
+  off = subscribeDshCtxEmitEvents(onFrame);
+  if (off) {
+    // 订阅注册成功 ≠ producer 可用（CodeRabbit 第二轮 #4）：truthy disposer 只代表 ctx.on
+    // 白名单已挂上，DSH producer（事件真正从 ctx 广播）要到 host boot 收敛（g.web.ready，
+    // 进程内同 ctx 的会话/设置等 producer 随 boot 挂载完成）才保证存在。注册成功后同时
+    // 挂总线 events 兜底（双订不重复：进程内形态总线已退役——connectBus 停调、总线不发
+    // 帧；旧形态宿主无 ctx、走下方 else 单订总线——两源不会同时活）——producer 可用确认
+    // 前/ctx 源失效期间，总线帧（若存在）仍可达。
+    const bus = g?.dshanaBus;
+    if (bus && typeof bus.on === "function") {
+      busOff = bus.on("events", onFrame);
+    }
+    // ready 信号 = host 已就绪（producer 挂载完成）或总线 ready 帧（onFrame）；ctx 首帧
+    // 到达时下方 ready-wait 经 queue 突破，等价证明 ctx producer 可用。
+    ready = !!(g && g.web && g.web.ready === true);
+  } else {
+    // ctx 不可用（boot 未完成边缘/异常形态）：回退总线 events（bridge 转发）
+    const bus = g?.dshanaBus;
+    if (!bus || typeof bus.on !== "function") {
+      throw new Error("dshana.bus 不可用，无法订阅 DSH 事件流");
+    }
+    off = bus.on("events", onFrame);
+  }
   if (signal?.aborted) {
     aborted = true;
-    off();
+    if (typeof off === "function") off();
+    if (typeof busOff === "function") busOff();
     throw Object.assign(new Error("dsh_run 已取消"), { code: "DSH_ABORTED" });
   }
   const onAbort = () => {
@@ -236,8 +386,8 @@ async function* openMux(base, signal) {
   };
   signal?.addEventListener("abort", onAbort, { once: true });
   try {
-    // 等 bridge 事件流就绪（bridge 连 remote.mux 后转发 ready 帧；最多 5s，
-    // 超时不阻塞——帧到达自然流转，bridge 重连期间事件可能晚到）
+    // 就绪等待（总线模式等 bridge 就绪帧；ctx 直订在 host 已就绪时 ready=true 直接
+    // 跳过；boot 未收敛窗口内等队列/超时突破——见上方 ready 判定）
     const readyDeadline = Date.now() + 5000;
     while (!ready) {
       if (queue.length) break;
@@ -261,6 +411,7 @@ async function* openMux(base, signal) {
   } finally {
     signal?.removeEventListener("abort", onAbort);
     if (typeof off === "function") off();
+    if (typeof busOff === "function") busOff();
   }
 }
 

@@ -66,7 +66,8 @@ import {
 // 种子模板为独立文件 src-cordis/seed（构建期复制 dist/cordis/seed）；设计
 // specs/current/dshana-profile-bundle/spec.md）：
 import { ensureProfileSeeded } from "./profile-seed.js";
-import { connectBus, closeBus, setBusConfigProvider } from "./bus.js";
+import { closeBus } from "./bus.js";
+import { mountAcp } from "./acp-mount.js";
 
 const STDERR_CAP = 8192;
 const PORT_READY_TIMEOUT_MS = 60000; // web host 端口就绪等待上限
@@ -544,23 +545,31 @@ async function loadInprocDsh(pkgDir) {
 }
 
 // ---- T7b 进程内 boot：进程级 env 管理 ----
-// 进程内形态 dsh 与宿主同进程：boot 前把 DSH_HOME / DSHANA_BUS_SECRET 写入
-// process.env（dsh 侧 loadProfile / resolveDshHome / bridge 凭据读同一 env，
-// 与 spawn 注入子进程 env 语义等价），dispose 后恢复原值（不留污染）。
-let inprocEnv = null; // { DSH_HOME?, DSHANA_BUS_SECRET? } 原值快照（undefined = 未设置）
-function setInprocEnv(dshHome, busSecret) {
+// 进程内形态 dsh 与宿主同进程：boot 前把 DSH_HOME（官方契约，dsh 运行时
+// resolveDshHome/loadProfile 读）/ DSHANA_ROOT（DSH 包与依赖根 = 插件根，
+// loadDeps 基座与版本/资源路径）/ DSHANA_HOME（数据家目录 = 宿主 dataDir，
+// settings 的 update-status/dataDir 消费）/ DSHANA_BUS_SECRET 写入 process.env
+//（与 spawn 注入子进程 env 语义等价），dispose 后恢复原值（不留污染）。
+// 总线 config 下发退役后，DSH 侧 dshanaBus.getConfig() 的兑底即读这三个 env
+//（同进程直给，不再依赖总线握手）。
+let inprocEnv = null; // { DSH_HOME?, DSHANA_ROOT?, DSHANA_HOME?, DSHANA_BUS_SECRET? } 原值快照
+function setInprocEnv(dshHome, dataDir, dshPkgDir, busSecret) {
   inprocEnv = {
     DSH_HOME: process.env.DSH_HOME,
+    DSHANA_ROOT: process.env.DSHANA_ROOT,
+    DSHANA_HOME: process.env.DSHANA_HOME,
     DSHANA_BUS_SECRET: process.env.DSHANA_BUS_SECRET,
   };
   process.env.DSH_HOME = dshHome;
+  process.env.DSHANA_ROOT = dshPkgDir;
+  process.env.DSHANA_HOME = dataDir;
   process.env.DSHANA_BUS_SECRET = busSecret;
 }
 function restoreInprocEnv() {
   if (!inprocEnv) return;
   const prev = inprocEnv;
   inprocEnv = null;
-  for (const k of ["DSH_HOME", "DSHANA_BUS_SECRET"]) {
+  for (const k of ["DSH_HOME", "DSHANA_ROOT", "DSHANA_HOME", "DSHANA_BUS_SECRET"]) {
     if (prev[k] === undefined) delete process.env[k];
     else process.env[k] = prev[k];
   }
@@ -634,7 +643,13 @@ export async function ensureWebHost(cfg) {
     }
   }
   if (g.web?.ctx) {
-    // 旧实例启动失败过：清掉重建（进程内形态 dispose）
+    // 旧实例启动失败过：清掉重建（进程内形态 dispose）——旧实例若已挂 ACP client
+    //（mountAcp 在 waitWebReady 前完成，之后失败属此路径）先 close 释放连接/清缓冲。
+    try {
+      if (g.web.acp && typeof g.web.acp.close === "function") g.web.acp.close();
+    } catch {
+      /* ACP client 关闭失败不阻断重建 */
+    }
     try {
       await g.web.ctx?.fiber?.dispose();
     } catch {
@@ -654,7 +669,10 @@ export async function ensureWebHost(cfg) {
   // 写 process.env.DSHANA_BUS_SECRET（同进程共享，bridge 读）；重启即换新 secret。
   g.busSecret = randomUUID();
   mkdirSync(cfg.dataDir, { recursive: true });
-  const port = Number(cfg.webPort) || 3080;
+  // 随机端口（listen 0 语义，2026-09-06 refactor/random-port）：webPort 配置项已删，
+  // DSH 以 port 0 boot（系统分配空闲端口），boot 后从 webServer service 读回实际监听端口
+  // （resolveActualPort）写 g.web.port——总线/探测/iframe 全链跟随实际端口。
+  const port = 0;
   // 当前会话日志 = 时间戳会话文件（index.js onload 已初始化单例 g.logPath）。
   // 单例优先；index.js 未初始化（冷启动边缘）时兜底自建。写进 web/logLastExit/错误消息供诊断。
   const logPath = g.logPath || newWebLogPath(cfg.dataDir);
@@ -662,9 +680,32 @@ export async function ensureWebHost(cfg) {
   // 目录 → dist/cordis），否则 dsh loadProfile 会抛「profile
   // does not exist」。
   await ensureDshanaProfile(cfg);
+  // g.web 被替换/重建（含 closeProcess 回收后重拉，CodeRabbit #6）：换新实例前重置
+  // providerPushWired——旧 ctx 的 provider-refresh-request 订阅已随旧 ctx dispose 失效，
+  // 若不移除 true 标志，新 ctx 就绪点不会再接线（markReady 里 wire 被短路），新 ctx 的
+  // ctx.on 订阅丢失 → provider 路由补推/home 就绪首推接收不到。此处清位让新实例重接。
+  providerPushWired = false;
   return bootInproc(cfg, { pkgDir, dshHome, port, logPath });
 }
 // ---- T7b：进程内 boot dsh（动态 import + runProfile，webserver 保留在进程内 bind）----
+/** 读回 webServer service 的实际监听端口（listen 0 语义：系统分配后从此取真实端口）。
+ * 官方 service.port getter = 实际监听端口；防御性 fallback 探 _server.address()。
+ * 读不到返回 0（保持 port 0 → waitWebReady 探测超时显式失败，属异常路径）。 */
+function resolveActualPort(web) {
+  try {
+    const ctx = web && web.ctx;
+    if (!ctx) return 0;
+    const svc = typeof ctx.get === "function" ? ctx.get("webServer") : ctx.webServer;
+    if (!svc) return 0;
+    if (typeof svc.port === "number" && svc.port > 0) return svc.port;
+    const srv = svc._server || (svc.server && svc.server._server);
+    if (srv && typeof srv.address === "function") {
+      const a = srv.address();
+      if (a && typeof a === "object" && a.port) return a.port;
+    }
+  } catch { /* 读端口失败走 0 */ }
+  return 0;
+}
 async function bootInproc(cfg, { pkgDir, dshHome, port, logPath }) {
   const g = getSingleton();
   const emitLog = (src, d) => {
@@ -685,10 +726,14 @@ async function bootInproc(cfg, { pkgDir, dshHome, port, logPath }) {
     disposed: false,
     bootError: null,
   };
-  // 进程内形态：dsh 与宿主同进程——boot 前把 DSH_HOME / DSHANA_BUS_SECRET 写入
-  // process.env（dsh 侧 loadProfile / resolveDshHome / bridge 凭据读同一 env，
-  // 与 spawn 注入子进程 env 语义等价），dispose 后恢复（见 closeProcess / restoreInprocEnv）。
-  setInprocEnv(dshHome, g.busSecret);
+  // 进程内形态：dsh 与宿主同进程——boot 前把 DSH_HOME / DSHANA_ROOT /
+  // DSHANA_HOME / DSHANA_BUS_SECRET 写入 process.env（dsh 侧 loadProfile /
+  // resolveDshHome / settings-provider 的 config 兑底（dshanaBus.getConfig 无总线
+  // 时读 env）/ bridge 凭据读同一 env，与 spawn 注入子进程 env 语义等价），dispose
+  // 后恢复（见 closeProcess / restoreInprocEnv）。DSHANA_ROOT = DSH 包与依赖根
+  //（插件根，loadDeps 基座），DSHANA_HOME = 宿主 dataDir——同进程直给，不再依赖
+  // 总线 config 下发（总线已退役）。
+  setInprocEnv(dshHome, cfg.dataDir, cfg.dshPkgDir || pkgDir, g.busSecret);
   const readyPromise = (async () => {
     try {
       const { profileBoot, bootEntry, appBoot, appBootEntry } = await loadInprocDsh(pkgDir);
@@ -704,12 +749,38 @@ async function bootInproc(cfg, { pkgDir, dshHome, port, logPath }) {
       });
       web.ctx = r.ctx;
       web.shutdown = r.shutdown;
-      emitLog("hana", `[dsh web] 进程内 boot 完成（ctx=${!!r.ctx} shutdown=${typeof r?.shutdown}，webserver ${port} 存活）`);
+      // port 0（listen 0 语义）：系统分配随机端口，boot 后从官方 webServer service 读回
+      // 实际监听端口（官方 service.port getter = 实际监听端口）。读回失败（服务未暴露）
+      // 保持 0——waitWebReady 探测会超时并给出带 stderr 的诊断，属异常路径显式失败。
+      const actual = resolveActualPort(web);
+      if (actual > 0 && actual !== port) {
+        web.port = actual;
+        emitLog("hana", `[dsh web] 随机端口已分配：${actual}`);
+      }
+      emitLog("hana", `[dsh web] 进程内 boot 完成（ctx=${!!r.ctx} shutdown=${typeof r?.shutdown}，webserver ${web.port} 存活）`);
+      // ACP 内部通讯通道挂载（feat/acp-channel）：DSH ctx 上挂 dsh-acp 插件（内存双工
+      // stream，零端口零 stdio），宿主侧 client 单例挂 web.acp——指令通道内部化的
+      // 载体（HTTP /api 兑底保留至 L2 迁移完成）。挂载/握手失败不阻断 boot（WebUI
+      // 主链不依赖 ACP），warn 降级。
+      try {
+        const acpApi = await mountAcp(r.ctx, {
+          dshHome,
+          emitLog,
+        });
+        web.acp = acpApi;
+        emitLog("hana", "[dsh web] ACP 内部通道就绪（web.acp）");
+      } catch (e) {
+        web.acp = null;
+        emitLog(
+          "warn",
+          `[dsh web] ACP 挂载失败（降级：指令走 HTTP /api）：${(e && e.message) || e}`,
+        );
+      }
       // 就绪探测必须与 boot 同 try：就绪失败（超时/握手失败）时 web.ctx 仍持有
       // 进程内 cordis 树 + 占用端口——不回收则 g.web 被 ensureWebHost 清掉后引用
       // 丢失，重试必 EADDRINUSE 直到重启 Hana（CodeRabbit Major：spawn 路径可杀子进程
       // 自愈，进程内路径必须显式 dispose）。
-      return await waitWebReady(web, port, emitLog, cfg);
+      return await waitWebReady(web, web.port, emitLog, cfg);
     } catch (e) {
       web.bootError = e;
       web.stderr = String(e?.stack || e?.message || e).slice(0, STDERR_CAP);
@@ -717,6 +788,11 @@ async function bootInproc(cfg, { pkgDir, dshHome, port, logPath }) {
       // 回收：就绪失败或 boot 失败都要 dispose 进程内 cordis 树（释放 HTTP server /
       // 端口），并恢复改写过的进程级 env（DSH_HOME / DSHANA_BUS_SECRET）——否则
       // g.web 摘除后 ctx 引用丢失，端口永久占用。
+      // ACP client 连接先关（web.acp.close 幂等）：mountAcp 在 waitWebReady 前已挂载，
+      // 失败回收路径同样要释放 client 连接/清缓冲，不能只依赖 ctx fiber dispose。
+      try {
+        if (web.acp && typeof web.acp.close === "function") web.acp.close();
+      } catch { /* ACP client 关闭失败不阻断回收 */ }
       try {
         await web.ctx?.fiber?.dispose();
       } catch (e2) {
@@ -768,32 +844,25 @@ async function waitWebReady(web, port, emitLog, cfg) {
       // provider push 收敛在同一就绪点（connectBus 幂等 + 内部退避重连，失败不阻断）。
       const markReady = () => {
         web.ready = true;
+        // 就绪态广播（CodeRabbit #10）：通知 /webui/events 的当前活动流（readiness 前早已
+        // 打开、处于 pending 的 shell 流）——否则只靠壳页 boot-state 轮询/刷新兑底挂载。
+        // readiness 后打开的新流不受影响（它们开流时已 ready 直推）。g.notifyWebReady 由
+        // routes/webui.js 模块每次加载重挂（同 notifyWebStartFailed 模式）。
+        try {
+          g?.notifyWebReady?.();
+        } catch {
+          /* 广播失败不阻断就绪 */
+        }
         // 新进程就绪：清掉上次退出记录（持久字段只反映最近一次退出）
         g.webLastExit = null;
-        // dshana.bus 消息总线：同一就绪点连接（bridge 段随 patch 挂载，子插件注册了
-        // /api/dshana.bus upgrade 路由）。connectBus 幂等 + 内部退避重连（连接失败不阻断
-        // dsh 启动——更新请求信道降级：settings 报「消息总线未连接」，check-version 走 dsh 侧
-        // 直查不受影响）。不 await，页面/任务不阻塞。
-        try {
-          connectBus({ webPort: port });
-          // bus.ready 补推接线（幂等，只挂一次）：总线连接成功后如有待补推 routes
-          // 立即补推（connectBus 是异步建连，pushProviderRoutes 在握手前调用必然
-          // 未送达记 pending——补推监听必须与 connectBus 同一就绪点挂上，否则工具
-          // 路径（ensureWebHost）不经过 startWebHostFromPlugin 时待补推永不到达）。
-          wireProviderPushOnBusReady();
-          // config 下发 provider（替代 patch config 注入）：hello-ok 后自动发 config 帧
-          // （dshPkgDir/dataDir），settings/provider 子插件经 dshanaBus.getConfig() 取路径。
-          // 每次握手重发，覆盖 web host 重启后新 bridge 实例。
-          setBusConfigProvider(() => ({
-            dshPkgDir: cfg.dshPkgDir || resolveDshPkgDir(cfg),
-            dataDir: cfg.dataDir,
-          }));
-        } catch (e) {
-          g.appendLog?.("hana", "[dshana.bus] 连接失败：" + (e?.message || e));
-        }
-        // provider 路由推送走总线（替代 /api/hana-provider.refresh HTTP push，任务 G）：
-        // 唯一新进程就绪点主动推一次最新 routes（任意 spawn 路径都保证有初始 push）；
-        // bus 未连接（hello-ok 未到）时记待补推，bus.ready 后自动补推——覆盖连接窗口期。
+        // 总线退役（refactor/bus-inproc 修正 B，2026-09-06）：宿主不再连 dshana.bus WS——
+        // 指令走 HTTP RPC（callUnary 直连 /api）、事件走 cordis ctx 直订。provider 路由
+        // push 与 config 下发随之 ctx 化（provider-refresh-request ctx 订阅 + ctx.emit
+        // provider-push，见 pushProviderRoutes / wireProviderPushCtx）。connectBus /
+        // setBusConfigProvider 已停调（closeBus 在 closeProcess 防御保留，未连时 no-op）。
+        // provider 路由推送：唯一新进程就绪点主动推一次最新 routes（ctx.emit 广播，
+        // provider 插件 ctx.on 收——纯数据注册无 HTTP 上下文依赖，实测方向可靠）。
+        wireProviderPushCtx();
         pushProviderRoutes();
         return web;
       };
@@ -835,8 +904,12 @@ const PROVIDER_SYNC_DEBOUNCE_MS = 300;
 let providerPushPending = false; // bus 未连接期间待补推标志（模块级单例）
 function pushProviderRoutes() {
   const g = getSingleton();
-  const bus = g.dshanaBus;
-  if (!bus || typeof bus.emit !== "function") {
+  // 总线退役（refactor/bus-inproc 修正 B）：provider push 改 cordis ctx 事件广播
+  // （DSH 侧 provider 插件 ctx.on('dshana/provider-push') 收；cordis 事件全向——
+  // 任意 ctx emit 触发任意 ctx on，实测可靠）。ctx 不可用（boot 未完成/异常）记
+  // providerPushPending，wireProviderPushCtx 的 request 订阅补推时清除。
+  const ctx = g?.web?.ctx;
+  if (!ctx || typeof ctx.emit !== "function") {
     providerPushPending = true;
     return;
   }
@@ -852,46 +925,50 @@ function pushProviderRoutes() {
     }
     return;
   }
-  const delivered = bus.emit("provider.refresh", { routes: host.routes });
-  if (delivered) {
+  try {
+    ctx.emit("dshana/provider-push", { routes: host.routes });
     providerPushPending = false;
     try {
-      g.appendLog?.("hana", "[dsh-run] provider 路由已经总线推送（" + host.routes.length + " 条 routes）");
+      g.appendLog?.("hana", "[dsh-run] provider 路由已 ctx 推送（" + host.routes.length + " 条 routes）");
     } catch {
       /* 日志失败不阻断 */
     }
-    console.log("[dsh-run] provider 路由已经总线推送（" + host.routes.length + " 条 routes）");
-  } else {
-    // 未送达（bus 未连接/未握手）：记待补推，bus.ready 后自动补推
+  } catch (e) {
     providerPushPending = true;
     try {
-      g.appendLog?.("hana", "[dsh-run] provider 路由总线推送未送达（bus 未连接），标记待补推");
+      g.appendLog?.("hana", "[dsh-run] provider 路由 ctx 推送失败：" + (e?.message || e));
     } catch {
       /* 日志失败不阻断 */
     }
   }
 }
 // bus.ready 补推接线（幂等，只挂一次）：总线连接成功后如有待补推 routes 立即补推。
-// 另订阅 dsh 侧 provider 插件的 provider.refresh.request 就绪握手（CodeRabbit 时序意见）：
-// 子插件订阅建立后显式请求重放最新 routes——覆盖「宿主首批 push 早于子插件订阅建立」
-// 的窗口（loadDeps/effect 未完成时首批 provider.refresh 事件丢失，provider 卡
-// empty-snapshot）。收到请求即重推（pushProviderRoutes 内部未送达记 pending，
-// bus.ready 后自动补推，无需在此重复判 pending）。
+// provider.refresh.request 的 ctx 订阅（幂等，只挂一次）：DSH 侧 provider 插件订阅建立后
+// 显式请求重放最新 routes（覆盖「宿主首批 push 早于子插件订阅」窗口）。总线退役后
+// request 经 ctx 事件（provider 插件 ctx.emit('dshana/provider-refresh-request')），宿主
+// ctx.on 收 → 重推（ctx 不可用（boot 边缘）记 providerPushPending，ctx 就绪后首推清除）。
 let providerPushWired = false;
-function wireProviderPushOnBusReady() {
+function wireProviderPushCtx() {
   if (providerPushWired) return;
-  providerPushWired = true;
   const g = getSingleton();
-  if (g.dshanaBus && typeof g.dshanaBus.on === "function") {
-    g.dshanaBus.on("provider.refresh.request", () => {
+  const ctx = g?.web?.ctx;
+  if (!ctx || typeof ctx.on !== "function") return;
+  try {
+    ctx.on("dshana/provider-refresh-request", () => {
       pushProviderRoutes();
     });
-    g.dshanaBus.on("bus.ready", () => {
-      if (providerPushPending) {
-        providerPushPending = false;
-        pushProviderRoutes();
-      }
-    });
+    // ctx.on 成功后才置位（CodeRabbit #6）：订阅建立失败时保持 false，下次就绪点可重试
+    //（否则置位后失败永不重接本实例的订阅）。新 web 实例重建时已在上方 ensureWebHost
+    // 清零 providerPushWired，新 ctx 就绪会重新接线。
+    providerPushWired = true;
+  } catch (e) {
+    // 订阅失败：不置位（保持可重试），仅记日志
+    providerPushWired = false;
+    try {
+      g.appendLog?.("hana", "[dsh-run] provider-refresh-request ctx 订阅失败：" + (e?.message || e));
+    } catch {
+      /* 日志失败不阻断 */
+    }
   }
 }
 function ensureProviderPushWatch(cfg) {
@@ -1039,8 +1116,8 @@ getSingleton().startWebHost = async function startWebHostFromPlugin(
     await ensureWebHost(cfg);
     // web host 就绪后建立宿主侧 provider 跟随 push watch（幂等：先清理旧 watch 再建）
     ensureProviderPushWatch(cfg);
-    // bus.ready 补推接线（幂等）：总线连接成功后如有待补推 routes 立即补推
-    wireProviderPushOnBusReady();
+    // provider-refresh-request ctx 订阅（幂等）：provider 插件订阅建立后请求重放 routes
+    wireProviderPushCtx();
     // 首批 provider 的初始 push 已收敛进 ensureWebHost（唯一就绪点，bus 就绪后自动
     // 送达或待补推），此处不再重复推；后续每次 resource.changed 经防抖 watch 增量 push。
     // DSH 更新请求 v0.22.1 起由子插件经 dshana.bus 消息总线直投（connectBus 已
@@ -1103,6 +1180,16 @@ export async function closeProcess() {
   const web = g.web;
   g.web = null;
   if (web?.ctx) {
+    // ACP client 连接先于 ctx 树 dispose 关闭（CodeRabbit 第二轮 #1）：web.acp.close()
+    // 释放宿主侧 client 连接并清空 toolCache/updateQueue 缓冲（mountAcp 的 close，幂等）。
+    // 必须在 ctx.fiber.dispose 之前——同树插件随 dispose 卸载后 client 连接失去收尾入口。
+    try {
+      if (web.acp && typeof web.acp.close === "function") web.acp.close();
+    } catch (e) {
+      try {
+        g.appendLog?.("hana", "[dsh web] ACP client 关闭异常（不影响回收）：" + ((e && e.message) || e));
+      } catch { /* 日志失败不阻断 */ }
+    }
     // T7b 进程内形态：await ctx.fiber.dispose() 释放 dsh cordis 树（HTTP server +
     // loader + 全部插件）。不用 runProfile 返回的 shutdown 控制器：其 shutdown() 会写
     // process.exitCode、interrupt() 会 process.exit 直接杀宿主进程（createProcessShutdown

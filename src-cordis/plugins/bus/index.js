@@ -110,6 +110,13 @@ let authCookieInflight = null
 // （$events/result）需要它定位事件流——宿主侧无 launchToken 源无从得知，由
 // 本总线事件流持有（apply 的 evtConnect ready 回调赋值）。
 let evtClientId = ''
+// 进程内 RPC 分发服务引用（总线内置化第二刀 refactor/bus-inproc）：bridge provide
+// 'apiRpcDispatcher'（apply 同步段），bus 经 ctx.inject 动态注入（不阻塞激活）。
+// 注入成功 → 翻译器 Unary/respond 直调 dispatcher（免自环 fetch 依赖端口 + cookie）；
+// 未注入（bridge 未激活/旧版）→ 降级原自环 fetch 路径，行为不变。
+let rpcDispatcherRef = null
+// 模块级 logger（apply 注入 ctx.logger；翻译器模块级函数日志用——bridgeLog 是 apply 闭包）
+let moduleLogger = null
 
 /** 自环 RPC 鉴权 cookie（dsh 0.1.2+ /api/* 需浏览器 cookie，无则 401）。
  * launchToken 经 GET /?token= 换发 signed cookie（authorizeIndex 流程，本机回环）；
@@ -205,6 +212,13 @@ export async function translateRpcRequest(req, port, reply) {
         eventId: p.eventId,
         outcome: p.outcome,
       }
+      // 进程内优先（总线内置化第二刀）：dispatcher 直调 $events/result interceptor
+      // （免自环 fetch 依赖端口）；未注入降级原 fetch 路径
+      if (rpcDispatcherRef && typeof rpcDispatcherRef.call === 'function') {
+        const rr = await rpcDispatcherRef.call('$events/result', { args })
+        reply({ reqId, ok: true, value: { accepted: rr.ok === true } })
+        return
+      }
       const res = await fetch(base + '/api/$events/result', {
         method: 'POST',
         headers,
@@ -246,6 +260,34 @@ export async function translateRpcRequest(req, port, reply) {
     const args = isSession
       ? { [isSessionList ? '_request' : 'request']: { ...(req.payload || {}), requestId: reqId } }
       : req.payload
+    // 进程内优先（总线内置化第二刀）：dispatcher 直调 interceptor（免自环 fetch 依赖
+    // 端口 + cookie 换发）；未注入（bridge 未激活/旧版）降级原 fetch 路径
+    if (rpcDispatcherRef && typeof rpcDispatcherRef.call === 'function') {
+      const r = await rpcDispatcherRef.call(endpoint, { args })
+      if (r.ok) {
+        reply({ reqId, ok: true, value: r.value })
+        return
+      }
+      const e = r.error || {}
+      try {
+        moduleLogger?.info?.(
+          '[@dsh-hanako/bus] RPC dispatcher 失败：method=' +
+            method +
+            ' code=' +
+            (e.code || 'unknown') +
+            ' msg=' +
+            ((e.message || '') + '').slice(0, 300),
+        )
+      } catch {
+        /* 日志失败不阻断 */
+      }
+      reply({
+        reqId,
+        ok: false,
+        error: { code: e.code || 'unknown', message: e.message || '' },
+      })
+      return
+    }
     const res = await fetch(base + '/api/' + endpoint, {
       method: 'POST',
       headers,
@@ -284,6 +326,12 @@ export async function translateRpcRequest(req, port, reply) {
 // ---- 插件 apply：注册 upgrade 路由 + 提供 dshanaBus 服务（全程容错，降级不阻断）----
 export function apply(ctx, config) {
   try {
+    // 模块级 logger（翻译器等模块级函数诊断用）
+    try {
+      moduleLogger = ctx.logger || null
+    } catch {
+      moduleLogger = null
+    }
     // launchToken：从 connection 服务（HostConnectionService）的 BrowserAuth 读
     // （dsh 0.1.2+ 浏览器鉴权进程令牌），自环 RPC 用它换 cookie。旧版 dsh 无此
     // 服务 → 保持空，自环免鉴权兼容（改造前行为）。
@@ -307,6 +355,10 @@ export function apply(ctx, config) {
         const emitter = new EventEmitter()
         let conn = null // 当前已握手连接（单连接语义）
         let upgradeDisposer = null
+        // 进程内 RPC 收口订阅的退订函数（rootCtx.on('dshana/inproc-request') 返回）。
+        // effect 重执行/卸载时必须退订——不保留则重载累积 stale handler，一次请求被
+        // 多次翻译/回投（CodeRabbit Major #1）。见下方 inprocDisposer 赋值与 cleanup 调用。
+        let inprocDisposer = null
         // 宿主下发的配置（hello 后经 config 帧到达；提供 getConfig() 供 settings/provider 取路径）
         let busConfig = null
 
@@ -492,8 +544,25 @@ export function apply(ctx, config) {
             ready: !!conn && conn.readyState === 1,
             path: BUS_PATH,
           }),
-          // 宿主下发的配置（未下发返回 null——settings/provider 据此报「总线配置未就绪」）
-          getConfig: () => (busConfig ? { ...busConfig } : null),
+          // 宿主下发的配置（总线形态：握手后 config 帧下发）。总线退役（refactor/
+          // bus-inproc）后宿主不再连 dshana.bus——同进程形态兑底：读 process.env
+          //（宿主 boot 前注入 DSHANA_ROOT = DSH 包与依赖根（插件根）/ DSHANA_HOME =
+          // 宿主数据目录；DSH_HOME 官方名 = DSHANA_HOME/dsh-home），settings/
+          // provider/app 的 dshPkgDir/dataDir 消费不再依赖总线 config。env 也缺
+          //（极端情况）返回 null（调用方原有「未就绪」语义保留）。
+          getConfig: () => {
+            if (busConfig) return { ...busConfig };
+            const envDshPkgDir = process.env.DSHANA_ROOT;
+            const envDataDir = process.env.DSHANA_HOME;
+            if (typeof envDshPkgDir === 'string' && envDshPkgDir) {
+              return {
+                dshPkgDir: envDshPkgDir,
+                dataDir:
+                  typeof envDataDir === 'string' && envDataDir ? envDataDir : null,
+              };
+            }
+            return null;
+          },
         }
         // ---- 总线 RPC 接线：订阅宿主 rpc.request → 翻译器执行 → 回投 rpc.result ----
         // service.on 的监听器异常隔离是每回调包装（新订阅沿用该模式）；翻译器内部
@@ -513,6 +582,75 @@ export function apply(ctx, config) {
             },
           )
         })
+
+        // ---- 进程内 RPC 收口（总线内置化第二刀 refactor/bus-inproc）：宿主经 ctx
+        // 直发指令（免 WS/端口）——宿主与 DSH 同进程同 ctx，宿主 ctx.emit(
+        // 'dshana/inproc-request', { reqId, method, payload }) → 这里 ctx.on 收 →
+        // translateRpcRequest（dispatcher 直调 bridge interceptor，免自环 fetch）→
+        // ctx.emit('dshana/inproc-result') 回投。WS 总线路径保留（兜底/外部连接）。
+        // apiRpcDispatcher 动态 inject（不阻塞激活：bridge 未激活时 ref 为空，翻译器
+        // 降级自环 fetch，行为不变）。
+        const onInprocRequest = (frame) => {
+          try {
+            const req =
+              frame && typeof frame === 'object' && frame.req ? frame.req : frame
+            try {
+              bridgeLog(
+                'inproc-request 收到：reqId=' +
+                  ((req && req.reqId) || '?') +
+                  ' method=' +
+                  ((req && req.method) || '?'),
+              )
+            } catch {
+              /* 诊断日志失败不阻断 */
+            }
+            if (
+              !req ||
+              typeof req.reqId !== 'string' ||
+              !req.reqId ||
+              typeof req.method !== 'string'
+            ) {
+              return
+            }
+            translateRpcRequest(
+              req,
+              httpCtx.webServer && typeof httpCtx.webServer.port === 'number'
+                ? httpCtx.webServer.port
+                : undefined,
+              (out) => {
+                try {
+                  ctx.emit('dshana/inproc-result', out)
+                } catch {
+                  bridgeLog('inproc-result 回投失败（reqId=' + ((out && out.reqId) || '?') + '）')
+                }
+              },
+            ).catch(() => {
+              bridgeLog('inproc-request 翻译失败（reqId=' + ((req && req.reqId) || '?') + '）')
+            })
+          } catch {
+            bridgeLog('inproc-request 收帧异常（已忽略）')
+          }
+        }
+        // cordis 事件冒泡方向：插件子 ctx emit 冒泡到根，宿主（持 g.web.ctx = 根）收得到；
+        // 宿主在根 emit **不下行**到插件子 ctx——收口必须挂根层（ctx.root，cordis 插件 ctx
+        // 的根引用；无 root（即根自身）兑底 ctx）才能收到宿主 ctx.emit。回投 emit 在子 ctx
+        // 发 → 冒泡到根 → 宿主 ctx.on（根层）收 ✓（与 DSH 内部 emit 同向）。
+        // 订阅返回退订函数存入 inprocDisposer：effect 清理（模块重载/unload）时退订，
+        // 防重注册导致 stale handler 累积（一次请求被多次翻译/回投/结果帧）。
+        const rootCtx = ctx.root || ctx
+        try {
+          ctx.inject(['apiRpcDispatcher'], (dispCtx) => {
+            try {
+              rpcDispatcherRef = dispCtx.get?.('apiRpcDispatcher') || null
+            } catch {
+              rpcDispatcherRef = null
+            }
+          })
+          inprocDisposer = rootCtx.on('dshana/inproc-request', onInprocRequest)
+        } catch (e) {
+          bridgeLog('进程内 RPC 收口接线失败：' + ((e && e.message) || e))
+          inprocDisposer = null
+        }
 
         // ---- 事件流订阅（remote.mux + $events）：bridge 在 dsh 进程内代宿主订阅，
         // 经总线 events 频道转发——宿主无需 WS 连接/鉴权（launchToken 在进程内
@@ -697,6 +835,17 @@ export function apply(ctx, config) {
               /* 忽略 */
             }
             conn = null
+          }
+          // 进程内 RPC 收口退订（rootCtx.on disposer）：effect 清理/卸载时移除——
+          // 否则 bridge 插件 reload 时 rootCtx.on 重复注册，stale handler 累积导致一次
+          // 请求被多次翻译/回投（CodeRabbit Major #1）。退订失败忽略（已宕/已退订 no-op）。
+          if (inprocDisposer && typeof inprocDisposer === 'function') {
+            try {
+              inprocDisposer()
+            } catch {
+              /* 退订失败忽略 */
+            }
+            inprocDisposer = null
           }
           emitter.removeAllListeners()
         }

@@ -35,11 +35,6 @@
     "configuration": {
       "title": "DSHana 设置",
       "properties": {
-        "webPort": {
-          "type": "number",
-          "default": 3080,
-          "title": "DSH WebUI 端口"
-        },
         "approvalTimeoutSec": {
           "type": "number",
           "default": 30,

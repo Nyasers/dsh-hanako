@@ -46,6 +46,7 @@
 
 // 插件页 HTML 壳（构建期 template-loader 经 doT 编译为自包含渲染函数，运行时零依赖）
 import { render as webuiShellHtml } from "../assets/webui-shell.jinja2";
+import { subscribeDshCtxEmitEvents } from "../lib/dsh-events.js";
 
 // ---- 就绪事件流订阅者（web host 启动失败通知；lifecycle.js 调 g.notifyWebStartFailed）----
 // 多个壳页 tab 可同时订阅；Set 保存，流关闭时移除。notifyWebStartFailed 每次模块加载
@@ -56,6 +57,14 @@ const webStartFailedListeners = new Set();
 // 与 webStartFailedListeners 同模式：安装/检测进入与终态时通知壳页一次性刷新诊断
 // （事件驱动替代面板 5s 周期 tick；安装中进度滚动由壳页 installing 态 tick 承担）。
 const depsChangedListeners = new Set();
+
+// ---- web host 就绪翻转通知订阅者（lifecycle 的 waitWebReady/markReady 调 g.notifyWebReady）----
+// 总线退役后（refactor/bus-inproc）宿主不再连 dshana.bus，/webui/events 在 readiness 前就
+// 打开的常驻流等不到 bus.ready 事件（CodeRabbit #10）。此 Set 接收 g.web.ready→true 翻转，
+// 推 ready 事件给当前活动流；readiness 后打开的新流开流即直推、不依赖本通知。与
+// notifyWebStartFailed/notifyDepsChanged 同模式（同模块每次加载重挂，一次订阅生命周期 =
+// 流存活期，close()/cancel() 移除）。
+const webReadyListeners = new Set();
 
 function esc(v) {
   return String(v)
@@ -137,7 +146,7 @@ function readBootState() {
       guidance: null,
       lastError: null,
     },
-    web: { ready: false, lastError: null },
+    web: { ready: false, port: null, lastError: null },
   });
   try {
     const g = globalThis.__dshHanako;
@@ -180,6 +189,12 @@ function readBootState() {
       },
       web: {
         ready: webReady,
+        // 实际监听端口（随机端口 listen 0 语义，boot 后读回）：iframe src 客户端拼装用——
+        // 服务端渲染自举页时端口可能未定，端口固进模板会钉死 3080 兑底（attach 错端口）
+        port:
+          g.web && typeof g.web.port === "number" && g.web.port > 0
+            ? g.web.port
+            : null,
         lastError: tail(g.webLastError, 800),
       },
     };
@@ -244,10 +259,6 @@ function buildShell({
 
 export default function registerWebuiRoutes(app, ctx) {
   const base = "/api/plugins/" + ctx.pluginId;
-  // 端口：manifest 默认 + 用户配置合并后的 ctx.config；非对象容错回退 3080
-  const cfg =
-    ctx && typeof ctx.config === "object" && ctx.config ? ctx.config : {};
-  const port = Number(cfg.webPort) || 3080;
 
   // 页面（父子双卡，见文件头）：主卡 /main 与子卡 /sidebar 共用同一壳页与自举逻辑，仅
   // iframe 的 view 参数不同（/main → main 视图 = 接收端 receive；/sidebar → sidebar 视图
@@ -262,10 +273,14 @@ export default function registerWebuiRoutes(app, ctx) {
   // （dsh 3080）iframe 同源直嵌提供，无浏览器端劫持/改写。
 
   const page = (view) => async (c) => {
-    // 壳页：iframe 直嵌 @dsh-hanako/app 子插件（dsh 3080）serve 的 fork SPA——
+    // 壳页：iframe 直嵌 @dsh-hanako/app 子插件（DSH server）serve 的 fork SPA——
     // iframe 内同源（资源/API/SSE/WS 全由子插件提供，免鉴权，无劫持无 token/PSS）；
     // 宿主只做页面壳：就绪事件化 / 自举状态 / 主题与剪贴板桥（全部在壳页 JS 里）。
     const ready = busReady();
+    // 随机端口（listen 0 语义，2026-09-06）：实际端口 boot 后写 g.web.port；渲染时动态
+    // 解析（ready 后 g.web 必在，port 已读回）。3080 仅为理论兜底（无 webPort 配置项了）。
+    const g = globalThis.__dshHanako;
+    const port = g?.web?.port || 3080;
     const hc = c.req.query("hana-css") || "";
     const th = c.req.query("hana-theme") || "inherit";
     const hcLink = hc ? `<link rel="stylesheet" href="${esc(hc)}">` : "";
@@ -310,6 +325,7 @@ export default function registerWebuiRoutes(app, ctx) {
     let unsubs = [];
     let onStartFailed = null;
     let onDepsChanged = null;
+    let onWebReady = null;
     const stream = new ReadableStream({
       start(controller) {
         const enc = new TextEncoder();
@@ -337,6 +353,7 @@ export default function registerWebuiRoutes(app, ctx) {
           unsubs.length = 0;
           if (onStartFailed) webStartFailedListeners.delete(onStartFailed);
           if (onDepsChanged) depsChangedListeners.delete(onDepsChanged);
+          if (onWebReady) webReadyListeners.delete(onWebReady);
           try {
             controller.close();
           } catch {
@@ -357,8 +374,59 @@ export default function registerWebuiRoutes(app, ctx) {
           if (closed) return;
           send({ type: "diag-changed" });
         };
-        // 订阅总线本机事件（bus.ready / bus.disconnect / events 转发）
+        // web host 就绪翻转 → 推 ready 事件（CodeRabbit #10）：总线退役后无 bus.ready 事件，
+        // readiness 前打开的本流收不到 ready → 悬 pending，只靠壳页刷新兑底。markReady
+        // 时 lifecycle 广播 g.notifyWebReady，这里收翻转推 ready（ready 后流的重复 ready 事件
+        // 由壳页 readyReceived 幂等忽略）。
+        onWebReady = () => {
+          if (closed) return;
+          send({ type: "ready" });
+        };
+        // 订阅总线本机事件（bus.ready / bus.disconnect / events 转发）——总线退役
+        // （refactor/bus-inproc 修正 B）后宿主不再连 dshana.bus：ready/pending 由下方
+        // 初始推（打开时 g.web.ready）+ 壳页 boot-state 刷新兑底驱动；此处订阅仅当
+        // 旧形态总线仍存在时挂（兼容残留），不存在即跳过。
+        // 打开时已就绪（常态：卡在 boot 完成后打开）→ 立即推 ready，壳页即挂载；
+        // 未就绪（自举页场景）不推——壳页靠 boot-state 刷新兑底挂载（applyBoot ready
+        // → mountReady，见 webui-shell），事件流仅作 diag-changed/theme-pref 载体。
+        // 就绪判定 = web host boot 收敛（g.web.ready，ACP/进程内 boot 形态）或旧形态
+        // 总线已连接（总线退役前兼容残留——退役后恒 false，不影响）。此前仅判
+        // busReady() 导致总线退役后打开壳页收不到 ready 事件（靠轮询兑底慢显示）。
         const g = globalThis.__dshHanako;
+        if ((g && g.web && g.web.ready === true) || busReady()) {
+          send({ type: "ready" });
+        }
+        // DSH 设置变更转发（theme-pref）：settings/document-updated 的 ui-theme 命名空间
+        // = 主题偏好变更，推给壳页转告注入脚本重读偏好（事件驱动替代 3s 轮询
+        // settings/describe）。事件源：ctx.on 直订优先（DSH Host 事件源头 = cordis ctx）；
+        // ctx 不可用兑底总线 events（旧形态 bridge 转发）。
+        const themeFromFrame = (frame) => {
+          if (closed) return;
+          if (!frame || frame.type !== "emit") return;
+          if (
+            frame.event === "settings/document-updated" &&
+            Array.isArray(frame.args) &&
+            frame.args[0] === "ui-theme"
+          ) {
+            send({
+              type: "theme-pref",
+              ns: "ui-theme",
+              revision: frame.args[1] ?? null,
+            });
+          }
+        };
+        // 订阅注册成功 ≠ producer 可用（CodeRabbit 第二轮 #4）：themeCtxOff truthy 只代表
+        // ctx.on 白名单已挂上；settings/document-updated 的 producer 随 host boot 收敛才
+        // 保证挂载，ctx 有效但 producer 未就绪时 ctx 订阅可能永不触发——保留总线 events
+        // 兜底订阅（双订，不重复：进程内形态总线已退役不发帧；旧形态宿主无 ctx 时
+        // themeCtxOff 为 null 也走总线——两源不会同时活）。
+        const themeCtxOff = subscribeDshCtxEmitEvents(themeFromFrame);
+        if (themeCtxOff) {
+          unsubs.push(themeCtxOff);
+        }
+        if (g && g.dshanaBus && typeof g.dshanaBus.on === "function") {
+          unsubs.push(g.dshanaBus.on("events", themeFromFrame));
+        }
         if (g && g.dshanaBus && typeof g.dshanaBus.on === "function") {
           unsubs.push(
             g.dshanaBus.on("bus.ready", () => {
@@ -374,26 +442,6 @@ export default function registerWebuiRoutes(app, ctx) {
               send({ type: "pending" });
             }),
           );
-          // DSH 设置变更转发（bridge $events 订阅 → 总线 events 频道 → 这里过滤）：
-          // settings/document-updated 的 ui-theme 命名空间 = 主题偏好变更，推给壳页
-          // 转告注入脚本重读偏好（事件驱动替代 3s 轮询 settings/describe）。
-          unsubs.push(
-            g.dshanaBus.on("events", (frame) => {
-              if (closed) return;
-              if (!frame || frame.type !== "emit") return;
-              if (
-                frame.event === "settings/document-updated" &&
-                Array.isArray(frame.args) &&
-                frame.args[0] === "ui-theme"
-              ) {
-                send({
-                  type: "theme-pref",
-                  ns: "ui-theme",
-                  revision: frame.args[1] ?? null,
-                });
-              }
-            }),
-          );
         }
         // 挂钩 web host 启动失败通知（lifecycle startWebHostFromPlugin catch 调用）。
         // 每次模块加载都重新赋值 notifyWebStartFailed（不设 __webStartFailedHooked 守卫）：
@@ -404,6 +452,7 @@ export default function registerWebuiRoutes(app, ctx) {
         // 幂等无害）。
         webStartFailedListeners.add(onStartFailed);
         depsChangedListeners.add(onDepsChanged);
+        webReadyListeners.add(onWebReady);
         const hookG = globalThis.__dshHanako || (globalThis.__dshHanako = {});
         hookG.notifyWebStartFailed = () => {
           for (const fn of [...webStartFailedListeners]) {
@@ -416,6 +465,17 @@ export default function registerWebuiRoutes(app, ctx) {
         };
         hookG.notifyDepsChanged = () => {
           for (const fn of [...depsChangedListeners]) {
+            try {
+              fn();
+            } catch {
+              /* 通知失败不阻断 */
+            }
+          }
+        };
+        // web host 就绪翻转广播（lifecycle waitWebReady/markReady 在 g.web.ready=true 时调用，
+        // CodeRabbit #10）：通知当前活动流（readiness 前已打开的常驻流）推 ready。
+        hookG.notifyWebReady = () => {
+          for (const fn of [...webReadyListeners]) {
             try {
               fn();
             } catch {

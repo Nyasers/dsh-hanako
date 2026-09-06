@@ -111,13 +111,18 @@ const toolCallCache = new Map();
 // 误判为完成）。前提：同一 sessionId 多轮 prompt（resume 复用会话）时条目被当轮覆盖——
 // dsh 会话串行（上一轮终态 finally 已删条目），当轮条目语义正确。
 
-function createOpEntry(sessionId) {
+function createOpEntry(sessionId, meta) {
   const g = getSingleton();
   // 协调态最小化：task/sessionId/approvalPending 均不再存（task 原文在 jsonl user/message，
-  // sessionId 即键，approvalPending 由 activeApprovals 是否有 pending 项推出）
+  // sessionId 即键，approvalPending 由 activeApprovals 是否有 pending 项推出）。
+  // ACP 审批协调补充（L4）：sessionPath/task/rpcId 供 acp-mount 的 request_permission
+  // handler 投递 interlude 审批通知（notifyApprovalWake 需要宿主会话关联）。
   g.ops.set(sessionId, {
     activeApprovals: [],
     cancelledRequested: false,
+    sessionPath: meta?.sessionPath ?? null,
+    task: meta?.task ?? null,
+    rpcId: meta?.rpcId ?? null,
   });
   return sessionId;
 }
@@ -309,6 +314,11 @@ function submitTask(
 
     let collected = "";
     let blocksSeq = []; // assistant/message 的 blocks（终态回调输出结构化，reasoning 可折叠）
+    // 最新一条 assistant/message 的纯文本（CodeRabbit #11）：从事件 data.message.content 经
+    // textFromMessageBlocks 提取真助手文本（非会话 title 元数据）。turn/end 时以它为最终
+    // assistant output——覆盖式保留 turn 内最后一条真正的助手答复。
+    let lastAssistantText = "";
+    const seenMsgIds = new Set(); // assistant/message 去重（防事件边界重放）
     let sawChunk = false;
     const seen = new Set();
     let outcome = null; // { stopReason, failure? }
@@ -318,42 +328,116 @@ function submitTask(
     let pendingFailure = null;
 
     const consume = (async () => {
+      // finishFromProjection：终态统一收尾（HTTP 会话经 api-session/status running=false，
+      // ACP 会话不经 session-controller——经 session/event 的 turn/end 帧）。tokenUsage 汇总
+      // 自会话投影（projcache）。assistant output 用事件循环累计的真助手文本（CodeRabbit
+      // #11）——不再拿 projcache 的 title 元数据冒充助手输出（title 是会话标题，不是回答）。
+      const finishFromProjection = () => {
+        // 终端前把事件循环累计的最后一条真正的助手答复定为 collected（有正文才覆盖）。
+        if (lastAssistantText) collected = lastAssistantText;
+        const proj = readSessionProjection(cfg.dataDir, sessionId);
+        if (proj) {
+          const pv = proj.record?.rows;
+          const tu = pv?.tokenUsage?.val;
+          if (tu) {
+            usageTotal = usageTotal || {};
+            const totals = tu.totals || {};
+            if (totals.uncachedInputTokens != null)
+              usageTotal.inputTokens = totals.uncachedInputTokens;
+            if (totals.outputTokens != null)
+              usageTotal.outputTokens = totals.outputTokens;
+            if (totals.cacheReadTokens != null)
+              usageTotal.cacheReadTokens = totals.cacheReadTokens;
+          }
+        }
+        outcome = pendingFailure
+          ? { stopReason: "error", failure: pendingFailure }
+          : { stopReason: "end_turn" };
+      };
       try {
         for await (const frame of openMux(base, ac.signal)) {
           // ---- dsh 0.1.2 事件帧适配（openMux 产出 emit/waterfall）----
           // 0.1.2 的 $events 只广播 api-session/*（added/removed/status/error/activity），
           // 无 assistant/chunk/turn 内容事件——内容经会话投影（projcache）读取。
+          // ACP 会话的事件走 session/event 通用广播（不经 session-controller）——
+          // turn/end 即终态（与 api-session/status false 同义，双通道互不冲突先到先收）。
           if (frame.type === "emit") {
             const ev = frame.event;
             const args = Array.isArray(frame.args) ? frame.args : [];
+            if (ev === "session/event") {
+              const [session, evObj] = args;
+              const sid = session && (session.id ?? null);
+              if (sid !== sessionId) continue;
+              if (!evObj || typeof evObj.type !== "string") continue;
+              if (evObj.type === "turn/end") {
+                // 终态前先判 reason.kind（CodeRabbit #12）：reason.kind==="error" 的失败回合
+                //（LLM 输出校验失败/内部错误）不得被 finishFromProjection 当正常成功上报。
+                const r = (evObj && evObj.data && evObj.data.reason) || null;
+                const kind = r && r.kind;
+                if (kind === "error") {
+                  // 失败回合：从 reason.error/failure（或 pendingFailure 兜底）取错误消息作
+                  // error outcome。normal 完成/aborted 走既有路径：aborted 由 abortPromise/
+                  // 上层 DSH_ABORTED 判终，这里不把失败回合当成功 end_turn。
+                  const f =
+                    (r && (r.failure || r.error)) ||
+                    pendingFailure ||
+                    { message: "DSH turn 失败（reason.kind=error 无错误详情）" };
+                  outcome = {
+                    stopReason: "error",
+                    failure: {
+                      message: String(
+                        (f && (f.message || "")) ||
+                          (r && r.message) ||
+                          "DSH turn 失败",
+                      ),
+                    },
+                  };
+                  return; // 终态：失败回合（outcome 已判 error）
+                }
+                finishFromProjection();
+                return; // 终态：turn 回合结束（正常/end_turn）
+              }
+              if (evObj.type === "assistant/message") {
+                // 从事件 data.message.content 提取真正的助手文本（CodeRabbit #11）：不走
+                // title 元数据冒充输出。text block 拼接为 lastAssistantText（turn 内最后一条
+                // 助手答复即最终 output）；去重防边界重放。blocks 镜像卡片口径累积到 blocksSeq
+                //（text/reasoning/tool-call），供终态结构化重建/下游取用。
+                const msg =
+                  (evObj && evObj.data && evObj.data.message) || null;
+                const id = (msg && typeof msg.id === "string" && msg.id) || "";
+                if (id) {
+                  if (seenMsgIds.has(id)) continue;
+                  seenMsgIds.add(id);
+                }
+                const blocks = Array.isArray(msg && msg.content)
+                  ? msg.content
+                  : [];
+                const msgText = textFromMessageBlocks(blocks);
+                for (const b of blocks) {
+                  if (!b) continue;
+                  if (b.type === "text" && typeof b.text === "string" && b.text) {
+                    blocksSeq.push({ type: "text", text: b.text });
+                  } else if (
+                    b.type === "reasoning" &&
+                    typeof b.text === "string" &&
+                    b.text
+                  ) {
+                    blocksSeq.push({ type: "reasoning", text: b.text });
+                  } else if (b.type === "tool-call" && b.name) {
+                    blocksSeq.push({ type: "tool-call", name: b.name });
+                  }
+                }
+                if (msgText) lastAssistantText = msgText;
+                continue;
+              }
+              continue;
+            }
             if (ev === "api-session/status") {
               const [sid, running] = args;
               if (sid !== sessionId) continue;
               if (running !== false) continue; // 运行中：等待终态
               // 终态：agent 回合结束（status false）。结果从会话投影读取。
-              const proj = readSessionProjection(cfg.dataDir, sessionId);
-              if (proj) {
-                const pv = proj.record?.rows;
-                const title = pv?.title?.val ?? null;
-                if (typeof title === "string" && title && !collected) {
-                  collected = title;
-                  blocksSeq.push({ type: "text", text: title });
-                }
-                const tu = pv?.tokenUsage?.val;
-                if (tu) {
-                  usageTotal = usageTotal || {};
-                  const totals = tu.totals || {};
-                  if (totals.uncachedInputTokens != null)
-                    usageTotal.inputTokens = totals.uncachedInputTokens;
-                  if (totals.outputTokens != null)
-                    usageTotal.outputTokens = totals.outputTokens;
-                  if (totals.cacheReadTokens != null)
-                    usageTotal.cacheReadTokens = totals.cacheReadTokens;
-                }
-              }
-              outcome = pendingFailure
-                ? { stopReason: "error", failure: pendingFailure }
-                : { stopReason: "end_turn" };
+              finishFromProjection();
               return; // 0.1.2：status false 即终态
             } else if (ev === "api-session/error") {
               const [sid, message] = args;
@@ -566,7 +650,11 @@ function submitTask(
       // 同 sessionId 多轮 prompt（resume 复用会话）时条目被当轮覆盖：dsh 会话串行
       // （上一轮终态 finally 已删条目），当轮条目语义正确。
       taskRpcId = promptMeta.rpcId || "";
-      createOpEntry(sessionId);
+      createOpEntry(sessionId, {
+        sessionPath,
+        task: taskText,
+        rpcId: taskRpcId,
+      });
       // 宿主 task 体系接入：任务注册（type: 'dsh'，taskId = sessionId——取消链路经宿主
       // task:abort → handler.abort → session.cancel，Agent 取消统一走宿主 task 能力，
       // dsh_cancel 不再直连）。注册失败不阻断任务（宿主面板不可见，任务照跑；终态同步
