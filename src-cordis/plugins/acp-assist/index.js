@@ -27,6 +27,11 @@
 export const name = "@dsh-hanako/acp-assist";
 export const inject = ["agents", "hanaLogger"];
 
+// agentPresets 注入等待上限（CodeRabbit 第二轮 #6）：ctx.inject 的 fiber 在极端缺服务
+// 形态可能迟迟不就绪，而 assist 已改为 await（见 assist 内实现）——设上限防 create/
+// resume 被挂死；超时记日志继续（preset 缺省不阻断会话，与插件降级语义一致）。
+const AGENT_PRESETS_INJECT_WAIT_MS = 10000;
+
 export function apply(ctx) {
   try {
     let loggerSvc = null;
@@ -75,8 +80,14 @@ export function apply(ctx) {
         );
         // agentPresets 默认 preset 挂载（settings agent-presets.default——ACP 会话
         // 接回 DSH 默认 preset 系统——mount id 缺省用 config.default）
+        // CodeRabbit 第二轮 #6：ctx.inject 是回调式——本 cordis 分支的 inject 返回
+        // Fiber & PromiseLike（await 它 = 等依赖就绪 + 回调完成）。原实现不 await：
+        // ap.mount() 在 setup 返回后才异步完成，create/resume 不等 preset 就绪就对
+        // 首 turn 开放（竞态——首 turn 可能先于 preset 挂载到达）。这里 await fiber，
+        // 保证 ap.mount() 在 assist 返回（= setup 链完成 → 会话可接首 turn）前完成；
+        // 完成后 dispose fiber（不留常驻插件实例）。等待设上限防极端缺服务形态挂死。
         try {
-          ctx.inject(["agentPresets"], async (apCtx) => {
+          const fiber = ctx.inject(["agentPresets"], async (apCtx) => {
             try {
               const ap = apCtx && apCtx.agentPresets;
               if (!ap || typeof ap.mount !== "function") {
@@ -101,12 +112,30 @@ export function apply(ctx) {
                   " preset=" + String(presetDefault ?? "default"),
               );
             } catch (e) {
+              // 挂载失败不阻断会话（降级语义保留）；回调自身不抛 → fiber await 只反映
+              // 依赖就绪/完成，不因 preset 失败 reject
               hostLog(
                 "[dsh acp-assist] preset 挂载失败（session 继续，无 preset 组合）：" +
                   ((e && e.message) || e),
               );
             }
           });
+          try {
+            // await fiber（装载完成 = ap.mount 完成）；等待上限防缺服务形态挂死 create
+            await Promise.race([
+              fiber,
+              new Promise((resolve) =>
+                setTimeout(resolve, AGENT_PRESETS_INJECT_WAIT_MS),
+              ),
+            ]);
+          } finally {
+            // 装载/挂载完成（或超时放弃）后 dispose fiber——不留常驻插件实例
+            if (fiber && typeof fiber.dispose === "function") {
+              try {
+                await fiber.dispose();
+              } catch { /* dispose 失败忽略 */ }
+            }
+          }
         } catch (e) {
           hostLog(
             "[dsh acp-assist] agentPresets 注入失败：" +
