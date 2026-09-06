@@ -62,6 +62,11 @@ export function inprocDshCtx() {
  * 进程内订阅 DSH emit 事件（ctx.on 直订，帧格式与总线 events 兼容）。
  * @param {(frame: {type:"emit", event:string, args:any[]}) => void} cb
  * @returns 退订函数；ctx 未就绪（端口形态 / boot 未完成）返回 null——调用方回退总线 events。
+ *
+ * 注意返回值契约（CodeRabbit 第二轮 #4）：truthy 退订函数只代表「ctx.on 订阅注册成功
+ *（白名单 ≥1 事件挂上）」——不等于「DSH producer 可用」（事件真正从 ctx 广播要到 host
+ * boot 收敛才保证）。调用方不得仅凭 truthy 判定事件源就绪；producer 可用性不足时仍应
+ * 保留总线 events 兜底（见 protocol.js openMux / routes/webui.js 的双订模式）。
  */
 export function subscribeDshCtxEmitEvents(cb) {
   const ctx = inprocDshCtx();

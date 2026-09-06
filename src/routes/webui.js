@@ -415,10 +415,16 @@ export default function registerWebuiRoutes(app, ctx) {
             });
           }
         };
+        // 订阅注册成功 ≠ producer 可用（CodeRabbit 第二轮 #4）：themeCtxOff truthy 只代表
+        // ctx.on 白名单已挂上；settings/document-updated 的 producer 随 host boot 收敛才
+        // 保证挂载，ctx 有效但 producer 未就绪时 ctx 订阅可能永不触发——保留总线 events
+        // 兜底订阅（双订，不重复：进程内形态总线已退役不发帧；旧形态宿主无 ctx 时
+        // themeCtxOff 为 null 也走总线——两源不会同时活）。
         const themeCtxOff = subscribeDshCtxEmitEvents(themeFromFrame);
         if (themeCtxOff) {
           unsubs.push(themeCtxOff);
-        } else if (g && g.dshanaBus && typeof g.dshanaBus.on === "function") {
+        }
+        if (g && g.dshanaBus && typeof g.dshanaBus.on === "function") {
           unsubs.push(g.dshanaBus.on("events", themeFromFrame));
         }
         if (g && g.dshanaBus && typeof g.dshanaBus.on === "function") {

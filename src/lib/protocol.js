@@ -16,8 +16,10 @@
 // （client-response 信封直发 /api/respond，低频面暂留 HTTP）；selectModel/cancel/list
 // 同留 HTTP（同 DSH 会话 gateway 层操作与 ACP 兼容）。
 //
-// 事件流 openMux：进程内 boot 下宿主与 DSH 同 ctx，ctx.on 直订优先（订阅成功即就绪）；
-// ctx 不可用（boot 边缘）回退总线 events（WS 总线退役前兑底保留）。
+// 事件流 openMux：进程内 boot 下宿主与 DSH 同 ctx，ctx.on 直订优先（订阅注册成功 ≠
+// producer 就绪——就绪 = host boot 收敛 g.web.ready 或总线 ready 帧/ctx 首帧，见 openMux
+// 内 ready 判定，CodeRabbit 第二轮 #4）；ctx 不可用（boot 边缘）回退总线 events（WS 总线
+// 退役前兑底保留）；ctx 订阅存在时同样保留总线兜底至 producer 可用确认。
 //
 // textFromChunk / textFromMessageBlocks 是事件帧文本提取面（assistant/chunk、
 // assistant/message 载荷）。消费方：tools/dsh-run.js submitTask + tools/dsh-approve.js
@@ -336,7 +338,8 @@ async function* openMux(base, signal) {
   const g = getSingleton();
   const queue = [];
   const waiters = [];
-  let off = null;
+  let off = null; // ctx 直订退订（off 为空时 = 总线单订退订）
+  let busOff = null; // ctx 订阅存在时的总线 events 兜底退订（producer 可用前保留）
   let ready = false;
   let aborted = false; // abort 已触发标志：唤醒 waiters 后供循环检查（防 abort 后新建 waiter 挂死）
   const onFrame = (payload) => {
@@ -350,7 +353,19 @@ async function* openMux(base, signal) {
   };
   off = subscribeDshCtxEmitEvents(onFrame);
   if (off) {
-    ready = true; // ctx 直订：订阅成功即就绪（无 bridge ready 帧等待）
+    // 订阅注册成功 ≠ producer 可用（CodeRabbit 第二轮 #4）：truthy disposer 只代表 ctx.on
+    // 白名单已挂上，DSH producer（事件真正从 ctx 广播）要到 host boot 收敛（g.web.ready，
+    // 进程内同 ctx 的会话/设置等 producer 随 boot 挂载完成）才保证存在。注册成功后同时
+    // 挂总线 events 兜底（双订不重复：进程内形态总线已退役——connectBus 停调、总线不发
+    // 帧；旧形态宿主无 ctx、走下方 else 单订总线——两源不会同时活）——producer 可用确认
+    // 前/ctx 源失效期间，总线帧（若存在）仍可达。
+    const bus = g?.dshanaBus;
+    if (bus && typeof bus.on === "function") {
+      busOff = bus.on("events", onFrame);
+    }
+    // ready 信号 = host 已就绪（producer 挂载完成）或总线 ready 帧（onFrame）；ctx 首帧
+    // 到达时下方 ready-wait 经 queue 突破，等价证明 ctx producer 可用。
+    ready = !!(g && g.web && g.web.ready === true);
   } else {
     // ctx 不可用（boot 未完成边缘/异常形态）：回退总线 events（bridge 转发）
     const bus = g?.dshanaBus;
@@ -361,7 +376,8 @@ async function* openMux(base, signal) {
   }
   if (signal?.aborted) {
     aborted = true;
-    off();
+    if (typeof off === "function") off();
+    if (typeof busOff === "function") busOff();
     throw Object.assign(new Error("dsh_run 已取消"), { code: "DSH_ABORTED" });
   }
   const onAbort = () => {
@@ -370,7 +386,8 @@ async function* openMux(base, signal) {
   };
   signal?.addEventListener("abort", onAbort, { once: true });
   try {
-    // 就绪等待（总线模式等 bridge 就绪帧；ctx 直订 ready 恒 true 直接跳过）
+    // 就绪等待（总线模式等 bridge 就绪帧；ctx 直订在 host 已就绪时 ready=true 直接
+    // 跳过；boot 未收敛窗口内等队列/超时突破——见上方 ready 判定）
     const readyDeadline = Date.now() + 5000;
     while (!ready) {
       if (queue.length) break;
@@ -394,6 +411,7 @@ async function* openMux(base, signal) {
   } finally {
     signal?.removeEventListener("abort", onAbort);
     if (typeof off === "function") off();
+    if (typeof busOff === "function") busOff();
   }
 }
 
