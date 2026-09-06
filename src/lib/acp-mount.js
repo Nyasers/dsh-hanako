@@ -111,6 +111,10 @@ export async function mountAcp(ctx, { dshHome, emitLog }) {
   const updateQueue = []; // session/update 通知缓冲（takeUpdate 取号者为空时暂存）
   const updateWaiters = []; // 等待 update 的解析器队列（takeUpdate 无缓冲时等投递）
   const toolCache = new Map(); // toolCallId → { name, args }（审批决策的 tool 上下文）
+  // 通道关闭标记（CodeRabbit 第二轮 #3）：close() 先置 closed 再关连接——closed 期间
+  // takeUpdate 立即 resolve null（不再新增 waiter，防新取号者挂死在已停用通道）；迟到的
+  // session/update 通知直接丢弃（不重入缓冲/toolCache）；close() 幂等（重复调用安全）。
+  let closed = false;
   // ---- L4：审批应答（approval/request ctx global waterfall）----
   // DSH agent 越界/敏感工具 → ApprovalService.decide → ctx.waterfall(scopeTarget(agent),
   // 'approval/request', req, ...)——agent-scope 过滤，普通 ctx.on（无 global）因 context
@@ -324,6 +328,8 @@ export async function mountAcp(ctx, { dshHome, emitLog }) {
   // toolCache 已在上方前置声明（防审批在 TDZ 期读 toolCache，见 CodeRabbit Minor #3）。
   const clientApp = createAcpClientApp({ name: "dsh-hanako-host" })
     .onNotification(methods.client.session.update, ({ params }) => {
+      // 通道已关闭（close 后迟到的通知）：直接丢弃，不写 toolCache/updateQueue
+      if (closed) return Promise.resolve();
       const update = params && params.update;
       if (update && typeof update === "object" && update.sessionUpdate === "tool_call") {
         if (update.toolCallId) {
@@ -377,11 +383,19 @@ export async function mountAcp(ctx, { dshHome, emitLog }) {
     client,
     sdk,
     methods,
-    takeUpdate: () =>
-      updateQueue.length
+    takeUpdate: () => {
+      // 已关闭：立即 resolve null——不新增 waiter（防 close 后新取号者挂死）；遗留
+      // waiter 由 close() 唤醒置空（既有 waiter-draining 行为保留）。
+      if (closed) return Promise.resolve(null);
+      return updateQueue.length
         ? Promise.resolve(updateQueue.shift())
-        : new Promise((r) => updateWaiters.push(r)),
+        : new Promise((r) => updateWaiters.push(r));
+    },
     close: () => {
+      // 幂等：closed 已置位直接返回（重复 close 安全，不再重复关连接/清空/唤醒）。
+      // 先置 closed 再关连接：closed 先行使新 takeUpdate / 迟到通知立即短路。
+      if (closed) return;
+      closed = true;
       try { connection.close?.(); } catch { /* noop */ }
       // 卸载/关闭：废弃累积 update 缓冲与等待者（防 close 后残留无界暂存/挂死 waiter）。
       // close 语义 = 通道停用不再取用——遗留缓冲可被 GC（CodeRabbit Major #5）。
