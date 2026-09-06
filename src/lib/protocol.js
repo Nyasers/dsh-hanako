@@ -155,6 +155,47 @@ async function acpCreate(acp, method, payload, signal) {
   try {
     getSingleton()?.appendLog?.("hana", `[dsh-rpc] ACP ${sid ? "resume" : "new"} 会话 ${res.sessionId}`);
   } catch { /* 日志失败不阻断 */ }
+  // effort 默认保持：session 建立后补 set reasoning_effort（ACP 会话 initial selection
+  // 只带 provider/model——settings 的 reasoningEffort 不经 ACP 插件 config 传递，落
+  // model 默认 = Default）。effort = 工具显式传（payload.reasoningEffort）?? boot 读
+  // settings 的默认（g.acpDefaultEffort——acp-mount readDefaultModel）。模型不支持
+  //（effort 枚举不在 efforts 列表）set 抛 AcpModelConfigError——catch 静默降级
+  //（effort 落该模型默认——「有的模型不支持该参数」的兜底）。
+  try {
+    const g0 = getSingleton();
+    const effort =
+      (payload && payload.reasoningEffort) ||
+      (g0 && g0.acpDefaultEffort) ||
+      null;
+    if (effort) {
+      try {
+        await client.request(
+          methods.agent.session.setConfigOption,
+          {
+            sessionId: res.sessionId,
+            configId: "reasoning_effort",
+            value: String(effort),
+          },
+          { signal },
+        );
+        try {
+          getSingleton()?.appendLog?.(
+            "hana",
+            "[dsh-rpc] ACP effort 已设：" + String(effort) +
+              "（session=" + String(res.sessionId).slice(0, 12) + "）",
+          );
+        } catch { /* 日志失败不阻断 */ }
+      } catch (e) {
+        try {
+          getSingleton()?.appendLog?.(
+            "hana",
+            "[dsh-rpc] ACP reasoning_effort 降级（模型默认）：" +
+              ((e && e.message) || e),
+          );
+        } catch { /* 日志失败不阻断 */ }
+      }
+    }
+  } catch { /* effort 读取/设置失败不阻断会话创建 */ }
   return { sessionId: res.sessionId };
 }
 
@@ -218,7 +259,15 @@ async function acpSelect(acp, method, payload, signal) {
     { sessionId: sid, configId: "model", value: JSON.stringify([provider, model]) },
     { signal },
   );
-  const effort = payload && payload.reasoningEffort;
+  // 默认 effort 保持（宿主 set model 会冲掉 DSH settings 的 reasoningEffort——
+  // readDefaultModel 读到存 g.acpDefaultEffort；任务显式传的优先）。模型不支持的
+  // effort（枚举不在 efforts 列表）set 抛 AcpModelConfigError——catch 静默降级
+  //（effort 落该模型默认）——「有的模型不支持该参数」的兜底。
+  const g0 = getSingleton();
+  const effort =
+    (payload && payload.reasoningEffort) ||
+    (g0 && g0.acpDefaultEffort) ||
+    null;
   if (effort) {
     try {
       await client.request(
@@ -226,6 +275,13 @@ async function acpSelect(acp, method, payload, signal) {
         { sessionId: sid, configId: "reasoning_effort", value: String(effort) },
         { signal },
       );
+      try {
+        getSingleton()?.appendLog?.(
+          "hana",
+          "[dsh-rpc] ACP effort 已设：" + String(effort) +
+            "（session=" + String(sid).slice(0, 12) + "）",
+        );
+      } catch { /* 日志失败不阻断 */ }
     } catch (e) {
       // effort 不被该模型接受：已选模型生效，effort 用模型默认（对齐 HTTP 降级）
       try {

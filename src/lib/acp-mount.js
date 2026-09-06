@@ -38,8 +38,10 @@ const MAX_BUFFERED_UPDATES = 128;
 const hostRequire = createRequire(import.meta.url);
 
 /** 读 DSH 默认模型（dsh-home/settings.yaml agent-default-model，与 tools run.js 同源），
- * 供 ACP 插件的 provider/model 配置（ACP 创建的 agent 的 initialSelection）。读失败
- * 返回 null（调用方回退 undefined——Schema 必填失败时抛错由调用方降级）。 */
+ * 供 ACP 插件的 provider/model 配置（ACP 创建的 agent 的 initialSelection）与
+ * selectModel 后的 effort 默认保持（readDefaultModel().effort——宿主 set model 会冲掉
+ * DSH settings 的 reasoningEffort，需在 set model 后补 set；不支持的模型 set 失败静默
+ * 降级）。读失败返回 null（调用方回退 undefined——Schema 必填失败时抛错由调用方降级）。 */
 function readDefaultModel(dshHome) {
   try {
     const p = join(dshHome, "settings.yaml");
@@ -48,8 +50,15 @@ function readDefaultModel(dshHome) {
       /agent-default-model:[\s\S]*?\n\s+model:\s*["']?([^"'\n]+)/,
     );
     const mp = txt.match(/agent-default-model:\s*\n\s+provider:\s*["']?([^"'\n]+)/);
+    const me = txt.match(
+      /agent-default-model:[\s\S]*?\n\s+reasoningEffort:\s*["']?([^"'\n]+)/,
+    );
     if (!mm || !mp) return null;
-    return { provider: mp[1].trim(), model: mm[1].trim() };
+    return {
+      provider: mp[1].trim(),
+      model: mm[1].trim(),
+      reasoningEffort: me ? me[1].trim() : undefined,
+    };
   } catch {
     return null;
   }
@@ -257,6 +266,14 @@ export async function mountAcp(ctx, { dshHome, emitLog }) {
     provider: dm?.provider,
     model: dm?.model,
   };
+  // 默认 effort（settings agent-default-model.reasoningEffort）：宿主 selectModel
+  // set model 会冲掉 DSH settings 的 effort（set model 无 effort → resolveCallConfig
+  // 落 model 默认）——存宿主单例供 protocol acpSelect 在 set model 后补 set effort
+  //（任务显式传优先；不支持的模型 set 失败静默降级——见 acpSelect catch）。
+  try {
+    const g0 = getSingleton();
+    if (g0) g0.acpDefaultEffort = dm?.reasoningEffort || null;
+  } catch { /* 单例不可写忽略 */ }
   // 内存双工对（零端口零 stdio）：server 侧写 a2c / 读 c2a；client 侧相反
   const a2c = new TransformStream();
   const c2a = new TransformStream();
