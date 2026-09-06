@@ -155,8 +155,14 @@ async function acpCreate(acp, method, payload, signal) {
     ? await client.request(methods.agent.session.resume, { sessionId: sid, ...params }, { signal })
     : await client.request(methods.agent.session.new, params, { signal });
   try {
-    getSingleton()?.appendLog?.("hana", `[dsh-rpc] ACP ${sid ? "resume" : "new"} 会话 ${res.sessionId}`);
+    getSingleton()?.appendLog?.(
+      "hana",
+      `[dsh-rpc] ACP ${sid ? "resume" : "new"} 会话 ${sid ? String(sid).slice(0, 16) : res.sessionId}`,
+    );
   } catch { /* 日志失败不阻断 */ }
+  // resume 响应只有 { configOptions }——无 sessionId（请求已带，客户端已知）；
+  // session.new 响应带 { sessionId }。返回的 sessionId 取请求 sid（resume）或响应的。
+  const outSessionId = sid ? sid : res.sessionId;
   // effort 默认保持：session 建立后补 set reasoning_effort（ACP 会话 initial selection
   // 只带 provider/model——settings 的 reasoningEffort 不经 ACP 插件 config 传递，落
   // model 默认 = Default）。effort = 工具显式传（payload.reasoningEffort）?? boot 读
@@ -174,7 +180,7 @@ async function acpCreate(acp, method, payload, signal) {
         await client.request(
           methods.agent.session.setConfigOption,
           {
-            sessionId: res.sessionId,
+            sessionId: outSessionId,
             configId: "reasoning_effort",
             value: String(effort),
           },
@@ -184,7 +190,7 @@ async function acpCreate(acp, method, payload, signal) {
           getSingleton()?.appendLog?.(
             "hana",
             "[dsh-rpc] ACP effort 已设：" + String(effort) +
-              "（session=" + String(res.sessionId).slice(0, 12) + "）",
+              "（session=" + String(outSessionId).slice(0, 12) + "）",
           );
         } catch { /* 日志失败不阻断 */ }
       } catch (e) {
@@ -198,7 +204,7 @@ async function acpCreate(acp, method, payload, signal) {
       }
     }
   } catch { /* effort 读取/设置失败不阻断会话创建 */ }
-  return { sessionId: res.sessionId };
+  return { sessionId: outSessionId };
 }
 
 // ACP session.prompt：ACP 协议是请求-响应（服务端 drain 到 turn 完才回）——宿主提交

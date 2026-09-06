@@ -105,6 +105,23 @@ export function apply(ctx) {
                   String(presetDefault ?? "（config.default 缺省）") +
                   " 到 session=" + String(sid).slice(0, 12),
               );
+              // 查重（CodeRabbit 回归发现）：resume 已挂 preset 的会话时 standing mount
+              // 仍在——重复 ap.mount 抛 "scope key is already bound"（不阻断但日志噪音）。
+              // composedPreset 查当前 agent 已组合的 preset——有则跳过（standing 已生效）
+              try {
+                const composed =
+                  typeof ap.composedPreset === "function"
+                    ? ap.composedPreset(agentCtx)
+                    : undefined;
+                if (composed) {
+                  hostLog(
+                    "[dsh acp-assist] preset 已挂载（standing 查重跳过）session=" +
+                      String(sid).slice(0, 12) +
+                      " preset=" + String(composed.id || composed || "?"),
+                  );
+                  return;
+                }
+              } catch { /* 查重失败照挂（mount 自身兜 bound） */ }
               await ap.mount(agentCtx, presetDefault);
               hostLog(
                 "[dsh acp-assist] preset 已挂载完成 session=" +

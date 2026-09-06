@@ -99,6 +99,53 @@ const approvalTimers = new Map();
 // 工具名或 model 自述（bash/pwsh 都能执行任意命令，工具名说明不了安全）。
 const toolCallCache = new Map();
 
+// 同会话提交队列：resume/send 可复用同一 DSH 会话，DSH 的 queue 模式会接受并发提交并把
+// 后到的 prompt 排到当前 turn 之后；但 submitTask 的 mux 事件流与 g.ops 条目都以 sessionId
+// 定位，两个同时运行的 submitTask 会互相消费对方的 turn/end、互相覆盖/清理 ops。因此对同一
+// DSH 会话的 submitTask 做进程内串行化，后到任务等前一个任务终态（finally 清理完成）后再
+// 执行，保留「同一会话顺序续跑」的既有语义。resume 在进入 runTask 前以 resumeSessionId 排队；
+// create 在提交 prompt 前按新 sessionId 登记本队列，避免 create 返回后立即 send 重叠。
+const sessionTurnQueues = new Map();
+
+async function withSessionTurn(sessionKey, run) {
+  const previous = sessionTurnQueues.get(sessionKey) || Promise.resolve();
+  let release = null;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const next = previous.then(() => gate);
+  sessionTurnQueues.set(sessionKey, next);
+  await previous;
+  try {
+    return await run();
+  } finally {
+    release();
+    if (sessionTurnQueues.get(sessionKey) === next) {
+      sessionTurnQueues.delete(sessionKey);
+    }
+  }
+}
+
+// create 路径拿到的 sessionId 在提交完成前对调用方不可知，不会已有并发排队；这里同步占住
+// session 队列槽位（与 withSessionTurn 同尾链格式），到任务 finally 清理后释放。
+function enterSessionTurn(sessionKey) {
+  if (sessionTurnQueues.has(sessionKey)) {
+    throw new Error(`dsh_run 内部错误：新会话 ${sessionKey} 已有排队提交`);
+  }
+  let release = null;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const next = Promise.resolve().then(() => gate);
+  sessionTurnQueues.set(sessionKey, next);
+  return () => {
+    release();
+    if (sessionTurnQueues.get(sessionKey) === next) {
+      sessionTurnQueues.delete(sessionKey);
+    }
+  };
+}
+
 // ---- 运行期协调状态（任务状态零存储，g.ops 仅存审批/取消协调字段）----
 // 任务状态（status/output/summary/usage/耗时）不再保存在插件内存：jsonl（dsh 会话日志）是
 // 唯一事实源，卡片经 /ops/stream 从 jsonl 重建基线 + 转发 DSH 实时事件，插件零任务状态。
@@ -108,8 +155,8 @@ const toolCallCache = new Map();
 // 判断即可）。任务终态时在 submitTask 的 finally 删除条目。用途：① approval/requested
 // 存审批上下文（respondRpcId 路由 respond），dsh_approve 工具应答；② dsh_cancel 凭
 // sessionId 直接 ops.get 取条目并标记 cancelledRequested（防 mux 断流时事件循环把取消
-// 误判为完成）。前提：同一 sessionId 多轮 prompt（resume 复用会话）时条目被当轮覆盖——
-// dsh 会话串行（上一轮终态 finally 已删条目），当轮条目语义正确。
+// 误判为完成）。前提：同一 sessionId 的 submitTask 由 withSessionTurn 串行，
+// 上一轮终态 finally 已删条目后下一轮才建条目，当轮条目语义正确。
 
 function createOpEntry(sessionId, meta) {
   const g = getSingleton();
@@ -218,7 +265,7 @@ function submitTask(
   // client-response 路由用，见 approval.respondRpcId）。
   let taskRpcId = null;
 
-  const promise = (async () => {
+  const runTask = async () => {
     const web = await ensureWebHost(cfg);
     const base = `http://127.0.0.1:${web.port}`;
 
@@ -230,36 +277,60 @@ function submitTask(
     // 故 resume 分支先 session.list 查目标会话已有 cwd（忽略用户传入的 cwd——resume 语义即沿用会话）。
     // agentPreset 无值不传（缺省走 web host 默认，Web UI 可调）
     let createPayload;
-    // 生效 cwd（宿主 task 注册元数据用）：create = 用户显式传的 cwd；resume =
-    // 会话已有 cwd（send 不传 cwd 时由 session.list 查回）。resume 分支赋值。
+    // 生效 cwd（宿主 task 注册元数据用）：create = 用户显式传的 cwd；resume = 会话已有
+    // cwd（send 不传 cwd 时由 session.list 查回）。resume 分支赋值。
     let effectiveCwd = String(cwd ?? "").trim();
+    // 活跃会话直续：list 只列「持久但非活跃（可 resume 恢复）」的会话（dsh-acp 的
+    // listSessions 排除 sessions Map/activating/ctx.sessions 注册）——list 不含 ≠ 不存在：
+    // 会话在 Map（活跃可插话 / 空闲可续）时续 = 直接 session.prompt（ACP prompt 到已
+    // 存在会话 = 加 turn/插话——steer 语义），不需要 create/resume（活跃会话 resume 会被
+    // dsh-acp 拒 "session already active"）。list 有（进程重启后持久非活跃）才走
+    // session.resume 恢复。真不存在的 id（list 无且不在 Map）→ prompt admission 失败
+    //（fire 后无事件流——run.js 超时暴露——错误提示见超时）。
+    let activeResumeId = null;
     if (resumeSessionId) {
       const list = await callUnaryBus("session.list", {
         projections: ["id", "cwd"],
       });
       const items = list.items || [];
       const existing = items.find((it) => it.sessionId === resumeSessionId);
-      if (!existing)
-        throw new Error(
-          `目标会话不存在或已归档，无法 resume：${resumeSessionId}`,
-        );
-      // 异常会话（cwd 为空/缺失）回退用户显式传的 cwd，再不行才报错
-      const resumeCwd = String(existing.cwd ?? "").trim() || cwd;
-      if (!resumeCwd)
-        throw new Error(
-          `目标会话 ${resumeSessionId} 无 cwd 且无可用回退 cwd，无法 resume`,
-        );
-      effectiveCwd = resumeCwd;
-      createPayload = {
-        sessionId: resumeSessionId,
-        cwd: resumeCwd,
-        ...(preset && { agentPreset: preset }),
-      };
+      if (existing) {
+        // 非活跃持久会话（进程重启/长期挂起）——session.resume 从持久恢复
+        // 异常会话（cwd 为空/缺失）回退用户显式传的 cwd，再不行才报错
+        const resumeCwd = String(existing.cwd ?? "").trim() || cwd;
+        if (!resumeCwd)
+          throw new Error(
+            `目标会话 ${resumeSessionId} 无 cwd 且无可用回退 cwd，无法 resume`,
+          );
+        effectiveCwd = resumeCwd;
+        createPayload = {
+          sessionId: resumeSessionId,
+          cwd: resumeCwd,
+          ...(preset && { agentPreset: preset }),
+        };
+      } else {
+        // list 不含：会话在 Map（活跃/空闲）——直接 prompt 续（插话/加 turn）——
+        // cwd 查不回（list 只列非活跃），effectiveCwd 用调用方传的（task 元数据用，
+        // 非关键——jsonl 目录由 DSH 按会话持久）
+        activeResumeId = resumeSessionId;
+        try {
+          getSingleton()?.appendLog?.(
+            "hana",
+            `[dsh-rpc] send 直续活跃会话 ${String(resumeSessionId).slice(0, 16)}（list 无——Map 直 prompt）`,
+          );
+        } catch { /* 日志失败不阻断 */ }
+      }
     } else {
       createPayload = { cwd, ...(preset && { agentPreset: preset }) };
     }
-    const session = await callUnaryBus("session.create", createPayload);
-    const sessionId = session.sessionId;
+    let sessionId;
+    if (activeResumeId) {
+      // 活跃会话：不调 session.create（会话已在 Map）——直接用它，后续 prompt fire
+      sessionId = activeResumeId;
+    } else {
+      const session = await callUnaryBus("session.create", createPayload);
+      sessionId = session.sessionId;
+    }
 
     // 1.5 模型选择：仅当工具显式传 provider/model/effort 时才 selectModel（显式覆盖
     // dsh 默认模型）；都不传时不 selectModel，任务直接用 dsh 默认模型
@@ -629,7 +700,13 @@ function submitTask(
     // promptMeta 声明提升到 try 外：提交失败时 catch 从 promptMeta.rpcId 兜底
     // taskRpcId（callUnaryBus/HTTP 兜底在 reject 路径也回传 meta.rpcId）
     const promptMeta = {};
+    // 新会话在 ready 之前不会暴露给其他 submitTask；进入 try 后、resolveReady 前登记
+    // session 队列槽位，使 create 未完成时到达的 send 等待，同时避免注册前抛错泄漏锁。
+    let releaseNewSessionTurn = null;
     try {
+      releaseNewSessionTurn = resumeSessionId
+        ? null
+        : enterSessionTurn(sessionId);
       // 3. 提交 prompt（queue 模式：立即 accepted，agent 异步执行）
       // promptMeta.rpcId = 会话 jsonl 的 user/message 事件 data.source.rpcId（同一 RPC id），
       // 经 ready 返回给卡片 URL：插件重启后按 sessionId+rpcId 从 jsonl 精确恢复（运行期
@@ -647,8 +724,8 @@ function submitTask(
       // 任务 rpcId 此刻产生（prompt 提交成功）：赋值提升变量 + 建运行期协调条目。
       // 顺序最稳：赋值 taskRpcId → createOpEntry → resolveReady——resolveReady 后事件循环
       // 才开始流转，审批帧到达时条目必已存在（g.ops.get(sessionId) 必命中）。
-      // 同 sessionId 多轮 prompt（resume 复用会话）时条目被当轮覆盖：dsh 会话串行
-      // （上一轮终态 finally 已删条目），当轮条目语义正确。
+      // 同一 sessionId 的 submitTask 由 withSessionTurn 串行：
+      // 上一轮终态 finally 已删条目后下一轮才建条目，当轮条目语义正确。
       taskRpcId = promptMeta.rpcId || "";
       createOpEntry(sessionId, {
         sessionPath,
@@ -784,7 +861,14 @@ function submitTask(
         /* 忽略 */
       }
     }
-  })();
+    if (releaseNewSessionTurn) {
+      releaseNewSessionTurn();
+    }
+  };
+
+  const promise = resumeSessionId
+    ? withSessionTurn(resumeSessionId, runTask)
+    : runTask();
 
   promise.catch((err) => {
     // 提交失败也保留 rpcId 关联：taskRpcId 已在 catch 里从 promptMeta.rpcId 兜底（若有）——
