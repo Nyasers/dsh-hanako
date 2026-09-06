@@ -120,15 +120,24 @@ export function apply(ctx) {
               );
             }
           });
+          let waitTimer = null;
           try {
             // await fiber（装载完成 = ap.mount 完成）；等待上限防缺服务形态挂死 create
             await Promise.race([
               fiber,
-              new Promise((resolve) =>
-                setTimeout(resolve, AGENT_PRESETS_INJECT_WAIT_MS),
-              ),
+              new Promise((resolve) => {
+                waitTimer = setTimeout(resolve, AGENT_PRESETS_INJECT_WAIT_MS);
+              }),
             ]);
           } finally {
+            // 清理等待计时器（CodeRabbit 第五轮：race 先被 fiber settle 时 timer 仍
+            // 挂着——多会话累积 10s 空 timer；clearTimeout 防泄漏）
+            if (waitTimer !== null) {
+              try {
+                clearTimeout(waitTimer);
+              } catch { /* 清理失败忽略 */ }
+              waitTimer = null;
+            }
             // 装载/挂载完成（或超时放弃）后 dispose fiber——不留常驻插件实例
             if (fiber && typeof fiber.dispose === "function") {
               try {

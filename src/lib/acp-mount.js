@@ -58,6 +58,9 @@ function readDefaultModel(dshHome) {
     // readDshDefaultModel 同源（settings.yaml 结构简单，不需引 YAML 解析器）。
     const lines = String(readFileSync(p, "utf8")).split(/\r?\n/);
     let inBlock = false;
+    let directIndent = null; // agent-default-model 直接子键的缩进（CodeRabbit 第五轮：
+    // 嵌套 mapping（缩进更深）的键不得冒充直接字段——如某子块里同名 provider/model
+    // 会覆盖 out——只收缩进 == 直接子级的键）
     const out = {};
     for (const line of lines) {
       if (/^agent-default-model\s*:/.test(line)) {
@@ -72,6 +75,9 @@ function readDefaultModel(dshHome) {
       }
       const m = line.match(/^(\s+)([A-Za-z]+)\s*:\s*(.*)$/);
       if (!m) continue; // 块内嵌套（列表项等）跳过，继续找键
+      const indent = m[1].length;
+      if (directIndent === null) directIndent = indent;
+      if (indent !== directIndent) continue; // 嵌套 mapping（缩进更深）跳过
       const k = m[2];
       const v = m[3].trim();
       if (v) out[k] = v.replace(/^['"]|['"]$/g, "");
