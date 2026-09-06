@@ -130,8 +130,12 @@ export function apply(ctx) {
         };
         return await origCreate.call(this, opt);
       } catch (e) {
-        log("create wrap 失败（透传原行为）：" + ((e && e.message) || e));
-        return origCreate.call(this, options);
+        // CodeRabbit 第二轮 #5：不再二次调 origCreate 重试。首试失败时原装配可能已部分
+        // 生效/agent 已创建（重试会双创建/重复装配），且重试掩盖 setup 抛出的真因
+        //（assist 自带 try/catch 不抛，能走到这里是原 setup/工厂装配失败）。log + rethrow，
+        // 保留原工厂的错误语义。
+        log("create wrap 失败（透传原错误）：" + ((e && e.message) || e));
+        throw e;
       }
     };
 
@@ -148,8 +152,10 @@ export function apply(ctx) {
           };
           return await origResume.call(this, opt);
         } catch (e) {
-          log("resume wrap 失败（透传原行为）：" + ((e && e.message) || e));
-          return origResume.call(this, options);
+          // CodeRabbit 第二轮 #5（与 create 同款）：不再二次调 origResume 重试——恢复
+          // 会话的装配同样可能已部分生效（重试双创建/双装配），log + rethrow 透传真因。
+          log("resume wrap 失败（透传原错误）：" + ((e && e.message) || e));
+          throw e;
         }
       };
     }
