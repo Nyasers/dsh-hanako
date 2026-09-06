@@ -45,19 +45,41 @@ const hostRequire = createRequire(import.meta.url);
 function readDefaultModel(dshHome) {
   try {
     const p = join(dshHome, "settings.yaml");
-    const txt = String(readFileSync(p, "utf8"));
-    const mm = txt.match(
-      /agent-default-model:[\s\S]*?\n\s+model:\s*["']?([^"'\n]+)/,
-    );
-    const mp = txt.match(/agent-default-model:\s*\n\s+provider:\s*["']?([^"'\n]+)/);
-    const me = txt.match(
-      /agent-default-model:[\s\S]*?\n\s+reasoningEffort:\s*["']?([^"'\n]+)/,
-    );
-    if (!mm || !mp) return null;
+    // 行级解析（CodeRabbit 第二轮 #7）：原实现三条跨块正则
+    // `agent-default-model:[\s\S]*?\n\s+(model|reasoningEffort):` 在 agent-default-model
+    // 块内没有对应键时，懒匹配会跨越到下一个顶层 mapping（llm-pi-ai / agent-presets 等）
+    // 误取同名字段（settings.yaml 顶层键嵌套子块同名键时）。先截 agent-default-model 块
+    //（到下一个顶层键/出块）再在块内提取键——零依赖行级策略，与 lib/config.js 的
+    // readDshDefaultModel 同源（settings.yaml 结构简单，不需引 YAML 解析器）。
+    const lines = String(readFileSync(p, "utf8")).split(/\r?\n/);
+    let inBlock = false;
+    const out = {};
+    for (const line of lines) {
+      if (/^agent-default-model\s*:/.test(line)) {
+        inBlock = true;
+        continue;
+      }
+      if (!inBlock) continue;
+      // 无缩进行 = 出块（下一个顶层键）；空行/注释行跳过（块内允许，不算出块）
+      if (!/^\s/.test(line)) {
+        if (line.trim() === "" || /^\s*#/.test(line)) continue;
+        break;
+      }
+      const m = line.match(/^(\s+)([A-Za-z]+)\s*:\s*(.*)$/);
+      if (!m) continue; // 块内嵌套（列表项等）跳过，继续找键
+      const k = m[2];
+      const v = m[3].trim();
+      if (v) out[k] = v.replace(/^['"]|['"]$/g, "");
+    }
+    // 选择行为与旧实现一致：provider+model 必需（缺任一回退 null，调用方走 undefined）；
+    // reasoningEffort 可选。值在块内截取，不会跨块误配。
+    if (!out.provider || !out.model) return null;
     return {
-      provider: mp[1].trim(),
-      model: mm[1].trim(),
-      reasoningEffort: me ? me[1].trim() : undefined,
+      provider: String(out.provider).trim(),
+      model: String(out.model).trim(),
+      reasoningEffort: out.reasoningEffort
+        ? String(out.reasoningEffort).trim()
+        : undefined,
     };
   } catch {
     return null;
