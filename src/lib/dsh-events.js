@@ -81,6 +81,10 @@ export function subscribeDshCtxEmitEvents(cb) {
       /* 单事件订阅失败（事件不存在/未注册）跳过——白名单保守覆盖 */
     }
   }
+  // 全白名单 ctx.on 都失败（disposers 为空）时返回 null（CodeRabbit #8）：否则调用方
+  // 拿到一个 truthy 空退订函数会误判「ctx 订阅成功」→ openMux 等地跳过总线兜底，结果
+  // 收不到任何事件帧挂起。null 语义 = ctx 订阅不可用，调用方回退总线 events。
+  if (disposers.length === 0) return null;
   return () => {
     for (const off of disposers) {
       try {
