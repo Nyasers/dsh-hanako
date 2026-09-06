@@ -111,6 +111,32 @@ export async function mountAcp(ctx, { dshHome, emitLog }) {
     const pending = new Promise((resolve) => {
       settle = resolve;
     });
+    // ---- 单飞收尾守卫（CodeRabbit Minor #4）----
+    // onAbort 与超时（及宿主应答 _respond）是三条独立 settle 路径。原实现无共享 guard：
+    // onAbort 标记 cancelled 后，超时回调仍会写 status="answered"/outcome="rejected"/
+    // answeredAt（_respond 空操作但状态字段被后到者污染），且 onAbort 不清超时计时器。
+    // settled 标志 = 首个 settle 写终态 + resolve 挂起 Promise + 清除超时计时器；后续
+    // 路径只 no-op——保留先到者设的状态/时间戳（onAbort 的 cancelled 不会被覆盖）。
+    let settled = false;
+    let timeoutTimer = null; // 超时拒绝计时器（settle/onAbort 时 clearTimeout，防再触发污染）
+    const commitSettle = (statusOutcome, resolvedValue) => {
+      if (settled) return;
+      settled = true;
+      approval.status = "answered";
+      approval.outcome = statusOutcome;
+      approval.answeredAt = new Date().toISOString();
+      if (timeoutTimer) {
+        clearTimeout(timeoutTimer);
+        timeoutTimer = null;
+      }
+      const s = settle;
+      settle = null;
+      if (s) {
+        try {
+          s(resolvedValue);
+        } catch { /* 已 settle 忽略 */ }
+      }
+    };
     const approval = {
       approvalId,
       eventId: approvalId,
@@ -122,12 +148,11 @@ export async function mountAcp(ctx, { dshHome, emitLog }) {
       status: "pending",
       requestedAt: new Date().toISOString(),
       _respond: (outcomeStr) => {
-        if (!settle) return;
-        const s = settle;
-        settle = null;
-        try {
-          s(outcomeStr === "rejected" ? "rejected" : "allowed-once");
-        } catch { /* 已 settle 忽略 */ }
+        // 宿主应答（dsh_approve / interlude 转发）：rejected → rejected，其余 → allowed-once
+        //（与旧 mapping 一致）。经 commitSettle：已 settle（abort/超时先到）则 no-op。
+        const mapped =
+          outcomeStr === "rejected" ? "rejected" : "allowed-once";
+        commitSettle(mapped, mapped);
       },
     };
     op.activeApprovals.push(approval);
@@ -137,33 +162,33 @@ export async function mountAcp(ctx, { dshHome, emitLog }) {
         `[dsh acp] 审批已挂起（id=${approvalId.slice(0, 24)}）——等宿主应答`,
       );
     } catch { /* 日志失败不阻断 */ }
-    // 审批请求取消（会话 abort/cancel）→ 返回 cancelled（waterfall 认领）
+    // 审批请求取消（会话 abort/cancel）→ 返回 cancelled。
+    // onAbort 写 cancelled 终态并清超时计时器（commitSettle 内部）：后到的超时/应答
+    // 只 no-op，不再覆盖 cancelled 状态与时间戳。
     const signal = req && req.signal;
     const onAbort = () => {
-      try {
-        approval._respond("cancelled");
-        approval.status = "answered";
-        approval.outcome = "cancelled";
-        approval.answeredAt = new Date().toISOString();
-      } catch { /* 忽略 */ }
+      // 先到分支写入 cancelled；resolve 仍沿用旧的 allowed-once（waterfall outcome）。
+      commitSettle("cancelled", "allowed-once");
     };
     if (signal) {
-      if (signal.aborted) onAbort();
+      if (signal.aborted) onAbort(); // signal 已 aborted：立即 settle + 清计时器
       else signal.addEventListener("abort", onAbort, { once: true });
     }
     // 超时自动拒绝（approvalTimeoutSec 秒无人应答；0/不可读 = 禁用）
     try {
       const ats = resolveApprovalTimeoutSec({ dataDir: g?.dataDir });
-      if (ats > 0) {
-        const timer = setTimeout(() => {
-          try {
-            approval._respond("rejected");
-            approval.status = "answered";
-            approval.outcome = "rejected";
-            approval.answeredAt = new Date().toISOString();
-          } catch { /* 忽略 */ }
+      if (ats > 0 && !settled) {
+        // signal 已同步 aborted（上方 onAbort 已 settle）→ 不再起计时器
+        timeoutTimer = setTimeout(() => {
+          // 已 settle（onAbort/应答先到）→ no-op（守卫处理）；仍 pending → rejected
+          commitSettle("rejected", "rejected");
         }, ats * 1000);
-        approval._cancelTimer = () => clearTimeout(timer);
+        approval._cancelTimer = () => {
+          if (timeoutTimer) {
+            clearTimeout(timeoutTimer);
+            timeoutTimer = null;
+          }
+        };
       }
     } catch { /* 超时表不可用禁用 */ }
     // 宿主 Agent 审批通知（interlude 插话——bus/sessionPath/rpcId/task 经 op 条目
