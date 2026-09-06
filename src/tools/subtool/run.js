@@ -314,6 +314,11 @@ function submitTask(
 
     let collected = "";
     let blocksSeq = []; // assistant/message 的 blocks（终态回调输出结构化，reasoning 可折叠）
+    // 最新一条 assistant/message 的纯文本（CodeRabbit #11）：从事件 data.message.content 经
+    // textFromMessageBlocks 提取真助手文本（非会话 title 元数据）。turn/end 时以它为最终
+    // assistant output——覆盖式保留 turn 内最后一条真正的助手答复。
+    let lastAssistantText = "";
+    const seenMsgIds = new Set(); // assistant/message 去重（防事件边界重放）
     let sawChunk = false;
     const seen = new Set();
     let outcome = null; // { stopReason, failure? }
@@ -324,17 +329,15 @@ function submitTask(
 
     const consume = (async () => {
       // finishFromProjection：终态统一收尾（HTTP 会话经 api-session/status running=false，
-      // ACP 会话不经 session-controller——经 session/event 的 turn/end 帧）。两者共读会话
-      // 投影（projcache）：title 作为 collected 输出 + tokenUsage 汇总 → outcome。
+      // ACP 会话不经 session-controller——经 session/event 的 turn/end 帧）。tokenUsage 汇总
+      // 自会话投影（projcache）。assistant output 用事件循环累计的真助手文本（CodeRabbit
+      // #11）——不再拿 projcache 的 title 元数据冒充助手输出（title 是会话标题，不是回答）。
       const finishFromProjection = () => {
+        // 终端前把事件循环累计的最后一条真正的助手答复定为 collected（有正文才覆盖）。
+        if (lastAssistantText) collected = lastAssistantText;
         const proj = readSessionProjection(cfg.dataDir, sessionId);
         if (proj) {
           const pv = proj.record?.rows;
-          const title = pv?.title?.val ?? null;
-          if (typeof title === "string" && title && !collected) {
-            collected = title;
-            blocksSeq.push({ type: "text", text: title });
-          }
           const tu = pv?.tokenUsage?.val;
           if (tu) {
             usageTotal = usageTotal || {};
@@ -371,8 +374,36 @@ function submitTask(
                 return; // 终态：turn 回合结束（projcache 已写 title/stats）
               }
               if (evObj.type === "assistant/message") {
-                // 0.1.2 内容走 projcache（title 已收）——消息帧不重复收集；若 proj 缺
-                // title 可在此兜底（暂无需要，保留分支便于后续扩展）
+                // 从事件 data.message.content 提取真正的助手文本（CodeRabbit #11）：不走
+                // title 元数据冒充输出。text block 拼接为 lastAssistantText（turn 内最后一条
+                // 助手答复即最终 output）；去重防边界重放。blocks 镜像卡片口径累积到 blocksSeq
+                //（text/reasoning/tool-call），供终态结构化重建/下游取用。
+                const msg =
+                  (evObj && evObj.data && evObj.data.message) || null;
+                const id = (msg && typeof msg.id === "string" && msg.id) || "";
+                if (id) {
+                  if (seenMsgIds.has(id)) continue;
+                  seenMsgIds.add(id);
+                }
+                const blocks = Array.isArray(msg && msg.content)
+                  ? msg.content
+                  : [];
+                const msgText = textFromMessageBlocks(blocks);
+                for (const b of blocks) {
+                  if (!b) continue;
+                  if (b.type === "text" && typeof b.text === "string" && b.text) {
+                    blocksSeq.push({ type: "text", text: b.text });
+                  } else if (
+                    b.type === "reasoning" &&
+                    typeof b.text === "string" &&
+                    b.text
+                  ) {
+                    blocksSeq.push({ type: "reasoning", text: b.text });
+                  } else if (b.type === "tool-call" && b.name) {
+                    blocksSeq.push({ type: "tool-call", name: b.name });
+                  }
+                }
+                if (msgText) lastAssistantText = msgText;
                 continue;
               }
               continue;
