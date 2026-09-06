@@ -370,8 +370,32 @@ function submitTask(
               if (sid !== sessionId) continue;
               if (!evObj || typeof evObj.type !== "string") continue;
               if (evObj.type === "turn/end") {
+                // 终态前先判 reason.kind（CodeRabbit #12）：reason.kind==="error" 的失败回合
+                //（LLM 输出校验失败/内部错误）不得被 finishFromProjection 当正常成功上报。
+                const r = (evObj && evObj.data && evObj.data.reason) || null;
+                const kind = r && r.kind;
+                if (kind === "error") {
+                  // 失败回合：从 reason.error/failure（或 pendingFailure 兜底）取错误消息作
+                  // error outcome。normal 完成/aborted 走既有路径：aborted 由 abortPromise/
+                  // 上层 DSH_ABORTED 判终，这里不把失败回合当成功 end_turn。
+                  const f =
+                    (r && (r.failure || r.error)) ||
+                    pendingFailure ||
+                    { message: "DSH turn 失败（reason.kind=error 无错误详情）" };
+                  outcome = {
+                    stopReason: "error",
+                    failure: {
+                      message: String(
+                        (f && (f.message || "")) ||
+                          (r && r.message) ||
+                          "DSH turn 失败",
+                      ),
+                    },
+                  };
+                  return; // 终态：失败回合（outcome 已判 error）
+                }
                 finishFromProjection();
-                return; // 终态：turn 回合结束（projcache 已写 title/stats）
+                return; // 终态：turn 回合结束（正常/end_turn）
               }
               if (evObj.type === "assistant/message") {
                 // 从事件 data.message.content 提取真正的助手文本（CodeRabbit #11）：不走
