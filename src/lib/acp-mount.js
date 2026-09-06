@@ -202,8 +202,12 @@ export async function mountAcp(ctx, { dshHome, emitLog }) {
     // 只 no-op，不再覆盖 cancelled 状态与时间戳。
     const signal = req && req.signal;
     const onAbort = () => {
-      // 先到分支写入 cancelled；resolve 仍沿用旧的 allowed-once（waterfall outcome）。
-      commitSettle("cancelled", "allowed-once");
+      // 审批请求取消（会话 abort/cancel）→ 返回 cancelled。resolve 值 = 宿主回给
+      // ApprovalService 的 ApprovalOutcome：必须完整透传 cancelled——不得沿用旧的
+      // allowed-once（否则 abort 被当作一次授权放行，工具可能随后续重试被执行）。
+      // outcome→allowed-once/rejected 的收窄映射只发生在宿主决策入口 _respond；
+      // 超时自动拒绝路径已直传 rejected（CodeRabbit 第二轮 #2）。
+      commitSettle("cancelled", "cancelled");
     };
     if (signal) {
       if (signal.aborted) onAbort(); // signal 已 aborted：立即 settle + 清计时器
