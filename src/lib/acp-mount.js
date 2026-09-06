@@ -173,11 +173,23 @@ export async function mountAcp(ctx, { dshHome, emitLog }) {
   // 注册 global waterfall listener（无视 agent-scope filter——收所有审批）；返回 outcome
   // = 认领（不调 next——审批服务 decide 拿宿主决策）。
   try {
-    ctx.on("approval/request", approvalAnswerer, { global: true });
-    log("审批应答已挂（approval/request global listener）");
+    ctx.on("approval/request", approvalAnswerer, { global: true, prepend: true });
+    log("审批应答已挂（approval/request global+prepend listener）");
   } catch (e) {
     log("审批应答挂载失败：" + ((e && e.message) || e));
   }
+  // 诊断（审批链路定位）：internal/dispatch 探测——waterfall 分发面实证。events.ts
+  // dispatch 时 emit('internal/dispatch', mode, name, args, thisArg)——收 log 确认
+  // approval/request 的 waterfall 是否真的 dispatch（policy 短路则完全不进）。
+  // 注：已验证完成（12:58 审批全链通）——此探测仅保留供未来链路回归参考。
+  try {
+    ctx.on("internal/dispatch", (mode, name) => {
+      if (name !== "approval/request") return;
+      try {
+        log("internal/dispatch 探测：approval/request 已分发（mode=" + mode + "）");
+      } catch { /* 日志失败不阻断 */ }
+    });
+  } catch { /* 探测订阅失败忽略 */ }
 
   // 依赖沿 DSH 树解析（dsh realpath → dsh-acp-app → dsh-acp + SDK——见文件头注释），
   // 与 DSH 运行时同物理包实例（非 bundle 内联）；动态加载不阻塞模块加载（闭环）。
@@ -229,14 +241,6 @@ export async function mountAcp(ctx, { dshHome, emitLog }) {
   const clientApp = createAcpClientApp({ name: "dsh-hanako-host" })
     .onNotification(methods.client.session.update, ({ params }) => {
       const update = params && params.update;
-      try {
-        const sid = (params && params.sessionId) || "?";
-        const ut = (update && update.sessionUpdate) || "?";
-        getSingleton()?.appendLog?.(
-          "hana",
-          `[dsh acp] session/update 收到（session=${String(sid).slice(0, 12)} type=${ut}）`,
-        );
-      } catch { /* 日志失败不阻断 */ }
       if (update && typeof update === "object" && update.sessionUpdate === "tool_call") {
         if (update.toolCallId) {
           let args = null;
