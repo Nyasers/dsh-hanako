@@ -24,6 +24,10 @@ import { getSingleton } from "./state.js";
 import { notifyApprovalWake } from "./wake.js";
 import { resolveApprovalTimeoutSec } from "./config.js";
 
+// ACP client session/update 通知缓冲上限（CodeRabbit Major #5）：takeUpdate 无候取者时
+// updateQueue 的暂存上限——超限丢最旧（进展遥测非关键，防无界累积内存增长）。
+const MAX_BUFFERED_UPDATES = 128;
+
 // ACP 运行时依赖定位：@deepseek-ai/dsh-acp（插件本体）与 @agentclientprotocol/sdk
 // 随 DSH 依赖树存在（@deepseek-ai/dsh → @deepseek-ai/dsh-acp-app → dsh-acp，SDK 是
 // dsh-acp 的依赖）——宿主不新增声明（bootstrap pnpm i -P 只装 cordis/dsh，避免 pnpm
@@ -293,7 +297,14 @@ export async function mountAcp(ctx, { dshHome, emitLog }) {
         }
       }
       if (updateWaiters.length) updateWaiters.shift()(params);
-      else updateQueue.push(params);
+      else {
+        // 无候取者时的无界暂存防护（CodeRabbit Major #5）：takeUpdate 长期无人调用时
+        // updateQueue 原会无限累积（session/update 每次进展/工具/checkpoint 都触发）。
+        // 有限上限 MAX_BUFFERED_UPDATES：超限丢最旧一条（保留近期进展取号方向，也让
+        // 队列有界）。updateWaiters.shift() 的即时投递路径不走此缓存、不受限。
+        if (updateQueue.length >= MAX_BUFFERED_UPDATES) updateQueue.shift();
+        updateQueue.push(params);
+      }
       return Promise.resolve();
     });
   const connection = clientApp.connect(clientStream);
@@ -319,6 +330,13 @@ export async function mountAcp(ctx, { dshHome, emitLog }) {
         : new Promise((r) => updateWaiters.push(r)),
     close: () => {
       try { connection.close?.(); } catch { /* noop */ }
+      // 卸载/关闭：废弃累积 update 缓冲与等待者（防 close 后残留无界暂存/挂死 waiter）。
+      // close 语义 = 通道停用不再取用——遗留缓冲可被 GC（CodeRabbit Major #5）。
+      updateQueue.length = 0;
+      const ws = updateWaiters.splice(0);
+      for (const r of ws) {
+        try { r(null); } catch { /* 忽略 */ }
+      }
     },
   };
 }
