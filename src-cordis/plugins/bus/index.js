@@ -355,6 +355,10 @@ export function apply(ctx, config) {
         const emitter = new EventEmitter()
         let conn = null // 当前已握手连接（单连接语义）
         let upgradeDisposer = null
+        // 进程内 RPC 收口订阅的退订函数（rootCtx.on('dshana/inproc-request') 返回）。
+        // effect 重执行/卸载时必须退订——不保留则重载累积 stale handler，一次请求被
+        // 多次翻译/回投（CodeRabbit Major #1）。见下方 inprocDisposer 赋值与 cleanup 调用。
+        let inprocDisposer = null
         // 宿主下发的配置（hello 后经 config 帧到达；提供 getConfig() 供 settings/provider 取路径）
         let busConfig = null
 
@@ -631,6 +635,8 @@ export function apply(ctx, config) {
         // 宿主在根 emit **不下行**到插件子 ctx——收口必须挂根层（ctx.root，cordis 插件 ctx
         // 的根引用；无 root（即根自身）兑底 ctx）才能收到宿主 ctx.emit。回投 emit 在子 ctx
         // 发 → 冒泡到根 → 宿主 ctx.on（根层）收 ✓（与 DSH 内部 emit 同向）。
+        // 订阅返回退订函数存入 inprocDisposer：effect 清理（模块重载/unload）时退订，
+        // 防重注册导致 stale handler 累积（一次请求被多次翻译/回投/结果帧）。
         const rootCtx = ctx.root || ctx
         try {
           ctx.inject(['apiRpcDispatcher'], (dispCtx) => {
@@ -640,9 +646,10 @@ export function apply(ctx, config) {
               rpcDispatcherRef = null
             }
           })
-          rootCtx.on('dshana/inproc-request', onInprocRequest)
+          inprocDisposer = rootCtx.on('dshana/inproc-request', onInprocRequest)
         } catch (e) {
           bridgeLog('进程内 RPC 收口接线失败：' + ((e && e.message) || e))
+          inprocDisposer = null
         }
 
         // ---- 事件流订阅（remote.mux + $events）：bridge 在 dsh 进程内代宿主订阅，
@@ -828,6 +835,17 @@ export function apply(ctx, config) {
               /* 忽略 */
             }
             conn = null
+          }
+          // 进程内 RPC 收口退订（rootCtx.on disposer）：effect 清理/卸载时移除——
+          // 否则 bridge 插件 reload 时 rootCtx.on 重复注册，stale handler 累积导致一次
+          // 请求被多次翻译/回投（CodeRabbit Major #1）。退订失败忽略（已宕/已退订 no-op）。
+          if (inprocDisposer && typeof inprocDisposer === 'function') {
+            try {
+              inprocDisposer()
+            } catch {
+              /* 退订失败忽略 */
+            }
+            inprocDisposer = null
           }
           emitter.removeAllListeners()
         }
