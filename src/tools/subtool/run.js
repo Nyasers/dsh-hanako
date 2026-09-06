@@ -230,36 +230,60 @@ function submitTask(
     // 故 resume 分支先 session.list 查目标会话已有 cwd（忽略用户传入的 cwd——resume 语义即沿用会话）。
     // agentPreset 无值不传（缺省走 web host 默认，Web UI 可调）
     let createPayload;
-    // 生效 cwd（宿主 task 注册元数据用）：create = 用户显式传的 cwd；resume =
-    // 会话已有 cwd（send 不传 cwd 时由 session.list 查回）。resume 分支赋值。
+    // 生效 cwd（宿主 task 注册元数据用）：create = 用户显式传的 cwd；resume = 会话已有
+    // cwd（send 不传 cwd 时由 session.list 查回）。resume 分支赋值。
     let effectiveCwd = String(cwd ?? "").trim();
+    // 活跃会话直续：list 只列「持久但非活跃（可 resume 恢复）」的会话（dsh-acp 的
+    // listSessions 排除 sessions Map/activating/ctx.sessions 注册）——list 不含 ≠ 不存在：
+    // 会话在 Map（活跃可插话 / 空闲可续）时续 = 直接 session.prompt（ACP prompt 到已
+    // 存在会话 = 加 turn/插话——steer 语义），不需要 create/resume（活跃会话 resume 会被
+    // dsh-acp 拒 "session already active"）。list 有（进程重启后持久非活跃）才走
+    // session.resume 恢复。真不存在的 id（list 无且不在 Map）→ prompt admission 失败
+    //（fire 后无事件流——run.js 超时暴露——错误提示见超时）。
+    let activeResumeId = null;
     if (resumeSessionId) {
       const list = await callUnaryBus("session.list", {
         projections: ["id", "cwd"],
       });
       const items = list.items || [];
       const existing = items.find((it) => it.sessionId === resumeSessionId);
-      if (!existing)
-        throw new Error(
-          `目标会话不存在或已归档，无法 resume：${resumeSessionId}`,
-        );
-      // 异常会话（cwd 为空/缺失）回退用户显式传的 cwd，再不行才报错
-      const resumeCwd = String(existing.cwd ?? "").trim() || cwd;
-      if (!resumeCwd)
-        throw new Error(
-          `目标会话 ${resumeSessionId} 无 cwd 且无可用回退 cwd，无法 resume`,
-        );
-      effectiveCwd = resumeCwd;
-      createPayload = {
-        sessionId: resumeSessionId,
-        cwd: resumeCwd,
-        ...(preset && { agentPreset: preset }),
-      };
+      if (existing) {
+        // 非活跃持久会话（进程重启/长期挂起）——session.resume 从持久恢复
+        // 异常会话（cwd 为空/缺失）回退用户显式传的 cwd，再不行才报错
+        const resumeCwd = String(existing.cwd ?? "").trim() || cwd;
+        if (!resumeCwd)
+          throw new Error(
+            `目标会话 ${resumeSessionId} 无 cwd 且无可用回退 cwd，无法 resume`,
+          );
+        effectiveCwd = resumeCwd;
+        createPayload = {
+          sessionId: resumeSessionId,
+          cwd: resumeCwd,
+          ...(preset && { agentPreset: preset }),
+        };
+      } else {
+        // list 不含：会话在 Map（活跃/空闲）——直接 prompt 续（插话/加 turn）——
+        // cwd 查不回（list 只列非活跃），effectiveCwd 用调用方传的（task 元数据用，
+        // 非关键——jsonl 目录由 DSH 按会话持久）
+        activeResumeId = resumeSessionId;
+        try {
+          getSingleton()?.appendLog?.(
+            "hana",
+            `[dsh-rpc] send 直续活跃会话 ${String(resumeSessionId).slice(0, 16)}（list 无——Map 直 prompt）`,
+          );
+        } catch { /* 日志失败不阻断 */ }
+      }
     } else {
       createPayload = { cwd, ...(preset && { agentPreset: preset }) };
     }
-    const session = await callUnaryBus("session.create", createPayload);
-    const sessionId = session.sessionId;
+    let sessionId;
+    if (activeResumeId) {
+      // 活跃会话：不调 session.create（会话已在 Map）——直接用它，后续 prompt fire
+      sessionId = activeResumeId;
+    } else {
+      const session = await callUnaryBus("session.create", createPayload);
+      sessionId = session.sessionId;
+    }
 
     // 1.5 模型选择：仅当工具显式传 provider/model/effort 时才 selectModel（显式覆盖
     // dsh 默认模型）；都不传时不 selectModel，任务直接用 dsh 默认模型
