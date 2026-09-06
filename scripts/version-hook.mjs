@@ -28,9 +28,11 @@
 //   3. changelog 增量生成（conventional-changelog，标题带完整版）
 //   4. HEAD 版本门禁（完整版相对 HEAD 未变化 → 拒绝，防 --allow-same-version 空转/误跑）
 //   5. tag preflight（v<完整版> 已存在 → 拒绝重复发版）
-//   6. git add 版本文件全集 + CHANGELOG → commit "chore: bump v<完整版>" → annotated tag v<完整版>
+//   6. git add 版本文件全集 + CHANGELOG → 暂存就绪后退出。git 收口（commit/tag）移出钩子：
+//      由主上下文经 github-hanako 插件 git_commit / git_exec 完成（协作署名 + 隔离签名环境），
+//      本钩子只保证版本落地与门禁，不再内部裸 commit/tag（2026-09-07 改造）。
 //
-// 门禁/职责沿袭 scripts/tagver.mjs（已并入本脚本）：HEAD 版本门禁 + tag preflight（本地 ref
+// 门禁沿袭 scripts/tagver.mjs（已并入本脚本）：HEAD 版本门禁 + tag preflight（本地 ref
 //  + 远程 origin ls-remote，防克隆未 fetch 远程 tag 导致孤儿 bump commit）；push 手动
 // （--atomic 分支与 tag 同成败，tag 触发 CI 发布）。
 import fs from "node:fs";
@@ -115,13 +117,15 @@ function main() {
       process.exit(1);
     }
   }
-  // 6) add 版本文件全集（package.json + manifest + cordis 包）+ CHANGELOG → commit → tag
+  // 6) add 版本文件全集（package.json + manifest + cordis 包）+ CHANGELOG → 暂存就绪退出
+  //    收口移出钩子：主上下文经 github-hanako git_commit 提交 bump（协作署名 + 隔离签名），
+  //    git tag 与 push --atomic 同链完成——本钩子只保证版本落地与门禁，不内部裸 commit/tag
   const files = [...versionCommitFiles(), "CHANGELOG.md"];
   run("git add " + files.join(" "), "git add 版本文件 + CHANGELOG");
-  run("git commit -m \"chore: bump v" + full + "\"", "git commit");
-  run("git tag -a \"v" + full + "\" -m \"v" + full + "\"", "git tag -a v" + full);
-  console.log("\n[version-hook] ✅ v" + full + " 提交完成（package.json + manifest.json + cordis 包 + CHANGELOG 同步并提交，tag 已打）。推送（tag 触发 CI 发布，--atomic 保证分支与 tag 同成败）：");
-  console.log("  git push --atomic origin master --tags");
+  console.log("\n[version-hook] ✅ v" + full + " 版本落地完成：package.json + manifest.json + cordis 包 + CHANGELOG 已同步并暂存（HEAD 门禁 + tag preflight 已过）。git 收口在钩子外，由主上下文执行：");
+  console.log("  1. git_commit 提交 bump：chore: bump v" + full + "（github-hanako 插件 git_commit，自动协作署名）");
+  console.log("  2. git tag -a v" + full + " -m v" + full);
+  console.log("  3. git push --atomic origin master --tags（tag 触发 CI 发布，分支与 tag 同成败）");
 }
 
 main();
