@@ -28,6 +28,11 @@ import { resolveApprovalTimeoutSec } from "./config.js";
 // updateQueue 的暂存上限——超限丢最旧（进展遥测非关键，防无界累积内存增长）。
 const MAX_BUFFERED_UPDATES = 128;
 
+// toolCache 上限（CodeRabbit 第二轮 #1）：toolCallId → { name, args }（审批决策的 tool
+// 上下文）——每次 tool_call 通知都存一条序列化 rawInput，web host 长活 + 工具反复调用
+// 时可无界累积参数数据。设上限，超限淘汰最旧；close() 时清空（见下方 close）。
+const MAX_TOOL_CACHE = 200;
+
 // ACP 运行时依赖定位：@deepseek-ai/dsh-acp（插件本体）与 @agentclientprotocol/sdk
 // 随 DSH 依赖树存在（@deepseek-ai/dsh → @deepseek-ai/dsh-acp-app → dsh-acp，SDK 是
 // dsh-acp 的依赖）——宿主不新增声明（bootstrap pnpm i -P 只装 cordis/dsh，避免 pnpm
@@ -337,6 +342,11 @@ export async function mountAcp(ctx, { dshHome, emitLog }) {
             name: typeof update.title === "string" ? update.title : "tool",
             args,
           });
+          // 有界缓存（CodeRabbit 第二轮 #1）：超上限淘汰最旧（Map 插入序最早 = 最旧）
+          if (toolCache.size > MAX_TOOL_CACHE) {
+            const oldestKey = toolCache.keys().next().value;
+            if (oldestKey !== undefined) toolCache.delete(oldestKey);
+          }
         }
       }
       if (updateWaiters.length) updateWaiters.shift()(params);
@@ -375,6 +385,9 @@ export async function mountAcp(ctx, { dshHome, emitLog }) {
       try { connection.close?.(); } catch { /* noop */ }
       // 卸载/关闭：废弃累积 update 缓冲与等待者（防 close 后残留无界暂存/挂死 waiter）。
       // close 语义 = 通道停用不再取用——遗留缓冲可被 GC（CodeRabbit Major #5）。
+      // toolCache 同步清空（CodeRabbit 第二轮 #1）：审批决策上下文随通道停用失效，
+      // 释放序列化 rawInput 引用（不再挂起长活 web host 的审批上下文）。
+      toolCache.clear();
       updateQueue.length = 0;
       const ws = updateWaiters.splice(0);
       for (const r of ws) {

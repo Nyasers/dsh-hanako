@@ -643,7 +643,13 @@ export async function ensureWebHost(cfg) {
     }
   }
   if (g.web?.ctx) {
-    // 旧实例启动失败过：清掉重建（进程内形态 dispose）
+    // 旧实例启动失败过：清掉重建（进程内形态 dispose）——旧实例若已挂 ACP client
+    //（mountAcp 在 waitWebReady 前完成，之后失败属此路径）先 close 释放连接/清缓冲。
+    try {
+      if (g.web.acp && typeof g.web.acp.close === "function") g.web.acp.close();
+    } catch {
+      /* ACP client 关闭失败不阻断重建 */
+    }
     try {
       await g.web.ctx?.fiber?.dispose();
     } catch {
@@ -782,6 +788,11 @@ async function bootInproc(cfg, { pkgDir, dshHome, port, logPath }) {
       // 回收：就绪失败或 boot 失败都要 dispose 进程内 cordis 树（释放 HTTP server /
       // 端口），并恢复改写过的进程级 env（DSH_HOME / DSHANA_BUS_SECRET）——否则
       // g.web 摘除后 ctx 引用丢失，端口永久占用。
+      // ACP client 连接先关（web.acp.close 幂等）：mountAcp 在 waitWebReady 前已挂载，
+      // 失败回收路径同样要释放 client 连接/清缓冲，不能只依赖 ctx fiber dispose。
+      try {
+        if (web.acp && typeof web.acp.close === "function") web.acp.close();
+      } catch { /* ACP client 关闭失败不阻断回收 */ }
       try {
         await web.ctx?.fiber?.dispose();
       } catch (e2) {
@@ -1169,6 +1180,16 @@ export async function closeProcess() {
   const web = g.web;
   g.web = null;
   if (web?.ctx) {
+    // ACP client 连接先于 ctx 树 dispose 关闭（CodeRabbit 第二轮 #1）：web.acp.close()
+    // 释放宿主侧 client 连接并清空 toolCache/updateQueue 缓冲（mountAcp 的 close，幂等）。
+    // 必须在 ctx.fiber.dispose 之前——同树插件随 dispose 卸载后 client 连接失去收尾入口。
+    try {
+      if (web.acp && typeof web.acp.close === "function") web.acp.close();
+    } catch (e) {
+      try {
+        g.appendLog?.("hana", "[dsh web] ACP client 关闭异常（不影响回收）：" + ((e && e.message) || e));
+      } catch { /* 日志失败不阻断 */ }
+    }
     // T7b 进程内形态：await ctx.fiber.dispose() 释放 dsh cordis 树（HTTP server +
     // loader + 全部插件）。不用 runProfile 返回的 shutdown 控制器：其 shutdown() 会写
     // process.exitCode、interrupt() 会 process.exit 直接杀宿主进程（createProcessShutdown
