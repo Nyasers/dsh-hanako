@@ -833,6 +833,15 @@ async function waitWebReady(web, port, emitLog, cfg) {
       // provider push 收敛在同一就绪点（connectBus 幂等 + 内部退避重连，失败不阻断）。
       const markReady = () => {
         web.ready = true;
+        // 就绪态广播（CodeRabbit #10）：通知 /webui/events 的当前活动流（readiness 前早已
+        // 打开、处于 pending 的 shell 流）——否则只靠壳页 boot-state 轮询/刷新兑底挂载。
+        // readiness 后打开的新流不受影响（它们开流时已 ready 直推）。g.notifyWebReady 由
+        // routes/webui.js 模块每次加载重挂（同 notifyWebStartFailed 模式）。
+        try {
+          g?.notifyWebReady?.();
+        } catch {
+          /* 广播失败不阻断就绪 */
+        }
         // 新进程就绪：清掉上次退出记录（持久字段只反映最近一次退出）
         g.webLastExit = null;
         // 总线退役（refactor/bus-inproc 修正 B，2026-09-06）：宿主不再连 dshana.bus WS——

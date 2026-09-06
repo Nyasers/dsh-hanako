@@ -58,6 +58,14 @@ const webStartFailedListeners = new Set();
 // （事件驱动替代面板 5s 周期 tick；安装中进度滚动由壳页 installing 态 tick 承担）。
 const depsChangedListeners = new Set();
 
+// ---- web host 就绪翻转通知订阅者（lifecycle 的 waitWebReady/markReady 调 g.notifyWebReady）----
+// 总线退役后（refactor/bus-inproc）宿主不再连 dshana.bus，/webui/events 在 readiness 前就
+// 打开的常驻流等不到 bus.ready 事件（CodeRabbit #10）。此 Set 接收 g.web.ready→true 翻转，
+// 推 ready 事件给当前活动流；readiness 后打开的新流开流即直推、不依赖本通知。与
+// notifyWebStartFailed/notifyDepsChanged 同模式（同模块每次加载重挂，一次订阅生命周期 =
+// 流存活期，close()/cancel() 移除）。
+const webReadyListeners = new Set();
+
 function esc(v) {
   return String(v)
     .replace(/&/g, "&amp;")
@@ -317,6 +325,7 @@ export default function registerWebuiRoutes(app, ctx) {
     let unsubs = [];
     let onStartFailed = null;
     let onDepsChanged = null;
+    let onWebReady = null;
     const stream = new ReadableStream({
       start(controller) {
         const enc = new TextEncoder();
@@ -344,6 +353,7 @@ export default function registerWebuiRoutes(app, ctx) {
           unsubs.length = 0;
           if (onStartFailed) webStartFailedListeners.delete(onStartFailed);
           if (onDepsChanged) depsChangedListeners.delete(onDepsChanged);
+          if (onWebReady) webReadyListeners.delete(onWebReady);
           try {
             controller.close();
           } catch {
@@ -363,6 +373,14 @@ export default function registerWebuiRoutes(app, ctx) {
         onDepsChanged = () => {
           if (closed) return;
           send({ type: "diag-changed" });
+        };
+        // web host 就绪翻转 → 推 ready 事件（CodeRabbit #10）：总线退役后无 bus.ready 事件，
+        // readiness 前打开的本流收不到 ready → 悬 pending，只靠壳页刷新兑底。markReady
+        // 时 lifecycle 广播 g.notifyWebReady，这里收翻转推 ready（ready 后流的重复 ready 事件
+        // 由壳页 readyReceived 幂等忽略）。
+        onWebReady = () => {
+          if (closed) return;
+          send({ type: "ready" });
         };
         // 订阅总线本机事件（bus.ready / bus.disconnect / events 转发）——总线退役
         // （refactor/bus-inproc 修正 B）后宿主不再连 dshana.bus：ready/pending 由下方
@@ -428,6 +446,7 @@ export default function registerWebuiRoutes(app, ctx) {
         // 幂等无害）。
         webStartFailedListeners.add(onStartFailed);
         depsChangedListeners.add(onDepsChanged);
+        webReadyListeners.add(onWebReady);
         const hookG = globalThis.__dshHanako || (globalThis.__dshHanako = {});
         hookG.notifyWebStartFailed = () => {
           for (const fn of [...webStartFailedListeners]) {
@@ -440,6 +459,17 @@ export default function registerWebuiRoutes(app, ctx) {
         };
         hookG.notifyDepsChanged = () => {
           for (const fn of [...depsChangedListeners]) {
+            try {
+              fn();
+            } catch {
+              /* 通知失败不阻断 */
+            }
+          }
+        };
+        // web host 就绪翻转广播（lifecycle waitWebReady/markReady 在 g.web.ready=true 时调用，
+        // CodeRabbit #10）：通知当前活动流（readiness 前已打开的常驻流）推 ready。
+        hookG.notifyWebReady = () => {
+          for (const fn of [...webReadyListeners]) {
             try {
               fn();
             } catch {
