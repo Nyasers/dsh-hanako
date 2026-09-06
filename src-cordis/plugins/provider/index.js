@@ -485,26 +485,33 @@ export async function apply(ctx, config) {
         }
       }
     });
-    // 订阅建立后请求重放（覆盖宿主首批 push 早于本订阅的窗口）：ctx.emit 请求，宿主
-    // ctx.on('dshana/provider-refresh-request') 收后重推
-    try {
-      ctx.emit("dshana/provider-refresh-request", {});
-    } catch {
-      /* 请求失败不阻断（宿主就绪点已主动推） */
-    }
-
-    // 启动 snapshot 置空：首个 provider 由宿主 web host 就绪后主动 push 填上。
-    // 兼容旧版 config.routesJSON（旧 patch 注入残留）仍可作初始 snapshot。
+    // 启动 snapshot（旧版 config.routesJSON 兼容）先于 replay 请求执行（CodeRabbit：
+    // Data Integrity）。理由：provider 插件在宿主 ctx 传输已就绪时重载（bus/插件 effect
+    // reload），下方 ctx.emit('dshana/provider-refresh-request') 的重放是**同步**回推宿主已
+    // 组装的最新 routes（宿主 ctx.on 收后立即 provider-push 再同步 feed 回本插件的
+    // ctx.on('dshana/provider-push') → refresh）。若 legacy routesJSON 刷新排在 replay 之后，
+    // 会用 stale 快照覆盖刚重放的最新 routes。故先落旧版初始快照，再发 replay——宿主最新
+    // routes 后到胜出。
     if (config && Array.isArray(config.routesJSON)) {
       ctx.logger.info(
         `[@dsh-hanako/provider] 检测到旧版 config.routesJSON（${config.routesJSON.length} 条），用作初始 route 目录`,
       );
+      // 首次激活（宿主 ctx 订阅未就绪，emit 无响应）时此处即最终初始值；重载场景退让给
+      // 下方 replay（若 ctx 传输可用，后续最新 push 覆盖此旧快照）。
       refresh("旧版 routesJSON", { routes: config.routesJSON });
     } else {
       ctx.logger.info(
         "[@dsh-hanako/provider] 启动 snapshot 为空，等待宿主 push 首批 route 目录",
       );
       providerLog("启动 snapshot 为空，等待宿主 push 首批 route 目录");
+    }
+    // 订阅建立后请求重放（覆盖宿主首批 push 早于本订阅的窗口）：ctx.emit 请求，宿主
+    // ctx.on('dshana/provider-refresh-request') 收后重推。调用点排在 legacy 初始快照之后——
+    // replay 加载的是宿主最新组装（ctx 传输可用时同步生效），不会被下方 stale snapshot 覆盖。
+    try {
+      ctx.emit("dshana/provider-refresh-request", {});
+    } catch {
+      /* 请求失败不阻断（宿主就绪点已主动推） */
     }
   } catch (e) {
     // 顶层兜底：apply 永不抛出（边界要求——不阻断 dsh 启动）
