@@ -62,6 +62,15 @@ export async function mountAcp(ctx, { dshHome, emitLog }) {
   const log = (msg) => {
     try { emitLog?.("hana", "[dsh acp] " + msg); } catch { /* noop */ }
   };
+  // 共享状态持有（审批应答 + client session/update 通知缓冲共用）：必须在
+  // approvalAnswerer 注册/可能被调用**之前**初始化——approvalAnswerer 在审批到达时读
+  // toolCache。若其声明在注册之后，ctx.on("approval/request", approvalAnswerer) 同步注册
+  // 后本函数还有很多 await（动态 import、ctx.plugin、握手），事件循环可在 toolCache 声明
+  //（TDZ）之前 dispatch 审批 → approvalAnswerer 读 toolCache 抛 ReferenceError。
+  // 故在此前置声明（CodeRabbit Minor #3）。
+  const updateQueue = []; // session/update 通知缓冲（takeUpdate 取号者为空时暂存）
+  const updateWaiters = []; // 等待 update 的解析器队列（takeUpdate 无缓冲时等投递）
+  const toolCache = new Map(); // toolCallId → { name, args }（审批决策的 tool 上下文）
   // ---- L4：审批应答（approval/request ctx global waterfall）----
   // DSH agent 越界/敏感工具 → ApprovalService.decide → ctx.waterfall(scopeTarget(agent),
   // 'approval/request', req, ...)——agent-scope 过滤，普通 ctx.on（无 global）因 context
@@ -232,12 +241,10 @@ export async function mountAcp(ctx, { dshHome, emitLog }) {
   });
   log("插件已挂载（provider=" + (acpConfig.provider || "?") + " model=" + (acpConfig.model || "?") + "）");
   // 宿主侧 client：注册 session/update 通知缓冲（指令进展事件）与审批反向应答
-  //（L4：审批应答——ctx approval/request global waterfall，见 approvalAnswerer）。
+  //（审批应答 = ctx approval/request global waterfall，见 approvalAnswerer）。
   // update 同时缓存 tool_call 的 title/rawInput（审批决策信息源——request_permission
-  // 请求只带 toolCallId，name/args 从 tool_call update 补）。
-  const updateQueue = [];
-  const updateWaiters = [];
-  const toolCache = new Map(); // toolCallId → { name, args }
+  // 请求只带 toolCallId，name/args 从 tool_call update 补）。updateQueue/updateWaiters/
+  // toolCache 已在上方前置声明（防审批在 TDZ 期读 toolCache，见 CodeRabbit Minor #3）。
   const clientApp = createAcpClientApp({ name: "dsh-hanako-host" })
     .onNotification(methods.client.session.update, ({ params }) => {
       const update = params && params.update;
