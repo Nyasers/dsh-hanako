@@ -240,14 +240,21 @@ async function acpSelect(acp, method, payload, signal) {
   return { ok: true };
 }
 
-// ACP session.cancel：notification（无响应）——投递后即返回（取消请求已送达 DSH）；
-// notify 同步抛错（连接断/序列化失败）时转普通错误（HTTP 兑底由调用方/上层处理）。
+// ACP session.cancel：notification（无响应）——发送到传输后即返回（取消请求已送达 DSH）。
+// CodeRabbit #7 judgement：ACP notify 虽是 fire-and-forget（服务端不回 ack），但 SDK 的
+// notify 返回 promise，其 settle = JSON-RPC notify 帧**写入传输完成**（内存双工 stream 写
+// 失败立即 reject；不依赖服务端响应 → 不会挂起）。因此值得 await：写入/序列化失败时错误
+// 沿 callUnaryBus 的既有错误路径抛出（调用方多为 best-effort 已 catch 忽略——index.js/
+// run.js 兜底捕获——不再静默吞掉「取消未送达」帧错误）。Service sendNotification 语义确认
+//（dist/acp.js AcpContext.notify→sendNotification）。
 async function acpCancel(acp, method, payload, signal) {
   const client = acp.client;
   const methods = acp.methods;
   const sid = payload && payload.sessionId;
   if (!sid) throw new Error("dsh session.cancel 缺 sessionId");
-  client.notify(methods.agent.session.cancel, { sessionId: sid });
+  // await notify：写传输失败（连接断/stream 已 error）→ 此处 reject → callUnaryBus 抛错，
+  // 取消未达不再被误报为 accepted。
+  await client.notify(methods.agent.session.cancel, { sessionId: sid });
   return { accepted: true };
 }
 
