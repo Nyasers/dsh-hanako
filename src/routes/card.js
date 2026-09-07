@@ -13,7 +13,8 @@
 // 架构：卡片链路从「HTTP 轮询 + op Map」改为「SSE 服务端推送 + jsonl 唯一事实源」。
 // 三层：卡片（iframe EventSource）<-> 插件（routes 转发）<-> DSH（events.mux WebSocket）。
 // 插件零任务状态：op Map 退役（tools/dsh-run.js 不再写任务快照），dsh 会话日志
-// （<dataDir>/dsh-home/sessions/<cwd分组>/<sessionId>/session.jsonl.zstd）为唯一事实源。
+// （<dataDir>/dsh-home/sessions/<cwd分组>/<sessionId>/session.v*.jsonl.zstd 或 v0
+// 原名 session.jsonl.zstd）为唯一事实源。
 // 每次 dsh_run 提交对应一个 user/message 事件（data.source.kind==user，
 // data.source.rpcId == 插件 callUnary 生成的 rpcId），按 rpcId 精确命中后，
 // 取该 user prompt 到下一个 user prompt（或文件尾）的事件窗口重建 op 快照。
@@ -33,11 +34,12 @@ import { subscribeDshCtxEmitEvents } from "../lib/dsh-events.js";
 const CARD_ASSETS = { css: cardCss, js: cardJs };
 
 // ---- 会话 jsonl 恢复（唯一事实源：op Map 退役后一切任务状态都从这里重建）----
-// dsh 会话日志 = <dataDir>/dsh-home/sessions/<cwd分组>/<sessionId>/session.jsonl.zstd，
-// 追加式多帧 zstd（每次 append 一帧，帧以 magic 28 B5 2F FD 开头）。
+// dsh 会话日志 = <dataDir>/dsh-home/sessions/<cwd分组>/<sessionId>/ 目录下 session.v<num>.jsonl.zstd
+//（dsh Session format v2；v0 时代为原名 session.jsonl.zstd），追加式多帧 zstd
+//（每次 append 一帧，帧以 magic 28 B5 2F FD 开头）。
 const ZSTD_MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
 
-/** 多帧 zstd 逐帧解压：dsh session.jsonl.zstd 每帧独立可解，返回事件数组（坏帧跳过）。 */
+/** 多帧 zstd 逐帧解压：dsh 会话日志（session.jsonl.zstd / session.v*.jsonl.zstd）每帧独立可解，返回事件数组（坏帧跳过）。 */
 function decodeSessionLog(filePath) {
   const buf = fs.readFileSync(filePath);
   const starts = [];
@@ -69,15 +71,50 @@ function decodeSessionLog(filePath) {
   return events;
 }
 
-/** 按 sessionId 定位会话日志文件（遍历 sessions/ 分组目录，不依赖 cwd 目录名编码）。 */
+/** 按 sessionId 定位会话日志文件（遍历 sessions/ 分组目录，不依赖 cwd 目录名编码）。
+ * dsh Session format v0 = session.jsonl.zstd（原名）；v1+ = session.v<num>.jsonl.zstd
+ *（如 session.v2.jsonl.zstd）。目录内取存在的最新代（v 数字最大优先，v0 兜底）。 */
 function sessionLogPath(dataDir, sessionId) {
   const sessionsRoot = path.join(dataDir, "dsh-home", "sessions");
   if (!fs.existsSync(sessionsRoot)) return null;
   for (const group of fs.readdirSync(sessionsRoot)) {
-    const p = path.join(sessionsRoot, group, sessionId, "session.jsonl.zstd");
-    if (fs.existsSync(p)) return p;
+    const dir = path.join(sessionsRoot, group, sessionId);
+    if (!fs.existsSync(dir)) continue;
+    const logName = findSessionLogName(dir);
+    if (logName) return path.join(dir, logName);
   }
   return null;
+}
+
+/** 会话日志文件名探测（v0/vN 双命名代，取最新）；无则 null。 */
+function findSessionLogName(sessionDir) {
+  const v0 = "session.jsonl.zstd";
+  let best = null;
+  let bestV = -1;
+  let names;
+  try {
+    names = fs.readdirSync(sessionDir);
+  } catch {
+    return null;
+  }
+  for (const n of names) {
+    if (n === v0) {
+      if (bestV < 0) {
+        best = n;
+        bestV = 0;
+      }
+      continue;
+    }
+    const m = /^session\.v(\d+)\.jsonl\.zstd$/.exec(n);
+    if (m) {
+      const v = Number(m[1]);
+      if (v > bestV) {
+        best = n;
+        bestV = v;
+      }
+    }
+  }
+  return best;
 }
 
 function textFromBlocks(content) {

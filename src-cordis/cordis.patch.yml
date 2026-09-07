@@ -7,8 +7,12 @@
 
 - id: system-prompt
   config:
-    persona: >-
-      You are a coding agent powered by the {{model}} model. Your working directory is {{cwd}}.
+    # dsh 0.1.3-alpha：persona 拆 prefix/suffix 两 section（deployment:persona-prefix /
+    # persona-suffix），单 persona 字段已从 schema 移除（旧键静默失效）。值与官方
+    # acp-app 同构拆分，语义等同旧 persona 单句。
+    personaPrefix: >-
+      You are a coding agent powered by the {{model}} model.
+    personaSuffix: Your working directory is {{cwd}}.
 
 - id: session-query-sqlite
   config:

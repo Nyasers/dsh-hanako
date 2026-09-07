@@ -89,7 +89,7 @@ function locateSessionDir(dataDir, sessionId, projSessions) {
     const cwd = projSessions[sessionId]?.identity?.cwd;
     if (cwd) {
       const guess = join(sessionsRoot, encodeCwdKey(cwd), sessionId);
-      if (existsSync(join(guess, "session.jsonl.zstd"))) return guess;
+      if (findSessionLogName(guess)) return guess; // 目录含会话日志（v0/vN 任一命名代）
     }
   }
   let found = null;
@@ -97,7 +97,7 @@ function locateSessionDir(dataDir, sessionId, projSessions) {
     for (const keyDir of readdirSync(sessionsRoot, { withFileTypes: true })) {
       if (!keyDir.isDirectory()) continue;
       const cand = join(sessionsRoot, keyDir.name, sessionId);
-      if (existsSync(join(cand, "session.jsonl.zstd"))) {
+      if (findSessionLogName(cand)) {
         found = cand;
         break;
       }
@@ -106,6 +106,40 @@ function locateSessionDir(dataDir, sessionId, projSessions) {
     /* 遍历失败返回 null */
   }
   return found;
+}
+
+// 会话日志文件命名：dsh Session format v0 = session.jsonl.zstd（原名保留）；
+// v1+ = session.v<num>.jsonl.zstd（如 session.v2.jsonl.zstd，SESSION_FORMAT_VERSION=2）。
+// 目录内取存在的最新代（v 数字最大者优先，v0 兜底）——返回文件名或 null。
+function findSessionLogName(sessionDir) {
+  if (!sessionDir || !existsSync(sessionDir)) return null;
+  let names = null;
+  try {
+    names = readdirSync(sessionDir);
+  } catch {
+    return null;
+  }
+  const v0 = "session.jsonl.zstd";
+  let best = null;
+  let bestV = -1;
+  for (const n of names) {
+    if (n === v0) {
+      if (bestV < 0) {
+        best = n;
+        bestV = 0;
+      }
+      continue;
+    }
+    const m = /^session\.v(\d+)\.jsonl\.zstd$/.exec(n);
+    if (m) {
+      const v = Number(m[1]);
+      if (v > bestV) {
+        best = n;
+        bestV = v;
+      }
+    }
+  }
+  return best;
 }
 
 // zstd 多帧容器解压：dsh 逐批 append（每批一帧，帧 magic 0xFD2FB528），
@@ -195,9 +229,24 @@ async function doGet(input, ctx, g, dataDir, projSessions) {
     };
   }
 
+  const logName = findSessionLogName(sessionDir);
+  if (!logName) {
+    return {
+      ok: false,
+      error: "会话 " + sessionId + " 目录下无会话日志文件（session.jsonl.zstd / session.v*.jsonl.zstd）",
+      content: [
+        {
+          type: "text",
+          text: "会话 " + sessionId + " 目录下无会话日志文件，无法取会话内容。可在 DSH Web UI（webPort）打开该会话查看。",
+        },
+      ],
+      details: { dsh: { action: "get", sessionId, ok: false } },
+    };
+  }
+
   let jsonlText = null;
   try {
-    const buf = readFileSync(join(sessionDir, "session.jsonl.zstd"));
+    const buf = readFileSync(join(sessionDir, logName));
     jsonlText = decompressZstdFrames(buf);
   } catch {
     jsonlText = null;
@@ -205,7 +254,7 @@ async function doGet(input, ctx, g, dataDir, projSessions) {
   if (jsonlText === null) {
     return {
       ok: false,
-      error: "会话 " + sessionId + " 的日志文件解压失败（session.jsonl.zstd 损坏或格式异常）",
+      error: "会话 " + sessionId + " 的日志文件解压失败（" + logName + " 损坏或格式异常）",
       content: [
         {
           type: "text",
