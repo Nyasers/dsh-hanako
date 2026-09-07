@@ -4,6 +4,9 @@
 allowBuilds:
   "@deepseek-ai/dsh-subprocess-local": true
   "@google/genai": true
+  # fs-ext 仅 dsh session 锁的 POSIX flock 路径需要（native node-gyp 编译）；
+  # 本插件目标平台 Windows（kernel32 信号量锁），无需编译——false 跳过。
+  fs-ext: false
   koffi: true
   node-pty: true
   protobufjs: true
