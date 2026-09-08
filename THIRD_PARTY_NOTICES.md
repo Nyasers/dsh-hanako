@@ -2,6 +2,13 @@
 
 dsh-hanako 随包分发的第三方组件及其许可声明。主项目许可见 NOTICE（MPL-2.0）。
 
+## @hana/plugin-sdk
+
+- 版本：宿主 0.930.1 配套（source-manifest packedVersion 0.930.0）；浏览器构建 dist/browser.js 原样引入，经构建复制进 `dist/ui/dshana/vendor/`
+- 用途：App 壳页浏览器面——`hana.api.fetch`（App surface 会话凭据注入 `X-Hana-App-Surface-Session`）、assets/theme/ui 等
+- 来源：宿主随包 `skills2set/hana-app-creator/assets/sdk/hana-plugin-sdk-0.0.0.tgz`
+- 许可：Apache License 2.0（全文见下）
+
 ## @hana/app-sdk
 
 - 版本：0.930.0（随宿主 Hana 0.930.x App 契约；升级 = 替换 `sdk/hana-app-sdk.tgz` 后重建）

@@ -1,39 +1,28 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/ui/dshana/app-shell.js — dsh-hanako App v2 壳页逻辑（main/sidebar 共用；纯浏览器 JS）
+// src/ui/dshana/app-shell.js — dsh-hanako App v2 壳页逻辑（main/sidebar 共用；浏览器 ESM）
 //
-// 相对资源纪律（迁移指南 §10）：本文件经 <script src="./app-shell.js"> 相对引入，页面内
-// 不出现根路径绝对 URL（/assets 等）。到本 App 后端路由的调用同样用相对同源路径：
-//   apiBase = "/api/apps/<appId>/routes"（自 location.pathname 推导，不硬编码 appId）
-//   boot-state  = apiBase + "/dshana/boot-state"
-// 宿主在 App surface 授权下加载 ui/ 页面并为同源子请求放行（app_route = 宿主登录或本 App
-// surface 会话）。真机对账点：页面到 routes 的鉴权 cookie/hana.api 形态见 DESIGN。
+// 相对资源纪律（迁移指南 §10）：本文件经 <script type="module" src="./app-shell.js">
+// 相对引入（main.html/sidebar.html），页面内不出现根路径绝对 URL。
 //
-// 到受管 runtime 服务（DSH Web UI / API / SSE / WS）：宿主在 service readyMarker 后自动
-// 暴露代理前缀 /api/apps/<appId>/routes/_runtime/<runtimeId>/（自动代理 HTTP/SSE/WS +
-// 重定向重写 + hana_app_runtime HttpOnly cookie，实证 server 0.930.1）。壳页在 ready 后把
-// iframe 指向该前缀（?dshana-view=main|sidebar 为本 App 与 DSH UI 约定的视图参数，DSH
-// UI 忽略未知参数）。DSH UI 的 SPA 若以根路径写死资源/API/WS，需 DSH 侧适配代理 base
-// （宿主不重写任意 SPA 的 HTML/根路径——真机验收项，见 DESIGN 已测/未测清单）。
+// 到本 App 后端路由的调用一律走浏览器 SDK 的 hana.api.fetch（迁移指南 §10 + @hana/
+// plugin-sdk 契约）：宿主在 App surface iframe URL 附带 appSurfaceSession query，SDK 把
+// 它放进 X-Hana-App-Surface-Session header——裸 fetch 不带该凭据会被宿主网关拒
+// （403 missing_credential，真机实测 0.930.1）。boot-state/start/stop 均走此通道。
+//
+// 到受管 runtime 服务（DSH Web UI）：宿主在 service readyMarker 后自动暴露代理前缀
+// /api/apps/<appId>/routes/_runtime/<runtimeId>/（HTTP/SSE/WS + hana_app_runtime
+// HttpOnly cookie，实证 server 0.930.1）。iframe 首访把本页 URL 的 appSurfaceSession
+// query 透传（宿主按 surface 授权 + Set-Cookie），后续子请求由 cookie 覆盖。
 //
 // 壳桥兼容（v1 iframe 壳页职责平移）：DSH Web UI 内注入的 @dsh-hanako/theme 桥会向
 // window.parent postMessage({ dshHanaThemeRequest:true }) 索取主题 vars；clipboard 桥会
-// postMessage({__dshCopy,...}) 经 MessageChannel 回执。本壳页按同一契约应答（best-effort，
-// 无浏览器 SDK 依赖）。嵌入场景下 DSH 页面在 iframe 内、parent === 本页 window。
+// postMessage({__dshCopy,...}) 经 MessageChannel 回执。本壳页按同一契约应答（best-effort）。
+import { hana } from "./vendor/hana-plugin-sdk.js";
+
 (function () {
   "use strict";
-
-  var APP_SEG = null; // { appId, apiBase }
-  function deriveAppSeg() {
-    if (APP_SEG) return APP_SEG;
-    var parts = (location.pathname || "").split("/"); // ["","api","apps",appId,"ui",...]
-    var idx = parts.indexOf("api");
-    var appId = idx >= 0 && parts[idx + 1] === "apps" ? parts[idx + 2] : null;
-    if (!appId) return null;
-    APP_SEG = { appId: appId, apiBase: "/api/apps/" + appId + "/routes" };
-    return APP_SEG;
-  }
 
   var PHASE_LABEL = { idle: "未启动", starting: "启动中", ready: "就绪", error: "失败", stopped: "已停止" };
   var POLL_FAST_MS = 1500;   // 非就绪：较快轮询
@@ -45,23 +34,38 @@
   function $(sel, root) { return (root || document).querySelector(sel); }
 
   function fetchState() {
-    var seg = deriveAppSeg();
-    if (!seg) return Promise.reject(new Error("无法从页面路径推导 App 路由前缀"));
-    return fetch(seg.apiBase + "/dshana/boot-state", {
+    // hana.api.fetch：带 X-Hana-App-Surface-Session（iframe URL 的 appSurfaceSession）
+    // 调本 App 后端路由 /api/apps/<id>/routes/dshana/boot-state（SDK 按路径解析 appId）。
+    return hana.api.fetch("dshana/boot-state", {
       method: "GET",
       cache: "no-store",
       headers: { Accept: "application/json" }
     }).then(function (res) {
       if (!res.ok) throw new Error("boot-state HTTP " + res.status + "（" + res.statusText + "）");
       return res.json();
+    }).catch(function (err) {
+      var msg = err && err.message ? err.message : String(err);
+      if (/appSurfaceSession/.test(msg)) {
+        throw new Error("页面缺少 App surface 会话凭据，请从 Card Center 重新打开本卡");
+      }
+      throw err;
     });
   }
 
   function postAction(action) {
-    var seg = deriveAppSeg();
-    if (!seg) return Promise.reject(new Error("无法推导 App 路由前缀"));
-    return fetch(seg.apiBase + "/dshana/" + action, { method: "POST", cache: "no-store" })
+    return hana.api.fetch("dshana/" + action, { method: "POST", cache: "no-store" })
       .then(function (res) { return res.json().catch(function () { return {}; }); });
+  }
+
+  // 受管 runtime 服务 iframe URL：proxyPrefix 尾带 "/"；首访透传本页 appSurfaceSession
+  // query（宿主按 surface 授权并为 runtime 路径种 hana_app_runtime cookie），再带视图参数。
+  function runtimeUiUrl(prefix) {
+    var q = new URLSearchParams();
+    var ss = new URLSearchParams(location.search).get("appSurfaceSession");
+    if (ss) q.set("appSurfaceSession", ss);
+    if (window.__DSHANA_VIEW) q.set("dshana-view", window.__DSHANA_VIEW);
+    var qs = q.toString();
+    return prefix + (qs ? "?" + qs : "");
   }
 
   function schedule(ms) {
@@ -85,7 +89,7 @@
     var frame = el.frame;
     if (frame) {
       if (s.ready && s.proxyPrefix) {
-        frame.src = s.proxyPrefix + (window.__DSHANA_VIEW ? "?dshana-view=" + encodeURIComponent(window.__DSHANA_VIEW) : "");
+        frame.src = runtimeUiUrl(s.proxyPrefix);
         frame.hidden = false;
         if (el.frameZone) el.frameZone.hidden = false;
       } else {
