@@ -11,7 +11,8 @@
 //   skills/             App skills（dsh-hanako / dsh-session，SKILL.md 随包分发）
 //   runtime/dsh-host.mjs  受管 Node runtime 入口（migration step 2；见 src/runtime/；
 //                         cordis/ 产物由 build:cordis 另产出 dist/cordis，随包分发）
-//   （ui/ 静态树在后续步骤归位——Web UI 迁移）
+//   ui/                   App ui/ 静态树（migration step 4b/5；cards route 指向壳页，
+//                         见 src/ui/——相对资源路径，宿主以 /api/apps/<id>/ui<route> 服务）
 // v1 遗留变化：不再生成 dist/routes/index.js 壳（v1 宿主按 routes/ 目录扫描具名导出
 // pluginRoutes；v2 路由走 ctx.routes.register 单 route app，宿主不扫 dist 目录）。
 // 用法：node src/build.js [RSPACK_ENV=<构建环境目录>]
@@ -91,6 +92,15 @@ if (!fs.pathExistsSync(iconSrc))
   throw new Error("App 图标缺失（src/assets/icon.png）：manifest.icon 指向 assets/icon.png，需真实可解码图片");
 fs.copySync(iconSrc, join(DIST_DIR, "assets", "icon.png"));
 console.log("manifest.json + skills/ + assets/icon.png -> dist/（App v2 安装目录形态）");
+
+// App ui/ 静态树（cards contributes 的 route 指向 ui 内相对文件；缺失 = 卡片 404 + manifest
+// 校验失败——fail-fast）。相对资源纪律（迁移指南 §10）：壳页内资源一律相对路径，无根绝对 URL。
+const uiSrc = join(ROOT, "src", "ui");
+if (!fs.pathExistsSync(uiSrc)) {
+  throw new Error("App ui/ 静态树缺失（src/ui）：contributes.cards 的 route 指向 ui 内页面（见 manifest.json）");
+}
+fs.copySync(uiSrc, join(DIST_DIR, "ui"));
+console.log("ui/ -> dist/ui（壳页 + app-shell.js；contributes.cards route 资源面）");
 
 // 3) 二次 terser（主区）+ 静态 URL 断言
 await extraTerser(DIST_DIR);

@@ -136,10 +136,10 @@ DSH 设置页「DSHana 设置」分页（settings.section slot，id `dshana-sett
 - 单测新增（node --test 全绿 62 例）：rpc-envelope（信封/网关 method 斜杠/requestId 注入）、task-map（路径/读写删/TTL/不落 callToken）、session-serialize（同会话串行/跨会话并行/槽位）、provider-ndjson（跨 chunk 半行/flush/坏行）、provider-catalog（routes/efforts/元数据）、provider-messages（assistant 签名/tool-result 拆分/图片/UNSUPPORTED_CONTENT）、provider-stream（done→chunks/回放信封/EMPTY_RESPONSE/max-tokens）、task-bridge（事件归类）。构建：node src/build.js 与 node src-cordis/build.js 通过（dist 内含 taskmaps/task-bridge/__dshanaHana 标记）。
 - 已测/未测边界（步骤 3）：真机 AppHost 实跑 create/send 模型流未在本刀跑通（无宿主环境/网络），装包后由主上下文验收：① tasks 生命周期与结果投递；② task-bridge 终态对账；③ provider adapter 被 DSH agent 循环调用的消息/块序与跨 turn done.assistant 回放；④ 同会话两次 send 串行；⑤ DSH 图片附件 base64 路径；⑥ 两会话并发（宿主模型流并发上限 2）；⑦ runtime 中途重启后 send 的 resume 路径；⑧ 执行超时/取消（依赖步骤 4 session.cancel）。本步模型流不逐块实时打字（done 时一次性产块，功能等价；DSH Web UI 实时性属步骤 4/5 面）。
 
-**遗留（步骤 4+ 收口）：**
+**遗留（步骤 4b/5 收口已由本刀合入代码侧——见文末「步骤 4b/5 收口（代码侧）」；此处只剩真机/后续刀项）：**
 
-- 步骤 4 本体（本刀 4a 已落地核心，见下方「步骤 4a 架构决策」）：审批/取消/执行超时/watch SSE 对账全链代码与单测已合入；剩真机 AppHost 验收（宿主审批通知形态、watch SSE 实测对账、宿主取消 UI 路径、DSH 超窗升级路径）与重启恢复（App 进程重启后 in-process 队列/后台 watcher 重建 + task-map 残留判定——仍属后续刀）。
-- 步骤 4/5：ctx.routes.register + UI/cards/ui/ 静态树（受管服务代理前缀 /api/apps/<appId>/routes/_runtime/<runtimeId>/）、activation on-demand、syncver 联动 cordis 包版本、pack.mjs 的 cordis 版本断言适配 v2 版本域、旧插件数据迁移脚本、@dsh-hanako/{bus,bridge,acp-assist,view,app,settings,theme,clipboard} 子插件在 v2 形态的退役/收敛判断（本刀只重写 provider；其余 apply 容错降级为惰性，随 UI 刀逐刀收口）。
+- 真机 AppHost 验收（装包后，主上下文与姐姐协调）：① 宿主审批通知形态与 watch SSE 实测对账；② 宿主取消 UI 端到端；③ 重启恢复（App 进程重启后 in-process 队列/后台 watcher 重建 + task-map 残留判定——仍属后续刀）；④ ui/ 壳页到 App routes 的 surface 授权/cookie 形态；⑤ DSH Web UI 在代理前缀下的资源/API/WS base 适配（宿主不重写任意 SPA——壳页就绪态已就位，DSH 侧 base 适配待对账）；⑥ 旧数据迁移真机执行（--apply 停机协调）。
+- activation on-demand（manifest activation.mode）决策仍留稳定后（指南 §11）。
 ## 步骤 4a 架构决策（approve / cancel / 执行超时 / watch SSE 消费侧）
 
 本刀合入内容对应迁移指南 §5（每 send 新 task、串行化）、§8（models.cancel(requestId)）、
@@ -239,6 +239,129 @@ DSH 设置页「DSHana 设置」分页（settings.section slot，id `dshana-sett
 7. DSH Web UI 直开会话的审批（无 task-map → next() 委托 → 无应答者 fail-closed）与 DSH
    自身 approval/policy 语义核对。
 8. 重启恢复（App 重启后 in-process 队列重建）仍属后续刀（本刀未动 apply 进程内协调态）。
+
+
+## 步骤 4b/5 收口（代码侧）——routes/UI/cards + 数据迁移 + 打包（本刀合入）
+
+指南 `10`（Web UI/HTTP/SSE/WS 迁移）、`12`（旧数据迁移）、`13` 步骤 5 的「代码侧」在本刀收口。
+真机 AppHost 验收（DSH UI 交互、surface 授权、代理前缀端到端）留装包后由主上下文做——下方
+「已测/未测边界」单列。
+
+### 宿主实证记录（server 0.930.1 bundle，只读查证）
+
+- **受管服务代理 = 宿主自动暴露，App routes 不需要转发**：bundle 含
+  `const Uee = "hana_app_runtime"`、`u1e(appId, runtimeId) = /api/apps/<appId>/routes/_runtime/<runtimeId>/`
+  与代理 express 路由 `/apps/:appId/routes/_runtime/:runtimeId/*`（ayr 函数族）：请求带
+  `upgrade: websocket` 走 upgradeWebSocket 转发（二进制/文本帧，缓冲上限 1MB），其余方法按
+  runtime 记录端口 fetch 到 `127.0.0.1:<port>`（重定向 Location 重写回代理前缀；剥离
+  authorization/cookie/host 等请求头；strip `appSurfaceSession`/iframe ticket/agentId 查询参）。
+  首次携带 `?appSurfaceSession=` 或 `X-Hana-App-Surface-Session` 的响应会 Set-Cookie
+  `hana_app_runtime=<surfaceToken>; Path=/api/apps/<id>/routes/_runtime/<rid>/; HttpOnly;
+  SameSite=Strict` 供后续子请求。因此本 App 的 ctx.routes **只做壳页/诊断面**；DSH Web UI/
+  API/SSE/WS 一律指向该前缀。
+- **ctx.routes.register**：单 bundle 只能 register 一次；registrar 收到 Hono sub-app（SKILL/
+  SDK d.ts：`register(registrar:(app)=>unknown)`，可返回 Promise 由宿主 await 后发布）；
+  公开 URL `/api/apps/<appId>/routes/<subpath>`，鉴权 app_route（宿主登录或本 App surface
+  会话）。处理函数在 App 进程内执行（与 ctx.tools.execute 同生命周期，共享 App 运行包/受管
+  runtime 单例——路由模块直接调 lib/managed-runtime.js 是本设计前提）。
+- **ui/ 静态树**：宿主 `GET/HEAD /apps/:appId/ui/*` 直接服务 App 安装目录 `ui/` 子树
+  （Z8t 防目录逃逸；scoped surface 路径 `/api/apps/<appId>/ui/_surface/<sessionToken>/...`
+  由 iframe-ticket 端点下发 uiBasePath——页面相对资源在此 base 下继承授权）。App 自身 ui/
+  页面资源一律相对路径（指南 `10` 禁根绝对 URL）；face 映射 `/api/apps/<appId>/ui/<image>`。
+- **contributes.cards v2 字段白名单**（宿主 readManifest 实证）：
+  `id/title/description/route/embedUrl/cardForm/titlebar/realization/pageOf/siteNavEntry/
+  fpFullPanel/functionPanel/face/formFactors`——realization:"page" + siteNavEntry、pageOf 均
+  可用（宿主 schema 校验同 SKILL）。route 值 = ui/ 相对路径（须对应真实文件，宿主按文件名
+  服务，无扩展名推断——route 用 `/dshana/main.html` 形态）。
+
+### 交付 1：ctx.routes.register 单 registrar（壳页/诊断面）
+
+- 新 src/routes/dshana-routes.js（v1 routes/webui.js + card.js 两工厂合并语义）：端点
+  `GET /dshana/boot-state`、`GET /dshana/health`、`POST /dshana/start`（fire-and-forget，
+  202 即回，壳页轮询跟进）、`POST /dshana/stop`。依赖注入（getSnapshot/start/stop）可单测；
+  index.js apply 用 defaultDshanaRouteDeps(ctx) 接真实实现（读 managedRuntimeDetails）。
+- src/lib/boot-state.js：归一化快照 `{phase,ready,runtimeId,proxyPrefix,service,error,
+  note,updatedAt}` 与 runtimeProxyPrefix()（前缀宿主契约单点）。**ready 门**：service.state
+  === ready 才给 proxyPrefix（绝不因 runtimeId 存在就展示端点——宿主在 readyMarker 后才发布
+  服务）。阶段文案覆盖 idle/starting/ready/error/stopped。
+- index.js：ctx.routes.register 缺失（宿主过旧）→ warn 降级（DSH 仅 dsh_session 可用）；
+  registrar 抛错 → 抬高中止 App 加载（显式失败优于静默残缺）；disposer 注销。
+
+### 交付 2：contributes.cards 回归（v2 schema）
+
+- manifest 增两卡：主卡 id dshana（route `/dshana/main.html`，realization:"page" +
+  siteNavEntry，titlebar/cardForm 默认），侧栏卡 id dshana-sidebar（route
+  `/dshana/sidebar.html`，pageOf:"dshana"，不声明 realization/siteNavEntry——宿主对非
+  page 卡这些字段视 undeclared，显式不写最干净）。
+- 壳页三态（精简版，v2 无自动链 UI）：idle（说明 + 「启动 DSH」按钮 → POST /dshana/start）、
+  starting（轮询 boot-state）、error/action-needed（错误码 + 用户可读指引 + 重试）、ready
+  （iframe src = 宿主代理前缀 + `?dshana-view=main|sidebar`）。**DSH UI 的 SPA base 适配**
+  （资源/API/WS 前缀）宿主不代做，真机对账（见下）。
+
+### 交付 3：ui/ 静态树归位
+
+- src/ui/dshana/{main.html, sidebar.html, app-shell.js}（build:src 复制到 dist/ui/）：
+  页面同层相对引用（`./app-shell.js`），无根路径绝对 URL；appId/路由前缀由页面
+  location.pathname 推导（/api/apps/<appId>/... 段），不硬编码整 URL。壳页轮询 boot-state、
+  POST start/stop；响应 v1 壳桥消息（`dshHanaThemeRequest`/剪贴板 `__dshCopy`）best-effort
+  （无浏览器 SDK 依赖；真机对账补充 TOKEN_MAP 对齐与 hana.clipboard 能力面）。
+
+### 交付 4：旧插件数据迁移（交付代码与 --check 路径，本刀不真跑）
+
+- src/lib/legacy-migrate.js（纯 node 内置）+ scripts/migrate-legacy.mjs CLI：
+  `--check`（默认，只读计划）/`--apply`/`--force`/`--source|--hanako-home`/`--target`
+  （缺省取 DSHANA_LEGACY_HOME/DSHANA_DATA_DIR）。流程 = 备份（目标数据区
+  `migration-backup/`，**已存在不覆盖唯一备份**）→ 复制 dsh-home/{sessions,storages,
+  settings.yaml,.anonymous-user-id} 与 logs、config.json（参考拷贝
+  legacy-config.json + 设置建议输出；不代写宿主 preferences）→ 校验（会话数/workspace.json
+  可解析/marker 落位，verifyMigration）→ 幂等标记 `dataDir/dshana/migrated.json`
+  {source,at,stats,backupDir}。**profiles/ 不迁移**（其 node_modules/@dsh-hanako 是 junction
+  指向 v1 安装目录，v2 runtime seed.js 每次启动用 installDir cordis/ 自愈重建——「profile 引用
+  修复」= 由种子化重建承接）；node_modules/.node 不迁移（App 依赖走 dataDir/runtime 区 pnpm
+  重装，无文件锁问题）。源只读不删（回退材料 = 旧插件数据原地保留）；--apply 打印停机指引
+  （先停旧插件写入，主上下文与姐姐协调）。Windows：path.join 原生分隔符、junction 在跳过
+  列表、reparse 不入复制。
+
+### 交付 5：pack/syncver 收口（v2 版本域）
+
+- **版本域定案**：主 package.json / manifest = App 域 2.0.0-beta.x；cordis 包（roster +
+  plugins，11 个 package.json）**等值跟随**（无独立版本线）；build metadata
+  （+dsh-<dsh 依赖>）由 version-hook 发版时统一拼回再同步（本刀执行 syncver 把 cordis 从
+  v1 域 1.0.0-beta.5+dsh-0.1.2-rc.1 对齐到 2.0.0-beta.1）。syncver.mjs 头注释记录 v2 域语义。
+- pack.mjs：静态项补 THIRD_PARTY_NOTICES.md；cordis dist 断言扩为 11 包（补 acp-assist）；
+  新增 dist/ui 断言（route 资源 fail-closed）；zip 形态不变（dist 根 manifest/index.js +
+  三件套 + NOTICE/THIRD_PARTY_NOTICES + cordis + ui，无 node_modules）。
+
+### 交付 6：@dsh-hanako/* 子插件 v2 收敛判断（落到 DESIGN；代码侧不动 roster，防 boot 破坏）
+
+逐插件职责与 v2 判断（profile cordis.patch.yml 行序保留——移除任何行都需要真机 boot 验证，
+本刀只做收敛判断与惰性标注，物理退役随 UI 真机验收刀收口）：
+
+| 子插件 | v1 职责 | v2 判断 | 说明 |
+|---|---|---|---|
+| provider | host provider 目录直连（apiKey/baseURL） | **保留必装（已 v2 重写）** | hana.models 推理 adapter（迁移步骤 3） |
+| bridge | 免鉴权 connection 等价服务 + /api HTTP 载体（DSH Web 数据面必需） | **保留（v2 仍必需）** | DSH UI 经代理前缀直连 /api/* 时同款免 401/403 依赖；App→runtime RPC 走官方 gateway /api 端点同依赖其 interceptor 面 |
+| app | serve fork 官方前端到根路径（宿主 WebUI iframe 载体） | **保留（惰性优先）** | DSH Web UI 根页面服务仍走 webserver fallback；v2 经代理前缀访问不变；内容面待 UI 真机验收 |
+| view | client 端 root 装配（main/sidebar 视图、layout 服务） | **保留（惰性优先）** | DSH UI 视图装配属 DSH 侧；URL 三态参数与壳页 ?dshana-view 约定一致即可 |
+| theme | 壳页 postMessage 主题注入（tapIndex 注入桥） | **保留（桥壳页侧需对账）** | v2 壳页 app-shell.js 已实现 dshHanaThemeRequest 应答（best-effort）；TOKEN_MAP 对齐待真机 |
+| clipboard | 剪贴板桥（宿主 capability 写剪贴板） | **保留（桥降级 best-effort）** | v2 无宿主 capability 白名单——壳页 navigator.clipboard/execCommand 兜底，失败如实回执；正式路径待 hana.clipboard 能力面确认 |
+| settings | DSH Web 设置页「DSHana 设置」分页（默认模型/版本卡 + 更新总线） | **惰性保留（需删改 v1 更新段）** | v1 更新链路（dshana.bus → 宿主）v2 无宿主侧；本地版本卡/默认模型 UI 保留；更新段退役（App 发版即 DSH 升级）——真机验收刀随 UI 修剪 |
+| logger | DSH 内日志收集 → dshanaBus → 宿主会话文件 | **惰性保留（通道退化为缓冲）** | v2 无宿主 WS 连接，总线缓冲不再送达；受管 runtime stdout 已由 host watch 镜像进 dataDir/logs（等价覆盖）——真机后移除总线转发段 |
+| bus | dshana.bus WS 服务端（宿主插件 IPC 通道） | **退役候选（roster 惰性保留）** | v2 宿主不再连 dshana.bus：App→runtime = loopback HTTP RPC（决策 A），runtime→宿主 = connectAppRuntime（tasks/models）。无消费方即死代码——真机确认 logger/settings 无注入依赖后从 patch.yml 移除 |
+| acp-assist | dsh-acp agent 工厂 setup 后置（探测版：patch+日志） | **惰性保留** | 探测产物零装载语义（apply 全 try/catch）；DSH Web UI 手动会话才涉及，v2 会话主链不走 dsh-acp——真机后随 ACP 面评估 |
+
+### 已测/未测边界（本刀）
+
+- 已测：node src/build.js 与 node src-cordis/build.js 通过（dist 含 ui/ + manifest cards +
+  dshana-routes 接线）；单测 143 例全绿（新增 boot-state 7 + dshana-routes 6 + legacy-migrate
+  5 = 18 例；既有 125 例保持）。pack.mjs 版本断言/静态清单逻辑改动后未实跑（留发版时验证）。
+- 未测（真机 AppHost 装包后由主上下文验收）：① ui/ 壳页 → /routes/dshana/* 的 surface
+  授权形态（scoped uiBasePath/iframe ticket → cookie/hana.api，代码按同源相对 fetch 写，
+  实证文件见 bundle iFt/eFt/uVe）；② DSH Web UI 在代理前缀下 SPA 资源/API/WS 的 base 适配
+  （宿主不重写 HTML/根路径——需 DSH 侧或 App 侧改写，见 manifest/壳页注释）；③ /dshana/start
+  fire-and-forget 的宿主 route 并发语义（boot 数分钟窗口内宿主对 App route 请求无超时回收）；
+  ④ 壳桥 theme vars 的 TOKEN_MAP 对齐 + clipboard 正式路径；⑤ migration --apply 真机执行
+  （含 Windows junction/文件锁/旧插件停机协调）。
 
 
 

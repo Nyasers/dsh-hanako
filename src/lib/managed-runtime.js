@@ -344,3 +344,17 @@ export function managedRuntimeState() {
     lastError: managed.lastError ? String((managed.lastError && managed.lastError.message) || managed.lastError) : null,
   };
 }
+
+/**
+ * 单例详情快照（boot-state / 壳页诊断面消费；保留对象形态供 UI 化展示）：
+ * { phase, runtimeId, info（最近一次 runtime.get 轮询记录，含 service 就绪态）,
+ *   lastError（Error 实例或 null）}。phase 值语义见 managed 注释。
+ */
+export function managedRuntimeDetails() {
+  return {
+    phase: managed.phase,
+    runtimeId: managed.runtimeId,
+    info: managed.lastInfo ? { ...managed.lastInfo } : null,
+    lastError: managed.lastError || null,
+  };
+}

@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DSHana · 状态</title>
+<!-- src/ui/dshana/sidebar.html — dsh-hanako App v2 侧栏卡（contributes.cards dshana-sidebar，
+     pageOf dshana）。紧凑状态摘要 + 就绪后内嵌 DSH Web UI sidebar 视图。 -->
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; }
+  body {
+    font: 13px/1.55 -apple-system, "Segoe UI", "Microsoft YaHei", Roboto, sans-serif;
+    background: var(--dsh-shell-bg, #f6f7f9); color: var(--dsh-shell-fg, #1c2430);
+  }
+  @media (prefers-color-scheme: dark) {
+    body { background: var(--dsh-shell-bg, #11151c); color: var(--dsh-shell-fg, #e6e9ef); }
+  }
+  .panel { padding: 12px 14px; }
+  .h { display: flex; align-items: center; gap: 8px; }
+  .h h1 { font-size: 13.5px; margin: 0 0 2px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #8a93a3; flex: 0 0 auto; }
+  [data-phase="ready"] .dot { background: #2e9e5b; }
+  [data-phase="starting"] .dot { background: #c98a10; }
+  [data-phase="error"] .dot { background: #c0392b; }
+  .muted { opacity: .7; font-size: 12px; }
+  .detail { margin-top: 6px; }
+  .row { display: flex; gap: 8px; margin-top: 10px; align-items: center; flex-wrap: wrap; }
+  button { font: inherit; padding: 4px 12px; border-radius: 6px; border: 1px solid currentColor; background: transparent; cursor: pointer; }
+  button.primary { background: #2b6cd6; border-color: #2b6cd6; color: #fff; }
+  .err { color: #b03a2e; }
+  [hidden] { display: none !important; }
+  code { font-family: ui-monospace, Consolas, monospace; font-size: 11px; }
+  #frame-wrap { margin: 10px -14px -12px; height: 340px; border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent); }
+  iframe { width: 100%; height: 100%; border: 0; }
+</style>
+</head>
+<body>
+<div class="panel" data-dshana-shell data-dshana-view="sidebar">
+  <div class="h"><span class="dot"></span><h1>DSHana 状态</h1><span class="muted" data-dsh-phase>…</span></div>
+  <div class="detail" data-dsh-detail>加载中……</div>
+  <div class="muted err" data-dsh-error-text hidden style="margin-top:4px"></div>
+  <div class="row">
+    <button class="primary" data-dsh-start hidden>启动 DSH</button>
+    <button data-dsh-stop hidden>停止</button>
+    <span class="muted">runtimeId</span><code data-dsh-runtime>–</code>
+  </div>
+  <div id="frame-wrap" data-dsh-frame-zone hidden>
+    <iframe data-dsh-frame title="DSH Web UI sidebar" hidden></iframe>
+  </div>
+</div>
+<script src="./app-shell.js"></script>
+</body>
+</html>

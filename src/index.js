@@ -19,8 +19,9 @@
 //   task handler 注册（task:abort → session.cancel） 迁移步骤 4（Hana ctx.tasks 取消链）
 //   DSH web host 启动自动链（ensure-deps→booting→ready） 迁移步骤 2（ctx.runtime.start
 //     受管 Node 进程 + connectAppRuntime；自动链状态机按受管进程语义重设计）
-//   路由注册（routes/webui.js + card.js）         迁移步骤 2/5（ctx.routes.register +
-//     ui/ 卡片贡献；本步骤不注册，rspack 也不再把它们打进 bundle）
+//   路由注册（v1 routes/webui.js + card.js）       迁移步骤 4b/5（ctx.routes.register 单
+//     registrar：routes/dshana-routes.js 壳页诊断面；到受管 runtime 的浏览器通道由宿主
+//     /api/apps/<id>/routes/_runtime/<runtimeId>/ 自动代理，不转发；ui/ 卡片贡献步骤 5 已回）
 //
 // 启动触发模型（v2 无 activationEvents/onStartup，指南 §3/§11）：
 // apply 不启动 DSH——只注册工具/设置并返回。DSH 受管运行时采用「工具首调兜底 + 需要时
@@ -52,6 +53,9 @@ import { disposeManagedRuntime } from "./lib/managed-runtime.js";
 // 工具模块（导出 name/description/parameters/execute；v2 无自动 pluginId_ 前缀——
 // 工具名即注册名，注册策略与命名决策见 tools/session.js 头注释）
 import * as dshSession from "./tools/session.js";
+// 壳页/诊断面单 registrar（迁移步骤 4b/5；v1 routes/webui.js+card.js 两工厂合并语义：
+// ctx.routes.register 只挂本 App 后端面；到受管 runtime 服务由宿主代理自动暴露，不转发）
+import { registerDshanaRoutes, defaultDshanaRouteDeps } from "./routes/dshana-routes.js";
 
 // ---- 统一日志（时间戳会话文件；与 v1 同格式，写 App dataDir）----
 // DSHana App 全量运行日志：每次 App 进程会话创建 <YYYYMMDD-HHmmss-SSS>.log 真实文件
@@ -153,12 +157,37 @@ export function apply(ctx) {
   });
   log("info", `工具注册:${dshSession.name}（ctx.tools.register，v2 全局唯一名，无自动前缀）`);
 
+  // ---- ctx.routes.register：壳页/诊断面（迁移步骤 4b/5 收口）----
+  // 契约（@hana/app-sdk + server 0.930.1 实证）：单 bundle App 只能 register 一次，
+  // registrar 收到宿主创建的 Hono sub-app（public URL /api/apps/dsh-hanako/routes/dshana/*，
+  // app_route 鉴权；registrar 可返回 Promise，宿主 await 后发布）。到受管 runtime 服务的
+  // 浏览器通道由宿主自动暴露在 /api/apps/dsh-hanako/routes/_runtime/<runtimeId>/（服务
+  // readyMarker 后成立，自动代理 HTTP/SSE/WS + 重定向重写 + HttpOnly cookie）——本 registrar
+  // 不需要转发受管服务，只提供壳页消费的 boot 状态与启动/停止面。
+  // ui/ 壳页（dist/ui/dshana/*.html）以相对同源 fetch 本组端点轮询（页面经 App surface
+  // 授权加载；真机对账点：surface cookie/hana.api 形态见 DESIGN 已测/未测清单）。
+  let unregisterRoutes = null;
+  if (ctx.routes && typeof ctx.routes.register === "function") {
+    try {
+      unregisterRoutes = ctx.routes.register((app) => registerDshanaRoutes(app, defaultDshanaRouteDeps(ctx)));
+      log("info", "路由注册:ctx.routes.register（/dshana/boot-state|health|start|stop——ui/ 壳页消费面）");
+    } catch (e) {
+      // registrar 抛错 = 路由发布失败 → 抬高让宿主拒绝本 App（路由是步骤 4b 交付面，
+      // 缺了壳页只剩纯工具；显式失败比静默残缺好诊断）
+      log("error", "ctx.routes.register 失败（App 加载中止）：" + ((e && e.message) || e));
+      throw e;
+    }
+  } else {
+    log("warn", "ctx.routes.register 缺失（宿主低于 0.930.1？）：壳页诊断面不可用，DSH Web UI 仅经 dsh_session 使用");
+  }
+
   // 返回 disposer：卸载/重载清理（步骤 2 起：停止受管 DSH runtime——若已启动；幂等）
   let disposed = false;
   return () => {
     if (disposed) return;
     disposed = true;
     try { if (typeof unregisterTool === "function") unregisterTool(); } catch { /* 忽略 */ }
+    try { if (typeof unregisterRoutes === "function") unregisterRoutes(); } catch { /* 忽略 */ }
     // 受管 runtime 收尾：停 runtime + 清单例（Windows 依赖更新/App 卸载前须先停，见
     // managed-runtime.js 与 DESIGN「依赖部署（v2）」锁纪律）。disposer 可异步不等待宿主。
     try {
@@ -168,7 +197,7 @@ export function apply(ctx) {
     } catch (e) {
       appendLog("hana", "disposer 停止 DSH runtime 异常：" + ((e && e.message) || e));
     }
-    appendLog("hana", "app apply disposer：工具注销 + DSH 受管 runtime 收尾完成");
+    appendLog("hana", "app apply disposer：工具注销 + 路由注销 + DSH 受管 runtime 收尾完成");
   };
 }
 
