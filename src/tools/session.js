@@ -1,9 +1,14 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/tools/session.js — dsh_session 会话工具（App v2 迁移步骤 1 形态）
+// src/tools/session.js — dsh_session 会话工具（App v2 迁移步骤 3 形态）
 //
-// v2 变化（相对 v1 tools/session.js，迁移指南 §13 步骤 1）：
+// 状态（迁移指南 §13 步骤 1-3）：list/get 离线只读（query subtool）；create/send 已接线
+// （lib/session-run.js submitDshTask：ctx.tasks.create + ensureManagedRuntime + loopback
+// HTTP RPC + task-map 映射 + 同会话串行化；终态由受管 runtime task-bridge 回投）；cancel/
+// approve 属步骤 4（审批/取消链）。
+//
+// v2 变化（相对 v1 tools/session.js，迁移指南 §13 步骤 1/3）：
 //  1. 工具名注册策略：保留原名 "dsh_session"（v1 宿主注册出的 "dsh-hanako_dsh_session"
 //     是宿主按插件 id 自动加前缀的工件，不是作者意图名；v2 ctx.tools.register 不自动
 //     加前缀、工具名全局唯一）。理由：全仓文档/SKILL/参数描述均以 dsh_session 为名，
@@ -25,6 +30,7 @@ import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execute as queryExecute } from "./subtool/query.js"; // list/get 只读查询（subtool）
+import { submitDshTask } from "../lib/session-run.js"; // create/send 提交链（步骤 3 接线）
 import { appDataDir } from "../lib/app-runtime.js";
 
 const __here = dirname(fileURLToPath(import.meta.url));
@@ -118,37 +124,23 @@ export const parameters = {
 // 迁移说明：v1 本模块导出的 sessionPermission（external_side_effect + describeSideEffect）
 // 是 v1 宿主权限模型的声明形态（函数型 describeSideEffect 无法跨 v2 App 进程序列化）。
 // v2 的权限面 = 能力授予（manifest capabilities，如 app/tools.expose-to-model）+ 宿主
-// 权限 ledger + 后续步骤的 hooks/tasks 审批链；步骤 1 注册时不再携带该字段，留待 create/
-// send 等外效 action 真正接线时按宿主 0.930.1 契约重新声明。见 src/index.js apply 注释。
+// 权限 ledger + 后续步骤的 tasks 审批链（迁移步骤 4 接线 requestApproval/respondApproval
+// 时按宿主 0.930.1 契约声明）。见 src/index.js apply 注释。
 
-// 未接线 action 的统一错误文案（让 Agent 明确知道阻塞在迁移步骤 3 业务接线，而不是
-// 参数/权限问题）。迁移步骤 2（本刀）已把受管启动封装就位（src/lib/managed-runtime.js
-// ensureManagedRuntime：ctx.runtime.start + 轮询等到 ready），下方 create/send/cancel/
-// approve 分支是步骤 3 的接线点——届时先经 ensureManagedRuntime 取单例 runtime 再走
-// Hana task/会话映射，参数与返回语义不变；本阶段仍只允许 list/get 离线使用。
-const NOT_WIRED = (action) =>
+// 步骤 3 状态：create/send 已接线（lib/session-run.js submitDshTask：ctx.tasks.create +
+// ensureManagedRuntime + loopback HTTP RPC + task-map 映射 + 同会话串行化；任务终态由
+// 受管 runtime 的 task-bridge（src/runtime/task-bridge.js）经 ctx.tasks.complete/fail 回投，
+// 宿主投递到来源会话）。cancel/approve 仍是步骤 4 内容（取消链 = 观察 Hana task
+// canceled/aborted → DSH session.cancel；审批链 = approval 映射 + requestApproval/
+// respondApproval + watch 对账），本阶段返回明确「未接线」文案。
+const STEP4_NOT_WIRED = (action) =>
   "action=" +
   action +
-  " 依赖 DSH 受管运行时业务接线（App v2 迁移步骤 3：ensureManagedRuntime 已就绪 + " +
-  "connectAppRuntime + Hana task 映射），当前骨架尚未接通业务回投——本阶段仅 list/get 可" +
-  "离线使用（读 App dataDir 的 dsh-home），create/send/cancel/approve 将在后续迁移步" +
-  "骤接通，届时参数与返回语义不变";
+  " 属于 App v2 迁移步骤 4（审批/取消链：Hana task canceled/aborted 观察 → DSH " +
+  "session.cancel、approval 映射与宿主 requestApproval/respondApproval/watch SSE 对账），" +
+  "当前骨架尚未接通。create/send（步骤 3）已可用：任务完成/失败会以后台结果投递到发起" +
+  "会话，内容用 action=get 读取。";
 
-// ---- 迁移步骤 3 接线桩（本刀已落受管启动封装，见 src/lib/managed-runtime.js）----
-// create/send/cancel/approve 真正接线时的统一前置（替换下方 throw 的接线形态）：
-//   import { ensureManagedRuntime, stopManagedRuntime } from "../lib/managed-runtime.js";
-//   // ① 启动（首次 create 触发；单例，多 DSH 会话共享——设计见 managed-runtime.js 头注释）：
-//   //    const { runtimeId } = await ensureManagedRuntime({ taskId });
-//   //    —— 内部 ctx.runtime.start({ runtime: "node", entry: "runtime/dsh-host.mjs",
-//   //    profile: "native", network: "external", service: { port, readyMarker: "DSH_READY" },
-//   //    args: buildRuntimeArgs(...) }) 并轮询 ctx.runtime.get 到 state=ready（含依赖
-//   //    ensure + DSH boot；首次可能数分钟，日志见 App 会话日志 src=dsht）。
-//   // ② runtime 就绪后：DSH 侧任务由子进程内 @dsh-hanako/* 经 connectAppRuntime 直连
-//   //    宿主 tasks/models（不经 App 中转）；App 侧负责 ctx.tasks.create 绑定来源会话，
-//   //    映射落 ctx.storage.agent（taskId ↔ dsh sessionId / rpcId）。
-//   // ③ 取消/审批链在迁移步骤 4（观察 Hana task canceled/aborted → DSH session.cancel）。
-//   // 失败归类：ensureManagedRuntime 抛错 err.code ∈ port-busy/deps/seed/boot-failed/
-//   //   not-authorized/timeout/unknown（message 含用户指引），直接作为工具错误抛出即可。
 async function doExecute(input, ctx) {
   const action = String(input.action ?? "").trim();
 
@@ -159,17 +151,42 @@ async function doExecute(input, ctx) {
   }
 
   if (action === "create" || action === "send") {
-    // 迁移步骤 3 接线前，create/send 不落地（v1 的 run subtool 提交链路依赖进程内
-    // web host 与宿主总线，不能原样跨到 App 隔离进程；受管启动封装已就绪见上方桩注释）
-    throw new Error(NOT_WIRED(action));
+    // 步骤 3 接线（v1 run subtool 提交链路的 v2 等价，见 lib/session-run.js 头注释）：
+    // ctx.tasks.create(callToken) → ensureManagedRuntime → session.create/list/selectModel/
+    // prompt（loopback HTTP RPC，v1 信封复用）→ task-map 写映射 → fire-and-forget 返回。
+    // callToken 由宿主工具调用上下文提供（input.context.callToken，v2 契约），只在
+    // ctx.tasks.create 消费一次，不落盘不落日志（指南 §5）。
+    const callToken = (input && input.context && input.context.callToken) || "";
+    const loc = await submitDshTask({ action, input, callToken, log: ctx && ctx.log });
+    const actionName = loc.action === "send" ? "send（续会话）" : "create（新建会话）";
+    const sid = String(loc.sessionId || "");
+    const rpc = String(loc.rpcId || "");
+    const text =
+      "任务已提交给 DSH（" + actionName + "）：rpcId " + rpc + "，sessionId " + sid +
+      (loc.cwd ? "，cwd " + loc.cwd : "") +
+      "。任务将在后台执行（Hana task " + loc.taskId + "），完成/失败结果会作为后台结果投递到" +
+      "本会话；需要看执行过程或最终结论时用 dsh_session action=get（sessionId " + sid + "）。";
+    return {
+      content: [{ type: "text", text }],
+      details: {
+        dsh: {
+          action: loc.action,
+          sessionId: sid,
+          rpcId: rpc,
+          taskId: loc.taskId,
+          status: "running",
+          cwd: loc.cwd || undefined,
+        },
+      },
+    };
   }
 
   if (action === "cancel") {
-    throw new Error(NOT_WIRED(action));
+    throw new Error(STEP4_NOT_WIRED(action));
   }
 
   if (action === "approve") {
-    throw new Error(NOT_WIRED(action));
+    throw new Error(STEP4_NOT_WIRED(action));
   }
 
   throw new Error(

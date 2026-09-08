@@ -3,7 +3,7 @@
   "id": "dsh-hanako",
   "name": "DSHana",
   "version": "2.0.0-beta.1",
-  "description": "DSHana: DeepSeek Harness as a subagent for HanaAgent (App v2, migration step 2: managed DSH runtime entry + startup wrapper in place; dsh_session list/get offline, create/send/cancel/approve business wiring in step 3)",
+  "description": "DSHana: DeepSeek Harness as a subagent for HanaAgent (App v2, migration step 3: provider adapter over ctx.models + create/send task chain wired via managed DSH runtime; list/get offline; cancel/approve in step 4)",
   "entry": "index.js",
   "icon": "assets/icon.png",
   "minAppVersion": "0.930.1",
@@ -16,6 +16,13 @@
     "app/runtime.native",
     "app/runtime.network"
   ],
+  "network": {
+    "allowedHosts": ["127.0.0.1"],
+    "methods": ["GET", "POST"],
+    "allowLocalhost": true,
+    "defaultTimeoutMs": 60000,
+    "maxResponseBytes": 8388608
+  },
   "contributes": {
     "settings": {
       "title": "DSHana",
@@ -41,11 +48,11 @@
           },
           "servicePort": {
             "type": "integer",
-            "minimum": 1,
+            "minimum": 1024,
             "maximum": 65535,
             "default": 4317,
             "title": "DSH 本地服务端口",
-            "description": "DSH Web 服务监听的显式本地端口（迁移指南 §10 显式端口契约，禁 0/随机）。被占用时 DSH 启动失败（runtime 状态 failed），改此值或释放端口后重试。多 App/多实例需各自不同端口"
+            "description": "DSH Web 服务监听的显式本地端口（迁移指南 §10 显式端口契约；宿主 runtime service 端口契约 1024..65535，禁 0/随机/特权口）。被占用时 DSH 启动失败（runtime 状态 failed），改此值或释放端口后重试。多 App/多实例需各自不同端口"
           }
         }
       }

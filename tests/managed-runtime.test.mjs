@@ -15,19 +15,20 @@ import {
   DEFAULT_SERVICE_PORT,
 } from "../src/lib/managed-runtime.js";
 
-test("parseServicePort: 合法整数直通（number / 数字字符串）", () => {
+test("parseServicePort: 合法整数直通（number / 数字字符串；宿主 service 端口契约 1024..65535）", () => {
   assert.equal(parseServicePort(4317), 4317);
   assert.equal(parseServicePort("5000"), 5000);
-  assert.equal(parseServicePort(1), 1);
+  assert.equal(parseServicePort(1024), 1024);
   assert.equal(parseServicePort(65535), 65535);
 });
 
-test("parseServicePort: 非法回落默认（禁 0/负/越界/非数——显式端口契约）", () => {
-  for (const bad of [0, -1, 65536, "0", "abc", "", null, undefined, 1.5, NaN]) {
+test("parseServicePort: 非法回落默认（禁 <1024/0/负/越界/非数——显式端口契约）", () => {
+  for (const bad of [0, -1, 1, 512, 1023, 65536, "0", "800", "abc", "", null, undefined, 1.5, NaN]) {
     assert.equal(parseServicePort(bad), DEFAULT_SERVICE_PORT, "raw=" + String(bad));
   }
-  // 显式 fallback 参数生效
+  // 显式 fallback 参数生效（fallback 也须 ≥1024）
   assert.equal(parseServicePort("bad", 9000), 9000);
+  assert.equal(parseServicePort("bad", 1), DEFAULT_SERVICE_PORT);
 });
 
 test("buildRuntimeArgs: 基础形态（与 options.js 对偶）", () => {

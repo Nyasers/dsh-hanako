@@ -30,6 +30,7 @@ import http from "node:http";
 import { parseArgs, UsageError, USAGE } from "./options.js";
 import { info, warn, err } from "./log.js";
 import { connectAppRuntime } from "./vendor/app-runtime-client.js";
+import { startTaskBridge } from "./task-bridge.js"; // 步骤 3：DSH 事件 → Hana task 回投
 import { resolveInstallRoot, locateDsh } from "./locate.js";
 import { ensureDeps } from "./ensure-deps.js";
 import { seedDshanaProfile } from "./seed.js";
@@ -130,6 +131,19 @@ function makeShutdown(state, exitCodeLog) {
     info(`shutdown：${reason}（exit ${code}）`);
     const ctx = state.ctx;
     const hana = state.hana;
+    // 步骤 3：先停任务桥（退订 ctx 事件，防关闭中再触发回投/流消费）再 dispose
+    if (typeof state.stopBridge === "function") {
+      try {
+        state.stopBridge();
+      } catch (e) {
+        warn("task-bridge 退订异常（继续退出）：" + ((e && e.message) || e));
+      }
+      state.stopBridge = null;
+    }
+    try {
+      // @dsh-hanako/provider 等子插件经该句柄取 hana client（见 main.js 步骤 1 注释）
+      if (globalThis.__dshanaHana === hana) globalThis.__dshanaHana = null;
+    } catch { /* 忽略 */ }
     try {
       if (ctx && ctx.fiber && typeof ctx.fiber.dispose === "function") {
         await Promise.race([
@@ -186,7 +200,7 @@ export async function main(argv) {
   const runtimeDir = join(dataDir, "runtime");
   const depsRoot = resolve(opts.depsRoot || join(runtimeDir, "node_modules"));
   const cordisSrc = resolve(opts.cordisSrc || join(installRoot, "cordis"));
-  const state = { hana: null, ctx: null };
+  const state = { hana: null, ctx: null, stopBridge: null };
   const shutdown = makeShutdown(state, info);
 
   // ---- 1) 宿主 IPC（先于一切：非受管运行时立刻给出可操作报错，不输出 READY）----
@@ -204,6 +218,13 @@ export async function main(argv) {
     return EXIT.IPC_UNAVAILABLE;
   }
   state.hana = hana;
+  // 步骤 3 契约：@dsh-hanako/provider 等受管子进程内子插件经该句柄调用宿主
+  // tasks/models/network（connectAppRuntime 的 client 对象；与插件同进程，globalThis
+  // 共享——provider adapter 重建见 src-cordis/plugins/provider/index.js v2）。关闭顺序：
+  // 先停 task-bridge/流，再 ctx dispose，最后 hana.close()（指南 §7 流纪律）。
+  try {
+    globalThis.__dshanaHana = hana;
+  } catch { /* 忽略 */ }
   // 父进程退出（宿主 stop/卸载）：有序释放后退出
   process.on("disconnect", () => {
     void shutdown("parent-disconnect", EXIT.DISCONNECT);
@@ -301,6 +322,20 @@ export async function main(argv) {
     return EXIT.PORT;
   }
   info(`webserver 已在 127.0.0.1:${opts.port} 真实监听——打印 readyMarker`);
+  // ---- 7) 任务桥挂载（步骤 3）：订阅 DSH 会话事件并按 task-map 回投 Hana task。
+  // 先于 readyMarker（App 等到 ready 后才提交 session.create/prompt，事件在 prompt 之后
+  // 才发生——先挂订阅无遗漏窗口）。失败不阻断就绪（桥不可用时任务将无终态回投，由
+  // App 侧日志与超时暴露——见 DESIGN「已测/未测边界」）。----
+  try {
+    state.stopBridge = startTaskBridge({
+      ctx: boot.ctx,
+      hana,
+      dataDir,
+      log: (s) => info("bridge", s),
+    });
+  } catch (e) {
+    err("bridge", "task-bridge 挂载失败（任务终态将无回投）：" + ((e && e.message) || e));
+  }
   process.stdout.write(opts.readyMarker + "\n");
   return EXIT.OK;
 }

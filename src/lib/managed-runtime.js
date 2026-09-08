@@ -26,7 +26,7 @@ import { appConfig, appDataDir, appLogger, getAppRuntime } from "./app-runtime.j
 
 export const READY_MARKER = "DSH_READY";
 export const RUNTIME_ENTRY = "runtime/dsh-host.mjs"; // 相对 App 安装目录（宿主校验在安装/数据目录内）
-export const DEFAULT_SERVICE_PORT = 4317; // manifest contributes.settings.servicePort 默认
+export const DEFAULT_SERVICE_PORT = 4317; // manifest contributes.settings.servicePort 默认（宿主 service 端口契约 1024..65535）
 export const READY_POLL_MS = 300;
 export const READY_TIMEOUT_MS = 240000; // 首次启动含依赖 ensure（pnpm 下载+安装）需更宽容限
 export const START_ERROR_HINTS = {
@@ -66,13 +66,14 @@ export function resetManagedRuntime() {
 
 /**
  * servicePort 解析（纯函数，便于单测）：raw 为 ctx.config.get('servicePort') 的原始值。
- * 合法整数 1..65535 返回原值；非法/缺省返回 fallback（默认 DEFAULT_SERVICE_PORT）。
- * 显式 0/负/越界/非数都不作为随机端口——指南 §10 禁随机端口契约（宿主不认子进程自报）。
+ * 合法整数 1024..65535 返回原值（宿主 runtime service 端口契约下限 1024——特权口/0/随机
+ * 一律不接受，见迁移核对记录）；非法/缺省返回 fallback（默认 DEFAULT_SERVICE_PORT）。
+ * 显式 <1024/负/越界/非数都不作为随机端口——指南 §10 禁随机端口契约（宿主不认子进程自报）。
  */
 export function parseServicePort(raw, fallback = DEFAULT_SERVICE_PORT) {
   const n = typeof raw === "number" ? raw : typeof raw === "string" && raw.trim() !== "" ? Number(raw) : NaN;
-  if (Number.isInteger(n) && n >= 1 && n <= 65535) return n;
-  return Number.isInteger(fallback) && fallback >= 1 && fallback <= 65535 ? fallback : DEFAULT_SERVICE_PORT;
+  if (Number.isInteger(n) && n >= 1024 && n <= 65535) return n;
+  return Number.isInteger(fallback) && fallback >= 1024 && fallback <= 65535 ? fallback : DEFAULT_SERVICE_PORT;
 }
 
 /**
