@@ -193,11 +193,20 @@ export function apply(ctx) {
   // ⚠️ 依赖 app/process.spawn capability（宿主 ledger 授予后 App/受管 runtime 进程才带
   // --allow-child-process，pnpm install 才能 spawn node）；未授予时 ensure 报 deps-io。
   {
+    // 宿主 bootstrap 窗口实证（0.930.1 plugin-loader-v2）：App 加载对 apply 有 60s
+    // RPC bootstrap 超时。beta.3 在 apply 同步路径内直接 fire ensureManagedRuntime，
+    // 宿主两次均在 60s 整报 "RPC bootstrap timed out" 并杀 App 进程——受管 runtime
+    // 的启动/轮询活动让宿主判定 bootstrap 未完成。故自动链延迟到宿主 bootstrap
+    // 握手之后（App 进程 apply 后仍存活）再触发。若延迟后仍超时（首次依赖安装
+    // 超过窗口），备选：完全移出 apply（壳页打开触发），见 DESIGN。
+    const AUTO_CHAIN_DELAY_MS = 5000;
     try {
-      ensureManagedRuntime({}).catch((e) => {
-        log("warn", "apply 自动链启动 DSH runtime 失败（状态经 boot-state 展示，可手动重试）：" + ((e && e.message) || e));
-      });
-      log("info", "apply 自动链：已触发 ensureManagedRuntime（受管 DSH runtime 后台拉起，single-flight）");
+      setTimeout(() => {
+        ensureManagedRuntime({}).catch((e) => {
+          log("warn", "apply 自动链启动 DSH runtime 失败（状态经 boot-state 展示，可手动重试）：" + ((e && e.message) || e));
+        });
+      }, AUTO_CHAIN_DELAY_MS);
+      log("info", "apply 自动链：" + AUTO_CHAIN_DELAY_MS + "ms 后触发 ensureManagedRuntime（避让宿主 bootstrap 窗口，single-flight）");
     } catch (e) {
       log("warn", "apply 自动链触发异常（忽略，继续返回 disposer）：" + ((e && e.message) || e));
     }
