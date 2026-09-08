@@ -21,6 +21,7 @@
     "@deepseek-ai/dsh": "0.1.2-rc.1"
   },
   "devDependencies": {
+    "@hana/app-sdk": "file:sdk\\hana-app-sdk.tgz",
     "@rspack/core": "^2.2.1",
     "archiver": "^8.0.0",
     "clean-css": "^5.3.3",

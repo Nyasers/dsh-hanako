@@ -15,6 +15,9 @@ importers:
         specifier: 0.1.2-rc.1
         version: 0.1.2-rc.1(150969acf17701f625d6f8ca241389f2)
     devDependencies:
+      '@hana/app-sdk':
+        specifier: file:sdk\hana-app-sdk.tgz
+        version: file:sdk/hana-app-sdk.tgz
       '@rspack/core':
         specifier: ^2.2.1
         version: 2.2.1
@@ -2074,6 +2077,10 @@ packages:
     peerDependenciesMeta:
       '@modelcontextprotocol/sdk':
         optional: true
+
+  '@hana/app-sdk@file:sdk/hana-app-sdk.tgz':
+    resolution: {integrity: sha512-aCTy4St53ZrlZESgcCDdynI9iHfMeZIpCIAiqZEW0f2JlcVtzgOtq30nwDw7g82N+tYG35PmTWP0HURtURdqBg==, tarball: file:sdk/hana-app-sdk.tgz}
+    version: 0.930.0
 
   '@hono/node-server@2.1.1':
     resolution: {integrity: sha512-ELuehkj5VCBdgEw9zs+ivkKwyzzUCSQuE96YmiPvn1ECBoZCczbFXJLeEGMTYjphP6gydh4pHMqEYPVMYUVgQg==}
@@ -6882,6 +6889,8 @@ snapshots:
       - bufferutil
       - supports-color
       - utf-8-validate
+
+  '@hana/app-sdk@file:sdk/hana-app-sdk.tgz': {}
 
   '@hono/node-server@2.1.1(hono@4.13.5)':
     dependencies:
