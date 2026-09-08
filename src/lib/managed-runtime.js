@@ -209,6 +209,7 @@ export async function ensureManagedRuntime(opts = {}) {
     const result = await promise;
     managed.phase = "ready";
     managed.lastInfo = result.info;
+    managed.lastError = null; // ready 态不残留历史失败（boot-state 快照 error 字段同步清空）
     return result;
   } catch (e) {
     managed.phase = "error";

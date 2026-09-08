@@ -53,12 +53,32 @@ import { hana } from "./vendor/hana-plugin-sdk.js";
       .then(function (res) { return res.json().catch(function () { return {}; }); });
   }
 
-  // 受管 runtime iframe URL：proxyPrefix 尾带 "/"；首访透传本页 appSurfaceSession query
-  // （宿主按 surface 授权并为 runtime 路径种 hana_app_runtime cookie），再带视图参数。
+  // 受管 runtime iframe 载入前置：宿主在「带 surface 凭据的 runtime 代理请求」响应里
+  // Set-Cookie hana_app_runtime（HttpOnly，Path=/api/apps/<id>/routes/_runtime/<rid>/，
+  // 实证 0.930.1）。iframe 无法自定义 header，必须先在壳页同源 fetch 一次 proxyPrefix
+  // 种下 cookie，后续 iframe 同源请求才自动携带并通过宿主代理鉴权。
+  function warmRuntimeCookie(prefix) {
+    try {
+      var ss = new URLSearchParams(location.search).get("appSurfaceSession");
+      if (!ss) return Promise.resolve(false);
+      return fetch(prefix, {
+        headers: { "X-Hana-App-Surface-Session": ss },
+        cache: "no-store",
+        credentials: "same-origin",
+      })
+        .then(function (r) {
+          return r.text().catch(function () { return ""; }).then(function () { return r.ok; });
+        })
+        .catch(function () { return false; });
+    } catch (e) {
+      return Promise.resolve(false);
+    }
+  }
+  // 受管 runtime iframe URL：proxyPrefix 尾带 "/"；首访经 warmRuntimeCookie 预请求种
+  // hana_app_runtime cookie（iframe 无 header 能力），URL 只带视图参数（appSurfaceSession
+  // query 宿主转发时剥除，非鉴权通道）。
   function runtimeUiUrl(prefix) {
     var q = new URLSearchParams();
-    var ss = new URLSearchParams(location.search).get("appSurfaceSession");
-    if (ss) q.set("appSurfaceSession", ss);
     var view = shell && shell.getAttribute("data-dshana-view");
     if (view) q.set("dshana-view", view);
     var qs = q.toString();
@@ -181,7 +201,12 @@ import { hana } from "./vendor/hana-plugin-sdk.js";
       if (frame) {
         if (frame.getAttribute("data-src") !== s.proxyPrefix) {
           frame.setAttribute("data-src", s.proxyPrefix);
-          frame.src = runtimeUiUrl(s.proxyPrefix);
+          // 先种 runtime cookie 再挂 iframe（iframe 无 header；403 兜底直接挂靠已有 cookie）
+          warmRuntimeCookie(s.proxyPrefix).finally(function () {
+            frame.src = runtimeUiUrl(s.proxyPrefix);
+            frame.hidden = false;
+          });
+          return;
         }
         frame.hidden = false;
       }
@@ -251,7 +276,11 @@ import { hana } from "./vendor/hana-plugin-sdk.js";
       if (frame) {
         if (frame.getAttribute("data-src") !== s.proxyPrefix) {
           frame.setAttribute("data-src", s.proxyPrefix);
-          frame.src = runtimeUiUrl(s.proxyPrefix);
+          warmRuntimeCookie(s.proxyPrefix).finally(function () {
+            frame.src = runtimeUiUrl(s.proxyPrefix);
+            frame.hidden = false;
+          });
+          return;
         }
         frame.hidden = false;
       }
