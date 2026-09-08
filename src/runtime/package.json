@@ -1,0 +1,15 @@
+{
+  "name": "dsh-hanako-runtime",
+  "version": "0.0.0",
+  "private": true,
+  "description": "DSHana 受管 runtime 依赖区声明（三件套①）：只含运行时 dependencies，版本随 App 发版；由 src/build.js 复制到 dist/runtime/ 并在受管 runtime 首启覆盖到 app-data/dsh-hanako/runtime/",
+  "dependencies": {
+    "@deepseek-ai/cordis": "4.0.2",
+    "@deepseek-ai/dsh": "0.1.2-rc.1"
+  },
+  "pnpm": {
+    "overrides": {
+      "koffi": "3.1.6"
+    }
+  }
+}

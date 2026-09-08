@@ -11,15 +11,17 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { minifyJs } from "./minify-assets.mjs";
 
-// 收集目录下全部 .js 的 file:// URL（rspack 会把 import.meta.url 静态化为构建机源码
-// 绝对路径；构建后产物出现这些字面量一律替换回 import.meta.url——分发路径失效根因）
+// 收集目录下全部 .js/.mjs 的 file:// URL（rspack 会把 import.meta.url 静态化为构建机源码
+// 绝对路径；构建后产物出现这些字面量一律替换回 import.meta.url——分发路径失效根因）。
+// .mjs 覆盖受管 runtime 入口（src/runtime/dsh-host.mjs → dist/runtime/dsh-host.mjs）。
+const JS_EXT = /\.(js|mjs)$/;
 export function collectSource(urlRoot) {
   const map = new Map();
   const walk = (dir) => {
     for (const name of readdirSync(dir)) {
       const p = join(dir, name);
       if (statSync(p).isDirectory()) walk(p);
-      else if (p.endsWith(".js")) map.set(pathToFileURL(p).href, p);
+      else if (JS_EXT.test(p)) map.set(pathToFileURL(p).href, p);
     }
   };
   walk(urlRoot);
@@ -32,7 +34,7 @@ export function makeUrlRewriter(staticUrlToMeta) {
     for (const name of readdirSync(dir)) {
       const p = join(dir, name);
       if (statSync(p).isDirectory()) walk(p);
-      else if (p.endsWith(".js")) {
+      else if (JS_EXT.test(p)) {
         let code = readFileSync(p, "utf8");
         let changed = false;
         for (const [url, entryName] of staticUrlToMeta) {
@@ -60,7 +62,7 @@ export async function extraTerser(root) {
       const p = join(dir, name);
       if (name === "node_modules" || name === "dsh-plugin") continue;
       if (statSync(p).isDirectory()) collect(p);
-      else if (p.endsWith(".js")) files.push(p);
+      else if (JS_EXT.test(p)) files.push(p);
     }
   };
   collect(root);
@@ -88,7 +90,7 @@ export function assertNoStaticFileUrl(root) {
     for (const name of readdirSync(dir)) {
       const p = join(dir, name);
       if (statSync(p).isDirectory()) scan(p);
-      else if (p.endsWith(".js")) {
+      else if (JS_EXT.test(p)) {
         const code = readFileSync(p, "utf8");
         for (const m of code.matchAll(/["']file:\/\/[^"']+["']/g)) {
           offenders.push(p + ": " + m[0].slice(0, 120));

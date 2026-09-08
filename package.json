@@ -8,6 +8,8 @@
     "build": "pnpm run build:src && pnpm run build:cordis",
     "build:src": "node src/build.js",
     "build:cordis": "node src-cordis/build.js",
+    "lock:runtime": "node scripts/lock-runtime.mjs",
+    "test": "node --test tests/",
     "syncver": "node scripts/syncver.mjs",
     "changelog": "node scripts/changelog.mjs",
     "prepack": "pnpm run syncver && pnpm run build",

@@ -1,0 +1,16 @@
+# 受管 runtime 依赖区构建脚本白名单（三件套②）——随 App 发版覆盖到 app-data/dsh-hanako/runtime/
+# 语义：pnpm 12（@pnpm/napi 载体）安装 dsh 依赖树时放行这些包的 install/postinstall 脚本
+# （koffi / node-pty 需要编译或下载原生产物）。白名单不参与 lockfile 解析。
+# 消费方：src/lib/pnpm-carrier.js parseAllowBuilds → @pnpm/napi install({ allowBuilds })。
+# koffi 显式 false（T4 实证 2026-09-08）：其 install script（cnoke --prebuild）在无 CMake 的
+# 机器上「Failed to load prebuilt binary, rebuilding from source」后失败，但**预编译产物本身可用**
+# ——@koromix/koffi-win32-x64 作为 optionalDependency 已落位，node v26.8.1 下 require('koffi')
+# 实测正常（N-API 10 / ABI 147）。故跳过其构建脚本（不要 CMake），运行期直接加载预编译。
+allowBuilds:
+  "@deepseek-ai/dsh-subprocess-local": true
+  "@google/genai": true
+  koffi: false
+  node-pty: true
+  protobufjs: true
+minimumReleaseAgeExclude:
+  - "@deepseek-ai/*"

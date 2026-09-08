@@ -6,9 +6,15 @@
   "description": "DSHana: DeepSeek Harness as a subagent for HanaAgent",
   "author": "Nyaser",
   "icon": "icon.png",
-  "minAppVersion": "0.925.0",
+  "minAppVersion": "0.930.1",
   "capabilities": [
-    "app/tools.expose-to-model"
+    "app/tools.expose-to-model",
+    "app/tasks.manage",
+    "app/session.start-turn",
+    "app/models.infer",
+    "app/runtime.execute",
+    "app/runtime.native",
+    "app/runtime.network"
   ],
   "network": {
     "allowedHosts": [
@@ -45,6 +51,12 @@
             "default": "",
             "title": "自定义 NodeJS 路径",
             "description": "可选，留空使用 hana-server 作为 Node 运行时，修改后需重启"
+          },
+          "servicePort": {
+            "type": "integer",
+            "default": 4317,
+            "title": "本地服务端口",
+            "description": "受管 DSH 服务监听端口（1024~65535；被占用时自动向后重选，最多 5 次）"
           }
         }
       }

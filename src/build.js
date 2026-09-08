@@ -48,6 +48,12 @@ const rspack = rspackPkg.rspack ?? rspackPkg.default?.rspack;
 // src 域源码收集（供 URL 回写）
 const rewriter = makeUrlRewriter(collectSource(join(ROOT, "src")));
 
+// src 域产物区清理（只清 src 域，绝不动 dist/cordis——那是 build:cordis 的产物；见
+// rspack.config.mjs 的 clean: false 说明）。清单与下方「src 域构件复制」一一对应。
+for (const name of ["index.js", "runtime", "manifest.json", "icon.png", "skills"]) {
+  fs.removeSync(join(ROOT, "dist", name));
+}
+
 // 主 bundle 编译
 const compiler = rspack(config);
 await new Promise((resolvePromise, reject) => {
@@ -70,6 +76,25 @@ fs.copySync(join(ROOT, "src", "manifest.json"), join(ROOT, "dist", "manifest.jso
 fs.copySync(join(ROOT, "src", "icon.png"), join(ROOT, "dist", "icon.png"));
 fs.copySync(join(ROOT, "src", "skills"), join(ROOT, "dist", "skills"));
 console.log("manifest.json + icon.png + skills -> dist/");
+
+// 3) 受管 runtime 声明三件套（spec D2：installDir/runtime/ 只读源 → 受管 runtime 首启
+//    固定覆盖到 app-data/dsh-hanako/runtime/）。package.json + pnpm-workspace.yaml 必带；
+//    pnpm-lock.yaml 可选（发版前用 scripts/lock-runtime.mjs 生成后随包，装到 runtime 用
+//    --frozen-lockfile 保证可复现；缺失时首装解析并生成锁文件）。
+//    注意：dist/runtime/dsh-host.mjs 由 rspack 第二入口产出（见 src/rspack.config.mjs），
+//    本步骤只补声明文件，不覆盖入口。
+const runtimeSrc = join(ROOT, "src", "runtime");
+const runtimeOut = join(ROOT, "dist", "runtime");
+fs.ensureDirSync(runtimeOut);
+for (const name of ["package.json", "pnpm-workspace.yaml", "pnpm-lock.yaml"]) {
+  const from = join(runtimeSrc, name);
+  if (!fs.existsSync(from)) {
+    console.log("[build] src/runtime/" + name + " 缺失（可选文件），跳过复制");
+    continue;
+  }
+  fs.copySync(from, join(runtimeOut, name));
+}
+console.log("runtime 声明三件套 -> dist/runtime/");
 
 // 4) 二次 terser（主区）
 await extraTerser(join(ROOT, "dist"));

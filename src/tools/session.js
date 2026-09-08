@@ -155,7 +155,9 @@ export async function execute(input, ctx) {
   try {
     return await doExecute(input, ctx);
   } catch (e) {
-    ctx.log?.error?.(
+    // ctx 由 index.js 的 toolContextOf 合成（v2 宿主把调用上下文放在 input.context）；
+    // 兜底可选链，避免"报错时再抛 TypeError 掩盖原错误"。
+    ctx?.log?.error?.(
       "[dsh-hanako] dsh_session failed:",
       e?.stack || e?.message || String(e),
     );

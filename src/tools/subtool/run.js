@@ -22,6 +22,10 @@ import { join } from "node:path";
 import { readFileSync, existsSync } from "node:fs";
 import { getSingleton, PLUGIN_ROOT, manifestDefaults } from "../../lib/state.js";
 import { resolveDshPkgDir } from "../../lib/bootstrap.js";
+// T7：taskId ↔ DSH session/rpc 映射（ctx.storage.agent 主存 / dataDir/state.json 兜底）
+import { bindTask, resolveTaskStore } from "../../lib/task-map.js";
+// 受管 runtime 内存态（runtimeId 等；映射条目记录定位键用）
+import { readDshRuntimeState } from "../../lib/runtime-host.js";
 import {
   readDshDefaultModel,
   readDshDefaultPreset,
@@ -52,6 +56,39 @@ import { ensureWebHost } from "../../lib/lifecycle.js";
 // 0.1.2 无 session/get 命令、$events 无内容事件（api-session/* 只有
 // added/removed/status/error/activity）——投影是任务结果的快速通道
 // （title/tokenUsage/sessionStats）；完整 assistant 消息可经 dsh_session get 深读。
+/**
+ * T7：Hana task 终态回投（ctx.tasks.complete/fail）+ 映射状态同步。
+ * 第 3 步 task-bridge 完整接线前，这里只做「尽力而为」的终态记录（失败不阻断任务链，
+ * 任务真实结果仍在 DSH 会话 jsonl / 卡片里）。
+ */
+async function settleHanaTask(ctx, taskId, { ok, result, error }) {
+  if (!taskId || !ctx) return;
+  const tasks = ctx.tasks;
+  try {
+    if (ok) {
+      await tasks?.complete?.(taskId, result);
+    } else {
+      await tasks?.fail?.(taskId, { message: String(error?.message || error || "DSH 任务失败").slice(0, 500) });
+    }
+  } catch {
+    /* 终态回投失败不阻断（任务结果另有 jsonl 事实源） */
+  }
+  try {
+    const store = resolveTaskStore(ctx, { dataDir: ctx.dataDir });
+    const prev = store.read().byTask?.[taskId];
+    if (prev) {
+      bindTask(store, {
+        ...prev,
+        status: ok ? "completed" : "failed",
+        ...(ok && result?.sessionId ? { dshSessionId: result.sessionId } : {}),
+        ...(ok && result?.rpcId ? { rpcId: result.rpcId } : {}),
+      });
+    }
+  } catch {
+    /* 映射更新失败不阻断 */
+  }
+}
+
 function readSessionProjection(dataDir, sessionId) {
   try {
     const p = join(
@@ -1017,6 +1054,31 @@ async function doExecute(input, ctx) {
   // 任务 rpcId：ready 的 loc.rpcId（prompt 提交产生的 RPC id，与 jsonl data.source.rpcId 同值）；
   // loc 为 null（提交失败）时为空串。deferred taskId 与工具契约字段都用它。
   const taskRpcId = (loc && loc.rpcId) || "";
+  // ---- T7：taskId ↔ DSH session/rpc 映射（ctx.storage.agent 主存；第 3 步完整接线前先建）----
+  // hanaTaskId 由 index.js 的 execute 外层在本次工具调用期间经 ctx.tasks.create 取得
+  // （callToken 只在 create 时有效，此后只用稳定 taskId）；缺失则跳过（映射降级，任务照跑）。
+  const hanaTaskId = typeof ctx?.hanaTaskId === "string" ? ctx.hanaTaskId : "";
+  if (hanaTaskId) {
+    try {
+      const store = resolveTaskStore(ctx, { dataDir });
+      bindTask(store, {
+        taskId: hanaTaskId,
+        kind: input.sessionId ? "send" : "create",
+        status: "running",
+        dshSessionId: (loc && loc.sessionId) || "",
+        rpcId: taskRpcId,
+        runtimeId: readDshRuntimeState().runtimeId || null,
+        cwd,
+        ...(input.provider ? { provider: String(input.provider) } : {}),
+        ...(input.model ? { model: String(input.model) } : {}),
+      });
+    } catch (e) {
+      getSingleton()?.appendLog?.(
+        "hana",
+        "[dsh-hanako] taskId 映射写入失败（降级）：" + (e?.message || e),
+      );
+    }
+  }
   // deferred taskId = 任务 rpcId（toolCallCache / approvalTimers / deferred 同键，与 g.ops
   // 的 sessionId 键并存）；taskRpcId 为空时兜底唯一键
   // （该路径提交必失败，deferred fail 报错即可）
@@ -1066,6 +1128,11 @@ async function doExecute(input, ctx) {
             sessionId: res.sessionId,
           },
         });
+        // T7：Hana task 终态回投 + 映射状态同步（失败不阻断）
+        settleHanaTask(ctx, hanaTaskId, {
+          ok: true,
+          result: { sessionId: res.sessionId, rpcId: taskRpcId },
+        });
       },
       (err) => {
         // 非正常终态（取消/超时/错误）也走 resolve 形态：宿主对 deferred:fail 只呈现
@@ -1081,6 +1148,8 @@ async function doExecute(input, ctx) {
             taskRpcId: taskRpcId || "submission-failed",
           }),
         });
+        // T7：非正常终态（取消/超时/失败）同样回投 Hana task（fail 语义）+ 映射状态
+        settleHanaTask(ctx, hanaTaskId, { ok: false, error: err });
       },
     );
 

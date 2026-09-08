@@ -1,18 +1,22 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/rspack.config.mjs — dsh-hanako 主 bundle 构建配置（src 域：随源码根，见布局原则\n// 「领域专用脚本随各自源码」；.mjs 不被 collectSource 收集，不随 bundle 打包）
-// 与 hana-remote-dev 的 rspack.config.mjs 对齐，按 dsh-hanako 实际适配：
-//   - 单入口 src/index.js → 单产物 dist/index.js（v2 apply 入口 + 工具 + lib + 路由 + 前端
-//     资产全部收敛）
-//   - 输出 ESM module（纯 ESM 无原生模块，不需要 CJS+loadBundle 沙箱；宿主直接 import）
-//   - library.type=module：入口具名导出（apply，v2 App 契约）真 emit 成 ESM export；
-//     default 同指 apply（双出口兼容宿主加载约定）。旧 default class + pluginRoutes 路由壳
-//     （dist/routes/index.js）已随 v2 迁移退役（v2 路由经 ctx.routes.register 注册）
-//   - asset/source：src/assets 下前端资源（webui-shell.jinja2 / card-op|dep.jinja2 模板 + card.js /
-//     card.css），模板经 template-loader（doT）编译为自包含渲染函数，js/css 经 minify-loader 压缩内联
+// src/rspack.config.mjs — dsh-hanako 主 bundle 构建配置（src 域：随源码根；.mjs 不被 collectSource 收集）
+//
+// 双入口（v2 第 2 步起）：
+//   ① index            → dist/index.js          App 主入口（apply(ctx) 注册面 + 工具 + lib + 路由 + 前端资产）
+//   ② runtime/dsh-host → dist/runtime/dsh-host.mjs  受管 native runtime 入口（DSH runProfile 承载；
+//      manifest 之外的独立进程入口，由 ctx.runtime.start 的 entry 参数按 installDir 相对路径拉起）
+//   两个入口各自内联依赖（splitChunks: false）——受管 runtime 进程只加载 dsh-host 需要的模块，
+//   不把 App 路由/前端资产带进去。
+//
+// 其余约束与 v1 一致：
+//   - 输出 ESM module（宿主直接 import；受管 runtime 以 node 直接执行 .mjs）
+//   - library.type=module：主入口具名导出 apply 真 emit 成 ESM export，default 同指 apply
+//   - asset/source：src/assets 下前端资源（jinja2 模板经 template-loader 编译、js/css 经 minify-loader 压缩）
 //   - externalsPresets.node：node 内置模块保持外部 import（零运行时依赖）
-// rspack 解析路径走 scripts/build.mjs 的 resolveRspackEntry（RSPACK_ENV 或本地 node_modules）
+//   - src/runtime/ 的声明三件套（package.json / pnpm-workspace.yaml / pnpm-lock.yaml）不是打包产物，
+//     由 src/build.js 直接复制进 dist/runtime/（见该文件「src 域构件复制」）
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -23,12 +27,21 @@ export default {
   name: "dsh-hanako",
   mode: "production",
   target: "node",
-  entry: path.join(root, "src", "index.js"),
+  entry: {
+    index: path.join(root, "src", "index.js"),
+    "runtime/dsh-host": path.join(root, "src", "runtime", "dsh-host.mjs"),
+  },
   output: {
     path: DIST_DIR,
-    filename: "index.js",
+    // 主入口保持 index.js（manifest.entry）；受管 runtime 入口保持 .mjs（dsh-host.mjs，
+    // 与 ctx.runtime.start({ entry: "runtime/dsh-host.mjs" }) 及 args 约定同名）
+    filename: (pathData) =>
+      pathData.chunk.name === "index" ? "index.js" : pathData.chunk.name + ".mjs",
     module: true,
-    clean: true,
+    // clean: false —— 产物区清理改由 src/build.js 精确执行（只清 src 域产物）。理由：
+    // rspack 的 clean 会连 dist/cordis 一起删（build:cordis 的产物，属另一条命令），
+    // 单独跑 build:src 时会让 profile 的 scope 源凭空消失（boot 失败）。clean.keep 实测不生效。
+    clean: false,
     library: { type: "module" },
   },
   experiments: { outputModule: true },
@@ -37,19 +50,14 @@ export default {
     rules: [
       {
         // HTML 模板：构建期经 template-loader（doT）编译为自包含渲染函数（ESM 默认导出）。
-        // 产物不含 doT（零运行时依赖，dependencies 恒空）；每请求直接调用渲染函数。
-        // 模板语法见 template-loader.mjs 头注释（{{= it.xxx }} 等，it = render scope）。
-        test: /\.jinja2$/, // 模板文件用 .jinja2 扩展名（避免静态检查器按 HTML 误报 {{= }} 语法）
+        // 产物不含 doT（零运行时依赖）；每请求直接调用渲染函数。
+        test: /\.jinja2$/,
         include: [path.join(root, "src", "assets")],
-        // src 域 loader（jinja2 编译专用，随 src：template-loader.mjs 与 rspack.config 同目录）
         use: [path.join(root, "src", "template-loader.mjs")],
-        // 显式 JS 模块类型：loader 输出 ESM 渲染函数，必须按 JS 解析（rspack 默认把未知
-        // 扩展名当 asset module，import 会得到 { jinja2: ... } 命名对象而非默认导出函数）
-        type: "javascript/esm", // 强制 ESM 语义：loader 输出 ESM（export default/具名），避免 rspack 对大模块走 CJS interop
+        type: "javascript/esm",
       },
       {
-        // 其余前端资产（js/css）：asset/source 内联为字符串（构建机路径零泄漏）。
-        // minify-loader（terser / clean-css）压缩后内联。
+        // 其余前端资产（js/css）：asset/source 内联为字符串，minify-loader 压缩后内联。
         test: /\.(js|css)$/,
         include: [path.join(root, "src", "assets")],
         use: [path.join(root, "scripts", "minify-loader.mjs")],
@@ -57,9 +65,15 @@ export default {
       },
     ],
   },
-  // usedExports: false + sideEffects: false —— 关闭导出级 tree-shaking（同旧 build.mjs
-  // 纪律：入口导出无外部消费者会被整体摇成空壳，插件本体全部保留）
-  optimization: { minimize: true, usedExports: false, sideEffects: false },
+  // usedExports: false + sideEffects: false —— 关闭导出级 tree-shaking（入口导出无外部消费者
+  // 会被整体摇成空壳）；splitChunks/runtimeChunk 关闭 —— 两个入口各自自包含（见文件头）
+  optimization: {
+    minimize: true,
+    usedExports: false,
+    sideEffects: false,
+    splitChunks: false,
+    runtimeChunk: false,
+  },
   devtool: false,
   node: false,
   stats: "minimal",
