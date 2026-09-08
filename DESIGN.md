@@ -90,3 +90,20 @@ DSH 设置页「DSHana 设置」分页（settings.section slot，id `dshana-sett
 - **bash 工具在 Windows 上可能 `E_ACCESSDENIED`**（dsh-bash-sandbox 创建 bash 服务实例失败，属 DSH 沙箱环境限制）。文件系统工具正常，Windows 上优先用文件系统工具
 - **HMR 降级**：进程内 boot 无 `--expose-internals`，dshana profile 的 patchReload live 依赖 HMR 可能静默降级（patch 静态/重启生效，插件升级时 dispose+reboot 重载）
 - 越界权限请求默认走审批自动化：插件捕获 approval/requested → 通知 Agent → `dsh_session(action="approve")` 应答；无人应答超时自动拒绝
+
+## App v2 迁移状态（feat/app-v2-migration，接口基线 Hana 0.930.1）
+
+本分支把 DSHana 从「v1 宿主插件（宿主进程内 boot DSH）」迁移为「Hana App v2（隔离 App 进程 + `apply(ctx)`）」，执行顺序见 `specs/DSHana迁移到HanaAppV2.md` §13。以上各节描述的是 v1 架构（进程内 boot / 总线 / 卡片），随迁移逐刀更新。
+
+**已落地（步骤 1：manifest / apply 入口 / 设置 / 工具注册，验证 list/get）：**
+
+- `src/manifest.json` 改为 App v2 契约：`version 2.0.0-beta.1`、`entry index.js`、`icon assets/icon.png`、`minAppVersion 0.930.1`、capabilities 取指南 §3 七项（`app/tools.expose-to-model`、`app/tasks.manage`、`app/session.start-turn`、`app/models.infer`、`app/runtime.execute`、`app/runtime.native`、`app/runtime.network`）。v1 专属/过时字段移除：`author`、`trust`、`activationEvents`（v2 无）、`ui.hostCapabilities`、`contributes.cards`（UI 迁移步骤回归）、`contributes.configuration → contributes.settings`、`network` 白名单（步骤 1 无 App 级 fetch；DSH 外网走受管 runtime 自身网络）。
+- `src/index.js`：`class + onload()` → `export apply(ctx)`（兼导出 `default { apply }`）；apply 注册完即返回。统一日志平移写 `ctx.dataDir/logs`；globalThis 宿主单例退役 → `src/lib/app-runtime.js` module-scope 运行包。
+- 工具注册：`ctx.tools.register`，工具名保留 `dsh_session`（v2 无自动 `pluginId_` 前缀、全局唯一；决策与冲突面见 `src/tools/session.js` 头注释）。action 参数与返回语义不变；本步骤仅 `list`/`get` 可用（DSH 未启动仍离线可读），`create`/`send`/`cancel`/`approve` 返回明确「待迁移步骤 2 接线」错误。
+- 设置：`contributes.settings`（approvalTimeoutSec / defaultTimeoutSec / nodejsPath），工具执行期经 `ctx.config.get`（apply 完成后才登记，apply 顶层不读）。
+- 数据读路径迁到 `ctx.dataDir`（宿主 `app-data/<id>/`）：list/get 读 `<dataDir>/dsh-home/...`（projcache + jsonl zstd）；旧插件数据迁移只留接缝（`lib/app-runtime.js appDataDir` 注释），本步骤不做迁移脚本。
+- 构建：`node src/build.js` 产物 `dist/` = App 安装目录形态（根 `manifest.json` + `index.js` + `assets/icon.png` + `skills/`）；v1 的 `dist/routes/` 壳不再生成。
+
+**遗留（后续步骤收口）：**
+
+- DSH 受管运行时（`ctx.runtime.start` + `connectAppRuntime` + Hana task/模型/审批映射）、`ctx.routes.register` + UI/cards、provider adapter 重写（`ctx.models`）、依赖部署决策（DSH node_modules 随包 vs dataDir）、`runtime/`/`ui/` 目录归位、syncver 联动 cordis 包版本、旧插件数据迁移脚本。

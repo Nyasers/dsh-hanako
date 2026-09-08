@@ -1,36 +1,49 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// tools/dsh-session.js — dsh 会话全生命周期工具（list/get/create/send/cancel）
-// 继承 dsh_ops（清单）+ dsh_run（任务提交）+ dsh_cancel（取消）全部能力：
-//   - list：解析 dsh 官方会话持久化缓存 <dataDir>/dsh-home/storages/session_projcache.json
-//     （session-persistence 单元的 proj cache，含全部历史会话摘要）。纯本地文件读。
-//   - get：凭 sessionId 直取会话内容——projcache 元数据 + summary（jsonl 最后一条
-//     assistant/message 的 text，截断 ≤4000 字符）。
-//   - create：新建会话 + 提交任务（原 dsh_run 无 sessionId 路径；task 必填）
-//   - send：续已有会话发消息（原 dsh_run resume 路径；sessionId + task 必填）
-//   - cancel：取消任务（原 dsh_cancel；sessionId 必填）
-// create/send 复用 dsh-run.js 的 execute（提交主流程：submitTask + 事件流 + 卡片）；
-// cancel 复用 dsh-cancel.js 的 execute。dsh-run/dsh-cancel 不再作为独立工具注册
-// （index.js 移除），保留为内部模块供本工具调用。
-// 权限模型：sessionId 即访问凭证——拿得到 id 即可 get/send/cancel。
+// src/tools/session.js — dsh_session 会话工具（App v2 迁移步骤 1 形态）
+//
+// v2 变化（相对 v1 tools/session.js，迁移指南 §13 步骤 1）：
+//  1. 工具名注册策略：保留原名 "dsh_session"（v1 宿主注册出的 "dsh-hanako_dsh_session"
+//     是宿主按插件 id 自动加前缀的工件，不是作者意图名；v2 ctx.tools.register 不自动
+//     加前缀、工具名全局唯一）。理由：全仓文档/SKILL/参数描述均以 dsh_session 为名，
+//     改名会让模型可见 API 与既有手册脱节；冲突面（宿主内置/其它 App/MCP 工具是否占用
+//     dsh_session）在步骤 1 暂无法从本仓库查证，若宿主加载时报重名，只需改本文件 name
+//     一处（如 dshana_session），其余字段不变。
+//  2. 数据读路径迁到 ctx.dataDir（宿主 app-data/<id>/；v1 的宿主插件 dataDir / 包根
+//     data/ 布局不再是权威）。list/get 读 dsh-home 的唯一事实源
+//     （storages/session_projcache.json + sessions/.../session.jsonl.zstd）——DSH host
+//     未启动仍可读（离线可读验收点）。旧插件数据 → App dataDir 的迁移接缝见
+//     lib/app-runtime.js appDataDir() 注释，本次只留口、不做迁移脚本。
+//  3. action 参数契约与返回语义不变（list/get/create/send/cancel/approve + 同 schema）。
+//     但 create/send/cancel/approve 依赖 DSH 受管运行时（ctx.runtime.start +
+//     connectAppRuntime + Hana task 映射），那是迁移步骤 2+ 的接线内容：步骤 1 这些
+//     action 一律返回明确「未接线」错误（先于字段校验，让 Agent 第一时间知道真正阻塞），
+//     list/get 正常离线工作。v1 的 run/cancel/approve subtool 实现保留在源码树
+//     （tools/subtool/）供后续步骤复用改造，不再被本模块静态 import。
 import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { execute as runExecute } from "./subtool/run.js";
 import { execute as queryExecute } from "./subtool/query.js"; // list/get 只读查询（subtool）
-import { execute as cancelExecute } from "./subtool/cancel.js";
-import { execute as approveExecute } from "./subtool/approve.js"; // 审批应答（会话操作，并入统一工具，2026-09-04）
+import { appDataDir } from "../lib/app-runtime.js";
 
 const __here = dirname(fileURLToPath(import.meta.url));
-// PLUGIN_ROOT 向上查找含 manifest.json 的目录——源码形态（tools/ 下）与
-// rspack bundle 形态（dist/tools/ 下）都能正确定位插件根（与 tools/dsh-run.js 同款定位）。
-let PLUGIN_ROOT = __here;
-while (!existsSync(join(PLUGIN_ROOT, "manifest.json"))) {
-  const parent = dirname(PLUGIN_ROOT);
-  if (parent === PLUGIN_ROOT)
-    throw new Error("无法定位插件根：向上未找到 manifest.json");
-  PLUGIN_ROOT = parent;
+// APP_ROOT 向上查找含 manifest.json 的目录——源码形态（src/tools/ 下）与
+// dist bundle 形态（dist/index.js 内联，import.meta.url = dist/）都能正确定位 App 根。
+let APP_ROOT = __here;
+while (!existsSync(join(APP_ROOT, "manifest.json"))) {
+  const parent = dirname(APP_ROOT);
+  if (parent === APP_ROOT)
+    throw new Error("无法定位 App 根：向上未找到 manifest.json");
+  APP_ROOT = parent;
+}
+
+/** 当前数据目录（权威 ctx.dataDir；离线/无宿主兜底包根 data/，与 v1 同语义） */
+function dataDirOf() {
+  const d = appDataDir();
+  if (d) return d;
+  const g = globalThis.__dshHanako; // v1 残留单例兜底（仅离线/未迁移路径，读不写）
+  return (g && g.dataDir) || join(APP_ROOT, "data");
 }
 
 export const name = "dsh_session";
@@ -40,7 +53,8 @@ export const description =
   "get=凭 sessionId 直取会话元数据 + 最终结论 summary；" +
   "create=新建会话 + 提交任务（task/cwd 必填，cwd 每次调用显式指定）；" +
   "send=续已有会话发消息（sessionId + task 必填，resume 语义）；" +
-  "cancel=取消任务（sessionId 必填）。" +
+  "cancel=取消任务（sessionId 必填）；" +
+  "approve=应答会话挂起的审批（allowed-once/rejected）。" +
   "权限模型：sessionId 即访问凭证。完整调用手册见 SKILL: skills/dsh-session/SKILL.md";
 
 export const parameters = {
@@ -79,7 +93,7 @@ export const parameters = {
     },
     timeout: {
       type: "number",
-      description: "仅 create/send：任务超时（秒），缺省用插件配置 defaultTimeoutSec",
+      description: "仅 create/send：任务超时（秒），缺省用 App 设置 defaultTimeoutSec",
     },
     agentPreset: {
       type: "string",
@@ -101,64 +115,57 @@ export const parameters = {
   required: ["action"],
 };
 
-export const sessionPermission = {
-  kind: "external_side_effect",
-  describeSideEffect: () => ({
-    kind: "local_read",
-    summary:
-      "读取 DSH 会话持久化缓存 session_projcache.json 与会话 jsonl（zstd 容器本地解压，只读；dsh-home 唯一事实源，sessionId 即访问凭证）；create/send 经总线提交 dsh 任务、cancel 取消任务、approve 应答会话挂起审批（写会话/审批状态）",
-    ruleId: "dsh-hanako-session",
-  }),
-};
+// 迁移说明：v1 本模块导出的 sessionPermission（external_side_effect + describeSideEffect）
+// 是 v1 宿主权限模型的声明形态（函数型 describeSideEffect 无法跨 v2 App 进程序列化）。
+// v2 的权限面 = 能力授予（manifest capabilities，如 app/tools.expose-to-model）+ 宿主
+// 权限 ledger + 后续步骤的 hooks/tasks 审批链；步骤 1 注册时不再携带该字段，留待 create/
+// send 等外效 action 真正接线时按宿主 0.930.1 契约重新声明。见 src/index.js apply 注释。
+
+// 步骤 1 未接线 action 的统一错误文案（让 Agent 明确知道阻塞在迁移步骤 2，而不是
+// 参数/权限问题；字段校验在错误之后不再执行，避免误导性提示）
+const NOT_WIRED = (action) =>
+  "action=" +
+  action +
+  " 依赖 DSH 受管运行时（App v2 迁移步骤 2 接线：ctx.runtime.start 启动 DSH + " +
+  "connectAppRuntime + Hana task 映射），当前骨架尚未启动 DSH——本阶段仅 list/get 可" +
+  "离线使用（读 App dataDir 的 dsh-home），create/send/cancel/approve 将在后续迁移步" +
+  "骤接通，届时参数与返回语义不变";
 
 async function doExecute(input, ctx) {
-  const g = globalThis.__dshHanako;
-  const dataDir = g?.dataDir || join(PLUGIN_ROOT, "data");
   const action = String(input.action ?? "").trim();
 
   if (action === "list" || action === "get") {
-    // 只读查询（list/get）由 query subtool 处理（纯本地：projcache + jsonl zstd）
+    // 只读查询（list/get）由 query subtool 处理（纯本地：projcache + jsonl zstd 解压，
+    // 不依赖 DSH host，离线可读；数据目录 = App ctx.dataDir）
     return queryExecute(input, ctx);
   }
 
   if (action === "create" || action === "send") {
-    const sessionId = String(input.sessionId ?? "").trim();
-    if (action === "create" && sessionId)
-      throw new Error("create 是新建会话，不允许传 sessionId（续会话请用 send）");
-    if (action === "send" && !sessionId)
-      throw new Error("send 必须传 sessionId（续已有会话；新建请用 create）");
-    if (!String(input.task ?? "").trim())
-      throw new Error(action + " 必须传 task（任务描述/消息文本）");
-    if (action === "create" && !String(input.cwd ?? "").trim())
-      throw new Error("create 必须传 cwd（沙箱工作目录；defaultCwd 配置已删除无回退，send 沿用会话已有 cwd）");
-    // 复用 dsh-run 的 execute（提交主流程：submitTask + 事件流 + 卡片 + 审批接线）；
-    // create 不传 sessionId（新建）、send 传 sessionId（resume 语义）。
-    return runExecute(input, ctx);
+    // 迁移步骤 2+ 接线前，create/send 不落地（v1 的 run subtool 提交链路依赖进程内
+    // web host 与宿主总线，不能原样跨到 App 隔离进程）
+    throw new Error(NOT_WIRED(action));
   }
 
   if (action === "cancel") {
-    const sessionId = String(input.sessionId ?? "").trim();
-    if (!sessionId) throw new Error("cancel 必须传 sessionId");
-    return cancelExecute(input, ctx);
+    throw new Error(NOT_WIRED(action));
   }
 
   if (action === "approve") {
-    // 审批应答（会话操作：应答挂在某 session 挂起的审批上，sessionId 定位）——复用
-    // dsh-approve 的 execute（activeApprovals 校验 + 总线应答），并入统一工具不再单独注册
-    return approveExecute(input, ctx);
+    throw new Error(NOT_WIRED(action));
   }
 
-  throw new Error(`action 必须是 list / get / create / send / cancel / approve（收到 "${action}"）`);
+  throw new Error(
+    "action 必须是 list / get / create / send / cancel / approve（收到 " + action + "）",
+  );
 }
 
 export async function execute(input, ctx) {
   try {
     return await doExecute(input, ctx);
   } catch (e) {
-    ctx.log?.error?.(
-      "[dsh-hanako] dsh_session failed:",
-      e?.stack || e?.message || String(e),
-    );
+    // ctx 为 App apply 注入的工具上下文（见 index.js makeToolCtx：log = 统一日志文件 +
+    // 宿主 logger）；缺失时静默（防御）
+    ctx?.log?.error?.("[dsh-hanako] dsh_session failed:", e?.stack || e?.message || String(e));
     throw e;
   }
 }

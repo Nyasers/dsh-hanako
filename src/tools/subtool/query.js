@@ -11,16 +11,19 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { zstdDecompressSync } from "node:zlib";
 import { textFromMessageBlocks } from "../../lib/protocol.js";
+// App v2 数据目录（apply 注入运行包；离线兜底见 execute 注释）
+import { appDataDir } from "../../lib/app-runtime.js";
 
 const __here = dirname(fileURLToPath(import.meta.url));
-// PLUGIN_ROOT 向上查找含 manifest.json 的目录（src/tools/subtool → src/；dist/tools/subtool
-// → dist/，与 session.js/run.js 同款定位）
-let PLUGIN_ROOT = __here;
-while (!existsSync(join(PLUGIN_ROOT, "manifest.json"))) {
-  const parent = dirname(PLUGIN_ROOT);
-  if (parent === PLUGIN_ROOT)
+// APP_ROOT 向上查找含 manifest.json 的目录——源码形态（src/tools/subtool → src/）与
+// App v2 dist bundle 形态（rspack 内联进 dist/index.js，import.meta.url = dist/）都
+// 能正确定位 App 根（manifest.json 在 dist 根，与 entry 同层）
+let APP_ROOT = __here;
+while (!existsSync(join(APP_ROOT, "manifest.json"))) {
+  const parent = dirname(APP_ROOT);
+  if (parent === APP_ROOT)
     throw new Error("无法定位插件根：向上未找到 manifest.json");
-  PLUGIN_ROOT = parent;
+  APP_ROOT = parent;
 }
 
 const DEFAULT_LIMIT = 10;
@@ -261,8 +264,10 @@ async function doGet(input, ctx, g, dataDir, projSessions) {
 
 // query 操作入口（session.js 按 action=list/get 路由到本模块）：纯本地只读
 export async function execute(input, ctx) {
-  const g = globalThis.__dshHanako;
-  const dataDir = g?.dataDir || join(PLUGIN_ROOT, "data");
+  // 数据目录：App v2 权威 = ctx.dataDir（宿主 app-data/<id>/，apply 注入运行包）；
+  // v1 单例/包根 data/ 兜底只覆盖离线与旧数据导入前的只读路径（迁移接缝注释见
+  // lib/app-runtime.js appDataDir()——本刀只把读路径迁到 ctx.dataDir 语义，不做迁移）
+  const dataDir = appDataDir() || globalThis.__dshHanako?.dataDir || join(APP_ROOT, "data");
   const action = String(input.action ?? "").trim();
 
   if (action === "list") {
@@ -307,7 +312,7 @@ export async function execute(input, ctx) {
     // projcache 只在需要时读一次（get 定位 cwd-key + 元数据共用）；
     // 权限模型：sessionId 即凭证——凭 id 在 dsh-home 存在即读，不存在报错（见 doGet）。
     const projSessions = readSessionProjcache(dataDir);
-    return doGet(input, ctx, g, dataDir, projSessions);
+    return doGet(input, ctx, null, dataDir, projSessions);
   }
 
   throw new Error(`query 操作只处理 list / get（收到 "${action}"）`);

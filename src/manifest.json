@@ -2,76 +2,45 @@
   "manifestVersion": 2,
   "id": "dsh-hanako",
   "name": "DSHana",
-  "version": "1.0.0-beta.5+dsh-0.1.2-rc.1",
-  "description": "DSHana: DeepSeek Harness as a subagent for HanaAgent",
-  "author": "Nyaser",
-  "minAppVersion": "0.520.0",
-  "trust": "full-access",
-  "ui": {
-    "hostCapabilities": [
-      "clipboard.writeText"
-    ]
-  },
-  "capabilities": [
-    "resource.watch",
-    "network.fetch"
-  ],
-  "network": {
-    "allowedHosts": [
-      "127.0.0.1",
-      "localhost"
-    ],
-    "methods": [
-      "POST"
-    ],
-    "defaultTimeoutMs": 5000,
-    "maxResponseBytes": 1024
-  },
-  "activationEvents": [
-    "onStartup"
-  ],
+  "version": "2.0.0-beta.1",
+  "description": "DSHana: DeepSeek Harness as a subagent for HanaAgent (App v2, migration step 1: dsh_session list/get offline; DSH managed runtime wiring in later steps)",
   "entry": "index.js",
+  "icon": "assets/icon.png",
+  "minAppVersion": "0.930.1",
+  "capabilities": [
+    "app/tools.expose-to-model",
+    "app/tasks.manage",
+    "app/session.start-turn",
+    "app/models.infer",
+    "app/runtime.execute",
+    "app/runtime.native",
+    "app/runtime.network"
+  ],
   "contributes": {
-    "configuration": {
-      "title": "DSHana 设置",
-      "properties": {
-        "approvalTimeoutSec": {
-          "type": "number",
-          "default": 30,
-          "title": "审批超时",
-          "description": "审批超时自动拒绝（单位：秒）"
-        },
-        "defaultTimeoutSec": {
-          "type": "number",
-          "default": 1800,
-          "title": "任务超时",
-          "description": "单次任务默认超时（单位：秒）"
-        },
-        "nodejsPath": {
-          "type": "string",
-          "default": "",
-          "title": "自定义 NodeJS 路径",
-          "description": "可选，留空使用 hana-server 作为 Node 运行时，修改后需重启"
+    "settings": {
+      "title": "DSHana",
+      "schema": {
+        "properties": {
+          "approvalTimeoutSec": {
+            "type": "number",
+            "default": 30,
+            "title": "审批超时（秒）",
+            "description": "审批超时自动拒绝（单位：秒）；显式设 0 禁用自动拒绝"
+          },
+          "defaultTimeoutSec": {
+            "type": "number",
+            "default": 1800,
+            "title": "任务默认超时（秒）",
+            "description": "单次任务默认超时（单位：秒）；0 或缺失回落 600 秒"
+          },
+          "nodejsPath": {
+            "type": "string",
+            "default": "",
+            "title": "自定义 NodeJS 路径",
+            "description": "可选：DSH 受管运行时使用的 NodeJS 可执行文件绝对路径；留空使用宿主 Node；修改后需重启 DSH 生效"
+          }
         }
       }
-    },
-    "cards": [
-      {
-        "id": "dshana",
-        "title": "DSHana",
-        "route": "/main",
-        "cardForm": "flush",
-        "titlebar": "translucent",
-        "realization": "page",
-        "siteNavEntry": true
-      },
-      {
-        "id": "dshana-sidebar",
-        "title": "DSHana Sidebar",
-        "route": "/sidebar",
-        "cardForm": "flush",
-        "pageOf": "dshana"
-      }
-    ]
+    }
   }
 }
