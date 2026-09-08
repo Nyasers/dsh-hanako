@@ -26,8 +26,9 @@
 //   （T5 退役：/webui/health 与 /webui/start、/webui/install-deps、/webui/verify-deps
 //   已删除——壳页无手动入口，install/verify/start 通道收敛为自动链 + dsh_install 工具）
 //
-// 机制：与 routes/card.js 同构——宿主把 app 挂在 /api/plugins/<pluginId> 命名空间下，
-// 这里注册相对路径。渲染前按总线连接状态（g.dshanaBus.status().connected）判定 ready：已连接
+// 机制：与 routes/card.js 同构——v2 形态下宿主把相对 route app 交给 ctx.routes.register
+// 的 registrar（src/index.js apply() 内一次注册全部 handler），这里只注册相对路径；
+// base（浏览器侧绝对 URL 前缀）由入口单点注入。渲染前按总线连接状态（g.dshanaBus.status().connected）判定 ready：已连接
 // 直接渲染 iframe；未连接渲染 Bootstrap 三态自举页（T4 spec：dsh-deps-zero-intervention——
 // 壳页数据源 = 首帧内嵌 /webui/boot-state 快照（readBootState）+ /webui/events 事件流：
 // bus ready → ready 事件挂载 iframe；bus.disconnect → pending；web host 启动失败与
@@ -257,8 +258,9 @@ function buildShell({
   });
 }
 
-export default function registerWebuiRoutes(app, ctx) {
-  const base = "/api/plugins/" + ctx.pluginId;
+export default function registerWebuiRoutes(app, base) {
+  // v2 App 路由形态：registrar 收到相对 route app，base（浏览器侧绝对 URL 前缀）由入口
+  // （src/index.js routeBaseOf）单点注入；旧 ctx.pluginId 基址不再可用。
 
   // 页面（父子双卡，见文件头）：主卡 /main 与子卡 /sidebar 共用同一壳页与自举逻辑，仅
   // iframe 的 view 参数不同（/main → main 视图 = 接收端 receive；/sidebar → sidebar 视图

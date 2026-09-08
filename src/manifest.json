@@ -5,16 +5,10 @@
   "version": "1.0.0-beta.5+dsh-0.1.2-rc.1",
   "description": "DSHana: DeepSeek Harness as a subagent for HanaAgent",
   "author": "Nyaser",
-  "minAppVersion": "0.520.0",
-  "trust": "full-access",
-  "ui": {
-    "hostCapabilities": [
-      "clipboard.writeText"
-    ]
-  },
+  "icon": "icon.png",
+  "minAppVersion": "0.925.0",
   "capabilities": [
-    "resource.watch",
-    "network.fetch"
+    "app/tools.expose-to-model"
   ],
   "network": {
     "allowedHosts": [
@@ -27,31 +21,31 @@
     "defaultTimeoutMs": 5000,
     "maxResponseBytes": 1024
   },
-  "activationEvents": [
-    "onStartup"
-  ],
   "entry": "index.js",
   "contributes": {
-    "configuration": {
+    "settings": {
       "title": "DSHana 设置",
-      "properties": {
-        "approvalTimeoutSec": {
-          "type": "number",
-          "default": 30,
-          "title": "审批超时",
-          "description": "审批超时自动拒绝（单位：秒）"
-        },
-        "defaultTimeoutSec": {
-          "type": "number",
-          "default": 1800,
-          "title": "任务超时",
-          "description": "单次任务默认超时（单位：秒）"
-        },
-        "nodejsPath": {
-          "type": "string",
-          "default": "",
-          "title": "自定义 NodeJS 路径",
-          "description": "可选，留空使用 hana-server 作为 Node 运行时，修改后需重启"
+      "schema": {
+        "type": "object",
+        "properties": {
+          "approvalTimeoutSec": {
+            "type": "number",
+            "default": 30,
+            "title": "审批超时",
+            "description": "审批超时自动拒绝（单位：秒）"
+          },
+          "defaultTimeoutSec": {
+            "type": "number",
+            "default": 1800,
+            "title": "任务超时",
+            "description": "单次任务默认超时（单位：秒）"
+          },
+          "nodejsPath": {
+            "type": "string",
+            "default": "",
+            "title": "自定义 NodeJS 路径",
+            "description": "可选，留空使用 hana-server 作为 Node 运行时，修改后需重启"
+          }
         }
       }
     },

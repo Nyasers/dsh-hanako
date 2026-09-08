@@ -4,8 +4,10 @@
 // src/build.js — 主 bundle（src 域）构建入口
 // 布局：领域专用脚本随各自源码——rspack.config.mjs（本目录，配置源）与本入口放 src/，
 // 共享工具（collect/walk/terser/assert + minify/template loader）在 scripts/（根级）。
-// 产物：dist/index.js（单 bundle：生命周期+工具+lib+前端资源，内联 src/assets）
-//     + dist/routes/index.js 壳 + dist/manifest.json（src/manifest.json 复制）。
+// 产物：dist/index.js（单 bundle：v2 apply 入口 + 工具 + lib + 前端资源，内联 src/assets）
+//     + dist/manifest.json（src/manifest.json 复制）+ dist/icon.svg（v2 App icon）+ dist/skills。
+//     v2 不再生成 dist/routes/index.js 路由壳——v2 App 的路由在 apply() 内经
+//     ctx.routes.register 注册（见 src/index.js），旧宿主 routes/ 扫描面已退役。
 // 用法：node src/build.js [RSPACK_ENV=<构建环境目录>]
 // 注意：.mjs 不被 collectSource 收集（只收 .js），本文件不随 bundle 打包。
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -61,16 +63,13 @@ await new Promise((resolvePromise, reject) => {
 // 1) 静态化路径字面量回写（dist 主区）
 rewriter(join(ROOT, "dist"));
 
-// 2) routes 壳（宿主 routes/ 扫描 → import bundle 具名导出转发）
-const shell = 'import { pluginRoutes } from "../index.js";\nexport default pluginRoutes;\n';
-fs.outputFileSync(join(ROOT, "dist", "routes", "index.js"), shell, "utf8");
-console.log("route shell -> routes/index.js");
-
-// 3) src 域构件复制（→ dist 根）：manifest.json（state.js PLUGIN_ROOT 向上找 manifest
-// 即达）+ skills/（插件 SKILL 随 src 分发，描述插件工具与宿主能力）
+// 2) src 域构件复制（→ dist 根）：manifest.json + icon.png（v2 App 必需 icon，
+// 与 manifest entry 同目录）+ skills/（SKILL 随 src 分发；v2 下经 App 运行时可读区/后续
+// 接线分发，先保留复制不动）
 fs.copySync(join(ROOT, "src", "manifest.json"), join(ROOT, "dist", "manifest.json"));
+fs.copySync(join(ROOT, "src", "icon.png"), join(ROOT, "dist", "icon.png"));
 fs.copySync(join(ROOT, "src", "skills"), join(ROOT, "dist", "skills"));
-console.log("manifest.json + skills -> dist/");
+console.log("manifest.json + icon.png + skills -> dist/");
 
 // 4) 二次 terser（主区）
 await extraTerser(join(ROOT, "dist"));

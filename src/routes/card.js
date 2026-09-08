@@ -313,8 +313,9 @@ function readOp({ sessionId, rpcId, timeoutMs }, includeFull) {
   return snap;
 }
 
-export default function registerCardRoutes(app, ctx) {
-  const base = "/api/plugins/" + ctx.pluginId;
+export default function registerCardRoutes(app, base) {
+  // v2 App 路由形态：registrar 收到相对 route app，base（浏览器侧绝对 URL 前缀）由入口
+  // （src/index.js routeBaseOf）单点注入；旧 ctx.pluginId 基址不再可用。
 
   // 卡片页（iframe 内容）：sessionId+rpcId（重启恢复定位；op Map 退役后仅此可定位）
   app.get("/card/op", (c) => {
