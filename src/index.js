@@ -47,9 +47,11 @@ import { join, dirname } from "node:path";
 import { archiveOldLogs, nextTimestampLogPath } from "./lib/log-archive.js";
 // App v2 运行包持有者（替代 v1 globalThis 单例，见 lib/app-runtime.js 头注释）
 import { initAppRuntime } from "./lib/app-runtime.js";
-// 受管 DSH runtime 启动封装（迁移步骤 2 落位；本步 apply 不启动，disposer 负责收尾，
-// create/send 等触发点在 tools/session.js 步骤 3 接线桩——见该文件头注释）
-import { disposeManagedRuntime } from "./lib/managed-runtime.js";
+// 受管 DSH runtime 启动封装（迁移步骤 2 落位；disposer 负责收尾。启动触发：工具首调
+// 兜底（tools/session.js 接线桩）+ **apply 级自动链**（注册完成即后台拉起受管 runtime，
+// 语义回归 v1「插件加载即自动 boot」——壳页打开时通常已 ready/starting，无需手动按钮；
+// single-flight 幂等，已就绪不重复启动）
+import { disposeManagedRuntime, ensureManagedRuntime } from "./lib/managed-runtime.js";
 // 工具模块（导出 name/description/parameters/execute；v2 无自动 pluginId_ 前缀——
 // 工具名即注册名，注册策略与命名决策见 tools/session.js 头注释）
 import * as dshSession from "./tools/session.js";
@@ -179,6 +181,26 @@ export function apply(ctx) {
     }
   } else {
     log("warn", "ctx.routes.register 缺失（宿主低于 0.930.1？）：壳页诊断面不可用，DSH Web UI 仅经 dsh_session 使用");
+  }
+
+  // ---- apply 级自动链：注册完成即后台拉起受管 DSH runtime（不 await，不阻塞 apply 返回）----
+  // 语义回归 v1「插件加载即自动 boot」（v1 activationEvents onStartup → webui 自动链）。
+  // v2 无 activationEvents，apply 即宿主加载本 App 的时机：注册完工具/路由后触发一次
+  // ensureManagedRuntime（single-flight 幂等：已 starting/ready 时 no-op 共享同一启动）。
+  // 首次启动含依赖安装（pnpm install 到 dataDir/runtime）可能耗时数分钟——fire-and-forget，
+  // 状态经 boot-state 由壳页轮询展示（starting 日志滚动）；失败不 crash apply，落在 runtime
+  // 状态机（phase=error + userText），壳页展示重试指引，dsh_session 首调仍可再触发。
+  // ⚠️ 依赖 app/process.spawn capability（宿主 ledger 授予后 App/受管 runtime 进程才带
+  // --allow-child-process，pnpm install 才能 spawn node）；未授予时 ensure 报 deps-io。
+  {
+    try {
+      ensureManagedRuntime({}).catch((e) => {
+        log("warn", "apply 自动链启动 DSH runtime 失败（状态经 boot-state 展示，可手动重试）：" + ((e && e.message) || e));
+      });
+      log("info", "apply 自动链：已触发 ensureManagedRuntime（受管 DSH runtime 后台拉起，single-flight）");
+    } catch (e) {
+      log("warn", "apply 自动链触发异常（忽略，继续返回 disposer）：" + ((e && e.message) || e));
+    }
   }
 
   // 返回 disposer：卸载/重载清理（步骤 2 起：停止受管 DSH runtime——若已启动；幂等）

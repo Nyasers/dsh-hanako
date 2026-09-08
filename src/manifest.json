@@ -2,7 +2,7 @@
   "manifestVersion": 2,
   "id": "dsh-hanako",
   "name": "DSHana",
-  "version": "2.0.0-beta.2",
+  "version": "2.0.0-beta.3",
   "description": "DSHana: DeepSeek Harness as a subagent for HanaAgent (App v2, migration step 4b/5: routes shell (boot-state/health/start/stop) + cards/ui shell pages over host runtime-service proxy prefix + legacy data migration tooling; step 4a cancel/approve; step 3 provider over ctx.models; list/get offline)",
   "entry": "index.js",
   "icon": "assets/icon.png",
@@ -14,7 +14,8 @@
     "app/models.infer",
     "app/runtime.execute",
     "app/runtime.native",
-    "app/runtime.network"
+    "app/runtime.network",
+    "app/process.spawn"
   ],
   "network": {
     "allowedHosts": ["127.0.0.1"],
@@ -40,7 +41,8 @@
         "description": "DSHana 侧栏卡：挂在 dshana 页（pageOf）上的状态摘要视图（复用 boot-state 轮询 + DSH Web UI sidebar 视图）。",
         "route": "/dshana/sidebar.html",
         "cardForm": "flush",
-        "pageOf": "dshana"
+        "pageOf": "dshana",
+        "functionPanel": { "id": "dshana-sidebar-panel", "label": "DSHana 状态" }
       }
     ],
     "settings": {
