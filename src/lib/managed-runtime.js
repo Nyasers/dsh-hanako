@@ -22,7 +22,14 @@
 // 参数契约（与 src/runtime/options.js 对偶；增删需两处同步 + tests/）：
 //   --hana-task-id/--port/--data-dir/--cordis-src/--deps-root/--ready-marker/--no-ensure
 //   buildRuntimeArgs() 是本模块对子进程唯一的参数来源。
+import { join } from "node:path";
 import { appConfig, appDataDir, appLogger, getAppRuntime } from "./app-runtime.js";
+import { PLUGIN_ROOT } from "./state.js";
+// App 进程侧依赖 ensure（v2 架构实证：受管 runtime 进程在宿主 win32-restricted-token
+// 沙箱内无法 spawn（deps-io EPERM exit=4）；App 进程经 app/process.spawn 授权带
+// --allow-child-process 是唯一可 spawn 的进程——依赖安装在此执行）。ensure-deps.js
+// 只依赖 node 内置 + lib/pnpm.js + lib/state.js，可安全进主 bundle。
+import { ensureDeps } from "../runtime/ensure-deps.js";
 
 export const READY_MARKER = "DSH_READY";
 export const RUNTIME_ENTRY = "runtime/dsh-host.mjs"; // 相对 App 安装目录（宿主校验在安装/数据目录内）
@@ -223,6 +230,47 @@ async function doStartManaged(opts) {
   if (!dataDir) throw new Error("managed-runtime: ctx.dataDir 缺失");
   const port = parseServicePort(appConfig("servicePort"));
   logApp("info", "[managed-runtime] 启动 DSH 受管 runtime（entry=runtime/dsh-host.mjs port=" + port + "）");
+
+  // ---- App 进程侧依赖 ensure（runtime 沙箱无法 spawn，见模块头）----
+  // opts.noEnsure = 跳过（预置 depsRoot 调试/离线场景，直接 start）；默认在此 ensure：
+  // pnpm install 到 dataDir/runtime（App 进程有 --allow-child-process，唯一可 spawn 者）。
+  // runtime 进程恒以 --no-ensure 启动（只 boot 不 spawn——沙箱内 ensure 必 EPERM）。
+  if (!opts.noEnsure) {
+    const runtimeDir = join(dataDir, "runtime");
+    const depsRoot = typeof opts.depsRoot === "string" && opts.depsRoot ? opts.depsRoot : join(runtimeDir, "node_modules");
+    logApp("info", "[managed-runtime] deps ensure（App 进程，spawn 授权面）：installRoot=" + PLUGIN_ROOT);
+    let ensured;
+    try {
+      ensured = await ensureDeps({
+        dataDir,
+        installRoot: PLUGIN_ROOT, // App 安装根（只读，含 runtime 三件套声明）
+        runtimeDir,
+        depsRoot,
+        noEnsure: false,
+        log: (s) => logApp("info", "[managed-runtime] " + s),
+      });
+    } catch (e) {
+      const text = (e && e.message) || String(e);
+      logApp("error", "[managed-runtime] deps ensure 异常：" + text);
+      const err = new Error("DSH 依赖 ensure 异常：" + text);
+      err.code = "deps-unknown";
+      throw err;
+    }
+    if (ensured.status === "error") {
+      const text = ensured.message || "";
+      const hint = ensured.kind === "io"
+        ? " 依赖安装无法启动子进程：请确认宿主已授予本 App app/process.spawn 能力（Settings → Security → App capabilities，授予后需重载 App 生效）。"
+        : ensured.kind === "network"
+          ? " 首次安装需要网络（registry.npmjs.org）。"
+          : "";
+      const err = new Error("DSH 依赖 ensure 失败（kind=" + ensured.kind + "）：" + text + hint);
+      err.code = "deps-" + ensured.kind;
+      logApp("error", "[managed-runtime] deps ensure 失败 kind=" + ensured.kind);
+      throw err;
+    }
+    logApp("info", "[managed-runtime] deps 就绪：" + (ensured.status === "present" ? "幂等命中（dsh@" + ensured.dsh + "）" : "本次安装完成（dsh@" + ensured.dsh + "）"));
+  }
+
   // cordisSrc 默认不传：子进程按自身入口位置推导 <installRoot>/cordis（App 安装只读，
   // 从 App 侧算 installRoot 反而脆弱）。调试/预置场景可显式传 depsRoot/cordisSrc 覆盖。
   const args = buildRuntimeArgs({
@@ -231,7 +279,7 @@ async function doStartManaged(opts) {
     dataDir,
     cordisSrc: typeof opts.cordisSrc === "string" && opts.cordisSrc ? opts.cordisSrc : undefined,
     depsRoot: typeof opts.depsRoot === "string" && opts.depsRoot ? opts.depsRoot : undefined,
-    noEnsure: opts.noEnsure || false,
+    noEnsure: true, // runtime 进程恒不 ensure（沙箱无法 spawn；依赖由 App 进程 ensure 保证）
   });
   const input = {
     runtime: "node",
