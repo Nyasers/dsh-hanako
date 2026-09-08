@@ -104,6 +104,26 @@ DSH 设置页「DSHana 设置」分页（settings.section slot，id `dshana-sett
 - 数据读路径迁到 `ctx.dataDir`（宿主 `app-data/<id>/`）：list/get 读 `<dataDir>/dsh-home/...`（projcache + jsonl zstd）；旧插件数据迁移只留接缝（`lib/app-runtime.js appDataDir` 注释），本步骤不做迁移脚本。
 - 构建：`node src/build.js` 产物 `dist/` = App 安装目录形态（根 `manifest.json` + `index.js` + `assets/icon.png` + `skills/`）；v1 的 `dist/routes/` 壳不再生成。
 
-**遗留（后续步骤收口）：**
+**已落地（步骤 2：DSH 迁入 App 受管 Node runtime，native/external + readyMarker 就绪门）：**
 
-- DSH 受管运行时（`ctx.runtime.start` + `connectAppRuntime` + Hana task/模型/审批映射）、`ctx.routes.register` + UI/cards、provider adapter 重写（`ctx.models`）、依赖部署决策（DSH node_modules 随包 vs dataDir）、`runtime/`/`ui/` 目录归位、syncver 联动 cordis 包版本、旧插件数据迁移脚本。
+- 受管 runtime 入口 `runtime/dsh-host.mjs`（源码 `src/runtime/`，rspack → `dist/runtime/dsh-host.mjs`，见 `src/runtime/rspack.config.mjs`）：App 自有参数解析（`--port/--data-dir/--hana-task-id/--deps-root/--cordis-src/--ready-marker/--no-ensure`，与 `src/lib/managed-runtime.js buildRuntimeArgs()` 对偶）→ `connectAppRuntime()`（无父 IPC fd → 可操作报错 + 退出码 3，不假装能跑）→ 进程级 env（`DSH_HOME=<dataDir>/dsh-home`、`DSHANA_ROOT=<dataDir>/runtime`、`DSHANA_HOME=<dataDir>`，不改宿主进程环境）→ 依赖 ensure → profile 种子化（`initProfile` + `node_modules/@dsh-hanako` scope 链接 → installDir `cordis/`，junction/拷贝回退）→ 动态定位 DSH（`locate.js`，profile-boot/app-boot，webpackIgnore 原生 import）→ `runProfile`（profile dshana、显式端口、`--no-open`）→ **就绪门**（webServer 服务端口 === 期望端口 且 HTTP 探测成功）→ stdout 打 `readyMarker`（唯一出口；失败路径绝不打印 READY）→ SIGTERM/SIGINT/父断连有序释放（关 DSH fiber → 再 `hana.close()`；拿到流式响应不能立刻 close，本步未接流）。退出码契约：2=usage/3=IPC 不可用/4=deps/5=seed/6=boot/7=port。
+- App 侧封装 `src/lib/managed-runtime.js`：`ensureManagedRuntime()`（单例 single-flight：**一个 App runtime 服务多个 DSH 会话**，首次 create 触发启动——设计见模块头注释与 tools/session.js 接线桩）解析 servicePort（manifest `servicePort` 设置，默认 4317）→ `ctx.runtime.start({ runtime:"node", entry:"runtime/dsh-host.mjs", profile:"native", network:"external", service:{ port, readyMarker:"DSH_READY" }, writeRoots/readRoots:[dataDir], args })` → `ctx.runtime.get` 轮询到 ready（不能把 runtimeId 当就绪）→ 失败归类（`err.code`：port-busy/deps/seed/boot-failed/not-authorized/timeout/unknown，message 带用户指引）+ runtime watch 日志尽力镜像（src=dsht 进 App 会话日志）；`disposeManagedRuntime()`/`stopManagedRuntime()`（App 卸载/更新前停 runtime，Windows .node 锁纪律）；`parseServicePort`/`buildRuntimeArgs`/`classifyRuntimeFailure` 纯函数可单测。
+- `src/tools/session.js`：create/send/cancel/approve 的「未接线」错误保留，分支前补步骤 3 接线桩注释（ensureManagedRuntime 调用形态 + taskId/映射/取消链落点）；list/get 仍离线可读。`src/index.js` disposer 接 disposeManagedRuntime。
+- manifest 增 `contributes.settings.servicePort`（integer，默认 4317，显式端口契约禁 0）；`src/build.js` 增 runtime bundle 编译（先主 bundle 清 dist，再追加 runtime/，再做 URL 回写/terser/断言）。
+- 单测 `tests/*.test.mjs`（node --test）：child options parse、managed-runtime 端口/参数/错误归类、ensure-deps 声明/版本/marker 纯函数。本地验证：`node src/build.js` 通过；`node dist/runtime/dsh-host.mjs` 直跑给出清晰报错（无父 IPC / 缺参）。真机 AppHost 启动验证待装包后做（见交付物注释「已测/未测边界」）。
+
+**依赖部署（v2）（决策，步骤 2 落定——「随包 vs dataDir 安装区 vs 混合」）**
+
+- **结论：dataDir 安装区（`<dataDir>/runtime/`，首启 pnpm 安装）+ 版本随包声明，无独立 DSH 升级通道（升级 dsh = App 发版，与 v1「声明单一事实源」语义一致）。**
+- 依据：① App installDir（宿主 `<HANA_HOME>/apps/<appId>`）只读（实测：App 进程 fs-write 白名单只有 dataDir），v1「pnpm install --prod 进插件根 node_modules」物理不可行；② 一份 App 产物要跨 Windows/macOS/Linux，native 产物（node-pty/koffi/sharp 等）按平台/ABI 由 pnpm 在目标机解析，随包单份 ZIP 无法同时携带三平台 addon（逐平台打包破坏单产物约束）；③ 实测体量：`node_modules` 全量 312MB（含构建 devDeps）、`@deepseek-ai` 闭包 ~25MB、含非 scope 运行时依赖整体 ~100-200MB——进 App ZIP 不现实。
+- 布局（固定路径 + 覆盖，无版本目录；`ensure-deps.js`）：`app-data/dsh-hanako/runtime/{package.json, pnpm-workspace.yaml, pnpm-lock.yaml}`（installDir 三件套覆盖，随 App 发版）→ `node_modules/`（pnpm install --prod --frozen-lockfile 产物，depsRoot 默认指向）→ `.runtime-ok`（幂等标记 {manifest:{dsh,cordis},at}，声明版本变化即重装）。pnpm 引导复用 v1 `src/lib/pnpm.js`（单文件 pnpm.mjs 下载 + sha512 + worker，缓存 dataDir/pnpm-dist）；node 代理（runtime/node.cmd → process.execPath）+ PATH 前缀让 koffi/node-pty install script 找到解释器（v1 T7d 同款）。
+- 解析：`dsh-host.mjs` 经显式路径定位 depsRoot（`ensure-deps.js`/`locate.js`，与 v1 loadInprocDsh 同款 createRequire + .pnpm 枚举 + webpackIgnore 原生 import）；profile boot 的模块回退 farm（dsh-app-boot `healProfilesModuleFallback`，把 dsh 安装闭包镜像成 `$DSH_HOME/profiles/node_modules` 链接）自动覆盖官方插件树解析；`@dsh-hanako/*`（cordis 产物随包 installDir `cordis/`，只读可读）经 profile `node_modules/@dsh-hanako` scope 链接（junction 指向只读目录可读；App 更新换目录后漂移由种子化自愈重建，失败回退整体拷贝）。
+- Windows native 文件锁与停止更新约束（指南 §4）：依赖变更重装前必须先停占用 .node 的 DSH 进程/worker/终端——受管形态下 DSH 只跑在单例 runtime（App 可控 stop），ensure 发生在「旧 runtime 已停/未起」的启动前窗口；App 卸载/更新/停止统一先 `ctx.runtime.stop`。随包方案更新会整体替换 installDir（同样受锁约束且 ZIP 重），故未采用。
+- 已测/未测边界：版本比对/marker/拷贝三件套/参数构造已单测；pnpm 网络安装路径（首次真实 AppHost 运行）未在本刀本地跑通（无网络），代码路径与 v1 同源（pnpm.js），真机装包后由主上下文验证。
+
+**遗留（步骤 3+ 收口）：**
+
+- 步骤 3：provider adapter 重写（`ctx.models`，NDJSON + done.assistant 签名回放）、create/send 业务回投（经 tools/session.js 接线桩调 `ensureManagedRuntime` + `ctx.tasks.create` + taskId↔dsh sessionId 映射落 `ctx.storage.agent`）。
+- 步骤 4：审批/取消链（Hana task canceled/aborted 观察 → DSH session.cancel、approval 映射与 watch SSE 对账）、重启恢复、工作区写授权按 task/session scope 解析（runtime writeRoots 目前只有 dataDir）。
+- 步骤 4/5：`ctx.routes.register` + UI/cards/`ui/` 静态树（受管服务代理前缀 `/api/apps/<appId>/routes/_runtime/<runtimeId>/`）、activation on-demand、syncver 联动 cordis 包版本、pack.mjs 的 cordis 版本断言适配 v2 版本域、旧插件数据迁移脚本。
+

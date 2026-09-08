@@ -121,16 +121,34 @@ export const parameters = {
 // 权限 ledger + 后续步骤的 hooks/tasks 审批链；步骤 1 注册时不再携带该字段，留待 create/
 // send 等外效 action 真正接线时按宿主 0.930.1 契约重新声明。见 src/index.js apply 注释。
 
-// 步骤 1 未接线 action 的统一错误文案（让 Agent 明确知道阻塞在迁移步骤 2，而不是
-// 参数/权限问题；字段校验在错误之后不再执行，避免误导性提示）
+// 未接线 action 的统一错误文案（让 Agent 明确知道阻塞在迁移步骤 3 业务接线，而不是
+// 参数/权限问题）。迁移步骤 2（本刀）已把受管启动封装就位（src/lib/managed-runtime.js
+// ensureManagedRuntime：ctx.runtime.start + 轮询等到 ready），下方 create/send/cancel/
+// approve 分支是步骤 3 的接线点——届时先经 ensureManagedRuntime 取单例 runtime 再走
+// Hana task/会话映射，参数与返回语义不变；本阶段仍只允许 list/get 离线使用。
 const NOT_WIRED = (action) =>
   "action=" +
   action +
-  " 依赖 DSH 受管运行时（App v2 迁移步骤 2 接线：ctx.runtime.start 启动 DSH + " +
-  "connectAppRuntime + Hana task 映射），当前骨架尚未启动 DSH——本阶段仅 list/get 可" +
+  " 依赖 DSH 受管运行时业务接线（App v2 迁移步骤 3：ensureManagedRuntime 已就绪 + " +
+  "connectAppRuntime + Hana task 映射），当前骨架尚未接通业务回投——本阶段仅 list/get 可" +
   "离线使用（读 App dataDir 的 dsh-home），create/send/cancel/approve 将在后续迁移步" +
   "骤接通，届时参数与返回语义不变";
 
+// ---- 迁移步骤 3 接线桩（本刀已落受管启动封装，见 src/lib/managed-runtime.js）----
+// create/send/cancel/approve 真正接线时的统一前置（替换下方 throw 的接线形态）：
+//   import { ensureManagedRuntime, stopManagedRuntime } from "../lib/managed-runtime.js";
+//   // ① 启动（首次 create 触发；单例，多 DSH 会话共享——设计见 managed-runtime.js 头注释）：
+//   //    const { runtimeId } = await ensureManagedRuntime({ taskId });
+//   //    —— 内部 ctx.runtime.start({ runtime: "node", entry: "runtime/dsh-host.mjs",
+//   //    profile: "native", network: "external", service: { port, readyMarker: "DSH_READY" },
+//   //    args: buildRuntimeArgs(...) }) 并轮询 ctx.runtime.get 到 state=ready（含依赖
+//   //    ensure + DSH boot；首次可能数分钟，日志见 App 会话日志 src=dsht）。
+//   // ② runtime 就绪后：DSH 侧任务由子进程内 @dsh-hanako/* 经 connectAppRuntime 直连
+//   //    宿主 tasks/models（不经 App 中转）；App 侧负责 ctx.tasks.create 绑定来源会话，
+//   //    映射落 ctx.storage.agent（taskId ↔ dsh sessionId / rpcId）。
+//   // ③ 取消/审批链在迁移步骤 4（观察 Hana task canceled/aborted → DSH session.cancel）。
+//   // 失败归类：ensureManagedRuntime 抛错 err.code ∈ port-busy/deps/seed/boot-failed/
+//   //   not-authorized/timeout/unknown（message 含用户指引），直接作为工具错误抛出即可。
 async function doExecute(input, ctx) {
   const action = String(input.action ?? "").trim();
 
@@ -141,8 +159,8 @@ async function doExecute(input, ctx) {
   }
 
   if (action === "create" || action === "send") {
-    // 迁移步骤 2+ 接线前，create/send 不落地（v1 的 run subtool 提交链路依赖进程内
-    // web host 与宿主总线，不能原样跨到 App 隔离进程）
+    // 迁移步骤 3 接线前，create/send 不落地（v1 的 run subtool 提交链路依赖进程内
+    // web host 与宿主总线，不能原样跨到 App 隔离进程；受管启动封装已就绪见上方桩注释）
     throw new Error(NOT_WIRED(action));
   }
 

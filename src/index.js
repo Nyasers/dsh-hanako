@@ -23,27 +23,32 @@
 //     ui/ 卡片贡献；本步骤不注册，rspack 也不再把它们打进 bundle）
 //
 // 启动触发模型（v2 无 activationEvents/onStartup，指南 §3/§11）：
-// 本步骤（骨架）不启动 DSH——apply 只注册工具/设置并返回。后续步骤的 DSH 受管运行时
-// 采用「工具首调兜底 + 需要时自启」模型：dsh_session 的 create/send/cancel/approve
-// 首调时若 DSH runtime 未就绪则触发启动（ctx.runtime.start → watch 就绪 → 注册调用）；
-// list/get 纯本地读永远可用，不依赖 DSH 启动。稳定后再启用 manifest activation 的
-// on-demand 模式（静态工具声明 + 首用启动）。本刀不实现该启动逻辑，只在工具分派处
-// 给出明确的「未接线」错误（见 tools/session.js）。
+// apply 不启动 DSH——只注册工具/设置并返回。DSH 受管运行时采用「工具首调兜底 + 需要时
+// 自启」模型：dsh_session 的 create/send/cancel/approve 首调时若 DSH runtime 未就绪则
+// 触发启动（ctx.runtime.start → 轮询 get 到 ready → 注册调用）；list/get 纯本地读永远
+// 可用，不依赖 DSH 启动。稳定后再启用 manifest activation 的 on-demand 模式。步骤 2
+// 已把启动封装落位（lib/managed-runtime.js ensureManagedRuntime 单例），步骤 3 在
+// tools/session.js 的接线桩处接入。
 //
 // 设置读取纪律（指南 §4）：contributes.settings 在 apply() 完成后才由宿主登记，apply
 // 顶层不得依赖 ctx.config.get 已可读；工具执行期（apply 已返回）经运行包 readConfig
 // 安全读取（ctx.config.get + schema 默认值回填，失败返回 undefined）。
 //
-// 依赖部署策略（DSH 依赖随包 vs 装 dataDir）：这是迁移决策点，本刀不定死。manifest
-// 的 icon/skills 位于安装目录（只读）；DSH node_modules 将来要么打进包（dist/
-// runtime/… 随包部署）要么装 App dataDir。相关假设已在 manifest.json、build.js 注释
-// 标注，步骤 2 收口。
+// 依赖部署策略（迁移步骤 2 定案，见 DESIGN「依赖部署（v2）」）：DSH 依赖（@deepseek-ai/dsh
+// + cordis + dsh-* 官方插件树 + 平台原生产物）装在 App dataDir 安装区 <dataDir>/runtime/
+// （首启 pnpm install，installDir 只读不可写），版本随 App 声明（package.json dependencies
+// 单一事实源，无独立升级通道）；cordis 产物（@dsh-hanako/*）随包在安装目录 cordis/，
+// profile 经 junction 链接（见 src/runtime/seed.js）。本刀受管子进程入口 = runtime/
+// dsh-host.mjs（dist 构建产物，见 src/build.js 与 src/runtime/）。
 import { mkdirSync, appendFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 // 日志生命周期（v1 同源复用：旧日志 zstd 压缩归档 + 时间戳日志文件命名）
 import { archiveOldLogs, nextTimestampLogPath } from "./lib/log-archive.js";
 // App v2 运行包持有者（替代 v1 globalThis 单例，见 lib/app-runtime.js 头注释）
 import { initAppRuntime } from "./lib/app-runtime.js";
+// 受管 DSH runtime 启动封装（迁移步骤 2 落位；本步 apply 不启动，disposer 负责收尾，
+// create/send 等触发点在 tools/session.js 步骤 3 接线桩——见该文件头注释）
+import { disposeManagedRuntime } from "./lib/managed-runtime.js";
 // 工具模块（导出 name/description/parameters/execute；v2 无自动 pluginId_ 前缀——
 // 工具名即注册名，注册策略与命名决策见 tools/session.js 头注释）
 import * as dshSession from "./tools/session.js";
@@ -98,7 +103,7 @@ export function apply(ctx) {
   const appendLog = (src, chunk) => appendLogLine(logPath, src, chunk);
   if (archivedName) appendLog("hana", `日志归档：${archivedName}（上一 App 会话）`);
   if (compressed > 0) appendLog("hana", `旧日志压缩：${compressed} 个`);
-  appendLog("hana", "app apply（App v2 会话开始，migration step 1）");
+  appendLog("hana", "app apply（App v2 会话开始，migration step 2：受管 runtime 封装就位）");
 
   // ---- 宿主日志器（ctx.logger：debug/info/warn/error）+ 运行包 ----
   const logger = ctx.logger || null;
@@ -148,13 +153,22 @@ export function apply(ctx) {
   });
   log("info", `工具注册:${dshSession.name}（ctx.tools.register，v2 全局唯一名，无自动前缀）`);
 
-  // 返回 disposer：卸载/重载清理（步骤 1 无长活服务；未来在此停止 DSH runtime/流/任务）
+  // 返回 disposer：卸载/重载清理（步骤 2 起：停止受管 DSH runtime——若已启动；幂等）
   let disposed = false;
   return () => {
     if (disposed) return;
     disposed = true;
     try { if (typeof unregisterTool === "function") unregisterTool(); } catch { /* 忽略 */ }
-    appendLog("hana", "app apply disposer：工具注销完成（DSH 受管运行时接线见迁移步骤 2+）");
+    // 受管 runtime 收尾：停 runtime + 清单例（Windows 依赖更新/App 卸载前须先停，见
+    // managed-runtime.js 与 DESIGN「依赖部署（v2）」锁纪律）。disposer 可异步不等待宿主。
+    try {
+      disposeManagedRuntime().catch((e) => {
+        appendLog("hana", "disposer 停止 DSH runtime 失败：" + ((e && e.message) || e));
+      });
+    } catch (e) {
+      appendLog("hana", "disposer 停止 DSH runtime 异常：" + ((e && e.message) || e));
+    }
+    appendLog("hana", "app apply disposer：工具注销 + DSH 受管 runtime 收尾完成");
   };
 }
 

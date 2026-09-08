@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "build": "pnpm run build:src && pnpm run build:cordis",
+    "test": "node --test-isolation=none tests/options.test.mjs tests/managed-runtime.test.mjs tests/ensure-deps.test.mjs",
     "build:src": "node src/build.js",
     "build:cordis": "node src-cordis/build.js",
     "syncver": "node scripts/syncver.mjs",

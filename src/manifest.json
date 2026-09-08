@@ -3,7 +3,7 @@
   "id": "dsh-hanako",
   "name": "DSHana",
   "version": "2.0.0-beta.1",
-  "description": "DSHana: DeepSeek Harness as a subagent for HanaAgent (App v2, migration step 1: dsh_session list/get offline; DSH managed runtime wiring in later steps)",
+  "description": "DSHana: DeepSeek Harness as a subagent for HanaAgent (App v2, migration step 2: managed DSH runtime entry + startup wrapper in place; dsh_session list/get offline, create/send/cancel/approve business wiring in step 3)",
   "entry": "index.js",
   "icon": "assets/icon.png",
   "minAppVersion": "0.930.1",
@@ -38,6 +38,14 @@
             "default": "",
             "title": "自定义 NodeJS 路径",
             "description": "可选：DSH 受管运行时使用的 NodeJS 可执行文件绝对路径；留空使用宿主 Node；修改后需重启 DSH 生效"
+          },
+          "servicePort": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535,
+            "default": 4317,
+            "title": "DSH 本地服务端口",
+            "description": "DSH Web 服务监听的显式本地端口（迁移指南 §10 显式端口契约，禁 0/随机）。被占用时 DSH 启动失败（runtime 状态 failed），改此值或释放端口后重试。多 App/多实例需各自不同端口"
           }
         }
       }

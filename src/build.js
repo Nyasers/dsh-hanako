@@ -9,7 +9,9 @@
 //   index.js            rspack 单 bundle（入口具名导出 apply + default.apply）
 //   assets/icon.png     App 身份图标（manifest.icon 指向的包内真实图片）
 //   skills/             App skills（dsh-hanako / dsh-session，SKILL.md 随包分发）
-//   （runtime/、ui/ 等目录在后续迁移步骤按需归位——DSH 受管进程入口与 UI 资产）
+//   runtime/dsh-host.mjs  受管 Node runtime 入口（migration step 2；见 src/runtime/；
+//                         cordis/ 产物由 build:cordis 另产出 dist/cordis，随包分发）
+//   （ui/ 静态树在后续步骤归位——Web UI 迁移）
 // v1 遗留变化：不再生成 dist/routes/index.js 壳（v1 宿主按 routes/ 目录扫描具名导出
 // pluginRoutes；v2 路由走 ctx.routes.register 单 route app，宿主不扫 dist 目录）。
 // 用法：node src/build.js [RSPACK_ENV=<构建环境目录>]
@@ -19,6 +21,7 @@ import { dirname, join } from "node:path";
 
 import fs from "fs-extra";
 import config from "./rspack.config.mjs"; // 同目录（src 域配置随源码）
+import runtimeConfig from "./runtime/rspack.config.mjs"; // runtime/ 域（受管 runtime 入口）
 import {
   collectSource,
   makeUrlRewriter,
@@ -53,17 +56,26 @@ const rspack = rspackPkg.rspack ?? rspackPkg.default?.rspack;
 // src 域源码收集（供 URL 回写）
 const rewriter = makeUrlRewriter(collectSource(join(ROOT, "src")));
 
-// 主 bundle 编译（rspack output.clean 清空 dist 后写入 dist/index.js）
-const compiler = rspack(config);
-await new Promise((resolvePromise, reject) => {
-  compiler.run((err, stats) => {
-    compiler.close(() => { });
-    if (err) return reject(err);
-    if (stats?.hasErrors()) return reject(new Error(stats.toString({ errors: true })));
-    console.log(stats?.toString({ colors: true, chunks: false, modules: false, assets: true }));
-    resolvePromise();
+// 单 compiler 编译封装（rspack 一次 run/close；stats 报错即 reject）
+async function compile(cfg, label) {
+  const compiler = rspack(cfg);
+  await new Promise((resolvePromise, reject) => {
+    compiler.run((err, stats) => {
+      compiler.close(() => { });
+      if (err) return reject(err);
+      if (stats?.hasErrors()) return reject(new Error(label + "：" + stats.toString({ errors: true })));
+      console.log(stats?.toString({ colors: true, chunks: false, modules: false, assets: true }));
+      resolvePromise();
+    });
   });
-});
+}
+
+// 主 bundle 编译（rspack output.clean 清空 dist 后写入 dist/index.js）
+await compile(config, "build:src 主 bundle");
+
+// 受管 runtime 入口编译（dist/runtime/dsh-host.mjs；clean:false 只追加，见 config 头注释）
+await compile(runtimeConfig, "build:src runtime bundle");
+console.log("runtime bundle -> dist/runtime/dsh-host.mjs（受管 runtime 入口，migration step 2）");
 
 // 1) 静态化路径字面量回写（dist 主区）
 rewriter(DIST_DIR);
@@ -72,8 +84,8 @@ rewriter(DIST_DIR);
 fs.copySync(join(ROOT, "src", "manifest.json"), join(DIST_DIR, "manifest.json"));
 fs.copySync(join(ROOT, "src", "skills"), join(DIST_DIR, "skills"));
 // App 图标：src/assets/icon.png 为唯一规范源（manifest.icon "assets/icon.png"）；
-// 依赖部署（DSH node_modules 随包 vs dataDir）未定案，后续步骤决定 assets/ 是否并入
-// runtime/ 目录一并打包（届时 icon 路径不变，仍相对 App 安装根）。
+// 依赖部署（migration step 2 定案，见 DESIGN「依赖部署（v2）」）：DSH 依赖不随 dist 打包
+// （dataDir runtime/ 安装区，首启 pnpm 安装）；dist 保持轻量壳 + cordis 产物。
 const iconSrc = join(ROOT, "src", "assets", "icon.png");
 if (!fs.pathExistsSync(iconSrc))
   throw new Error("App 图标缺失（src/assets/icon.png）：manifest.icon 指向 assets/icon.png，需真实可解码图片");
