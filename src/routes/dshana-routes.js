@@ -17,7 +17,8 @@
 //     src/lib/boot-state.js 头注释与 DESIGN「步骤 4b/5 收口」）。
 //
 // 端点（本 App 私有，路径段前缀 dshana）：
-//   GET  /dshana/boot-state  归一化 boot 快照（idle/starting/ready/error + 文案）——壳页轮询
+//   GET  /dshana/boot-state  归一化 boot 快照（idle/starting/ready/error + 文案 +
+//                            logTail/logPath 会话日志尾）——壳页轮询
 //   GET  /dshana/health      存活/连通自检（壳页用于判断「路由面可达」与 surface 授权）
 //   POST /dshana/start       手动触发受管 runtime 启动（v2 无自动链 UI；fire-and-forget，
 //                            立刻 202 返回，壳页轮询 boot-state 跟进；已就绪/启动中幂等）
@@ -25,11 +26,64 @@
 //
 // 依赖注入（可测性）：deps = { appId, version, getSnapshot(), start(), stop(), log() }。
 // 默认实现经 src/lib/managed-runtime.js 读取真实单例；测试注入 fake。
+import { readdirSync, readFileSync, openSync, readSync, statSync, closeSync } from "node:fs";
+import { join } from "node:path";
+
+/**
+ * 挂路由（registrar 回调体）。app 为宿主传入的 Hono sub-app（duck-typed）。
+ * deps 缺省时用 defaultDshanaRouteDeps(null)——单测请显式传 fake。
+ */
 export const DASHANA_ROUTE_PREFIX = "/dshana";
 
 /** 默认依赖实现（读 App 运行包 + 受管 runtime 单例；模块级状态在 App 进程内共享）。 */
 import { managedRuntimeDetails, ensureManagedRuntime, stopManagedRuntime } from "../lib/managed-runtime.js";
 import { buildBootSnapshot, APP_ID } from "../lib/boot-state.js";
+
+/**
+ * 读取 App dataDir/logs 最新会话日志尾部（壳页 starting 态滚动展示 runtime 启动/依赖
+ * ensure 过程镜像）。只读、失败静默（{ logPath: null, logTail: [] }），不阻塞状态面。
+ */
+export function readLatestLogTail(dataDir, { maxLines = 40, tailBytes = 256 * 1024 } = {}) {
+  const empty = { logPath: null, logTail: [] };
+  try {
+    if (!dataDir) return empty;
+    const logsDir = join(dataDir, "logs");
+    let names;
+    try {
+      names = readdirSync(logsDir).filter((n) => typeof n === "string" && n.endsWith(".log"));
+    } catch {
+      return empty;
+    }
+    if (!names.length) return empty;
+    names.sort((a, b) => {
+      try { return statSync(join(logsDir, b)).mtimeMs - statSync(join(logsDir, a)).mtimeMs; } catch { return 0; }
+    });
+    const file = join(logsDir, names[0]);
+    let text = "";
+    try {
+      const { size } = statSync(file);
+      const start = Math.max(0, size - tailBytes);
+      if (start <= 0) {
+        text = readFileSync(file, "utf8");
+      } else {
+        const fd = openSync(file, "r");
+        try {
+          const buf = Buffer.alloc(size - start);
+          readSync(fd, buf, 0, buf.length, start);
+          text = buf.toString("utf8");
+        } finally {
+          closeSync(fd);
+        }
+      }
+    } catch {
+      return { logPath: file, logTail: [] };
+    }
+    const lines = text.split(/\r?\n/).map((l) => l.trimEnd()).filter((l) => l.length > 0);
+    return { logPath: file, logTail: lines.slice(-maxLines) };
+  } catch {
+    return empty;
+  }
+}
 
 export function defaultDshanaRouteDeps(ctx) {
   const log = (...args) => {
@@ -43,16 +97,16 @@ export function defaultDshanaRouteDeps(ctx) {
     appId: (ctx && ctx.appId) || APP_ID,
     version: "",
     log,
-    getSnapshot: () => buildBootSnapshot(managedRuntimeDetails()),
+    getSnapshot: () => {
+      const dataDir = ctx && typeof ctx.dataDir === "string" && ctx.dataDir ? ctx.dataDir : null;
+      const { logPath, logTail } = readLatestLogTail(dataDir);
+      return buildBootSnapshot(managedRuntimeDetails(), { logPath, logTail });
+    },
     start: () => ensureManagedRuntime({}),
     stop: () => stopManagedRuntime(),
   };
 }
 
-/**
- * 挂路由（registrar 回调体）。app 为宿主传入的 Hono sub-app（duck-typed）。
- * deps 缺省时用 defaultDshanaRouteDeps(null)——单测请显式传 fake。
- */
 export function registerDshanaRoutes(app, deps) {
   const d = deps || {};
   const { appId = APP_ID, version = "", log = () => {} } = d;

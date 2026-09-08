@@ -3,185 +3,386 @@
 //
 // src/ui/dshana/app-shell.js — dsh-hanako App v2 壳页逻辑（main/sidebar 共用；浏览器 ESM）
 //
-// 相对资源纪律（迁移指南 §10）：本文件经 <script type="module" src="./app-shell.js">
-// 相对引入（main.html/sidebar.html），页面内不出现根路径绝对 URL。
-//
-// 到本 App 后端路由的调用一律走浏览器 SDK 的 hana.api.fetch（迁移指南 §10 + @hana/
-// plugin-sdk 契约）：宿主在 App surface iframe URL 附带 appSurfaceSession query，SDK 把
-// 它放进 X-Hana-App-Surface-Session header——裸 fetch 不带该凭据会被宿主网关拒
-// （403 missing_credential，真机实测 0.930.1）。boot-state/start/stop 均走此通道。
-//
-// 到受管 runtime 服务（DSH Web UI）：宿主在 service readyMarker 后自动暴露代理前缀
-// /api/apps/<appId>/routes/_runtime/<runtimeId>/（HTTP/SSE/WS + hana_app_runtime
-// HttpOnly cookie，实证 server 0.930.1）。iframe 首访把本页 URL 的 appSurfaceSession
-// query 透传（宿主按 surface 授权 + Set-Cookie），后续子请求由 cookie 覆盖。
-//
-// 壳桥兼容（v1 iframe 壳页职责平移）：DSH Web UI 内注入的 @dsh-hanako/theme 桥会向
-// window.parent postMessage({ dshHanaThemeRequest:true }) 索取主题 vars；clipboard 桥会
-// postMessage({__dshCopy,...}) 经 MessageChannel 回执。本壳页按同一契约应答（best-effort）。
+// 相对资源纪律（迁移指南 §10）：经 <script type="module" src="./app-shell.js"> 相对引入，
+// 页面内不出现根路径绝对 URL。到本 App 后端路由一律 hana.api.fetch（@hana/plugin-sdk）：
+// 宿主在 App surface iframe URL 附 appSurfaceSession query，SDK 注入
+// X-Hana-App-Surface-Session header——裸 fetch 会被宿主网关 403 missing_credential
+// （真机实测 0.930.1）。受管 runtime iframe 首访透传 appSurfaceSession（宿主按 surface
+// 授权并种 hana_app_runtime cookie）。视觉沿袭 v1 webui-shell 纸张风（CSS 变量 +
+// fallback 纸张色），数据语义 v2 boot-state（phase idle/starting/ready/error/stopped +
+// logTail/logPath）。
 import { hana } from "./vendor/hana-plugin-sdk.js";
 
 (function () {
   "use strict";
 
-  var PHASE_LABEL = { idle: "未启动", starting: "启动中", ready: "就绪", error: "失败", stopped: "已停止" };
-  var POLL_FAST_MS = 1500;   // 非就绪：较快轮询
-  var POLL_SLOW_MS = 5000;   // 就绪/错误：慢轮询（发现运行态漂移）
+  var PHASE_CHIP = { idle: "未启动", starting: "启动中", ready: "就绪", error: "失败", stopped: "已停止" };
+  var POLL_FAST_MS = 1500;   // 非就绪：较快轮询（starting 日志滚动）
+  var POLL_MID_MS = 3000;    // idle/error：中速
+  var POLL_SLOW_MS = 6000;   // 就绪：慢轮询（发现运行态漂移）
   var pollTimer = null;
-  var lastReady = false;
-  var stateEls = {};
+  var shell = null;          // 根元素（data-dshana-shell）
+  var isSidebar = false;
 
+  // ---- 小工具 ----
   function $(sel, root) { return (root || document).querySelector(sel); }
-
-  function fetchState() {
-    // hana.api.fetch：带 X-Hana-App-Surface-Session（iframe URL 的 appSurfaceSession）
-    // 调本 App 后端路由 /api/apps/<id>/routes/dshana/boot-state（SDK 按路径解析 appId）。
-    return hana.api.fetch("dshana/boot-state", {
-      method: "GET",
-      cache: "no-store",
-      headers: { Accept: "application/json" }
-    }).then(function (res) {
-      if (!res.ok) throw new Error("boot-state HTTP " + res.status + "（" + res.statusText + "）");
-      return res.json();
-    }).catch(function (err) {
-      var msg = err && err.message ? err.message : String(err);
-      if (/appSurfaceSession/.test(msg)) {
-        throw new Error("页面缺少 App surface 会话凭据，请从 Card Center 重新打开本卡");
-      }
-      throw err;
-    });
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/"/g, "&quot;")
+      .replace(/</g, "&lt;").replace(/>/g, "&gt;");
   }
 
+  // ---- 状态面（hana.api.fetch，surface session 自动注入）----
+  function fetchState() {
+    return hana.api.fetch("dshana/boot-state", {
+      method: "GET", cache: "no-store", headers: { Accept: "application/json" }
+    }).then(function (res) {
+      if (!res.ok) throw new Error("boot-state HTTP " + res.status);
+      return res.json();
+    }).then(function (d) { return (d && d.state) || null; })
+      .catch(function (err) {
+        var msg = err && err.message ? err.message : String(err);
+        if (/appSurfaceSession/.test(msg)) {
+          throw new Error("页面缺少 App surface 会话凭据，请从 Card Center 重新打开本卡");
+        }
+        throw err;
+      });
+  }
   function postAction(action) {
     return hana.api.fetch("dshana/" + action, { method: "POST", cache: "no-store" })
       .then(function (res) { return res.json().catch(function () { return {}; }); });
   }
 
-  // 受管 runtime 服务 iframe URL：proxyPrefix 尾带 "/"；首访透传本页 appSurfaceSession
-  // query（宿主按 surface 授权并为 runtime 路径种 hana_app_runtime cookie），再带视图参数。
+  // 受管 runtime iframe URL：proxyPrefix 尾带 "/"；首访透传本页 appSurfaceSession query
+  // （宿主按 surface 授权并为 runtime 路径种 hana_app_runtime cookie），再带视图参数。
   function runtimeUiUrl(prefix) {
     var q = new URLSearchParams();
     var ss = new URLSearchParams(location.search).get("appSurfaceSession");
     if (ss) q.set("appSurfaceSession", ss);
-    if (window.__DSHANA_VIEW) q.set("dshana-view", window.__DSHANA_VIEW);
+    var view = shell && shell.getAttribute("data-dshana-view");
+    if (view) q.set("dshana-view", view);
     var qs = q.toString();
     return prefix + (qs ? "?" + qs : "");
   }
 
-  function schedule(ms) {
+  // ---- 视图判定（v2 phase → 壳视图）----
+  function viewOf(s) {
+    if (!s) return "idle";
+    if (s.ready) return "ready";
+    if (s.phase === "starting") return "booting";
+    if (s.phase === "error" || s.phase === "stopped") return "action";
+    return "idle";
+  }
+
+  // ---- 时间线片段（预期流程；v2 无细分上报，booting 时全程待命，不假装具体阶段）----
+  function timelineHtml() {
+    var steps = [
+      ["依赖与运行区准备", "首次启动经 pnpm 安装 DSH 依赖（dataDir/runtime）"],
+      ["DSH 服务启动", "cordis profile 装载 + 显式端口监听"],
+      ["服务就绪确认", "宿主代理 /routes/_runtime/<id>/ 暴露，Web UI 可用"],
+    ];
+    var html = '<ol class="timeline">';
+    for (var i = 0; i < steps.length; i++) {
+      html += '<li class="pending"><span class="tl-dot"></span><span class="tl-body">'
+        + '<div class="tl-name">' + esc(steps[i][0]) + "</div>"
+        + '<div class="tl-desc">' + esc(steps[i][1]) + "</div></span></li>";
+    }
+    return html + "</ol>";
+  }
+
+  function logBlock(lines) {
+    var arr = Array.isArray(lines) ? lines : [];
+    if (!arr.length) return "";
+    return '<pre class="diag-progress" data-log-scroll>' + esc(arr.join("\n")) + "</pre>";
+  }
+
+  function metaHtml(s) {
+    var bits = [];
+    if (s && s.runtimeId) bits.push("runtimeId " + esc(s.runtimeId));
+    if (s && s.service && s.service.port) bits.push("port " + esc(String(s.service.port)));
+    if (s && s.logPath) bits.push("日志 " + esc(s.logPath));
+    return bits.length ? '<p class="meta-line">' + bits.join(" · ") + "</p>" : "";
+  }
+
+  // ---- main 视图渲染（boot-panel 容器 innerHTML）----
+  function idleViewHtml(s) {
+    return '<div class="card">'
+      + '<h2 class="card-label">尚未启动</h2>'
+      + '<p class="desc">v2 无自动链：DSH 由会话任务（dsh_session create/send）首次调用自动启动；'
+      + "也可点下方「启动 DSH」手动预热 Web UI。首次启动含依赖安装，可能需要数分钟。</p>"
+      + '<div class="actions"><button class="primary" data-dsh-start>启动 DSH</button></div>'
+      + metaHtml(s)
+      + "</div>";
+  }
+  function bootingViewHtml(s) {
+    return '<div class="card">'
+      + '<h2 class="card-label">正在启动 DSH</h2>'
+      + '<p class="desc">受管 runtime 正在拉起（首次含依赖安装与 profile 种子化，可能需要数分钟）。'
+      + "就绪后本页自动载入 DSH Web UI。</p>"
+      + timelineHtml()
+      + logBlock(s && s.logTail)
+      + metaHtml(s)
+      + "</div>";
+  }
+  function actionViewHtml(s) {
+    var isErr = !s || s.phase === "error";
+    var isStop = s && s.phase === "stopped";
+    var userText = s && s.error && s.error.userText;
+    var code = s && s.error && s.error.code;
+    var guide = userText || (isStop ? "DSH 已停止（手动停止或卸载流程触发）。" : "DSH 启动失败，详情如下。");
+    var noteText = isErr
+      ? "可调整 App 设置（servicePort 换未占用端口 / nodejsPath）后重新启动；依赖区异常时可删除 dataDir/runtime/.runtime-ok 触发重装。"
+      : "再次 create/send 或点「启动 DSH」即可重新启动。";
+    var raw = [];
+    if (code) raw.push("code: " + esc(code));
+    if (userText) raw.push("message: " + esc(userText));
+    if (s && s.runtimeId) raw.push("runtimeId: " + esc(s.runtimeId));
+    if (s && s.service && s.service.port) raw.push("port: " + esc(String(s.service.port)));
+    if (s && s.logTail && s.logTail.length) raw.push("最近日志:\n" + esc(s.logTail.slice(-14).join("\n")));
+    return '<div class="card">'
+      + '<h2 class="card-label">' + (isErr ? "启动失败，需要处理" : "已停止") + "</h2>"
+      + '<div class="guide"><div class="guide-label">' + (isErr ? "问题" : "状态") + "</div>"
+      + esc(guide) + "</div>"
+      + '<div class="note ' + (isErr ? "auto" : "stop") + '">' + esc(noteText) + "</div>"
+      + '<div class="actions"><button class="primary" data-dsh-start>重新启动 DSH</button></div>'
+      + (raw.length ? "<details class=\"raw-details\"><summary>原始详情</summary>"
+        + '<pre class="diag-progress">' + raw.join("\n") + "</pre></details>" : "")
+      + metaHtml(s)
+      + "</div>";
+  }
+
+  // ---- 渲染 ----
+  function applySnapshot(s) {
+    if (!s) { setStateView("error", "boot-state 无响应"); return; }
+    var view = viewOf(s);
+    var body = document.body;
+    var main = $("[data-dshana-shell]");
+    if (!main) return;
+
+    if (isSidebar) { renderSidebar(s, view); return; }
+
+    // main 卡
+    var spin = $("#dsh-spin");
+    var stage = $("#dsh-stage");
+    var frameWrap = $("#frame-wrap");
+    var frame = $("#dsh-frame");
+    var panel = $("#boot-panel");
+    if (view === "ready") {
+      body.setAttribute("data-view", "ready");
+      if (spin) spin.hidden = true;
+      if (panel) panel.innerHTML = "";
+      if (frameWrap) {
+        frameWrap.hidden = false;
+        var bar = $("#runtime-bar");
+        var rt = $("[data-dsh-runtime]", bar), pt = $("[data-dsh-port]", bar);
+        if (rt) rt.textContent = "runtime " + (s.runtimeId || "–");
+        if (pt) pt.textContent = s.service && s.service.port ? "port " + s.service.port : "–";
+      }
+      if (frame) {
+        if (frame.getAttribute("data-src") !== s.proxyPrefix) {
+          frame.setAttribute("data-src", s.proxyPrefix);
+          frame.src = runtimeUiUrl(s.proxyPrefix);
+        }
+        frame.hidden = false;
+      }
+      bindMainActions(s);
+      schedulePoll(POLL_SLOW_MS);
+      return;
+    }
+
+    body.setAttribute("data-view", view === "booting" ? "booting" : view === "action" ? "action" : "idle");
+    if (spin) spin.hidden = view !== "booting";
+    if (frameWrap) frameWrap.hidden = true;
+    if (frame) { frame.removeAttribute("src"); frame.hidden = true; }
+    if (panel) {
+      var html = view === "booting" ? bootingViewHtml(s)
+        : view === "action" ? actionViewHtml(s)
+          : idleViewHtml(s);
+      panel.innerHTML = html;
+      var dp = panel.querySelector("[data-log-scroll]");
+      if (dp) dp.scrollTop = dp.scrollHeight;
+      bindMainActions(s);
+    }
+    schedulePoll(view === "booting" ? POLL_FAST_MS : POLL_MID_MS);
+  }
+
+  function bindMainActions(s) {
+    var main = $("[data-dshana-shell]");
+    if (!main) return;
+    var btnStart = $("[data-dsh-start]", main);
+    var btnStop = $("[data-dsh-stop]", main);
+    if (btnStart && !btnStart.dataset.bound) {
+      btnStart.dataset.bound = "1";
+      btnStart.addEventListener("click", function () {
+        postAction("start").catch(function (e) {
+          setStateView("error", "启动请求失败：" + ((e && e.message) || e));
+        });
+      });
+    }
+    if (btnStop && !btnStop.dataset.bound) {
+      btnStop.dataset.bound = "1";
+      btnStop.addEventListener("click", function () {
+        postAction("stop").catch(function (e) {
+          setStateView("error", "停止请求失败：" + ((e && e.message) || e));
+        });
+      });
+    }
+  }
+
+  // ---- sidebar 紧凑渲染 ----
+  function renderSidebar(s, view) {
+    var main = $("[data-dshana-shell]");
+    main.setAttribute("data-phase", s.phase || "idle");
+    var chip = $("[data-dsh-phase]", main);
+    if (chip) chip.textContent = PHASE_CHIP[s.phase] || s.phase || "–";
+    var detail = $("[data-dsh-detail]", main);
+    var meta = $("[data-dsh-meta]", main);
+    var logEl = $("[data-dsh-log]", main);
+    var frameZone = $("[data-dsh-frame-zone]", main);
+    var frame = $("[data-dsh-frame]", main);
+    var btnStart = $("[data-dsh-start]", main);
+    var btnStop = $("[data-dsh-stop]", main);
+
+    if (view === "ready") {
+      if (detail) detail.textContent = "DSH 已就绪。";
+      if (meta) { meta.hidden = false; meta.textContent = "runtime " + (s.runtimeId || "–") + (s.service && s.service.port ? " · port " + s.service.port : ""); }
+      if (logEl) logEl.hidden = true;
+      if (frameZone) frameZone.hidden = false;
+      if (frame) {
+        if (frame.getAttribute("data-src") !== s.proxyPrefix) {
+          frame.setAttribute("data-src", s.proxyPrefix);
+          frame.src = runtimeUiUrl(s.proxyPrefix);
+        }
+        frame.hidden = false;
+      }
+      if (btnStart) btnStart.hidden = true;
+      if (btnStop) btnStop.hidden = false;
+      bindSidebarActions();
+      schedulePoll(POLL_SLOW_MS);
+      return;
+    }
+    if (frameZone) frameZone.hidden = true;
+    if (frame) { frame.removeAttribute("src"); frame.hidden = true; }
+    if (btnStop) btnStop.hidden = true;
+    var note = s && s.note ? s.note : "";
+    var errTxt = s && s.error && s.error.userText;
+    if (view === "action") {
+      if (detail) { detail.textContent = (errTxt || note); detail.classList.add("err"); }
+      if (btnStart) btnStart.hidden = false;
+    } else if (view === "booting") {
+      if (detail) { detail.textContent = note; detail.classList.remove("err"); }
+      if (btnStart) btnStart.hidden = true;
+    } else {
+      if (detail) { detail.textContent = note; detail.classList.remove("err"); }
+      if (btnStart) btnStart.hidden = false;
+    }
+    if (meta) {
+      var bits = [];
+      if (s && s.runtimeId) bits.push("runtime " + s.runtimeId);
+      if (s && s.service && s.service.port) bits.push("port " + s.service.port);
+      meta.hidden = bits.length === 0;
+      meta.textContent = bits.join(" · ");
+    }
+    if (logEl) {
+      var lines = s && s.logTail && s.logTail.length ? s.logTail.slice(-10) : [];
+      logEl.hidden = lines.length === 0;
+      logEl.textContent = lines.join("\n");
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+    bindSidebarActions();
+    schedulePoll(view === "booting" ? POLL_FAST_MS : POLL_MID_MS);
+  }
+  function bindSidebarActions() {
+    var main = $("[data-dshana-shell]");
+    if (!main) return;
+    var btnStart = $("[data-dsh-start]", main);
+    var btnStop = $("[data-dsh-stop]", main);
+    if (btnStart && !btnStart.dataset.bound) {
+      btnStart.dataset.bound = "1";
+      btnStart.addEventListener("click", function () {
+        postAction("start").then(function () { poll(); }).catch(function (e) {
+          setStateView("error", "启动请求失败：" + ((e && e.message) || e));
+        });
+      });
+    }
+    if (btnStop && !btnStop.dataset.bound) {
+      btnStop.dataset.bound = "1";
+      btnStop.addEventListener("click", function () {
+        postAction("stop").then(function () { poll(); }).catch(function (e) {
+          setStateView("error", "停止请求失败：" + ((e && e.message) || e));
+        });
+      });
+    }
+  }
+
+  function setStateView(_phase, text) {
+    var main = $("[data-dshana-shell]");
+    if (!main) return;
+    var detail = $("[data-dsh-detail]", main) || $("#boot-panel");
+    if (detail) detail.textContent = text;
+    if (!isSidebar) {
+      var spin = $("#dsh-spin");
+      if (spin) spin.hidden = true;
+      document.body.setAttribute("data-view", "error");
+      var panel = $("#boot-panel");
+      if (panel) panel.innerHTML = '<div class="card"><h2 class="card-label">无法连接 App 后端路由</h2>'
+        + '<p class="desc">' + esc(text) + "</p>"
+        + '<p class="muted">请从 Card Center 重新打开本卡以完成 App surface 授权。</p></div>';
+    }
+    schedulePoll(POLL_SLOW_MS);
+  }
+
+  function schedulePoll(ms) {
     if (pollTimer) clearTimeout(pollTimer);
     pollTimer = setTimeout(poll, ms);
   }
-
-  function render(snap) {
-    var s = snap && snap.state;
-    if (!s) { setView("error", "boot-state 响应缺少 state 字段"); return; }
-    var phase = s.phase || "idle";
-    var el = stateEls;
-    var detail = s.note || (PHASE_LABEL[phase] || phase);
-    setView(phase, detail, s);
-    if (el.phase) el.phase.textContent = PHASE_LABEL[phase] || phase;
-    if (el.phaseCode) el.phaseCode.textContent = phase;
-    if (el.errorCode) el.errorCode.textContent = s.error ? s.error.code : "";
-    if (el.errorText) el.errorText.textContent = s.error ? s.error.userText : "";
-    if (el.runtime) el.runtime.textContent = s.runtimeId || "-";
-    // 就绪：展示 iframe（指向宿主运行时服务代理前缀）；否则隐藏并清理
-    var frame = el.frame;
-    if (frame) {
-      if (s.ready && s.proxyPrefix) {
-        frame.src = runtimeUiUrl(s.proxyPrefix);
-        frame.hidden = false;
-        if (el.frameZone) el.frameZone.hidden = false;
-      } else {
-        frame.removeAttribute("src");
-        frame.hidden = true;
-        if (el.frameZone) el.frameZone.hidden = true;
-      }
-    }
-    lastReady = Boolean(s.ready);
-  }
-
-  function setView(phase, text, s) {
-    var body = stateEls.body;
-    if (!body) return;
-    body.setAttribute("data-phase", phase);
-    var show = { idle: "idle", starting: "starting", ready: "ready", error: "error", stopped: "idle" };
-    body.classList.toggle("ph-ready", phase === "ready");
-    body.classList.toggle("ph-booting", phase === "starting");
-    body.classList.toggle("ph-error", phase === "error" || phase === "stopped");
-    if (stateEls.detail) stateEls.detail.textContent = text;
-    // 操作按钮显隐：idle/error/stopped 显示「启动」；ready 显示「停止」
-    if (stateEls.btnStart) stateEls.btnStart.hidden = phase !== "idle" && phase !== "error" && phase !== "stopped";
-    if (stateEls.btnStop) stateEls.btnStop.hidden = phase !== "ready";
-    if (stateEls.errorPanel) stateEls.errorPanel.hidden = !(phase === "error");
-    if (stateEls.actionPanel) stateEls.actionPanel.hidden = phase !== "idle" && phase !== "stopped" && phase !== "error";
-    if (stateEls.bootLine) stateEls.bootLine.hidden = phase !== "starting";
-    if (stateEls.readyNote) stateEls.readyNote.hidden = !(phase === "ready" && s && s.proxyPrefix);
-  }
-
   function poll() {
-    fetchState().then(function (data) {
-      render(data);
-      schedule(data && data.state && data.state.ready ? POLL_SLOW_MS : POLL_FAST_MS);
-    }).catch(function (err) {
-      setView("error", "无法连接 App 后端路由（" + (err && err.message ? err.message : String(err)) + "）。请从 Card Center 重新打开本卡以完成 App surface 授权。");
-      schedule(POLL_SLOW_MS);
-    });
+    fetchState().then(function (s) { applySnapshot(s); })
+      .catch(function (err) {
+        setStateView("error", (err && err.message) || String(err));
+      });
   }
 
-  function startNow() {
-    postAction("start").then(function () {
-      stateEls.startingNote && stateEls.startingNote.removeAttribute("hidden");
-      poll();
-    }).catch(function (err) {
-      setView("error", "启动请求失败：" + (err && err.message ? err.message : String(err)));
-    });
-  }
-  function stopNow() {
-    postAction("stop").then(function () { poll(); }).catch(function (err) {
-      setView("error", "停止请求失败：" + (err && err.message ? err.message : String(err)));
-    });
-  }
-
-  // ---- 壳桥应答：theme / clipboard（DSH Web UI 嵌入时 window.parent === 本页）----
-  // @dsh-hanako/theme 桥的 TOKEN_MAP 别名表在本页不可静态获得（宿主不保证把全套主题
-  // CSS 变量注入 App surface），故 best-effort：从 documentElement 计算样式读常见 alias
-  // token（存在才回），拿不到完整表时留给真机对账（DSH UI 内嵌验收）补充。
-  var THEME_ALIAS_VARS = [
-    "--dsw-alias-bg", "--dsw-alias-fg", "--dsw-alias-accent", "--dsw-alias-border",
-    "--dsw-specific-bg", "--dsw-specific-fg", "--dsw-specific-accent", "--dsw-specific-border"
+  // ---- 壳桥：主题 + 剪贴板（内层 DSH Web UI 的 v1 契约应答）----
+  var THEME_VARS = [
+    ["--bg", "#F5EFE4"], ["--bg-card", "#FBF7EE"], ["--sidebar-bg", "#EFE8DB"],
+    ["--text", "#2A2622"], ["--text-light", "#4A433C"], ["--text-muted", "#6B6158"],
+    ["--accent", "#537D96"], ["--accent-hover", "#3F6179"],
+    ["--border", "#D8CFBE"], ["--green", "#4A6B4A"], ["--danger", "#8B2C1F"],
+    ["--overlay-strong", "rgba(42,38,34,0.15)"], ["--overlay-medium", "rgba(42,38,34,0.08)"],
+    ["--user-bg", "rgba(83,125,150,0.08)"], ["--accent-light", "rgba(83,125,150,0.08)"],
   ];
-  function collectThemeVars() {
-    var vars = {};
+  function readThemeVars() {
+    var cs = getComputedStyle(document.documentElement);
+    var out = {};
+    for (var i = 0; i < THEME_VARS.length; i++) {
+      var name = THEME_VARS[i][0];
+      var val = cs.getPropertyValue(name).trim();
+      out[name] = val || THEME_VARS[i][1];
+    }
     try {
-      var cs = getComputedStyle(document.documentElement);
-      for (var i = 0; i < THEME_ALIAS_VARS.length; i++) {
-        var name = THEME_ALIAS_VARS[i];
-        var val = cs.getPropertyValue(name);
-        if (val) vars[name] = String(val).trim();
-      }
-    } catch (e) { /* 主题采集失败忽略 */ }
-    return vars;
+      out.themeId = new URLSearchParams(location.search).get("hana-theme") || "inherit";
+    } catch (e) { out.themeId = "inherit"; }
+    return out;
+  }
+  function sendThemeTo(dst) {
+    var msg = { dshHanaTheme: readThemeVars() };
+    try { dst.postMessage(msg, "*"); } catch (e) { /* 目标不可达忽略 */ }
+  }
+  function frameWindow() {
+    var main = $("[data-dshana-shell]");
+    var f = isSidebar ? $("[data-dsh-frame]", main) : $("#dsh-frame");
+    return f && !f.hidden ? f.contentWindow : null;
   }
   window.addEventListener("message", function (e) {
     var data = e.data;
     if (!data || typeof data !== "object") return;
-    if (data.dshHanaThemeRequest) {
-      try {
-        e.source.postMessage({ dshHanaTheme: { vars: collectThemeVars() } }, e.origin);
-      } catch (err) { /* 忽略 */ }
-    }
-    // dshHanaPref：DSH 偏好变更事件提示——本页无 /webui/events 等价通道（v1 宿主插件
-    // 专供），嵌入验收后补（见 DESIGN 已测/未测清单）
+    if (data.dshHanaThemeRequest) { try { sendThemeTo(e.source); } catch (err) { /* 忽略 */ } }
     if (data.__dshCopy) {
-      var text = typeof data.text === "string" ? data.text : "";
-      writeClipboard(text).then(function (ok) {
+      writeClipboard(typeof data.text === "string" ? data.text : "").then(function (ok) {
         try {
-          if (data.port2 && data.port2.postMessage) {
-            data.port2.postMessage({ __dshCopyResult: { ok: ok } });
-          } else if (e.ports && e.ports[0]) {
-            e.ports[0].postMessage({ __dshCopyResult: { ok: ok } });
-          }
+          if (data.port2 && data.port2.postMessage) data.port2.postMessage({ __dshCopyResult: { ok: ok } });
+          else if (e.ports && e.ports[0]) e.ports[0].postMessage({ __dshCopyResult: { ok: ok } });
         } catch (err) { /* 忽略 */ }
       });
     }
@@ -196,43 +397,49 @@ import { hana } from "./vendor/hana-plugin-sdk.js";
   function legacyCopy(text) {
     try {
       var ta = document.createElement("textarea");
-      ta.value = text;
-      ta.style.position = "fixed";
-      ta.style.opacity = "0";
-      document.body.appendChild(ta);
-      ta.select();
+      ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+      document.body.appendChild(ta); ta.select();
       var ok = document.execCommand && document.execCommand("copy");
       document.body.removeChild(ta);
       return Boolean(ok);
-    } catch (e) {
-      return false;
-    }
+    } catch (e) { return false; }
   }
+  // 主题跟随：SDK 主题订阅（宿主变更 → 推送内层）+ 定时兜底推送（frame 存在时）
+  var themePushTimer = null;
+  function startThemePush() {
+    var cw = frameWindow();
+    if (!cw) return;
+    sendThemeTo(cw);
+    clearInterval(themePushTimer);
+    themePushTimer = setInterval(function () {
+      var w = frameWindow();
+      if (w) sendThemeTo(w);
+      else { clearInterval(themePushTimer); themePushTimer = null; }
+    }, 2000);
+  }
+  try {
+    if (hana && typeof hana.theme.subscribe === "function") {
+      hana.theme.subscribe(function () { startThemePush(); });
+    }
+  } catch (e) { /* SDK 主题订阅不可用则只走定时推送 */ }
 
   // ---- 启动 ----
   function boot() {
     var root = $("[data-dshana-shell]");
     if (!root) return;
-    window.__DSHANA_VIEW = root.getAttribute("data-dshana-view") || "main";
-    stateEls = {
-      body: root,
-      phase: $("[data-dsh-phase]", root), phaseCode: $("[data-dsh-phase-code]", root),
-      detail: $("[data-dsh-detail]", root),
-      errorCode: $("[data-dsh-error-code]", root), errorText: $("[data-dsh-error-text]", root),
-      runtime: $("[data-dsh-runtime]", root),
-      frame: $("[data-dsh-frame]", root), frameZone: $("[data-dsh-frame-zone]", root),
-      btnStart: $("[data-dsh-start]", root), btnStop: $("[data-dsh-stop]", root),
-      errorPanel: $("[data-dsh-error-panel]", root), actionPanel: $("[data-dsh-action]", root),
-      bootLine: $("[data-dsh-boot-line]", root), readyNote: $("[data-dsh-ready-note]", root),
-      startingNote: $("[data-dsh-starting-note]", root)
-    };
-    if (stateEls.btnStart) stateEls.btnStart.addEventListener("click", startNow);
-    if (stateEls.btnStop) stateEls.btnStop.addEventListener("click", stopNow);
+    shell = root;
+    isSidebar = root.getAttribute("data-dshana-view") === "sidebar";
+    // 就绪后定时向 iframe 推主题（render 每轮也会触发一次首推）
+    var obs = setInterval(function () {
+      if (document.body.getAttribute("data-view") === "ready" || (isSidebar && frameWindow())) {
+        startThemePush();
+      }
+      if (document.body.getAttribute("data-view") !== "ready" && !isSidebar) {
+        clearInterval(obs);
+      }
+    }, 1500);
     poll();
   }
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", boot);
-  } else {
-    boot();
-  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);
+  else boot();
 })();

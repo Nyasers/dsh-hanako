@@ -63,6 +63,16 @@ test("phaseCopy/文案覆盖五态", () => {
   }
 });
 
+test("buildBootSnapshot: logTail/logPath 归一化（默认空、注入透传带限长）", () => {
+  const s = buildBootSnapshot({ phase: "starting" });
+  assert.deepEqual(s.logTail, []);
+  assert.equal(s.logPath, null);
+  const s2 = buildBootSnapshot({ phase: "starting" }, { logPath: "/x/2026.log", logTail: ["a", "b", "x".repeat(600)] });
+  assert.equal(s2.logPath, "/x/2026.log");
+  assert.equal(s2.logTail.length, 3);
+  assert.ok(s2.logTail[2].length <= 500);
+});
+
 test("stripSnapshotMeta: 快照深度等价忽略 updatedAt", () => {
   const a = stripSnapshotMeta(buildBootSnapshot({ phase: "idle" }));
   const b = stripSnapshotMeta(buildBootSnapshot({ phase: "idle" }));
