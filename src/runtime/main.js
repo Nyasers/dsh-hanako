@@ -34,6 +34,7 @@ import { info, warn, err } from "./log.js";
 // 无运行时包解析——见 rspack.config.mjs 打包纪律注释）。升级 = 换 sdk tgz + pnpm install + 重建。
 import { connectAppRuntime } from "@hana/app-sdk";
 import { startTaskBridge } from "./task-bridge.js"; // 步骤 3：DSH 事件 → Hana task 回投
+import { startApprovalBridge } from "./approval-bridge.js"; // 步骤 4a：DSH 审批 → Hana requestApproval/watch 对账
 import { resolveInstallRoot, locateDsh } from "./locate.js";
 import { ensureDeps } from "./ensure-deps.js";
 import { seedDshanaProfile } from "./seed.js";
@@ -134,14 +135,17 @@ function makeShutdown(state, exitCodeLog) {
     info(`shutdown：${reason}（exit ${code}）`);
     const ctx = state.ctx;
     const hana = state.hana;
-    // 步骤 3：先停任务桥（退订 ctx 事件，防关闭中再触发回投/流消费）再 dispose
-    if (typeof state.stopBridge === "function") {
-      try {
-        state.stopBridge();
-      } catch (e) {
-        warn("task-bridge 退订异常（继续退出）：" + ((e && e.message) || e));
+    // 步骤 3/4a：先停任务桥与审批桥（退订 ctx 事件，防关闭中再触发回投/流消费）再 dispose
+    for (const key of ["stopBridge", "stopApproval"]) {
+      const fn = state[key];
+      if (typeof fn === "function") {
+        try {
+          fn();
+        } catch (e) {
+          warn(key + " 退订异常（继续退出）：" + ((e && e.message) || e));
+        }
+        state[key] = null;
       }
-      state.stopBridge = null;
     }
     try {
       // @dsh-hanako/provider 等子插件经该句柄取 hana client（见 main.js 步骤 1 注释）
@@ -203,7 +207,7 @@ export async function main(argv) {
   const runtimeDir = join(dataDir, "runtime");
   const depsRoot = resolve(opts.depsRoot || join(runtimeDir, "node_modules"));
   const cordisSrc = resolve(opts.cordisSrc || join(installRoot, "cordis"));
-  const state = { hana: null, ctx: null, stopBridge: null };
+  const state = { hana: null, ctx: null, stopBridge: null, stopApproval: null };
   const shutdown = makeShutdown(state, info);
 
   // ---- 1) 宿主 IPC（先于一切：非受管运行时立刻给出可操作报错，不输出 READY）----
@@ -325,19 +329,31 @@ export async function main(argv) {
     return EXIT.PORT;
   }
   info(`webserver 已在 127.0.0.1:${opts.port} 真实监听——打印 readyMarker`);
-  // ---- 7) 任务桥挂载（步骤 3）：订阅 DSH 会话事件并按 task-map 回投 Hana task。
+  // ---- 7) 桥挂载（步骤 3 + 步骤 4a）：订阅 DSH 事件 → Hana task/审批。
   // 先于 readyMarker（App 等到 ready 后才提交 session.create/prompt，事件在 prompt 之后
-  // 才发生——先挂订阅无遗漏窗口）。失败不阻断就绪（桥不可用时任务将无终态回投，由
-  // App 侧日志与超时暴露——见 DESIGN「已测/未测边界」）。----
+  // 才发生——先挂订阅无遗漏窗口）。失败不阻断就绪（桥不可用时任务将无终态/审批回投，
+  // 由 App 侧日志与超时暴露——见 DESIGN「已测/未测边界」）。----
+  const serviceBaseUrl = "http://127.0.0.1:" + opts.port;
   try {
     state.stopBridge = startTaskBridge({
       ctx: boot.ctx,
       hana,
       dataDir,
+      serviceBaseUrl, // 宿主任务取消反向触发 → 本进程 DSH session.cancel（只本会话）
       log: (s) => info("bridge", s),
     });
   } catch (e) {
     err("bridge", "task-bridge 挂载失败（任务终态将无回投）：" + ((e && e.message) || e));
+  }
+  try {
+    state.stopApproval = startApprovalBridge({
+      ctx: boot.ctx,
+      hana,
+      dataDir,
+      log: (s) => info("approval", s),
+    });
+  } catch (e) {
+    err("approval", "approval-bridge 挂载失败（DSH 越界审批将 fail-closed）：" + ((e && e.message) || e));
   }
   process.stdout.write(opts.readyMarker + "\n");
   return EXIT.OK;

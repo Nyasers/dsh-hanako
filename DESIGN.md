@@ -138,7 +138,107 @@ DSH 设置页「DSHana 设置」分页（settings.section slot，id `dshana-sett
 
 **遗留（步骤 4+ 收口）：**
 
-- 步骤 4：审批/取消链（Hana task canceled/aborted 观察 + requestApproval/respondApproval + watch SSE 对账 → DSH session.cancel/审批应答；approvalId/requestId 映射扩展 task-map 条目）、执行超时（需 cancel 链）、重启恢复（App 进程重启后 in-process 队列/后台 watcher 重建 + task-map 残留判定）、工作区写授权按 task/session scope 扩展（runtime.start 已把首启任务来源会话 sandboxFolders 带入 writeRoots）。
+- 步骤 4 本体（本刀 4a 已落地核心，见下方「步骤 4a 架构决策」）：审批/取消/执行超时/watch SSE 对账全链代码与单测已合入；剩真机 AppHost 验收（宿主审批通知形态、watch SSE 实测对账、宿主取消 UI 路径、DSH 超窗升级路径）与重启恢复（App 进程重启后 in-process 队列/后台 watcher 重建 + task-map 残留判定——仍属后续刀）。
 - 步骤 4/5：ctx.routes.register + UI/cards/ui/ 静态树（受管服务代理前缀 /api/apps/<appId>/routes/_runtime/<runtimeId>/）、activation on-demand、syncver 联动 cordis 包版本、pack.mjs 的 cordis 版本断言适配 v2 版本域、旧插件数据迁移脚本、@dsh-hanako/{bus,bridge,acp-assist,view,app,settings,theme,clipboard} 子插件在 v2 形态的退役/收敛判断（本刀只重写 provider；其余 apply 容错降级为惰性，随 UI 刀逐刀收口）。
+## 步骤 4a 架构决策（approve / cancel / 执行超时 / watch SSE 消费侧）
+
+本刀合入内容对应迁移指南 §5（每 send 新 task、串行化）、§8（models.cancel(requestId)）、
+§9（审批与取消全文）在 v2 接线中的逐条落点与决策。**已测/未测边界在下方单列**；以下
+决策是「当前实现按宿主 0.930.1 d.ts 契约写、真实宿主形态待装包对账」的依据。
+
+- **决策 E（取消链分侧与顺序 = App 发起 RPC、DSH 真中止后宿主才 canceled）**：
+  App 主进程（tools/session.js cancel / session-run 超时看门狗）经 loopback HTTP RPC 直调
+  DSH web /api/session/cancel（lib/dsh-rpc.js rpcSessionCancel + rpc-envelope 复用——与
+  create/send 同一条指令面），并先写映射 cancel 标记（markCancelRequested）。受管 runtime
+  task-bridge 在 DSH turn/end(aborted)（或自然终态但已有 cancel 标记，v1 cancelledRequested
+  同款语义）时把宿主任务结算成 hana.tasks.cancel——**canceled 只在 DSH 真中止后标记**
+  （指南 §9 第 4 步：不能宿主标 canceled 而 DSH 还在跑）。宿主侧取消反向触发（Hana task
+  canceled/aborted，来源会话停止按钮等）= task-bridge 对 running 任务经 hana.tasks.watch
+  (taskId) SSE 观察，取消到达 → 本进程 DSH session.cancel + cancelSessionModelRequests
+  （只停本会话 requestId；单例 runtime 不误停他人会话）。取消确认窗口（App 侧
+  CANCEL_CONFIRM_MS=15s 轮询 tasks.get）超窗未确认 → 升级 ctx.tasks.cancel 兜底并如实
+  告知（残余风险：DSH 进程若真未响应，宿主已 canceled——写入本刀真机边界验收项）。
+- **决策 F（watch SSE 消费侧 = 受管 runtime 子进程）**：需要「宿主审批 outcome → DSH
+  approval/request 等待者」与「宿主 task 取消 → DSH session.cancel」的都是 runtime 内模块
+  （approval-bridge / task-bridge）；App 主进程不消费 SSE（应答走 ctx.tasks.respondApproval
+  的返回值即权威，取消终态用轮询 tasks.get）。故 watch-SSE 解析/对账（lib/watch-sse.js）
+  打进受管 runtime bundle（src/runtime → ../lib 同图内联），消费处只有子进程。SSE 与
+  NDJSON 分开解析（指南 §9）：models.stream 是逐行 NDJSON（provider lib/ndjson.js）；
+  watch 是 event:/data: 多行块（createSseDecoder），snapshot 首条 + app-task 后续 + reset
+  （缓冲溢出）与断线都要先 get() 对账（runWatchReconcile）。
+- **决策 G（审批分侧 = runtime 创建与等待、App 应答）**：DSH 审批请求（sandbox 升级
+  approval/policy=ask）→ ApprovalService 走 ctx.waterfall(scopeTarget(agent),
+  'approval/request')——approval-bridge 以 ctx.on('approval/request', …, { global: true,
+  prepend: true }) 认领（v1 实证：无 scope ctx.on 因 context filter 收不到 agent-scope
+  瀑布事件）。有 task-map（dsh_session 发起的会话）→ hana.tasks.requestApproval({taskId,
+  label, details:{dshSessionId,rpcId,toolName,callId,reason,args}, timeoutMs})（以父 taskId
+  为范围，不需 callToken；timeoutMs 快照经映射下传，0=宿主不自动拒绝）→ 映射文件记
+  approvals 条目（App approve 校验归属/去重）→ 挂起 ApprovalOutcome 承诺 watch(approvalId)
+  等终态：allowed-once/rejected 原样投给该 approvalId 的 DSH 等待者（承诺闭包天然定向，
+  不广播）；终态无 outcome（父任务结束/撤销/审批超时）→ rejected（fail closed，绝不隐式
+  放行；指南 §9）。App 侧 dsh_session(action=approve) = approve-respond.js 校验 task-map
+  approvals 表（属于该会话且 pending）→ ctx.tasks.respondApproval({approvalId,outcome}) →
+  runtime watch 观察 outcome 投递给 DSH。DSH 请求侧 abort（回合取消）→ 宿主审批收尾应答
+  rejected（不留孤儿）+ resolve 'cancelled'（取消绝不当授权）。审批等待不计入执行超时：
+  超时 cancel 链会让 req.signal 中止走此路径；宿主审批由 timeoutMs 独立自动拒绝。
+- **决策 H（task-map 扩展为工作单元协调文件）**：同 session 单 JSON（既有决策 C/D 键）上
+  追加 timeoutSec/approvalTimeoutMs（提交快照，跨进程下传 App settings）、cancel{at,reason}
+  （取消标记）、approvals[]（审批条目）——读-改-写全原子（updateTaskMap/patchTaskMap/
+  addApproval/settleApproval/markCancelRequested）。DSH 侧事件单飞 + App 同会话串行化
+  使同文件并发写窗口极小；损坏/缺失一律 null 容错。callToken 依旧绝不落盘。
+- **决策 I（执行超时 = 走 cancel 链，不是只 fail task）**：session-run 提交后台
+  waitTaskTerminalWithTimeout：timeoutSec（显式参数或 App defaultTimeoutSec，manifest 默认
+  1800/非法回落 600）超时 → cancelSessionWork(reason='timeout')（标记 + session.cancel +
+  确认窗口）→ DSH 真中止后宿主 canceled。审批等待期间不触发（DSH turn 未结束 + 宿主审批
+  timeoutMs 独立拒绝；DSH 回合中止经由 abort 信号路径）。
+- **决策 J（活动模型 requestId 注册表 = globalThis，跨 bundle 共享）**：provider adapter
+  流开始把 requestId 记入 globalThis.__dshanaActiveModelRequests（Map<sessionId,Set>），
+  流收尾注销；task-bridge 取消时按会话定向 hana.models.cancel（lib/model-requests.js 只读
+  消费）。provider（cordis bundle）与 task-bridge（dsh-host bundle）不能互相 import——
+  globalThis 约定（与 __dshanaHana 同款），键名两侧字面一致。
+
+**步骤 4a 已落地清单：**
+
+- src/lib/task-map.js：approvals/cancel/timeout 快照 + 原子读改写（步骤 4a 扩展）。
+- src/lib/watch-sse.js：SSE 解码/帧解释（snapshot/app-task/reset/结构兜底）、终态判定、
+  审批 outcome 映射（fail-closed）、runWatchReconcile（先 get 对账、reset/断线重连退避）。
+- src/lib/dsh-rpc.js / service-base.js：注入式 /api RPC（App ctx.network.fetch 与 runtime
+  Node fetch 共用）；rpcSessionCancel + cancelAccepted。
+- src/lib/cancel-chain.js：cancel 编排（planCancel/executeCancel/awaitCancelTerminal/
+  cancelSessionWork）、任务/审批超时解析（App settings 注入）；session-run 的 rpcCall 收敛
+  到 dsh-rpc，serviceBase 拆叶子模块（防环）。
+- src/lib/approve-respond.js：dsh_session approve 应答（归属校验 + respondApproval + 回填）。
+- src/lib/model-requests.js：活动 requestId 注册表消费侧（运行时 bundle）。
+- src/runtime/approval-bridge.js：DSH approval/request global+prepend 认领 → requestApproval
+  → 映射记录 → watch(approvalId) 对账 → outcome 只投正确等待者；tool-call 缓存供 args
+  证据；signal abort → 宿主 rejected 收尾 + DSH 'cancelled'。
+- src/runtime/task-bridge.js：cancel 标记结算（DSH 中止后 canceled）；宿主任务 watch 反向
+  cancel（session.cancel + 定向 models.cancel，只本会话）；settle 幂等。
+- src/runtime/main.js：挂 approval-bridge；task-bridge 传 serviceBaseUrl；shutdown 停两桥。
+- src-cordis/plugins/provider/index.js：活动模型流注册/注销（globalThis 注册表）。
+- src/tools/session.js：cancel/approve 分支接线（移「未接线」）；manifest description 更新。
+- 单测新增 21 例（watch-sse 9 / task-map-ext 4 / cancel-chain 3 / approval-bridge 5）+
+  src-cordis provider 注册表不新增测试面（纯注册）。既有 104 例 + 新增 21 例 = 125 全绿；
+  node src/build.js 与 node src-cordis/build.js 通过（dist 内含 approval-bridge/requestApproval/
+  cancel 链标记）。
+
+**真机/后续验收边界（本刀代码侧未跑通宿主，装包后由主上下文验收）：**
+
+1. 宿主审批通知形态：requestApproval 创建后来源会话如何收到「待审批」通知（文案/审批 UI/
+   卡片），dsh_session(action=approve) 是否被模型正确选用——approve 分支无本地依赖，纯
+   应答宿主；通知形态属宿主侧。
+2. watch SSE 实测对账：host watch(taskId/approvalId) 的事件名/载荷是否确为 snapshot/
+   app-task/reset（按指南措辞实现 + 结构兜底）；get(approvalId) 与 get(taskId) 是否都受理。
+3. 宿主取消 UI（来源会话停止按钮）路径端到端：host task canceled → runtime watch 反向
+   session.cancel → DSH turn/end aborted → 宿主 canceled，两会话并发不串扰。
+4. 取消确认窗口超窗升级（CANCEL_CONFIRM_MS=15s）的实测触发面与文案。
+5. 审批 timeoutMs 自动拒绝是否即时进入 watch 流（host 行为）；超时后 approve 应答的宿主
+   报错文案形态。
+6. 执行超时走 cancel 链端到端（DSH agent 正在跑工具/长推理时被 session.cancel 中止），
+   超时后任务终态 = canceled 且内容不误标成功。
+7. DSH Web UI 直开会话的审批（无 task-map → next() 委托 → 无应答者 fail-closed）与 DSH
+   自身 approval/policy 语义核对。
+8. 重启恢复（App 重启后 in-process 队列重建）仍属后续刀（本刀未动 apply 进程内协调态）。
+
 
 

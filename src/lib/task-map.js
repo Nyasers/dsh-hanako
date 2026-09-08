@@ -20,11 +20,25 @@
 // 事实源只有 dataDir 文件，避免双写漂移。storage.agent 仅当未来 App 侧需要跨重启检索
 // 任务/会话关系时再补索引。callToken 硬约束（指南 §5）：本模块只落 taskId/sessionId 等
 // 定位键，**绝不落 callToken**。
+//
+// 步骤 4a 扩展（审批/取消/超时链，见 DESIGN「步骤 4a 架构决策」）——同一映射文件追加
+// 工作单元级协调字段（写方 = App 主进程 submitDshTask/取消与受管 runtime approval-bridge/
+// task-bridge；同 DSH 会话由 App 串行化 + DSH 侧事件单飞，写冲突窗口极小，仍一律原子
+// 写 + 读-改-写收敛，见 patchTaskMap/updateTaskMap）：
+//   timeoutSec / approvalTimeoutMs —— 提交期快照（DSH 子进程读不到 App settings，
+//     经映射文件下传；approvalTimeoutMs=0 禁用宿主自动拒绝，见 manifest 注释）
+//   cancel: { at, reason }          —— 取消已请求标记（cancel 工具/执行超时写；task-bridge
+//     终态时据此把 aborted 判成 hana.tasks.cancel 而非 fail——取消确认 = DSH 真中止后）
+//   approvals: [ ... ]              —— 本工作单元挂起的宿主审批（DSH approval/request →
+//     hana.tasks.requestApproval 后由 approval-bridge 追加；App approve 经它校验会话归属/
+//     去重并回填 answered；watch 对账以宿主审批记录为准，本表是定位与用户侧去重视图）
 import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, readdirSync, renameSync } from "node:fs";
 import { join, dirname } from "node:path";
 
 export const TASK_MAP_REL_DIR = "dshana/taskmaps"; // 相对 dataDir
 export const TASK_MAP_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 崩溃残留清理 TTL（7 天）
+export const APPROVAL_STATUS_PENDING = "pending";
+export const APPROVAL_STATUS_ANSWERED = "answered";
 
 /** dshSessionId 形态校验（与 tools/subtool/query.js 同正则，防路径穿越/畸形名）。 */
 const SESSION_ID_RE = /^session-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -139,3 +153,98 @@ export function pruneTaskMaps(dataDir, olderThanMs = TASK_MAP_TTL_MS) {
   }
   return removed;
 }
+// ---- 步骤 4a：映射补丁 / 取消标记 / 审批协调（原子读-改-写；跨进程共享同一文件）----
+
+/** 原子写一条映射记录（.tmp + rename；entry 须含合法 dshSessionId）。 */
+function atomicWriteEntry(dataDir, entry) {
+  const p = taskMapPath(dataDir, entry.dshSessionId);
+  mkdirSync(dirname(p), { recursive: true });
+  const tmp = p + ".tmp";
+  writeFileSync(tmp, JSON.stringify(entry), "utf8");
+  renameSync(tmp, p);
+}
+
+/**
+ * 读-改-写：对既有映射做一次更新（App/受管 runtime 两方共用）。fn 同步执行，
+ * 可原地修改 entry 或返回新对象；映射缺失返回 null（不创建）。写失败抛错由调用方定夺。
+ */
+export function updateTaskMap(dataDir, dshSessionId, fn) {
+  if (!isValidSessionId(dshSessionId)) return null;
+  const cur = readTaskMap(dataDir, dshSessionId);
+  if (!cur) return null; // 映射缺失：不创建
+  if (typeof fn !== "function") return cur;
+  const next = fn(cur);
+  if (!next) return cur; // fn 返回 falsy = 放弃写入
+  atomicWriteEntry(dataDir, next);
+  return next;
+}
+
+/** 浅补丁合并（新增/覆盖键；数组字段整体替换由调用方给全量）。映射缺失返回 null。 */
+export function patchTaskMap(dataDir, dshSessionId, patch) {
+  if (!patch || typeof patch !== "object") return null;
+  return updateTaskMap(dataDir, dshSessionId, (cur) => ({ ...cur, ...patch }));
+}
+
+/** 归一化审批记录（跨进程写入同一 schema）。 */
+export function normalizeApproval(ap) {
+  return {
+    approvalId: String((ap && ap.approvalId) || ""),
+    toolName: String((ap && ap.toolName) || "tool"),
+    ...(ap && typeof ap.callId === "string" && ap.callId ? { callId: ap.callId } : {}),
+    ...(ap && typeof ap.reason === "string" && ap.reason ? { reason: ap.reason } : {}),
+    ...(ap && typeof ap.args === "string" && ap.args ? { args: ap.args } : {}),
+    status: ap && ap.status === APPROVAL_STATUS_ANSWERED ? APPROVAL_STATUS_ANSWERED : APPROVAL_STATUS_PENDING,
+    ...(ap && ap.outcome ? { outcome: String(ap.outcome) } : {}),
+    at: (ap && typeof ap.at === "number") ? ap.at : Date.now(),
+  };
+}
+
+/**
+ * 追加一条挂起审批到会话映射（approval-bridge 收到 DSH approval/request 并取得宿主
+ * approvalId 后调用）。approvalId 必填且非空；映射缺失返回 null。
+ */
+export function addApproval(dataDir, dshSessionId, ap) {
+  const approvalId = String((ap && ap.approvalId) || "").trim();
+  if (!approvalId) throw new Error("task-map: addApproval 需要非空 approvalId");
+  return updateTaskMap(dataDir, dshSessionId, (cur) => {
+    const list = Array.isArray(cur.approvals) ? cur.approvals.filter((a) => a && a.approvalId !== approvalId) : [];
+    return { ...cur, approvals: [...list, normalizeApproval({ ...ap, approvalId })] };
+  });
+}
+
+/** 标记审批已结算（App approve 应答成功 / approval-bridge watch 终态后回填）。 */
+export function settleApproval(dataDir, dshSessionId, approvalId, outcome) {
+  const id = String(approvalId || "").trim();
+  if (!id) return null;
+  return updateTaskMap(dataDir, dshSessionId, (cur) => {
+    const list = Array.isArray(cur.approvals) ? cur.approvals : [];
+    const idx = list.findIndex((a) => a && a.approvalId === id);
+    if (idx < 0) return null; // 不在表：放弃写入（fn 返回 falsy 外层即不写）
+    const next = list.slice();
+    next[idx] = {
+      ...next[idx],
+      status: APPROVAL_STATUS_ANSWERED,
+      outcome: outcome === "rejected" ? "rejected" : "allowed-once",
+      at: Date.now(),
+    };
+    return { ...cur, approvals: next };
+  });
+}
+
+/** 读一条挂起审批（approve 工具校验会话归属/去重用；已结算/不存在返回 null）。 */
+export function findPendingApproval(entry, approvalId) {
+  if (!entry || !Array.isArray(entry.approvals)) return null;
+  const id = String(approvalId || "").trim();
+  if (!id) return null;
+  const ap = entry.approvals.find((a) => a && a.approvalId === id) || null;
+  return ap && ap.status === APPROVAL_STATUS_PENDING ? ap : null;
+}
+
+/** 标记取消已请求（cancel 工具 / 执行超时调用；幂等覆盖 reason 与时间戳）。 */
+export function markCancelRequested(dataDir, dshSessionId, reason) {
+  return updateTaskMap(dataDir, dshSessionId, (cur) => ({
+    ...cur,
+    cancel: { at: Date.now(), reason: String(reason || "user").slice(0, 200) },
+  }));
+}
+

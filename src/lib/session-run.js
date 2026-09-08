@@ -27,12 +27,15 @@
 // DSH 执行超时/取消——需要 session.cancel 链，见 DESIGN「遗留」；模型侧超时由宿主
 // models.stream 5 分钟/请求兜底）。
 import { join } from "node:path";
-import { appCtx, appConfig, appDataDir } from "./app-runtime.js";
-import { ensureManagedRuntime, parseServicePort } from "./managed-runtime.js";
-import { buildClientRequest, parseServerResponse, nextRpcId, defaultRpcTimeoutMs } from "./rpc-envelope.js";
+import { appCtx, appDataDir } from "./app-runtime.js";
+import { ensureManagedRuntime } from "./managed-runtime.js";
+import { nextRpcId } from "./rpc-envelope.js";
 import { writeTaskMap, removeTaskMap, isValidSessionId, pruneTaskMaps } from "./task-map.js";
 import { withSessionTurn, enterSessionTurn } from "./session-serialize.js";
 import { readDshDefaultModel } from "./config.js";
+import { serviceBase } from "./service-base.js";
+import { rpcCallWithFetch } from "./dsh-rpc.js";
+import { resolveTaskTimeoutSec, resolveApprovalTimeoutMs, cancelSessionWork } from "./cancel-chain.js";
 
 // ---- 归一/校验（纯函数面，便于单测）----
 export function normalizeCreateSend({ action, input } = {}) {
@@ -95,28 +98,12 @@ export function resolveModelSelection(parsed, dshHome) {
 }
 
 // ---- loopback HTTP RPC（ctx.network.fetch 门；manifest network 声明放行 127.0.0.1）----
-async function rpcCall(ctx, base, { method, payload, rpcId, signal, timeoutMs }) {
-  const { body } = buildClientRequest({ method, payload, rpcId });
-  const deadline = Number(timeoutMs) > 0 ? Number(timeoutMs) : defaultRpcTimeoutMs();
-  const ctl = AbortSignal.timeout(deadline);
-  const merged = signal ? AbortSignal.any([signal, ctl]) : ctl;
-  const res = await ctx.network.fetch(base + "/api/" + body.method, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-    signal: merged,
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error("DSH /api/" + body.method + " HTTP " + res.status + (text ? "：" + text.slice(0, 300) : ""));
+// 实现收敛到 lib/dsh-rpc.js rpcCallWithFetch（cancel-chain 等步骤 4a 模块共用同一封装）。
+async function rpcCall(ctx, base, opts) {
+  if (!ctx || !ctx.network || typeof ctx.network.fetch !== "function") {
+    throw new Error("session-run: 宿主 ctx.network.fetch 不可用（缺 network 授权）");
   }
-  const full = await res.json();
-  return parseServerResponse(full, body.rpcId);
-}
-
-/** 受管 runtime service base URL（显式端口契约：parseServicePort(servicePort)）。 */
-export function serviceBase(port) {
-  return "http://127.0.0.1:" + parseServicePort(port !== undefined && port !== null ? port : appConfig("servicePort"));
+  return rpcCallWithFetch((url, init) => ctx.network.fetch(url, init), base, opts);
 }
 
 function sleep(ms) {
@@ -147,6 +134,37 @@ async function waitTaskTerminal(ctx, taskId, log, pollMs = 1200) {
       return rec;
     }
     await sleep(pollMs);
+  }
+}
+
+/**
+ * 带执行超时的终态等待（步骤 4a）：timeoutSec（秒）内未终态 → 走 cancel 链（指南 §9：
+ * 执行超时 = 取消，不是只标失败）；超时后仍继续等到任务终态（cancel 已确认/升级后宿主
+ * 终态到达）。timeoutSec <= 0 时等价 waitTaskTerminal（无限等）。超时计时 unref（不阻断
+ * App 进程退出）。
+ */
+async function waitTaskTerminalWithTimeout(ctx, taskId, sessionId, timeoutSec, log, pollMs = 1200) {
+  const ms = Number(timeoutSec) > 0 ? Math.round(Number(timeoutSec)) * 1000 : 0;
+  let fired = false;
+  let timer = null;
+  const fire = async () => {
+    if (fired) return;
+    fired = true;
+    logLine(log, "[dsh-session] 任务执行超时（" + Math.round(ms / 1000) + "s）——走 cancel 链（session=" + sessionId + "）");
+    try {
+      await cancelSessionWork({ sessionId, reason: "timeout", log });
+    } catch (e) {
+      log?.warn?.("[dsh-session] 超时 cancel 链失败：" + ((e && e.message) || e));
+    }
+  };
+  if (ms > 0) {
+    timer = setTimeout(() => { void fire(); }, ms);
+    if (typeof timer.unref === "function") timer.unref();
+  }
+  try {
+    return await waitTaskTerminal(ctx, taskId, log, pollMs);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
@@ -301,8 +319,20 @@ export function submitDshTask({ action, input, callToken, log }) {
         }
       }
       // ⑤ 写映射（先于 prompt；rpcId = prompt requestId = jsonl data.source.rpcId 关联键）
+      //    步骤 4a：映射快照下传执行超时与审批超时（受管 runtime approval-bridge 读不到
+      //    App settings，经映射文件取 approvalTimeoutMs；0 = 宿主不自动拒绝）
       const rpcId = nextRpcId();
-      writeTaskMap(dataDir, { taskId, dshSessionId: sessionId, action: parsed.action, rpcId });
+      const timeoutSec = resolveTaskTimeoutSec(parsed.timeoutSec);
+      const approvalTimeoutMs = resolveApprovalTimeoutMs();
+      writeTaskMap(dataDir, {
+        taskId,
+        dshSessionId: sessionId,
+        action: parsed.action,
+        rpcId,
+        ...(parsed.action === "create" || parsed.action === "send" ? { task: parsed.taskText.slice(0, 500) } : {}),
+        timeoutSec,
+        approvalTimeoutMs,
+      });
       // ⑥ prompt（fire：{ accepted:true } 立即返回）
       await rpcCall(ctx, base, {
         method: "session/prompt",
@@ -319,8 +349,10 @@ export function submitDshTask({ action, input, callToken, log }) {
         cwd: established.effectiveCwd || parsed.cwd || null,
       };
       resolveReady(loc);
-      // 后台等到终态（child task-bridge complete/fail → 宿主投递来源会话）
-      const rec = await waitTaskTerminal(ctx, taskId, log);
+      // 后台等到终态（child task-bridge complete/fail/canceled → 宿主投递来源会话）。
+      // 步骤 4a 执行超时：超时走 cancel 链（不是只 fail task——指南 §9：超时/撤销不默认
+      // 批准、不给假成功）；超时确认也复用取消确认窗口（DSH 未确认时升级宿主 cancel）。
+      const rec = await waitTaskTerminalWithTimeout(ctx, taskId, sessionId, timeoutSec, log);
       logLine(log, "[dsh-session] task 终态 " + ((rec && rec.status) || "?") + "（session=" + sessionId + "）");
       return loc;
     } catch (e) {

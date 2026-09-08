@@ -3,7 +3,7 @@
   "id": "dsh-hanako",
   "name": "DSHana",
   "version": "2.0.0-beta.1",
-  "description": "DSHana: DeepSeek Harness as a subagent for HanaAgent (App v2, migration step 3: provider adapter over ctx.models + create/send task chain wired via managed DSH runtime; list/get offline; cancel/approve in step 4)",
+  "description": "DSHana: DeepSeek Harness as a subagent for HanaAgent (App v2, migration step 4a: cancel/approve wired — approval bridge over hana.tasks.requestApproval + watch-SSE reconciliation, cancel chain via DSH session.cancel + execution timeout; step 3: provider adapter over ctx.models + create/send task chain; list/get offline)",
   "entry": "index.js",
   "icon": "assets/icon.png",
   "minAppVersion": "0.930.1",

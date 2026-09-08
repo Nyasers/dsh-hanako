@@ -83,6 +83,45 @@ function warn(ctx, msg) {
   }
 }
 
+// ---- 步骤 4a：活动模型 requestId 注册表（globalThis 与 dsh-host bundle 共享）----
+// 键名与 src/lib/model-requests.js MODEL_REQUEST_GLOBAL_KEY 字面一致（本插件与 task-bridge
+// 分属 cordis 插件 bundle / dsh-host bundle，不能互相 import——同进程 globalThis 约定，
+// 与 __dshanaHana 同款）。结构：Map<dshSessionId, Set<requestId>>；取消消费侧只读。
+const ACTIVE_MODEL_KEY = "__dshanaActiveModelRequests";
+function registerActiveModelRequest(sessionId, requestId) {
+  try {
+    if (!sessionId || !requestId) return;
+    const g = globalThis;
+    let m = g[ACTIVE_MODEL_KEY];
+    if (!(m instanceof Map)) {
+      m = new Map();
+      try { g[ACTIVE_MODEL_KEY] = m; } catch { /* globalThis 只读兜底 */ }
+    }
+    let set = m.get(sessionId);
+    if (!set) {
+      set = new Set();
+      m.set(sessionId, set);
+    }
+    set.add(requestId);
+  } catch {
+    /* 注册失败不影响推理（取消仅尽力而为） */
+  }
+}
+function unregisterActiveModelRequest(sessionId, requestId) {
+  try {
+    if (!sessionId) return;
+    const g = globalThis;
+    const m = g && g[ACTIVE_MODEL_KEY];
+    if (!(m instanceof Map)) return;
+    const set = m.get(sessionId);
+    if (!set) return;
+    set.delete(requestId);
+    if (set.size === 0) m.delete(sessionId);
+  } catch {
+    /* 注销失败忽略 */
+  }
+}
+
 function toLlmError(LlmError, e, requestId) {
   const message = (e && e.message) || String(e || "模型调用失败");
   const code = (e && e.code) || "MODEL_ERROR";
@@ -175,7 +214,8 @@ function buildHanaAdapter(LlmAdapter, LlmError, deps) {
 
     async *stream(options) {
       const dataDir = dataDirOf();
-      const taskId = taskIdForSession(dataDir, options && options.sessionId);
+      const sessionId = options && options.sessionId;
+      const taskId = taskIdForSession(dataDir, sessionId);
       if (!taskId) {
         throw new LlmError(
           "DSH 会话 " + String((options && options.sessionId) || "?") +
@@ -237,6 +277,9 @@ function buildHanaAdapter(LlmAdapter, LlmError, deps) {
       if (typeof options.temperature === "number" && Number.isFinite(options.temperature)) {
         request.temperature = options.temperature;
       }
+      // 步骤 4a：活动模型流注册（task-bridge 宿主取消/审批链按会话定向 models.cancel，
+      // 只停本工作不误停他人会话；键契约见 src/lib/model-requests.js MODEL_REQUEST_GLOBAL_KEY）
+      registerActiveModelRequest(sessionId, requestId);
       try {
         const response = await deps.hana.models.stream(request);
         let done = false;
@@ -273,6 +316,8 @@ function buildHanaAdapter(LlmAdapter, LlmError, deps) {
       } catch (e) {
         if (e instanceof LlmError) throw e;
         throw toLlmError(LlmError, e, requestId);
+      } finally {
+        unregisterActiveModelRequest(sessionId, requestId);
       }
     }
   })();
