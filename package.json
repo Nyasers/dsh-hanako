@@ -22,7 +22,7 @@
   },
   "devDependencies": {
     "@hana/app-sdk": "file:vendor/hana-app-sdk/hana-app-sdk.tgz",
-    "@rspack/core": "^2.2.1",
+    "@rspack/core": "^2.2.2",
     "archiver": "^8.0.0",
     "clean-css": "^5.3.3",
     "conventional-changelog": "^8.1.3",
@@ -32,6 +32,6 @@
     "fs-extra": "^11.4.0",
     "html-minifier-terser": "^7.2.0",
     "terser": "^5.51.2",
-    "tsdown": "^0.22.14"
+    "tsdown": "^0.23.0"
   }
 }
