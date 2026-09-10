@@ -14,7 +14,12 @@
     "prepack": "pnpm run syncver && pnpm run build",
     "pack": "node scripts/pack.mjs",
     "postpack": "node scripts/clean-tmp.mjs",
-    "pack:all": "pnpm run pack --targets=all",
+    "pack:all": "pnpm run pack:linux-x64 && pnpm run pack:darwin-arm64 && pnpm run pack:darwin-x64 && pnpm run pack:win32-x64 && pnpm run pack:universal",
+    "pack:linux-x64": "pnpm run pack --targets=linux-x64",
+    "pack:darwin-arm64": "pnpm run pack --targets=darwin-arm64",
+    "pack:darwin-x64": "pnpm run pack --targets=darwin-x64",
+    "pack:win32-x64": "pnpm run pack --targets=win32-x64",
+    "pack:universal": "pnpm run pack --targets=universal",
     "preversion": "pnpm run build",
     "version": "node scripts/version-hook.mjs"
   },
