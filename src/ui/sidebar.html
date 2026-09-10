@@ -20,8 +20,8 @@
     background: var(--bg, #F5EFE4);
   }
   .panel { padding: 12px 14px; box-sizing: border-box; height: 100%; display: flex; flex-direction: column; }
-  /* 就绪态：本页 chrome 全部收起，整块让给 DSH sidebar（贴边占满，无内边距/分隔线） */
-  .panel[data-dsh-ready="1"] { padding: 0; }
+  /* 注入模式就绪：本页整块让给注入的 DSH 侧栏（#root 占满，无内边距/分隔线） */
+  .panel[data-dsh-ready="1"] { display: none; }
   .h { display: flex; align-items: center; gap: 8px; }
   .h h1 { font-size: 13.5px; margin: 0; font-weight: 600; }
   .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--border, #8a93a3); flex: none; }

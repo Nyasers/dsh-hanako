@@ -145,6 +145,8 @@
   }
   .bar-id { font-variant-numeric: tabular-nums; color: var(--text-muted, #6B6158); }
   #runtime-bar button { padding: 4px 14px; font-size: 12.5px; margin-left: auto; }
+  /* 注入模式就绪：壳页自举层整体让位给注入的 DSH 前端（#root 占满） */
+  body[data-view="ready"] #dsh-stage { display: none; }
 </style>
 </head>
 <body data-view="idle" data-dshana-shell data-dshana-view="main">
