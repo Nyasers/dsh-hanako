@@ -7,9 +7,16 @@
 // 依赖物化形态对齐样例 hana-dsh：hoisted 布局（顶层真实目录、无软链接——软链进 zip 跨机
 // 解压即断）。物化在 _tmp/pkg-root/ 隔离进行，不触碰仓库 node_modules。
 // 流程：复制交付清单（prepack 钩子已先行 build）→ 物化生产依赖 → 断言多平台资产 → zip → SHA256。
-// 用法：pnpm run pack（prepack 自动前置 build；单独 node scripts/pack.mjs 要求 dist/ 已构建）
-// 产出：releases/dsh-hanako-v<version>[-<target>].zip + .sha256（多目标见 --targets）；
-//   临时目录 _tmp/pkg、_tmp/pkg-root 起手清残留、逐目标用完即清、收尾无論成败都清。
+// 用法：pnpm run pack --target <名字>（prepack 自动前置 build；单独 node scripts/pack.mjs 要求 dist/ 已构建）
+// 产出：releases/dsh-hanako-v<version>[-<target>].zip + .sha256。**zip 根 = 包根**：manifest.json、
+//   index.js、node_modules/、ui/ 等全部在 zip 根级，不得套一层目录（宿主安装时在包根读 manifest.json）。
+// 两个临时目录的分工（都在 _tmp/ 下，起手清残留、用完即清、收尾由 postpack 钩子清）：
+//   · _tmp/pkg-root/<target>：依赖物化**工位**。要跑一次真 install，就得有个像独立项目的目录
+//     ——package.json + pnpm-lock.yaml + 为该目标生成的 pnpm-workspace.yaml（supportedArchitectures）
+//     三件套放进去跑 pnpm install --prod。隔离在 _tmp 下，仓库自身的 node_modules 与锁文件不被污染。
+//   · _tmp/pkg：交付**组装台**。只放要进包的东西（dist/ + 物化依赖树 + cordis + ui + manifest），
+//     不带 pnpm 的中间物（lockfile、workspace yaml、.modules.yaml 这些是构建输入，不是交付物）。
+//     把「工位」与「组装台」分开，就是不让构建输入混进安装包；组装出包后立即删。
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -333,7 +340,7 @@ for (const stale of [pkgRoot, stagingRoot]) fs.removeSync(stale);
   const modules = materializeProdDeps(spec);
   // 命名：通用包无后缀（既有 CI/脚本按 dsh-hanako-v<ver>.zip 取件），平台包带目标后缀
   const base = spec.name === "universal" ? `dsh-hanako-v${version}` : `dsh-hanako-v${version}-${spec.name}`;
-  const pkgDir = join(pkgRoot, base); // 铺平目录（zip 中间原料）
+  const pkgDir = join(pkgRoot, base); // 组装暂存目录（内容原样进 zip 根，此目录名不出现在包里）
   fs.removeSync(pkgDir);
   fs.copySync(distDir, pkgDir);
   fs.copySync(modules, join(pkgDir, "node_modules"));
@@ -351,7 +358,12 @@ for (const stale of [pkgRoot, stagingRoot]) fs.removeSync(stale);
     archive.on("error", reject);
   });
   archive.pipe(output);
-  archive.directory(pkgDir, base);
+  // 第二参数必须为 false：把 pkgDir 的**内容**放在 zip 根。
+  // 曾写成 archive.directory(pkgDir, base)，于是整包被套进一层 `<base>/`，宿主安装时在包根读
+  // manifest.json 读不到（manifest.json 落在 `<base>/manifest.json`），报 INVALID_MANIFEST 拒绝安装：
+  //   宿主校验器 `validate-app.mjs --archive <zip>` 会明确判 "ENOENT ... '<app>\\manifest.json'"。
+  // 参照物：装得上的样例包 zip 根级就是 manifest.json / node_modules / ui / dist。
+  archive.directory(pkgDir, false);
   await archive.finalize();
   await done;
   fs.moveSync(tmpZip, zipPath, { overwrite: true });
