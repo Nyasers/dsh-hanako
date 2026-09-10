@@ -225,12 +225,6 @@
     - id: '@dsh-hanako/provider'
       name: '@dsh-hanako/provider'
 
-    # ACP 插件的插件：agent 工厂 setup 后置段——补 dsh-acp 缺的 preset 组合/effort
-    # 校准（探测版：只 patch + 日志）。须在 dsh-acp 同树激活（依赖 agents 工厂，
-    # 行序不敏感——patch 在首个 session 请求前完成即可）。
-    - id: '@dsh-hanako/acp-assist'
-      name: '@dsh-hanako/acp-assist'
-
     - id: '@dsh-hanako/settings'
       name: '@dsh-hanako/settings'
 

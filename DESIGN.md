@@ -326,9 +326,9 @@ DSH 设置页「DSHana 设置」分页（settings.section slot，id `dshana-sett
 
 - 版本线为单一 1.x 线（开发期停在最后已发布基线、发版经 `pnpm version` 推进、DSH 跟随策略），
   细节与依据见 `specs/dshana-v2-定案与待议-2026-09-10.md` §5；cordis 包（roster + plugins，
-  11 个 package.json）**等值跟随**主版本（无独立版本线）；build metadata（+dsh-<dsh 依赖>）由
+  10 个 package.json）**等值跟随**主版本（无独立版本线）；build metadata（+dsh-<dsh 依赖>）由
   version-hook 发版时统一拼回再同步。syncver.mjs 头注释记录版本线语义。
-- pack.mjs：静态项补 THIRD_PARTY_NOTICES.md；cordis dist 断言扩为 11 包（补 acp-assist）；
+- pack.mjs：静态项补 THIRD_PARTY_NOTICES.md；cordis dist 断言按清单校验（现 10 包）；
   新增 dist/ui 断言（route 资源 fail-closed）；zip 形态不变（dist 根 manifest/index.js +
   三件套 + NOTICE/THIRD_PARTY_NOTICES + cordis + ui，无 node_modules）。
 
@@ -348,7 +348,7 @@ DSH 设置页「DSHana 设置」分页（settings.section slot，id `dshana-sett
 | settings | DSH Web 设置页「DSHana 设置」分页（默认模型/版本卡 + 更新总线） | **惰性保留（需删改 v1 更新段）** | v1 更新链路（dshana.bus → 宿主）v2 无宿主侧；本地版本卡/默认模型 UI 保留；更新段退役（App 发版即 DSH 升级）——真机验收刀随 UI 修剪 |
 | logger | DSH 内日志收集 → dshanaBus → 宿主会话文件 | **惰性保留（通道退化为缓冲）** | v2 无宿主 WS 连接，总线缓冲不再送达；受管 runtime stdout 已由 host watch 镜像进 dataDir/logs（等价覆盖）——真机后移除总线转发段 |
 | bus | dshana.bus WS 服务端（宿主插件 IPC 通道） | **退役候选（roster 惰性保留）** | v2 宿主不再连 dshana.bus：App→runtime = loopback HTTP RPC（决策 A），runtime→宿主 = connectAppRuntime（tasks/models）。无消费方即死代码——真机确认 logger/settings 无注入依赖后从 patch.yml 移除 |
-| acp-assist | dsh-acp agent 工厂 setup 后置（探测版：patch+日志） | **惰性保留** | 探测产物零装载语义（apply 全 try/catch）；DSH Web UI 手动会话才涉及，v2 会话主链不走 dsh-acp——真机后随 ACP 面评估 |
+| acp-assist | dsh-acp agent 工厂 setup 后置（补 ACP 会话缺的默认 preset） | **已退役（2026-09-10）** | v2 不装载 dsh-acp，patch 对象不存在；roster 行与插件目录已删。依据见 `specs/dshana-v2-定案与待议-2026-09-10.md` §10 |
 
 ### 已测/未测边界（本刀）
 
