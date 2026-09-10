@@ -40,13 +40,16 @@ Hana 宿主进程
 
 ## DSH Web UI（DSHana 标签页）
 
-配置 `webPort`（默认 3080）时插件加载即**进程内 boot**，DSHana 以**父子双卡**注册（manifest
-`contributes.cards[]`：主卡 id `dshana` route `/main`（realization:page + siteNavEntry）；子卡 id
-`dshana-sidebar` route `/sidebar`、`pageOf: "dshana"`——宿主 functionPanel route 参数落地前的
-过渡表达），每卡壳页 iframe 内嵌 `http://127.0.0.1:<webPort>/?dshana-view=<view>`（同源免鉴权）：
+DSHana 以**单主卡 + 自带功能面板**注册（manifest `contributes.cards[]`：卡 id `dshana` route
+`/dshana/main.html`，realization:"page" + siteNavEntry + fpFullPanel；同一张卡上的
+`functionPanel.route = /dshana/sidebar.html` 即主窗口 FP）。启动由 `dsh_session` 任务或壳页
+「启动 DSH」触发（v2 无加载即 boot）；就绪后主卡壳页 iframe 内嵌 runtime 代理前缀
+`…/routes/_runtime/<runtimeId>/?dshana-view=main`（无侧栏），FP 页内嵌 `?dshana-view=sidebar`
+（纯侧栏）——两个 DSH 视图同源：
 
-- **三态自举页（Bootstrap 壳，T4）**：按总线连接状态判定——已连接直接渲染 iframe；未连接渲染自举页，数据源 = `GET /webui/boot-state`（T3 单一状态出口）+ `GET /webui/events` 事件流（ready/pending/diag-changed/theme-pref）：booting（阶段时间线 + 安装实时日志 + 退避信息）/ action-needed（errorClass 人话 + 操作步骤 + 自动续跑/停等说明）/ ready（iframe 直嵌）。**页面无任何手动按钮**
-- **父子双卡视图装配（V5 过渡）**：主卡 dshana 直嵌 main 视图（`?dshana-view=main`，选中态桥 receive）；子卡 dshana-sidebar 直嵌纯侧栏视图（`?dshana-view=sidebar`，emit）——URL 参数驱动装配与桥角色（`@dsh-hanako/view` readView / sync-bridge），单向下行分落两卡；子卡不声明 realization/siteNavEntry/fpFullPanel（宿主 schema：声明 pageOf 的卡 realization 会被删，显式不声明最干净）。旧 manifest 的 fpFullPanel/functionPanel（embedUrl 侧栏）已摘除，fp 集成待宿主 route 参数支持后议
+- **三态自举页（Bootstrap 壳）**：按 boot-state 快照判定——ready 直接渲染 iframe；否则渲染自举页，数据源 = `GET /dshana/boot-state`（壳页定时轮询：booting 1.5s / idle-error 3s / ready 6s，无事件流）：idle（未启动：说明 + 「启动 DSH」）/ booting（阶段时间线 + 日志尾滚动）/ action（error/stopped：错误码 + 人话指引 + 「重新启动 DSH」）/ ready（iframe 直嵌）。动作按钮只有启动/停止两个，无安装/检测入口
+- **单卡 + FP 视图装配**：主卡直嵌 main 视图（`?dshana-view=main`，选中态桥 receive）；功能面板页直嵌纯侧栏视图（`?dshana-view=sidebar`，emit）——URL 参数驱动装配与桥角色（`@dsh-hanako/view` readView / sync-bridge），单向下行分落两处。形态与官方样例 `hana-dsh` v0.4.0 一致：`functionPanel.route` 指向本 App 自己的 `ui/` 页；宿主 0.944.2 起支持该形态，旧 `embedUrl`（loopback 侧栏，受固定端口牵制）不再需要
+- **iframe 鉴权（runtime 代理）**：宿主对 `/api/apps/<id>/routes/_runtime/<rid>/…` 认四条凭据——`Authorization`/`?token`、`X-Hana-App-Surface-Session` 头、cookie `hana_app_runtime`（HttpOnly，Path 锁在代理前缀）、路径票据 `…/_surface/<appSurfaceSession>/…`。iframe 不能自定 header，所以壳页两条一起走：**把 `appSurfaceSession` 当作 `_surface` 段写进 iframe src**（首访文档请求自身就带凭据；宿主解析后会把上游 302 的 `Location` 重写回同一基路径——官方样例 `hana.api.url(path, true)` 同一形态），再用一次带头的同源预请求让宿主种下 `hana_app_runtime` cookie，兜住 iframe 内丢掉前缀的绝对路径子请求。本页未拿到 `appSurfaceSession` 时不下挂 iframe（代理对无凭据请求一律 403 `missing_credential`，挂上去只会把那段 JSON 画出来），改在面板上说明原因。
 - **iframe 主题桥**：壳页 postMessage 回传宿主主题 vars → 注入的 theme 插件写 body 层 `!important` 覆盖（`--dsw-alias-*` + `--dsw-specific-*` token 映射，无静态主题表）；DSH 偏好 `system`（默认）跟随宿主明暗 + 配色，`light`/`dark` 用原生；偏好变更经 3s 轻量轮询 `settings/describe` 实时重评（旧 events.host WS 端点已随 DSH 0.1.2 退役）
 
 ### DSHana 设置分页
@@ -289,10 +292,10 @@ DSH 设置页「DSHana 设置」分页（settings.section slot，id `dshana-sett
 
 ### 交付 2：contributes.cards 回归（v2 schema）
 
-- manifest 增两卡：主卡 id dshana（route `/dshana/main.html`，realization:"page" +
-  siteNavEntry，titlebar/cardForm 默认），侧栏卡 id dshana-sidebar（route
-  `/dshana/sidebar.html`，pageOf:"dshana"，不声明 realization/siteNavEntry——宿主对非
-  page 卡这些字段视 undeclared，显式不写最干净）。
+- manifest 单卡：id dshana（route `/dshana/main.html`，realization:"page" +
+  siteNavEntry + fpFullPanel，cardForm:"flush"），同卡 `functionPanel`
+  `{ id: "dshana-sidebar-panel", label: "DSHana 状态", route: "/dshana/sidebar.html" }`
+  ——FP 由主卡自带（宿主 0.944.2+ 的 route 形态），不再用 `pageOf` 同伴卡过渡。
 - 壳页三态（精简版，v2 无自动链 UI）：idle（说明 + 「启动 DSH」按钮 → POST /dshana/start）、
   starting（轮询 boot-state）、error/action-needed（错误码 + 用户可读指引 + 重试）、ready
   （iframe src = 宿主代理前缀 + `?dshana-view=main|sidebar`）。**DSH UI 的 SPA base 适配**
@@ -300,7 +303,7 @@ DSH 设置页「DSHana 设置」分页（settings.section slot，id `dshana-sett
 
 ### 交付 3：ui/ 静态树归位
 
-- src/ui/dshana/{main.html, sidebar.html, app-shell.js}（build:src 复制到 dist/ui/）：
+- src/ui/{main.html, sidebar.html, app-shell.js}（build:src 复制到 dist/ui/）：
   页面同层相对引用（`./app-shell.js`），无根路径绝对 URL；appId/路由前缀由页面
   location.pathname 推导（/api/apps/<appId>/... 段），不硬编码整 URL。壳页轮询 boot-state、
   POST start/stop；响应 v1 壳桥消息（`dshHanaThemeRequest`/剪贴板 `__dshCopy`）best-effort

@@ -30,6 +30,8 @@
   },
   "devDependencies": {
     "@hana/app-sdk": "file:vendor/hana-app-sdk/hana-app-sdk.tgz",
+    "@hana/plugin-components": "file:vendor/hana-app-sdk/hana-plugin-components-0.0.0.tgz",
+    "@hana/plugin-sdk": "file:vendor/hana-app-sdk/hana-plugin-sdk-0.0.0.tgz",
     "@rspack/core": "^2.2.2",
     "archiver": "^8.0.0",
     "clean-css": "^5.3.3",

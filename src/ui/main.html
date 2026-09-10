@@ -4,12 +4,15 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>DSHana</title>
-<!-- src/ui/dshana/main.html — dsh-hanako App v2 主壳页（contributes.cards dshana route）。
+<!-- src/ui/main.html — dsh-hanako App v2 主壳页（contributes.cards dshana route，单卡）。
      视觉沿袭 v1 webui-shell 纸张风（宿主主题变量 + fallback 纸张色，明暗随主题），
      数据语义 v2（boot-state 快照 phase idle/starting/ready/error/stopped）。
      三态：idle/stopped 引导 · starting 自举（时间线 + 实时日志滚动）· error 指引重试 ·
      ready 顶栏 + iframe 直嵌 DSH Web UI。无 emoji、无渐变/阴影光效。
-     到本 App 后端路由一律 hana.api.fetch（surface session 凭据，见 app-shell.js）。 -->
+     到本 App 后端路由一律 hana.api.fetch（surface session 凭据，见 app-shell.js）。
+     body 上的 data-dshana-shell 是壳脚本的根锚（app-shell.js boot() 取它，缺失则不轮询）；
+     data-dshana-view="main" 同时是给 DSH 视图装配的参数（就绪后 iframe = ?dshana-view=main，
+     无侧栏——侧栏归本卡的功能面板 /sidebar.html）。 -->
 <style>
   html, body { height: 100%; margin: 0; }
   html { color-scheme: light dark; }
@@ -144,7 +147,7 @@
   #runtime-bar button { padding: 4px 14px; font-size: 12.5px; margin-left: auto; }
 </style>
 </head>
-<body data-view="idle">
+<body data-view="idle" data-dshana-shell data-dshana-view="main">
   <div id="dsh-stage">
     <div class="boot-panel">
       <div class="view-head">
