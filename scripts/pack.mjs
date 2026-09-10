@@ -126,12 +126,13 @@ assertUiTree(distDir);
 //   Windows x64 / Linux x86_64（glibc），外加通用兜底包。
 //   · 为什么隔离目录：不触碰仓库 node_modules（dev+prod 混合树，且动它会触发 pnpm 重建——
 //     Windows 上曾遇清理被拒导致树损坏）。
-//   用法：node scripts/pack.mjs [--targets universal|all|<逗号分隔目标名>]；默认 universal
-//   （保持既有 CI 行为）；CI 改造后传 all，出 4 个平台包 + 通用兜底。
-//   别名约定：`pack:<target>` 与 `pack:all` 都必须**委派给 pack**（`pnpm run pack --targets=…`），
-//   不能直接写 `node scripts/pack.mjs --targets=…`：pnpm 的 pre/post 钩子是按脚本名精确匹配的，
+//   用法：node scripts/pack.mjs [--target universal|darwin-arm64|darwin-x64|linux-x64|win32-x64|
+//   linux-arm64|win32-arm64]；默认 universal（单一目标，不接 `all`）。多目标 = 多次调用
+//   （包别名 `pack:<target>`）或 CI 的并发矩阵。
+//   别名约定：所有 `pack:<target>` 都必须**委派给 pack**（`pnpm run pack --target=…`），
+//   不能直接写 `node scripts/pack.mjs --target=…`：pnpm 的 pre/post 钩子是按脚本名精确匹配的，
 //   `pack:linux-x64` 只会去找 `prepack:linux-x64` / `postpack:linux-x64`（实测确认），直接调脚本
-//   会同时跳过 prepack（build）与 postpack（清临时目录）。`pack:all` = 依次调各 `pack:<target>`。
+//   会同时跳过 prepack（build）与 postpack（清临时目录）。
 const stagingRoot = join(ROOT, "_tmp", "pkg-root");
 
 const HOST_TARGETS = [
@@ -213,21 +214,42 @@ function materializeProdDeps(spec) {
   return modules;
 }
 
-// 目标选择（默认 universal：保持既有 CI 行为）
-const selectedSpecs = (() => {
-  const eqArg = process.argv.find((a) => a.startsWith("--targets="));
-  const idx = process.argv.indexOf("--targets");
-  const raw = eqArg ? eqArg.slice("--targets=".length) : idx >= 0 ? process.argv[idx + 1] : "universal";
-  const names = !raw || raw === "universal"
-    ? ["universal"]
-    : raw === "all"
-      ? ["universal", ...HOST_TARGETS.map((t) => t.name)]
-      : raw.split(",").map((s) => s.trim()).filter(Boolean);
-  return names.map((n) => {
-    const spec = targetSpec(n);
-    if (!spec) throw new Error(`未知打包目标：${n}（可选：universal / all / ${[...HOST_TARGETS, ...EXTRA_TARGETS].map((t) => t.name).join(" / ")}）`);
-    return spec;
-  });
+// 目标选择：`--target <名字>` / `--target=<名字>`（**必须显式给**，无默认）。
+// 三种情况一律报错并打印支持目标列表，绝不静默回落：未指定、不认识的目标、不认识的参数。
+// （曾因 `--targets=x` 以 `--target` 开头而漏判，静默回落跑了一次完整的通用包：两分多钟 + 2 GB 临时文件。）
+// 多目标由 CI 并行矩阵各自跑一次，或本地逐个跑 `pnpm run pack:<target>`；不支持 `all`。
+function supportedTargetNames() {
+  return ["universal", ...HOST_TARGETS.map((t) => t.name), ...EXTRA_TARGETS.map((t) => t.name)];
+}
+function failUsage(detail) {
+  console.error(`[pack] ${detail}`);
+  console.error("[pack] 支持的目标：");
+  for (const n of supportedTargetNames()) {
+    const s = targetSpec(n);
+    console.error(`  ${n.padEnd(14)} os=[${s.os.join(",")}] cpu=[${s.cpu.join(",")}]${s.libc ? " libc=[" + s.libc.join(",") + "]" : ""}`);
+  }
+  console.error("[pack] 用法：node scripts/pack.mjs --target <名字>（或 pnpm run pack --target=<名字>）");
+  process.exit(2);
+}
+const spec = (() => {
+  const args = process.argv.slice(2);
+  const bad = args.find((a) => a.startsWith("-") && a !== "--target" && !a.startsWith("--target="));
+  if (bad) failUsage(`不认识的参数：${bad}（只接受 --target <名字> / --target=<名字>）`);
+  const eq = args.find((a) => a.startsWith("--target="));
+  const i = args.indexOf("--target");
+  let raw;
+  if (eq) {
+    raw = eq.slice("--target=".length).trim();
+  } else if (i >= 0) {
+    const v = args[i + 1];
+    if (!v || v.startsWith("-")) failUsage("--target 需要一个目标名");
+    raw = v.trim();
+  } else {
+    failUsage("未指定 --target");
+  }
+  const found = targetSpec(raw);
+  if (!found) failUsage(`未知打包目标：${raw}`);
+  return found;
 })();
 
 // 2. 静态资产压缩（terser JS 纯语法级 + clean-css CSS 压缩，覆盖写回 dist 副本）
@@ -293,19 +315,19 @@ function isEsm(code) {
   }
 }
 
-// 3+4) 逐目标组装 → zip → SHA256（发布产物归档 releases/）
+// 3+4) 组装 → zip → SHA256（单目标；发布产物归档 releases/）
 //    archiver 纯 Node 跨平台 zip（对齐 hana-remote-dev）：不用 tar -a -cf——
 //    GNU tar（Linux）不认 .zip 后缀会静默产出 tar 伪 zip（CI ubuntu 踩坑 2026-08-14）
 const relDir = join(ROOT, "releases");
 fs.ensureDirSync(relDir);
 // 临时目录纪律（曾因多目标连跑堆积 2.2 GB 把宿主压崩）：
 //   · 起手清残留（上次运行/中途崩溃留下的）；
-//   · 逐目标用完即清（暂存树 + 铺平目录），峰值 → 单目标；
+//   · 用完即清（暂存树 + 铺平目录）；
 //   · 收尾全清由 package.json 的 postpack 钩子承担（scripts/clean-tmp.mjs），CI 里也可单独调。
 // 中间原料与暂存树都可再生，真正的产物只有 releases/ 下的 zip + sha256。
 const pkgRoot = join(ROOT, "_tmp", "pkg");
 for (const stale of [pkgRoot, stagingRoot]) fs.removeSync(stale);
-for (const spec of selectedSpecs) {
+{
   const modules = materializeProdDeps(spec);
   // 命名：通用包无后缀（既有 CI/脚本按 dsh-hanako-v<ver>.zip 取件），平台包带目标后缀
   const base = spec.name === "universal" ? `dsh-hanako-v${version}` : `dsh-hanako-v${version}-${spec.name}`;
@@ -313,7 +335,7 @@ for (const spec of selectedSpecs) {
   fs.removeSync(pkgDir);
   fs.copySync(distDir, pkgDir);
   fs.copySync(modules, join(pkgDir, "node_modules"));
-  // 暂存树用完即删：逐目标峰值磁盘从「所有目标叠加」降到「单目标」
+  // 暂存树用完即删
   fs.removeSync(join(stagingRoot, spec.name));
   console.log(`[pack] ${spec.name}：代码 + 依赖树已就位（${base}），暂存树已清理`);
   const zipPath = join(relDir, `${base}.zip`);
@@ -336,7 +358,7 @@ for (const spec of selectedSpecs) {
   console.log(`[pack] ${zipPath}`);
   console.log(`[pack] zip ${(buf.length / 1048576).toFixed(1)} MB · SHA256 ${sha}`);
   fs.writeFileSync(`${zipPath}.sha256`, sha, "utf8");
-  // 该目标的铺平目录已入包，即用即清（峰值 → 单目标）
+  // 铺平目录已入包，即用即清
   fs.removeSync(pkgDir);
 }
 // 收尾全清 → postpack 钩子（scripts/clean-tmp.mjs）
