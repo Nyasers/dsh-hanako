@@ -17,7 +17,7 @@
     "app/session.stage-file",
     "app/models.infer",
     "app/runtime.execute",
-    "app/runtime.native",
+    "app/runtime.local-machine",
     "app/runtime.network",
     "app/process.spawn",
     "app/events.emit",

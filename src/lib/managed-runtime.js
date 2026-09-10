@@ -8,7 +8,7 @@
 // 职责：
 //   managedStart/ensureManagedRuntime：解析 servicePort（App 设置，见 manifest
 //     contributes.settings.servicePort）→ ctx.runtime.start({ runtime:"node",
-//     entry:"runtime/dsh-host.mjs", profile:"native", network:"external", service:{
+//     entry:"runtime/dsh-host.mjs", profile:"local-machine", network:"external", service:{
 //     port, readyMarker:"DSH_READY" }, ... }) → 状态轮询等到 ready / failed / exited。
 //     绝不把 runtimeId 当就绪（指南 §6）：starting 只是宿主已拉起进程，DSH 真就绪 = 子
 //     进程真实监听后打印的 readyMarker → host 侧 service.state=ready。
@@ -42,7 +42,7 @@ export const START_ERROR_HINTS = {
   "boot-failed": "DSH runProfile 启动失败（见 runtime 日志）。若依赖刚变更，可尝试重装依赖（删除 dataDir/runtime/.runtime-ok 后重启）。",
   deps: "DSH 依赖未就绪或安装失败（首次使用需要网络以 pnpm 安装 DSH 依赖到 dataDir/runtime）。检查网络后重试；离线预置见 DESIGN「依赖部署（v2）」。",
   seed: "dshana profile 初始化失败（见 runtime 日志；profile 迁移拒绝/scope 链接失败由种子化引导）。",
-  "not-authorized": "宿主未授权受管 runtime 写入 App 数据目录（writeRoots 未放行）。检查 App 能力与授权状态。",
+  "not-authorized": "宿主未授权本 App 启动受管 runtime（local-machine 能力未授予或已撤销）。检查 App 能力与授权状态。",
   unknown: "受管 runtime 启动失败（见 runtime 日志与状态）。",
 };
 
@@ -282,17 +282,17 @@ async function doStartManaged(opts) {
     depsRoot: typeof opts.depsRoot === "string" && opts.depsRoot ? opts.depsRoot : undefined,
     noEnsure: true, // runtime 进程恒不 ensure（沙箱无法 spawn；依赖由 App 进程 ensure 保证）
   });
+  // 权限档 = local-machine（定案 2026-09-10，见 specs/dshana-v2-定案与待议-2026-09-10.md §1）：
+  // 明确不是沙箱——受管程序自持工作区与命令策略，可读写当前用户可及的一切文件（含其他应用
+  // 数据与磁盘凭据），仅保留 stop / 撤销 / 进程树回收的托管语义。宿主契约**禁止**传
+  // readRoots / writeRoots / callToken / taskId，故本调用一律不带（文件边界归零，换来 DSH 能
+  // 写进用户项目工作区）。护栏 = DSH 自身权限模式与审批策略 + 已接上的 Hana 审批面。
   const input = {
     runtime: "node",
     entry: RUNTIME_ENTRY,
-    profile: "native", // 全平台统一（native + external；指南 §6）
+    profile: "local-machine",
     network: "external",
     args,
-    taskId: opts.taskId || undefined,
-    // 授权写根：App 自身数据区（runtime 安装区 / dsh-home 会话数据 / logs）。宿主只放行
-    // 已授权根；会话工作区（用户项目）的写授权在后续步骤按 task/session scope 解析。
-    writeRoots: [dataDir],
-    readRoots: [dataDir],
     service: { port, readyMarker: READY_MARKER },
   };
   let info;
