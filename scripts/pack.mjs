@@ -128,6 +128,9 @@ assertUiTree(distDir);
 //     Windows 上曾遇清理被拒导致树损坏）。
 //   用法：node scripts/pack.mjs [--targets universal|all|<逗号分隔目标名>]；默认 universal
 //   （保持既有 CI 行为）；CI 改造后传 all，出 4 个平台包 + 通用兜底。
+//   别名约定：`pnpm run pack:all` = `pnpm run pack --targets=all`——必须**委派给 pack**，
+//   否则 prepack（build）与 postpack（清理临时目录）这两个钩子不会触发：pnpm 的 pre/post
+//   钩子是按脚本名精确匹配的，`pack:all` 只会去找 `prepack:all` / `postpack:all`（实测确认）。
 const stagingRoot = join(ROOT, "_tmp", "pkg-root");
 
 const HOST_TARGETS = [
