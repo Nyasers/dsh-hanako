@@ -23,6 +23,8 @@
 //   --hana-task-id/--port/--data-dir/--cordis-src/--deps-root/--ready-marker
 //   buildRuntimeArgs() 是本模块对子进程唯一的参数来源。
 import { join } from "node:path";
+import { mkdirSync, writeFileSync, chmodSync, rmSync } from "node:fs";
+import { randomInt, randomBytes } from "node:crypto";
 import { appConfig, appDataDir, appLogger, getAppRuntime } from "./app-runtime.js";
 // 依赖就位（自包含打包，2026-09-10）：依赖随包物化在安装目录 <installRoot>/node_modules，
 // 运行时不再安装、不再 spawn（原 ensure-deps.js 与 lib/pnpm.js 已删除；app/process.spawn
@@ -52,6 +54,8 @@ let managed = {
   lastError: null,
   mirrorCancel: null, // watch 日志镜像 AbortController
   mirrors: [], // 已挂 watch 的 runtimeId（防重复）
+  bridgePort: null, // 中继端口（= 注册给宿主的 service.port；App 侧 RPC 基址）
+  bridgeKey: null, // 中继鉴权 key（header x-hana-dsh-bridge；绝不落盘/落日志）
 };
 
 /** 复位单例（外部测试/重建用）。 */
@@ -64,6 +68,8 @@ export function resetManagedRuntime() {
     lastError: null,
     mirrorCancel: null,
     mirrors: [],
+    bridgePort: null,
+    bridgeKey: null,
   };
   return managed;
 }
@@ -81,21 +87,41 @@ export function parseServicePort(raw, fallback = DEFAULT_SERVICE_PORT) {
 }
 
 /**
- * 子进程参数构造（与 src/runtime/options.js parseArgs 对偶）。opts:
- * { taskId?, port, dataDir, cordisSrc?, depsRoot?, readyMarker? }
+ * 私有运行时配置构造（与 src/runtime/options.js normalizeRuntimeConfig 对偶）。opts:
+ * { dataDir, dshPort, bridgePort, bridgeKey, cordisSrc?, depsRoot?, readyMarker? }
+ * 敏感项（bridgeKey）只进本对象→写 0600 文件→argv 只传路径，不出现在 argv/日志。
  */
-export function buildRuntimeArgs(opts) {
-  const { taskId, port, dataDir, cordisSrc, depsRoot, readyMarker = READY_MARKER } = opts || {};
-  const args = [];
-  if (typeof port === "number") args.push("--port", String(port));
-  else throw new Error("buildRuntimeArgs: port 必填（1..65535 显式端口）");
-  if (typeof dataDir === "string" && dataDir) args.push("--data-dir", dataDir);
-  else throw new Error("buildRuntimeArgs: dataDir 必填（App ctx.dataDir）");
-  if (taskId) args.push("--hana-task-id", String(taskId));
-  if (typeof cordisSrc === "string" && cordisSrc) args.push("--cordis-src", cordisSrc);
-  if (typeof depsRoot === "string" && depsRoot) args.push("--deps-root", depsRoot);
-  args.push("--ready-marker", readyMarker);
-  return args;
+export function buildRuntimeConfig(opts) {
+  const { dataDir, dshPort, bridgePort, bridgeKey, cordisSrc, depsRoot, readyMarker = READY_MARKER } = opts || {};
+  if (typeof dataDir !== "string" || !dataDir) throw new Error("buildRuntimeConfig: dataDir 必填（App ctx.dataDir）");
+  if (!Number.isInteger(dshPort) || dshPort < 1 || dshPort > 65535) throw new Error("buildRuntimeConfig: dshPort 必填（1..65535）");
+  if (!Number.isInteger(bridgePort) || bridgePort < 1 || bridgePort > 65535) throw new Error("buildRuntimeConfig: bridgePort 必填（1..65535）");
+  if (typeof bridgeKey !== "string" || bridgeKey.length < 16) throw new Error("buildRuntimeConfig: bridgeKey 必填（≥16 字符）");
+  const config = { dataDir, dshPort, bridgePort, bridgeKey, readyMarker };
+  if (typeof cordisSrc === "string" && cordisSrc) config.cordisSrc = cordisSrc;
+  if (typeof depsRoot === "string" && depsRoot) config.depsRoot = depsRoot;
+  return config;
+}
+
+/** 写私有运行时配置文件（dataDir/integration/，0600），返回绝对路径。 */
+export function writeRuntimeConfigFile(dataDir, config) {
+  const dir = join(dataDir, "integration");
+  mkdirSync(dir, { recursive: true });
+  const filename = join(dir, `runtime-${randomBytes(9).toString("hex")}.json`);
+  writeFileSync(filename, JSON.stringify(config), { mode: 0o600 });
+  try { chmodSync(filename, 0o600); } catch { /* Windows 权限位有限，忽略 */ }
+  return filename;
+}
+
+/** 中继访问面（App 侧 RPC 用）：{ base, headers }；未就绪返回 null。 */
+export function bridgeAccess() {
+  if (!managed.bridgePort) return null;
+  return {
+    base: "http://127.0.0.1:" + managed.bridgePort,
+    headers: managed.bridgeKey ? { "x-hana-dsh-bridge": managed.bridgeKey } : {},
+    port: managed.bridgePort,
+    key: managed.bridgeKey,
+  };
 }
 
 /** runtime 终态归类（纯函数）：按 info.state/exitCode/signal/service 产出 { kind, userText }。 */
@@ -225,22 +251,20 @@ async function doStartManaged(opts) {
   const ctx = app.ctx;
   const dataDir = appDataDir();
   if (!dataDir) throw new Error("managed-runtime: ctx.dataDir 缺失");
-  const port = parseServicePort(appConfig("servicePort"));
-  logApp("info", "[managed-runtime] 启动 DSH 受管 runtime（entry=runtime/dsh-host.mjs port=" + port + "）");
-
-  // ---- 依赖就位（自包含打包）----
-  // 依赖随包在 <installRoot>/node_modules；App 侧不再做任何安装（原 ensure 块与 app/process.spawn
-  // 能力已退役）。子进程按自身入口位置推导 installRoot，无需 App 传入路径。
-
-  // cordisSrc 默认不传：子进程按自身入口位置推导 <installRoot>/cordis；depsRoot 默认
-  // <installRoot>/node_modules（随包物化）。两者均可在调试/预置场景显式覆盖。
-  const args = buildRuntimeArgs({
-    taskId: opts.taskId || null,
-    port,
+  const bridgePort = parseServicePort(appConfig("servicePort"));
+  const bridgeKey = randomBytes(24).toString("base64url");
+  let dshPort = randomInt(38000, 52000);
+  while (dshPort === bridgePort) dshPort = randomInt(38000, 52000);
+  const config = buildRuntimeConfig({
     dataDir,
+    dshPort,
+    bridgePort,
+    bridgeKey,
     cordisSrc: typeof opts.cordisSrc === "string" && opts.cordisSrc ? opts.cordisSrc : undefined,
     depsRoot: typeof opts.depsRoot === "string" && opts.depsRoot ? opts.depsRoot : undefined,
   });
+  const configPath = writeRuntimeConfigFile(dataDir, config);
+  logApp("info", "[managed-runtime] 启动 DSH 受管 runtime（entry=runtime/dsh-host.mjs dshPort=" + dshPort + " bridgePort=" + bridgePort + "）");
   // 权限档 = local-machine（定案 2026-09-10，见 specs/dshana-v2-定案与待议-2026-09-10.md §1）：
   // 明确不是沙箱——受管程序自持工作区与命令策略，可读写当前用户可及的一切文件（含其他应用
   // 数据与磁盘凭据），仅保留 stop / 撤销 / 进程树回收的托管语义。宿主契约**禁止**传
@@ -251,13 +275,15 @@ async function doStartManaged(opts) {
     entry: RUNTIME_ENTRY,
     profile: "local-machine",
     network: "external",
-    args,
-    service: { port, readyMarker: READY_MARKER },
+    args: [configPath],
+    service: { port: bridgePort, readyMarker: READY_MARKER },
   };
   let info;
   try {
     info = await ctx.runtime.start(input);
   } catch (e) {
+    // 启动失败：配置文件中含 bridgeKey，立即删除（不残留凭据）
+    try { rmSync(configPath, { force: true }); } catch { /* 忽略 */ }
     // 宿主侧 start 拒绝（能力/授权/校验失败）：归类上报
     const text = (e && e.message) || String(e);
     logApp("error", "[managed-runtime] ctx.runtime.start 被宿主拒绝：" + text);
@@ -266,6 +292,10 @@ async function doStartManaged(opts) {
     err.code = kind;
     throw err;
   }
+  // 子进程已启动：配置已读入（首件事），延迟清理文件；同时记录中继访问面供 App 侧 RPC。
+  managed.bridgePort = bridgePort;
+  managed.bridgeKey = bridgeKey;
+  setTimeout(() => { try { rmSync(configPath, { force: true }); } catch { /* 忽略 */ } }, 10000);
   const runtimeId = info && info.runtimeId;
   if (!runtimeId) {
     throw new Error("ctx.runtime.start 未返回 runtimeId（宿主契约异常）：" + JSON.stringify(info || null));

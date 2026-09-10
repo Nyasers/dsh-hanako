@@ -8,7 +8,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   parseServicePort,
-  buildRuntimeArgs,
+  buildRuntimeConfig,
   classifyRuntimeFailure,
   READY_MARKER,
   RUNTIME_ENTRY,
@@ -31,35 +31,46 @@ test("parseServicePort: 非法回落默认（禁 <1024/0/负/越界/非数——
   assert.equal(parseServicePort("bad", 1), DEFAULT_SERVICE_PORT);
 });
 
-test("buildRuntimeArgs: 基础形态（与 options.js 对偶）", () => {
-  const args = buildRuntimeArgs({ port: 4317, dataDir: "/hana/app-data/dsh-hanako", taskId: "task-1" });
-  assert.deepEqual(args, ["--port", "4317", "--data-dir", "/hana/app-data/dsh-hanako", "--hana-task-id", "task-1", "--ready-marker", READY_MARKER]);
+test("buildRuntimeConfig: 基础形态（与 options.js normalizeRuntimeConfig 对偶）", () => {
+  const c = buildRuntimeConfig({ dataDir: "/hana/app-data/dsh-hanako", dshPort: 47120, bridgePort: 4317, bridgeKey: "k".repeat(32) });
+  assert.deepEqual(c, {
+    dataDir: "/hana/app-data/dsh-hanako",
+    dshPort: 47120,
+    bridgePort: 4317,
+    bridgeKey: "k".repeat(32),
+    readyMarker: READY_MARKER,
+  });
 });
 
-test("buildRuntimeArgs: 覆盖项（cordis-src/deps-root）只在显式传时出现", () => {
-  const base = buildRuntimeArgs({ port: 8080, dataDir: "/x" });
-  assert.ok(!base.includes("--deps-root"));
-  assert.ok(!base.includes("--cordis-src"));
-  // no-ensure 已随 ensure 链退役
-  const full = buildRuntimeArgs({
-    port: 8080,
+test("buildRuntimeConfig: 覆盖项（cordisSrc/depsRoot）只在显式传时出现", () => {
+  const base = buildRuntimeConfig({ dataDir: "/x", dshPort: 1, bridgePort: 2, bridgeKey: "k".repeat(32) });
+  assert.ok(!("depsRoot" in base));
+  assert.ok(!("cordisSrc" in base));
+  const full = buildRuntimeConfig({
     dataDir: "/x",
+    dshPort: 8080,
+    bridgePort: 8081,
+    bridgeKey: "k".repeat(32),
     cordisSrc: "/install/cordis",
     depsRoot: "/deps/node_modules",
     readyMarker: "MY_READY",
   });
-  assert.deepEqual(full, [
-    "--port", "8080",
-    "--data-dir", "/x",
-    "--cordis-src", "/install/cordis",
-    "--deps-root", "/deps/node_modules",
-    "--ready-marker", "MY_READY",
-  ]);
+  assert.deepEqual(full, {
+    dataDir: "/x",
+    dshPort: 8080,
+    bridgePort: 8081,
+    bridgeKey: "k".repeat(32),
+    cordisSrc: "/install/cordis",
+    depsRoot: "/deps/node_modules",
+    readyMarker: "MY_READY",
+  });
 });
 
-test("buildRuntimeArgs: 必填缺失抛错", () => {
-  assert.throws(() => buildRuntimeArgs({ dataDir: "/x" }), /port/);
-  assert.throws(() => buildRuntimeArgs({ port: 8080 }), /dataDir/);
+test("buildRuntimeConfig: 必填缺失/非法抛错", () => {
+  assert.throws(() => buildRuntimeConfig({ dshPort: 1, bridgePort: 2, bridgeKey: "k".repeat(32) }), /dataDir/);
+  assert.throws(() => buildRuntimeConfig({ dataDir: "/x", bridgePort: 2, bridgeKey: "k".repeat(32) }), /dshPort/);
+  assert.throws(() => buildRuntimeConfig({ dataDir: "/x", dshPort: 1, bridgeKey: "k".repeat(32) }), /bridgePort/);
+  assert.throws(() => buildRuntimeConfig({ dataDir: "/x", dshPort: 1, bridgePort: 2, bridgeKey: "short" }), /bridgeKey/);
 });
 
 test("classifyRuntimeFailure: 退出码契约归类（src/runtime/main.js EXIT 同步）", () => {

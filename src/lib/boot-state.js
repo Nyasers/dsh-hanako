@@ -21,10 +21,13 @@
 //   error（上次启动失败，含 code+userText 供重试指引）/ stopped（已停止）
 export const APP_ID = "dsh-hanako";
 
-/** 宿主受管服务代理前缀（u1e 同形；appId/runtimeId 空值返回 null）。 */
-export function runtimeProxyPrefix({ appId = APP_ID, runtimeId } = {}) {
+/** 宿主受管服务代理前缀（u1e 同形；appId/runtimeId 空值返回 null）。
+ * 2026-09-11 起支持 bridgeKey：中继作为唯一服务面后，路径需带 `_hana/<key>/` 段（浏览器
+ * iframe 无法自定 header，只能走路径票据）——中继据此注入 DSH cookie。 */
+export function runtimeProxyPrefix({ appId = APP_ID, runtimeId, bridgeKey } = {}) {
   if (!appId || !runtimeId) return null;
-  return `/api/apps/${encodeURIComponent(appId)}/routes/_runtime/${encodeURIComponent(runtimeId)}/`;
+  const base = `/api/apps/${encodeURIComponent(appId)}/routes/_runtime/${encodeURIComponent(runtimeId)}/`;
+  return bridgeKey ? `${base}_hana/${encodeURIComponent(bridgeKey)}/` : base;
 }
 
 /** 反解析代理前缀（校验用/单测）：返回 { appId, runtimeId } 或 null。 */
@@ -75,7 +78,7 @@ export function phaseCopy(phase, { ready = false, errText = null } = {}) {
  * logPath/logTail 由调用方（routes 面，持有 ctx.dataDir 读权）注入：logTail 为 App 会话
  * 日志最新若干行（starting 态壳页滚动展示，含 runtime 启动/依赖 ensure 过程镜像）。
  */
-export function buildBootSnapshot(details, { logPath = null, logTail = [] } = {}) {
+export function buildBootSnapshot(details, { logPath = null, logTail = [], bridgeKey = null } = {}) {
   const d = details && typeof details === "object" ? details : {};
   const phase = typeof d.phase === "string" ? d.phase : "idle";
   const runtimeId = typeof d.runtimeId === "string" && d.runtimeId ? d.runtimeId : null;
@@ -97,7 +100,7 @@ export function buildBootSnapshot(details, { logPath = null, logTail = [] } = {}
   }
   // 代理前缀只在「服务真正就绪」后给出：phase/runtimeId 本身不代表宿主已暴露代理
   // （宿主在 readyMarker 出现后才发布服务），UI 绝不提前指向死端点。
-  const proxyPrefix = ready ? runtimeProxyPrefix({ runtimeId }) : null;
+  const proxyPrefix = ready ? runtimeProxyPrefix({ runtimeId, bridgeKey }) : null;
   const logTailOut = (Array.isArray(logTail) ? logTail : [])
     .map((line) => String(line).slice(0, 500))
     .slice(-80);

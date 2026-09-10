@@ -1,218 +1,43 @@
-# @dsh-hanako/dshana 内置 roster（官方语义 bundle patch，src-cordis/ 顶层）。
-# 层序：profile manifest 的 dsh.profile.bundles 按序应用本文件（在 @deepseek-ai/dsh-base
-# 之后），随后叠加 profile 用户层与 $DSH_HOME home 层——用户/home 按 id 逐行覆盖本文件
-# （后写胜出）。扩展 roster 走用户层或 home 层，勿改本文件。
+# @dsh-hanako/dshana — 定制 bundle patch。
+#
+# 层序（profile manifest 的 dsh.profile.bundles，后写胜出）：
+#   @deepseek-ai/dsh-base → @deepseek-ai/dsh-web-app → @dsh-hanako/dshana（本文件）
+#
+# 官方两层已经提供：surface 值覆盖（system-prompt / session-query-sqlite / tools）、服务层
+# （session / settings / workspace controller、web-startup / webserver / web-runtime、client-hmr）、
+# **connection（官方 @deepseek-ai/dsh-client-connection：BrowserAuth token/cookie 鉴权面 + /api 载体）**、
+# browser roster（modules / api-remotes / cordis-client-runner + 全部 ui-*）、agent-presets，
+# 以及「agent plane 移入 presets」的 disabled 段。
+#
+# **本文件不重复官方行**，只放两类内容：
+#   1) 对官方行的覆盖 / disable（我们自己的值）
+#   2) @dsh-hanako/* 定制插件 insert
+#
+# 机制：一切经本 bundle 的 dsh.bundle.patch 声明（见 src-cordis/package.json），不使用 profile
+# 用户层 cordis.patch.yml，也不使用命令行 --patch 叠加。
+#
+# 2026-09-11 起向官方样例 hana-dsh 看齐：连接与鉴权面交回官方（connection 由 dsh-web-app 层
+# 提供，App 侧经 runtime 中继补 cookie），不再用 @dsh-hanako/bridge 伪造免鉴权 connection。
 
-# ── surface-specific 值覆盖（与官方 web bundle 同值，显式保留防演进漂移）──
+# ── 1) 对官方行的覆盖 ───────────────────────────────────────────────────────
 
-- id: system-prompt
+# web-runtime（官方 @deepseek-ai/dsh-web-app 行）：App 内嵌场景不开系统浏览器、不打印 URL
+# （由宿主卡片 / iframe 承载），surfaceContext 保留（模型可见 Web 面说明）。trustedHosts 沿用
+# 官方表达式（LAN 字面量 + --trusted-host），不另开信任面。
+- id: web-runtime
   config:
-    persona: >-
-      You are a coding agent powered by the {{model}} model. Your working directory is {{cwd}}.
+    openBrowser: false
+    printUrl: false
+    surfaceContext: true
+    trustedHosts: !!js ctx.webStartup.trustedHosts
 
-- id: session-query-sqlite
-  config:
-    path: ':memory:'
-    openAt: never
+# 官方 ui-layout 的「root 装配者」角色由 @dsh-hanako/view（client 半）接管——layout 服务与
+# root 槽注册都在 view；官方行 disable，避免出现两个装配者。
+- id: ui-layout
+  disabled: true
 
-- id: tools
-  config:
-    mode: !!js process.env.DSH_TOOLS_MODE
-
+# ── 2) @dsh-hanako/* 定制插件 ──────────────────────────────────────────────
 - insert:
-    # ── 服务层（官方 web-app bundle 的服务行，dsh-base 不带的）──
-    - id: subagent-model-selection-settings
-      name: '@deepseek-ai/dsh-tool-subagent/model-selection-settings'
-
-    - id: code-runtime
-      name: '@deepseek-ai/dsh-code-runtime-worker-thread'
-
-    - id: message-feedback
-      name: '@deepseek-ai/dsh-message-feedback'
-      config:
-        maxNoteBytes: 8192
-
-    - id: workspace
-      name: '@deepseek-ai/dsh-workspace'
-
-    - id: session-reference
-      name: '@deepseek-ai/dsh-session-reference'
-
-    - id: file-reference-local
-      name: '@deepseek-ai/dsh-file-reference-local'
-
-    - id: session-stats
-      name: '@deepseek-ai/dsh-session-stats'
-
-    - id: directory-picker
-      name: '@deepseek-ai/dsh-host-directory-picker-auto'
-
-    - id: plugin-inventory
-      name: '@deepseek-ai/dsh-host-plugin-inventory'
-
-    - id: session-controller
-      name: '@deepseek-ai/dsh-api-session-controller'
-
-    - id: settings-controller
-      name: '@deepseek-ai/dsh-api-settings-controller'
-
-    - id: workspace-controller
-      name: '@deepseek-ai/dsh-api-workspace-controller'
-
-    - id: cordis-host-runner
-      name: '@deepseek-ai/dsh-cordis-host-runner'
-
-    - id: web-startup
-      name: '@deepseek-ai/dsh-web-app/startup'
-
-    - id: webserver
-      name: '@deepseek-ai/dsh-host-webserver'
-      inject: [webStartup]
-      config:
-        host: !!js ctx.webStartup.host ?? '127.0.0.1'
-        port: !!js ctx.webStartup.port ?? 3080
-        compression: gzip
-        compressionLevel: 1
-        compressionThresholdBytes: 1024
-
-    - id: web-runtime
-      name: '@deepseek-ai/dsh-web-app'
-      inject: [webStartup]
-      config:
-        openBrowser: !!js ctx.webStartup.openBrowser
-        printUrl: true
-        surfaceContext: true
-        trustedHosts: !!js ctx.webStartup.trustedHosts
-
-    - id: client-hmr
-      name: '@deepseek-ai/dsh-client-hmr'
-
-    # ── browser 基础设施（无 connection/鉴权面）──
-    - id: modules
-      name: '@deepseek-ai/dsh-client-modules'
-
-    - id: api-remotes
-      name: '@deepseek-ai/dsh-api-remotes'
-
-    - id: cordis-client-runner
-      name: '@deepseek-ai/dsh-cordis-client-runner'
-
-    # ── UI 组件（复用官方 client 插件，纯呈现层不强联鉴权）──
-    - id: ui-theme
-      name: '@deepseek-ai/dsh-client-ui-theme'
-
-    - id: locale
-      name: '@deepseek-ai/dsh-client-locale'
-
-    # (ui-layout 已从 roster 移除——root 装配者由 @dsh-hanako/view 接管，见本文件
-    # @dsh-hanako/* 子插件区；其 client src 由 view 插件 vendor 构建期编译进自身 bundle)
-
-    - id: ui-renderer
-      name: '@deepseek-ai/dsh-client-ui-renderer'
-
-    - id: ui-session
-      name: '@deepseek-ai/dsh-client-ui-session'
-
-    - id: ui-sidebar
-      name: '@deepseek-ai/dsh-client-ui-sidebar'
-
-    - id: ui-settings
-      name: '@deepseek-ai/dsh-client-ui-settings'
-
-    - id: ui-settings-general
-      name: '@deepseek-ai/dsh-client-ui-settings-general'
-
-    - id: ui-settings-models
-      name: '@deepseek-ai/dsh-client-ui-settings-models'
-
-    - id: ui-settings-plugin-inventory
-      name: '@deepseek-ai/dsh-client-ui-settings-plugin-inventory'
-
-    - id: ui-conversation
-      name: '@deepseek-ai/dsh-client-ui-conversation'
-
-    - id: ui-approval
-      name: '@deepseek-ai/dsh-client-ui-approval'
-
-    - id: ui-chat
-      name: '@deepseek-ai/dsh-client-ui-chat'
-
-    - id: ui-brand-official
-      name: '@deepseek-ai/dsh-client-ui-brand-official'
-
-    - id: ui-attachment
-      name: '@deepseek-ai/dsh-client-ui-attachment'
-
-    - id: ui-tool
-      name: '@deepseek-ai/dsh-client-ui-tool'
-
-    - id: ui-cordis
-      name: '@deepseek-ai/dsh-client-ui-cordis'
-
-    - id: ui-workflow-run
-      name: '@deepseek-ai/dsh-client-ui-workflow-run'
-
-    - id: ui-deliverables
-      name: '@deepseek-ai/dsh-client-ui-deliverables'
-
-    - id: ui-workspace
-      name: '@deepseek-ai/dsh-client-ui-workspace'
-
-    - id: ui-input-trigger
-      name: '@deepseek-ai/dsh-client-ui-input-trigger'
-
-    - id: ui-commands
-      name: '@deepseek-ai/dsh-client-ui-commands'
-
-    - id: ui-skill
-      name: '@deepseek-ai/dsh-client-ui-skill'
-
-    - id: ui-subagent
-      name: '@deepseek-ai/dsh-client-ui-subagent'
-
-    - id: ui-reference
-      name: '@deepseek-ai/dsh-client-ui-reference'
-
-    - id: ui-schedule
-      name: '@deepseek-ai/dsh-client-ui-schedule'
-
-    - id: ui-jobs
-      name: '@deepseek-ai/dsh-client-ui-jobs'
-
-    - id: ui-goal
-      name: '@deepseek-ai/dsh-client-ui-goal'
-
-    - id: ui-message-feedback
-      name: '@deepseek-ai/dsh-client-ui-message-feedback'
-
-    - id: ui-model-selection
-      name: '@deepseek-ai/dsh-client-ui-model-selection'
-
-    - id: ui-permission
-      name: '@deepseek-ai/dsh-client-ui-permission-presets'
-
-    - id: ui-agent-preset
-      name: '@deepseek-ai/dsh-client-ui-agent-preset'
-
-    - id: ui-settings-plugins
-      name: '@deepseek-ai/dsh-client-ui-settings-plugins'
-
-    - id: ui-plan
-      name: '@deepseek-ai/dsh-client-ui-plan'
-
-    - id: ui-user-questions
-      name: '@deepseek-ai/dsh-client-ui-user-questions'
-
-    - id: ui-trajectory
-      name: '@deepseek-ai/dsh-client-ui-trajectory'
-
-    # ── agent-presets（dsh-base 不带，显式 insert 补 default）──
-    - id: agent-presets
-      name: '@deepseek-ai/dsh-agent-presets'
-      config:
-        default: standard
-
-    # ── @dsh-hanako/* 子插件 ──
     - id: '@dsh-hanako/logger'
       name: '@dsh-hanako/logger'
 
@@ -228,23 +53,17 @@
     - id: '@dsh-hanako/settings'
       name: '@dsh-hanako/settings'
 
+    # v1 遗留总线（dshana.bus WS 服务端）：v2 宿主不再连它，控制面改走 ctx.runtime.fetch
+    # 到 runtime 中继的 /_control（见 src/runtime/bridge.js）。退役候选，暂留待真机确认无
+    # 注入依赖后删除。
     - id: '@dsh-hanako/bus'
       name: '@dsh-hanako/bus'
 
-    # 免鉴权 connection 等价服务 + /api HTTP 载体（替代官方 dsh-client-connection 的
-    # BrowserAuth token/cookie 鉴权面——SPA 数据面 /api 一元 RPC 与 gateway 激活的
-    # 依赖；requestRejection 恒 undefined = 拔鉴权墙）。须在 gateway/api-* 插件之前
-    # 或同批激活（cordis inject 异步协调，服务可用即回调，顺序不敏感）。
-    - id: '@dsh-hanako/bridge'
-      name: '@dsh-hanako/bridge'
-
-    # 宿主专供 WebUI：serve fork 官方前端到根路径（fallback 席位，无代理/无鉴权面，
-    # 数据面走 bridge 免鉴权 /api + gateway remote.mux）
+    # 宿主专供 WebUI：serve fork 官方前端到根路径（webserver fallback 席位）。官方
+    # web-runtime 亦经 frontend-static 挂同席位——两者重叠，真机 boot 验证谁生效（待验）。
     - id: '@dsh-hanako/app'
       name: '@dsh-hanako/app'
 
-    # fpFullPanel 视图装配插件：替代官方 ui-layout 的 root 装配者角色——provide layout
-    # 服务（满足 ui-sidebar 等 inject 方）+ 注册 root = 官方 AppFrame（无参完整视图，
-    # 官方等价）；URL 三态（无参/main/sidebar）路由 V2/V3 扩展
+    # fpFullPanel 视图装配插件：替代官方 ui-layout 的 root 装配者角色。
     - id: '@dsh-hanako/view'
       name: '@dsh-hanako/view'
