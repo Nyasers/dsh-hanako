@@ -14,6 +14,7 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { createHash } from "node:crypto";
+import { parseArgs } from "node:util";
 import { ZipArchive } from "archiver";
 
 import fs from "fs-extra";
@@ -214,9 +215,11 @@ function materializeProdDeps(spec) {
   return modules;
 }
 
-// 目标选择：`--target <名字>` / `--target=<名字>`（**必须显式给**，无默认）。
-// 三种情况一律报错并打印支持目标列表，绝不静默回落：未指定、不认识的目标、不认识的参数。
-// （曾因 `--targets=x` 以 `--target` 开头而漏判，静默回落跑了一次完整的通用包：两分多钟 + 2 GB 临时文件。）
+// 目标选择：`--target <名字>` / `--target=<名字>`（必须显式给，无默认）。
+// 用 node:util 的 parseArgs 结构化解析（strict + 禁位置参数）：未知选项、缺值、多余位置参数
+// 由它直接报错，不再手写字符串扫描——上一版手扫以 startsWith("--target") 判「认识的参数」，
+// 把 `--targets=x` 漏成了合法值，静默回落跑了一整次通用包。
+// 未指定 / 不支持的目标 / 解析失败三种情况一律 failUsage：打印支持目标列表并退出码 2。
 // 多目标由 CI 并行矩阵各自跑一次，或本地逐个跑 `pnpm run pack:<target>`；不支持 `all`。
 function supportedTargetNames() {
   return ["universal", ...HOST_TARGETS.map((t) => t.name), ...EXTRA_TARGETS.map((t) => t.name)];
@@ -232,23 +235,22 @@ function failUsage(detail) {
   process.exit(2);
 }
 const spec = (() => {
-  const args = process.argv.slice(2);
-  const bad = args.find((a) => a.startsWith("-") && a !== "--target" && !a.startsWith("--target="));
-  if (bad) failUsage(`不认识的参数：${bad}（只接受 --target <名字> / --target=<名字>）`);
-  const eq = args.find((a) => a.startsWith("--target="));
-  const i = args.indexOf("--target");
-  let raw;
-  if (eq) {
-    raw = eq.slice("--target=".length).trim();
-  } else if (i >= 0) {
-    const v = args[i + 1];
-    if (!v || v.startsWith("-")) failUsage("--target 需要一个目标名");
-    raw = v.trim();
-  } else {
-    failUsage("未指定 --target");
+  let parsed;
+  try {
+    parsed = parseArgs({
+      args: process.argv.slice(2),
+      options: { target: { type: "string" } },
+      strict: true,
+      allowPositionals: false,
+    });
+  } catch (e) {
+    failUsage(`参数解析失败：${(e && e.message) || e}`);
   }
-  const found = targetSpec(raw);
-  if (!found) failUsage(`未知打包目标：${raw}`);
+  const raw = parsed.values.target;
+  if (raw === undefined) failUsage("未指定 --target");
+  const name = String(raw).trim();
+  const found = targetSpec(name);
+  if (!found) failUsage(`未知打包目标：${name}`);
   return found;
 })();
 
