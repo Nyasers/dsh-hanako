@@ -416,22 +416,17 @@ import { hana } from "./vendor/hana-plugin-sdk.js";
       });
     }
   });
+  // 复制必须走宿主能力门（app/ui.clipboard-write）：iframe 内由 postMessage 触发的复制没有
+  // 用户手势，navigator.clipboard 与 document.execCommand 都会被拒——v1 真机实测过，那两条
+  // 兜底全是白写，故不再保留。SDK 侧 hana.clipboard.writeText 失败会 reject。
   function writeClipboard(text) {
-    var nc = navigator.clipboard;
-    if (nc && typeof nc.writeText === "function") {
-      return nc.writeText(text).then(function () { return true; }, function () { return legacyCopy(text); });
+    if (!hana || !hana.clipboard || typeof hana.clipboard.writeText !== "function") {
+      return Promise.resolve(false);
     }
-    return Promise.resolve(legacyCopy(text));
-  }
-  function legacyCopy(text) {
-    try {
-      var ta = document.createElement("textarea");
-      ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
-      document.body.appendChild(ta); ta.select();
-      var ok = document.execCommand && document.execCommand("copy");
-      document.body.removeChild(ta);
-      return Boolean(ok);
-    } catch (e) { return false; }
+    return Promise.resolve(hana.clipboard.writeText(text)).then(
+      function (payload) { return !(payload && payload.ok === false); },
+      function () { return false; }
+    );
   }
   // 主题跟随：SDK 主题订阅（宿主变更 → 推送内层）+ 定时兜底推送（frame 存在时）
   var themePushTimer = null;
