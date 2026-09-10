@@ -9,3 +9,15 @@ allowBuilds:
   protobufjs: true
 minimumReleaseAgeExclude:
   - "@deepseek-ai/*"
+
+# 多平台预编译资产：安装时同时物化 win32/darwin/linux × x64/arm64 的可选依赖，
+# 让出一份安装产物就能覆盖三平台（打包时随包分发，安装方无需 npm install）。
+# 注：pnpm 11 不再读 package.json 的 pnpm 字段（会打印 ignored 警告），此设置只能放这里。
+supportedArchitectures:
+  os:
+    - win32
+    - darwin
+    - linux
+  cpu:
+    - x64
+    - arm64
