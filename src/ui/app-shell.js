@@ -15,6 +15,7 @@
 // fallback 纸张色），数据语义 v2 boot-state（phase idle/starting/ready/error/stopped +
 // logTail/logPath）。
 import { hana } from "@hana/plugin-sdk";
+import { injectDshIndex, installTransport } from "./dsh-inject.js";
 
 (function () {
   "use strict";
@@ -234,26 +235,9 @@ import { hana } from "@hana/plugin-sdk";
       body.setAttribute("data-view", "ready");
       if (spin) spin.hidden = true;
       if (panel) panel.innerHTML = "";
-      if (frameWrap) {
-        frameWrap.hidden = false;
-        var bar = $("#runtime-bar");
-        var rt = $("[data-dsh-runtime]", bar), pt = $("[data-dsh-port]", bar);
-        if (rt) rt.textContent = "runtime " + (s.runtimeId || "–");
-        if (pt) pt.textContent = s.service && s.service.port ? "port " + s.service.port : "–";
-      }
-      if (frame) {
-        if (frame.getAttribute("data-src") !== s.proxyPrefix) {
-          frame.setAttribute("data-src", s.proxyPrefix);
-          // 先种 runtime cookie 再挂 iframe（iframe 无 header；403 兜底直接挂靠已有 cookie）
-          warmRuntimeCookie(s.proxyPrefix).finally(function () {
-            frame.src = runtimeUiUrl(s.proxyPrefix);
-            frame.hidden = false;
-          });
-          return;
-        }
-        frame.hidden = false;
-      }
-      bindMainActions(s);
+      if (frameWrap) frameWrap.hidden = true;
+      if (frame) { frame.removeAttribute("src"); frame.hidden = true; }
+      startInjection(s.proxyPrefix);
       schedulePoll(POLL_SLOW_MS);
       return;
     }
@@ -272,6 +256,49 @@ import { hana } from "@hana/plugin-sdk";
       bindMainActions(s);
     }
     schedulePoll(view === "booting" ? POLL_FAST_MS : POLL_MID_MS);
+  }
+
+  // ---- DSH 注入（对齐官方样例：同文档注入 + __DSH_TRANSPORT__，不再用 iframe）----
+  // 一次装配：标记视图参数（DSH 侧 view 插件读 ?dshana-view=）→ 装 transport → 取回 DSH
+  // index 注入本页。私有前缀 = 中继前缀 + surface 路径票据（DSH 前端经原生 fetch 发出的
+  // 请求带不了 header，票据必须在路径里）。
+  var injected = { started: false, dispose: null };
+  function startInjection(prefix) {
+    if (injected.started) return;
+    injected.started = true;
+    var view = (shell && shell.getAttribute("data-dshana-view")) || "main";
+    markViewParam(view);
+    var privatePrefix = withSurfaceTicket(prefix, surfaceSession());
+    var base = new URL(privatePrefix, location.origin);
+    injected.dispose = installTransport(base);
+    hana.api.fetch(privatePrefix + "index.html", { cache: "no-store" })
+      .then(function (r) {
+        if (!r.ok) throw new Error("DSH index HTTP " + r.status);
+        return r.text();
+      })
+      .then(function (html) { return injectDshIndex(html, base); })
+      .catch(function (err) { showInjectionError(err); });
+  }
+  // 视图参数写进 URL（DSH 侧 view 插件按 ?dshana-view= 装配；replaceState 不改历史）
+  function markViewParam(view) {
+    try {
+      var u = new URL(location.href);
+      if (u.searchParams.get("dshana-view") !== view) {
+        u.searchParams.set("dshana-view", view);
+        history.replaceState(null, "", u.toString());
+      }
+    } catch (e) { /* 非标准环境忽略 */ }
+  }
+  function showInjectionError(err) {
+    var msg = (err && err.message) ? err.message : String(err);
+    if (shell) shell.hidden = true;
+    document.body.setAttribute("data-view", "action");
+    var panel = $("#boot-panel") || $(".panel");
+    if (!panel) { panel = document.createElement("div"); document.body.append(panel); }
+    panel.innerHTML = '<div class="card"><h2 class="card-label">DSH 前端注入失败</h2>'
+      + '<div class="guide"><div class="guide-label">问题</div>' + esc(msg) + "</div>"
+      + '<div class="note auto">DSH 已就绪，但页面装配失败。重开本卡重试；若反复如此，检查中继前缀与 surface 票据。</div></div>';
+    schedulePoll(POLL_SLOW_MS);
   }
 
   function bindMainActions(s) {
@@ -332,21 +359,11 @@ import { hana } from "@hana/plugin-sdk";
       }
       if (meta) meta.textContent = "runtime " + (s.runtimeId || "–") + (s.service && s.service.port ? " · port " + s.service.port : "");
       if (logEl) logEl.hidden = true;
-      if (frameZone) frameZone.hidden = false;
-      if (frame) {
-        if (frame.getAttribute("data-src") !== s.proxyPrefix) {
-          frame.setAttribute("data-src", s.proxyPrefix);
-          warmRuntimeCookie(s.proxyPrefix).finally(function () {
-            frame.src = runtimeUiUrl(s.proxyPrefix);
-            frame.hidden = false;
-          });
-          return;
-        }
-        frame.hidden = false;
-      }
+      if (frameZone) frameZone.hidden = true;
+      if (frame) { frame.removeAttribute("src"); frame.hidden = true; }
       if (btnStart) btnStart.hidden = true;
-      if (btnStop) btnStop.hidden = false;
-      bindSidebarActions();
+      if (btnStop) btnStop.hidden = true;
+      startInjection(s.proxyPrefix);
       schedulePoll(POLL_SLOW_MS);
       return;
     }
@@ -516,6 +533,10 @@ import { hana } from "@hana/plugin-sdk";
     // 宿主握手（对齐官方样例 hana-dsh 的 bootstrap：页面挂载即 hana.ready()，宿主据此
     // 确认本页已接管；payload 省略——本 App 无额外就绪声明）。
     try { if (hana && typeof hana.ready === "function") hana.ready(); } catch (e) { /* 宿主未提供则忽略 */ }
+    // 卸载释放注入的 transport（WS 载体等）
+    window.addEventListener("pagehide", function () {
+      if (injected.dispose) { try { injected.dispose(); } catch (e) { /* 忽略 */ } }
+    }, { once: true });
     // 就绪后定时向 iframe 推主题（render 每轮也会触发一次首推）
     var obs = setInterval(function () {
       if (document.body.getAttribute("data-view") === "ready" || (isSidebar && frameWindow())) {

@@ -100,15 +100,16 @@ const uiSrc = join(ROOT, "src", "ui");
 if (!fs.pathExistsSync(uiSrc)) {
   throw new Error("App ui/ 静态树缺失（src/ui）：contributes.cards 的 route 指向 ui 内页面（见 manifest.json）");
 }
-// 静态面（*.html 等）直接拷贝；app-shell.js 由 ui bundle 产出（浏览器 SDK 构建期内联），
-// rspack.config.mjs 是构建源、不随包。
+// 静态面（*.html 等非脚本资源）直接拷贝；页面脚本（*.js/*.mjs）是构建源，由 ui bundle 收进
+// dist/ui/app-shell.js（浏览器 SDK 一并内联），不另放源码副本。
 fs.copySync(uiSrc, join(DIST_DIR, "ui"), {
   filter: (src) => {
     const name = basename(src);
-    return name !== "app-shell.js" && name !== "rspack.config.mjs";
+    if (name.endsWith(".js") || name.endsWith(".mjs")) return false;
+    return true;
   },
 });
-console.log("ui/ 静态面 -> dist/ui（*.html 等；app-shell.js 由 ui bundle 产出）");
+console.log("ui/ 静态面 -> dist/ui（*.html 等；脚本由 ui bundle 产出）");
 
 // ui bundle 编译（dist/ui/app-shell.js；clean:false 只写该文件，静态页已被 copy）
 await compile(uiConfig, "build:src ui bundle");
