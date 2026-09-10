@@ -14,6 +14,7 @@ const GOOD = {
   dshPort: 47120,
   bridgePort: 4317,
   bridgeKey: "k".repeat(32),
+  controlKey: "c".repeat(32),
   readyMarker: "DSH_READY",
 };
 
@@ -25,6 +26,7 @@ test("parseRuntimeConfig: 合法配置（注入读取）", () => {
   assert.equal(o.dshPort, 47120);
   assert.equal(o.bridgePort, 4317);
   assert.equal(o.bridgeKey, GOOD.bridgeKey);
+  assert.equal(o.controlKey, GOOD.controlKey);
   assert.equal(o.readyMarker, "DSH_READY");
   assert.equal(o.cordisSrc, null);
   assert.equal(o.depsRoot, null);
@@ -54,9 +56,11 @@ test("normalizeRuntimeConfig: dataDir 必填", () => {
   assert.throws(() => normalizeRuntimeConfig({ ...GOOD, dataDir: 5 }), (e) => e instanceof UsageError);
 });
 
-test("normalizeRuntimeConfig: bridgeKey 必填且不短于 16 字符", () => {
+test("normalizeRuntimeConfig: bridgeKey/controlKey 必填且不短于 16 字符", () => {
   assert.throws(() => normalizeRuntimeConfig({ ...GOOD, bridgeKey: "short" }), (e) => e instanceof UsageError && /bridgeKey/.test(e.message));
   assert.throws(() => normalizeRuntimeConfig({ ...GOOD, bridgeKey: "" }), (e) => e instanceof UsageError);
+  assert.throws(() => normalizeRuntimeConfig({ ...GOOD, controlKey: "short" }), (e) => e instanceof UsageError && /controlKey/.test(e.message));
+  assert.throws(() => normalizeRuntimeConfig({ ...GOOD, controlKey: "" }), (e) => e instanceof UsageError);
 });
 
 test("normalizeRuntimeConfig: readyMarker 含换行拒绝（宿主按整行匹配）", () => {

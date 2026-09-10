@@ -54,8 +54,9 @@ let managed = {
   lastError: null,
   mirrorCancel: null, // watch 日志镜像 AbortController
   mirrors: [], // 已挂 watch 的 runtimeId（防重复）
-  bridgePort: null, // 中继端口（= 注册给宿主的 service.port；App 侧 RPC 基址）
-  bridgeKey: null, // 中继鉴权 key（header x-hana-dsh-bridge；绝不落盘/落日志）
+  bridgePort: null, // 中继端口（= 注册给宿主的 service.port；浏览器侧访问）
+  bridgeKey: null, // 中继鉴权 key（header x-hana-dsh-bridge / _hana 路径；绝不落盘/落日志）
+  controlKey: null, // 控制面 key（/_control；App 工具经 controller.invoke 使用）
 };
 
 /** 复位单例（外部测试/重建用）。 */
@@ -70,6 +71,7 @@ export function resetManagedRuntime() {
     mirrors: [],
     bridgePort: null,
     bridgeKey: null,
+    controlKey: null,
   };
   return managed;
 }
@@ -92,12 +94,13 @@ export function parseServicePort(raw, fallback = DEFAULT_SERVICE_PORT) {
  * 敏感项（bridgeKey）只进本对象→写 0600 文件→argv 只传路径，不出现在 argv/日志。
  */
 export function buildRuntimeConfig(opts) {
-  const { dataDir, dshPort, bridgePort, bridgeKey, cordisSrc, depsRoot, readyMarker = READY_MARKER } = opts || {};
+  const { dataDir, dshPort, bridgePort, bridgeKey, controlKey, cordisSrc, depsRoot, readyMarker = READY_MARKER } = opts || {};
   if (typeof dataDir !== "string" || !dataDir) throw new Error("buildRuntimeConfig: dataDir 必填（App ctx.dataDir）");
   if (!Number.isInteger(dshPort) || dshPort < 1 || dshPort > 65535) throw new Error("buildRuntimeConfig: dshPort 必填（1..65535）");
   if (!Number.isInteger(bridgePort) || bridgePort < 1 || bridgePort > 65535) throw new Error("buildRuntimeConfig: bridgePort 必填（1..65535）");
   if (typeof bridgeKey !== "string" || bridgeKey.length < 16) throw new Error("buildRuntimeConfig: bridgeKey 必填（≥16 字符）");
-  const config = { dataDir, dshPort, bridgePort, bridgeKey, readyMarker };
+  if (typeof controlKey !== "string" || controlKey.length < 16) throw new Error("buildRuntimeConfig: controlKey 必填（≥16 字符）");
+  const config = { dataDir, dshPort, bridgePort, bridgeKey, controlKey, readyMarker };
   if (typeof cordisSrc === "string" && cordisSrc) config.cordisSrc = cordisSrc;
   if (typeof depsRoot === "string" && depsRoot) config.depsRoot = depsRoot;
   return config;
@@ -113,7 +116,7 @@ export function writeRuntimeConfigFile(dataDir, config) {
   return filename;
 }
 
-/** 中继访问面（App 侧 RPC 用）：{ base, headers }；未就绪返回 null。 */
+/** 中继/控制访问面（App 侧用）：{ base, headers, port, key, controlKey, runtimeId }；未就绪返回 null。 */
 export function bridgeAccess() {
   if (!managed.bridgePort) return null;
   return {
@@ -121,6 +124,8 @@ export function bridgeAccess() {
     headers: managed.bridgeKey ? { "x-hana-dsh-bridge": managed.bridgeKey } : {},
     port: managed.bridgePort,
     key: managed.bridgeKey,
+    controlKey: managed.controlKey,
+    runtimeId: managed.runtimeId,
   };
 }
 
@@ -253,6 +258,7 @@ async function doStartManaged(opts) {
   if (!dataDir) throw new Error("managed-runtime: ctx.dataDir 缺失");
   const bridgePort = parseServicePort(appConfig("servicePort"));
   const bridgeKey = randomBytes(24).toString("base64url");
+  const controlKey = randomBytes(24).toString("base64url");
   let dshPort = randomInt(38000, 52000);
   while (dshPort === bridgePort) dshPort = randomInt(38000, 52000);
   const config = buildRuntimeConfig({
@@ -260,6 +266,7 @@ async function doStartManaged(opts) {
     dshPort,
     bridgePort,
     bridgeKey,
+    controlKey,
     cordisSrc: typeof opts.cordisSrc === "string" && opts.cordisSrc ? opts.cordisSrc : undefined,
     depsRoot: typeof opts.depsRoot === "string" && opts.depsRoot ? opts.depsRoot : undefined,
   });
@@ -295,6 +302,7 @@ async function doStartManaged(opts) {
   // 子进程已启动：配置已读入（首件事），延迟清理文件；同时记录中继访问面供 App 侧 RPC。
   managed.bridgePort = bridgePort;
   managed.bridgeKey = bridgeKey;
+  managed.controlKey = controlKey;
   setTimeout(() => { try { rmSync(configPath, { force: true }); } catch { /* 忽略 */ } }, 10000);
   const runtimeId = info && info.runtimeId;
   if (!runtimeId) {
