@@ -151,9 +151,17 @@ const UNIVERSAL_TARGET = {
   assets: HOST_TARGETS.flatMap((t) => t.assets),
 };
 
+// 非宿主矩阵、**仅手动编译**的目标（不进 CI 主线）：宿主未承诺这些平台，但预编译资产实测存在，
+// 需要时点名出包（`pack:<target>` 别名已备）。资产清单同样按实测形态写。
+// 注：这些目标不进 `--targets=all`，只能点名；否则 CI 会产出宿主不支持的包。
+const EXTRA_TARGETS = [
+  { name: "linux-arm64", os: ["linux"], cpu: ["arm64"], libc: ["glibc"], assets: ["@koromix/koffi-linux-arm64", "node-addon-require-builtin-linux-arm64-gnu", "@img/sharp-linux-arm64", "@img/sharp-libvips-linux-arm64"] },
+  { name: "win32-arm64", os: ["win32"], cpu: ["arm64"], assets: ["@koromix/koffi-win32-arm64", "node-addon-require-builtin-win32-arm64-msvc", "@img/sharp-win32-arm64"] },
+];
+
 function targetSpec(name) {
   if (name === "universal") return UNIVERSAL_TARGET;
-  return HOST_TARGETS.find((t) => t.name === name) || null;
+  return HOST_TARGETS.find((t) => t.name === name) || EXTRA_TARGETS.find((t) => t.name === name) || null;
 }
 
 // 仓库 pnpm-workspace.yaml 中的 supportedArchitectures 由本脚本按目标替换（标记块内）
@@ -217,7 +225,7 @@ const selectedSpecs = (() => {
       : raw.split(",").map((s) => s.trim()).filter(Boolean);
   return names.map((n) => {
     const spec = targetSpec(n);
-    if (!spec) throw new Error(`未知打包目标：${n}（可选：universal / all / ${HOST_TARGETS.map((t) => t.name).join(" / ")}）`);
+    if (!spec) throw new Error(`未知打包目标：${n}（可选：universal / all / ${[...HOST_TARGETS, ...EXTRA_TARGETS].map((t) => t.name).join(" / ")}）`);
     return spec;
   });
 })();
