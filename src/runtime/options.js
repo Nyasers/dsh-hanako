@@ -1,16 +1,22 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/runtime/options.js — 受管 runtime 子进程自有参数解析（dsh-host 专用）
+// src/runtime/options.js — 受管 runtime 子进程的私有配置读取（dsh-host 专用）
 //
-// 参数名由 App 主进程侧 lib/managed-runtime.js buildRuntimeArgs() 构造并保持一致
-//（本文件与 managed-runtime.js 是对偶契约；增删参数须两处同步 + tests/ 用例同步）。
-// 宿主（ctx.runtime.start）不解析这些参数——它们是 App 自有 args，子进程自己认。
+// 形态（对齐官方样例 hana-dsh）：**不再用命令行明文传参**，改为单个私有配置文件路径
+// （argv[1]）——配置由 App 主进程（lib/managed-runtime.js）以 0600 写入 dataDir/integration/，
+// 子进程读后立即 unlink。bridgeKey 这类「不能让回环端口变成第二个无鉴权面」的凭据绝不出现在
+// argv（进程列表可见）、环境变量或日志里。
 //
-// 支持形态：--flag value 与 --flag=value；值含空格时必须整体作为单个 argv 传入
-//（宿主 start.args 是数组，天然支持）；未知参数/缺失必选 → usageError（exit code 2）。
-// 端口显式契约（迁移指南 §10）：必须 1..65535 的显式端口，禁 0（禁随机 + 回读——宿主
-// 不认「子进程自报端口」，service.port 声明即契约）。
+// 配置文件 schema（JSON）：
+//   { dataDir, dshPort, bridgePort, bridgeKey, readyMarker, cordisSrc?, depsRoot? }
+//   · dataDir       App ctx.dataDir 绝对路径（dsh-home / runtime / logs 均在其下）
+//   · dshPort       DSH webserver 内部监听端口（1..65535，runtime 自用，不由宿主暴露）
+//   · bridgePort    中继端口 = 注册给宿主的 service.port（宿主代理目标；1..65535）
+//   · bridgeKey     中继鉴权 key（header x-hana-dsh-bridge / 路径 /_hana/<key>/）
+//   · readyMarker   就绪标记（须与 start.service.readyMarker 完全一致，整行匹配）
+//
+// 仍接受 --help（无配置文件时打印用法）。
 export class UsageError extends Error {
   constructor(message) {
     super(message);
@@ -19,116 +25,71 @@ export class UsageError extends Error {
   }
 }
 
-/** 本进程接受的 App 自有参数（与 managed-runtime.js buildRuntimeArgs 对偶）。 */
-export const FLAGS = [
-  "port",
-  "data-dir",
-  "hana-task-id",
-  "deps-root",
-  "cordis-src",
-  "ready-marker",
-  "help",
-];
+export const USAGE = `用法：dsh-host.mjs <runtime-config.json>（dsh-hanako App v2 受管 Node runtime 入口）
+  <runtime-config.json>  私有运行时配置文件绝对路径（App 主进程写入，0600，启动即删）；
+                         内容见 options.js 头注释 schema。
+  --help                 显示本帮助
 
-export const USAGE = `用法：dsh-host.mjs（dsh-hanako App v2 受管 Node runtime 入口，由 ctx.runtime.start 启动）
-必选参数：
-  --port <port>        DSH webserver 显式监听端口（1..65535；须与启动端 service.port 一致，禁 0）
-  --data-dir <dir>     App ctx.dataDir 绝对路径（dsh-home / runtime 依赖区 / logs 均在 dataDir 下）
-可选参数：
-  --hana-task-id <id>  发起本次启动的 Hana taskId（信息性；任务/会话映射在迁移步骤 3 接入）
-  --deps-root <dir>    依赖 node_modules 根（默认 <App 安装目录>/node_modules，随包物化；调试覆盖）
-  --cordis-src <dir>   @dsh-hanako cordis 产物 scope 根（默认 <App 安装目录>/cordis）
-  --ready-marker <s>   服务就绪标记（默认 DSH_READY；必须与 start.service.readyMarker 完全一致）
-  --help               显示本帮助
-`;
+说明：本入口只能由 Hana ctx.runtime.start({ runtime:"node" }) 启动（宿主注入父进程 IPC）。
+端口/凭据一律走私有配置文件，不经 argv／环境变量／日志传递。`;
 
-function takeValue(argv, i, flag, inline) {
-  if (inline !== undefined) return { value: inline, next: i + 1 };
-  const v = argv[i + 1];
-  if (v === undefined || v === "") {
-    throw new UsageError(`缺少参数值：--${flag} <value>`);
+const LOOPBACK_PORT = (value, field) => {
+  const n = typeof value === "number" ? value : Number(value);
+  if (!Number.isInteger(n) || n < 1 || n > 65535) {
+    throw new UsageError(`配置项 ${field} 必须是 1..65535 的整数（收到 ${JSON.stringify(value)}）`);
   }
-  return { value: v, next: i + 2 };
+  return n;
+};
+
+/** 配置归一 + 校验（纯函数，便于单测）。 */
+export function normalizeRuntimeConfig(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new UsageError("运行时配置必须是 JSON 对象");
+  }
+  const dataDir = typeof input.dataDir === "string" && input.dataDir ? input.dataDir : null;
+  if (!dataDir) throw new UsageError("配置项 dataDir 必填（App ctx.dataDir 绝对路径）");
+  const dshPort = LOOPBACK_PORT(input.dshPort, "dshPort");
+  const bridgePort = LOOPBACK_PORT(input.bridgePort, "bridgePort");
+  if (dshPort === bridgePort) throw new UsageError("配置项 dshPort 与 bridgePort 不能相同");
+  const bridgeKey = typeof input.bridgeKey === "string" ? input.bridgeKey : "";
+  if (bridgeKey.length < 16) throw new UsageError("配置项 bridgeKey 必填且不短于 16 字符");
+  const readyMarker = typeof input.readyMarker === "string" && input.readyMarker ? input.readyMarker : "DSH_READY";
+  if (/\n|\r/.test(readyMarker)) throw new UsageError("配置项 readyMarker 不得含换行（宿主按整行匹配）");
+  return {
+    dataDir,
+    dshPort,
+    bridgePort,
+    bridgeKey,
+    readyMarker,
+    cordisSrc: typeof input.cordisSrc === "string" && input.cordisSrc ? input.cordisSrc : null,
+    depsRoot: typeof input.depsRoot === "string" && input.depsRoot ? input.depsRoot : null,
+  };
 }
 
-/** 带值参数集（--flag <value> / --flag=<value>）；help 是无值开关。 */
-const VALUE_FLAGS = new Set(["port", "data-dir", "hana-task-id", "deps-root", "cordis-src", "ready-marker"]);
-const BOOL_FLAGS = new Set(["help"]);
-
 /**
- * 解析 argv（不含 node/script 前缀的纯参数数组）。
- * @returns 规范化选项对象（parse 纯函数，便于 node:test 单测）
+ * 解析入口参数：argv[0] === "--help" 返回 { help:true }；否则视 argv[0] 为配置文件路径。
+ * @param {string[]} argv 纯参数数组（不含 node/script）
+ * @param {(path:string)=>string} readFile 读取注入（默认 node 同步读；便于单测）
  */
-export function parseArgs(argv) {
+export function parseRuntimeConfig(argv, readFile) {
   const raw = Array.isArray(argv) ? argv : [];
-  const opts = {
-    taskId: null,
-    port: null,
-    dataDir: null,
-    depsRoot: null,
-    cordisSrc: null,
-    readyMarker: "DSH_READY",
-    help: false,
-  };
-  for (let i = 0; i < raw.length; ) {
-    const token = raw[i];
-    if (!token.startsWith("--")) {
-      throw new UsageError(`未知参数：${token}（只接受 --flag 形态；详见 --help）`);
-    }
-    const eq = token.indexOf("=");
-    const name = eq >= 0 ? token.slice(2, eq) : token.slice(2);
-    const inline = eq >= 0 ? token.slice(eq + 1) : undefined;
-    if (BOOL_FLAGS.has(name)) {
-      if (inline !== undefined) {
-        throw new UsageError(`--${name} 是无值开关，不接受 =value`);
-      }
-      opts.help = true;
-      i += 1;
-      continue;
-    }
-    if (!VALUE_FLAGS.has(name)) {
-      throw new UsageError(`未知参数：--${name}`);
-    }
-    const { value, next } = takeValue(raw, i, name, inline);
-    i = next;
-    switch (name) {
-      case "port": {
-        const n = Number(value);
-        if (!Number.isInteger(n) || n < 1 || n > 65535) {
-          throw new UsageError(`--port 必须是 1..65535 的整数（收到 ${JSON.stringify(value)}；显式端口契约禁 0）`);
-        }
-        opts.port = n;
-        break;
-      }
-      case "data-dir":
-        opts.dataDir = value;
-        break;
-      case "hana-task-id":
-        opts.taskId = value;
-        break;
-      case "deps-root":
-        opts.depsRoot = value;
-        break;
-      case "cordis-src":
-        opts.cordisSrc = value;
-        break;
-      case "ready-marker": {
-        const s = String(value);
-        if (!s || /\n|\r/.test(s)) {
-          throw new UsageError("--ready-marker 不能为空且不得含换行（宿主按整行匹配）");
-        }
-        opts.readyMarker = s;
-        break;
-      }
-      default:
-        throw new UsageError(`未知参数：--${name}`);
-    }
+  if (raw[0] === "--help" || raw[0] === "-h") return { help: true };
+  const configPath = raw[0];
+  if (typeof configPath !== "string" || !configPath || configPath.startsWith("--")) {
+    throw new UsageError("缺少私有运行时配置文件路径（用法：dsh-host.mjs <runtime-config.json>；--help 查看说明）");
   }
-  if (!opts.help) {
-    if (opts.port === null) throw new UsageError("缺少必选参数 --port <port>");
-    if (!opts.dataDir || typeof opts.dataDir !== "string") {
-      throw new UsageError("缺少必选参数 --data-dir <dir>（App ctx.dataDir）");
-    }
+  if (raw.length > 1) throw new UsageError(`未知参数：${raw[1]}（只接受一个配置文件路径）`);
+  let text;
+  try {
+    text = readFile(configPath);
+  } catch (e) {
+    throw new UsageError("读取私有运行时配置失败：" + ((e && e.message) || e));
   }
-  return opts;
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch (e) {
+    throw new UsageError("私有运行时配置不是合法 JSON：" + ((e && e.message) || e));
+  }
+  return normalizeRuntimeConfig(parsed);
 }

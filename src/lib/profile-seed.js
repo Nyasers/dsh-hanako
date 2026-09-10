@@ -50,9 +50,15 @@ import { join } from "node:path";
 // dsh-profile-<profile 目录名>；这里锁定 dshana 的固定名用于 legacy 识别）。
 const PROFILE_MANIFEST_NAME = "dsh-profile-dshana";
 
-// dshana profile 的官方 initProfile 参数（bundles 层序 = 官方服务层 + 本插件 roster
-// bundle；patchReload live 与官方自定义 profile 默认一致）。导出供消费方/测试断言。
-export const PROFILE_BUNDLES = ["@deepseek-ai/dsh-base", "@dsh-hanako/dshana"];
+// dshana profile 的官方 initProfile 参数（bundles 层序 = 官方服务层 + 官方 web 面 + 本插件
+// 定制 bundle；patchReload live 与官方自定义 profile 默认一致）。导出供消费方/测试断言。
+//
+// 层序语义（2026-09-11 定案，向官方样例 hana-dsh 看齐）：官方 `@deepseek-ai/dsh-web-app`
+// bundle 自带 connection（BrowserAuth token/cookie 鉴权面）、gateway、完整 browser roster
+// 与 agent-presets；`@dsh-hanako/dshana` 在其后只放「对官方行的覆盖 + @dsh-hanako/* 定制
+// 插件」，不再照抄官方行，也不手写实现 connection。层序后写胜出：dshana 可 disable/覆盖
+// 官方行（如 ui-layout 由 @dsh-hanako/view 接管）。
+export const PROFILE_BUNDLES = ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", "@dsh-hanako/dshana"];
 export const PROFILE_PATCH_RELOAD = "live";
 
 // 历史内置 bundle 名并集（随包托管边界：profile 目录只有 cordis.patch.yml 归用户，其余

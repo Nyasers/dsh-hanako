@@ -36,7 +36,7 @@ import { join } from "node:path";
 export const DASHANA_ROUTE_PREFIX = "/dshana";
 
 /** 默认依赖实现（读 App 运行包 + 受管 runtime 单例；模块级状态在 App 进程内共享）。 */
-import { managedRuntimeDetails, ensureManagedRuntime, stopManagedRuntime } from "../lib/managed-runtime.js";
+import { managedRuntimeDetails, ensureManagedRuntime, stopManagedRuntime, bridgeAccess } from "../lib/managed-runtime.js";
 import { buildBootSnapshot, APP_ID } from "../lib/boot-state.js";
 
 /**
@@ -100,7 +100,8 @@ export function defaultDshanaRouteDeps(ctx) {
     getSnapshot: () => {
       const dataDir = ctx && typeof ctx.dataDir === "string" && ctx.dataDir ? ctx.dataDir : null;
       const { logPath, logTail } = readLatestLogTail(dataDir);
-      return buildBootSnapshot(managedRuntimeDetails(), { logPath, logTail });
+      const access = bridgeAccess();
+      return buildBootSnapshot(managedRuntimeDetails(), { logPath, logTail, bridgeKey: access ? access.key : null });
     },
     start: () => ensureManagedRuntime({}),
     stop: () => stopManagedRuntime(),

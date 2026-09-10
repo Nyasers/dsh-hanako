@@ -22,12 +22,13 @@
 //      hana.close()。顺序纪律（指南 §7）：拿到流式 Response 后不能立刻 close()——本步
 //      尚未消费任何宿主流，hana.close() 只在退出前调用；步骤 3 接流后此处在关闭前须
 //      先结束/取消活动流。
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import http from "node:http";
-import { parseArgs, UsageError, USAGE } from "./options.js";
+import { parseRuntimeConfig, UsageError, USAGE } from "./options.js";
+import { startDshBridge } from "./bridge.js";
 import { info, warn, err } from "./log.js";
 // @hana/app-sdk 为 devDependencies（file:vendor/hana-app-sdk/hana-app-sdk.tgz，版本随宿主
 // 0.946.2 App 契约）；connectAppRuntime 运行时实现经 rspack 构建时静态内联进本 bundle（只
@@ -148,6 +149,15 @@ function makeShutdown(state, exitCodeLog) {
         state[key] = null;
       }
     }
+    // 中继关闭（异步；释放监听与在途连接）
+    if (state.bridge && typeof state.bridge.close === "function") {
+      try {
+        await state.bridge.close();
+      } catch (e) {
+        warn("中继关闭异常（继续退出）：" + ((e && e.message) || e));
+      }
+      state.bridge = null;
+    }
     try {
       // @dsh-hanako/provider 等子插件经该句柄取 hana client（见 main.js 步骤 1 注释）
       if (globalThis.__dshanaHana === hana) globalThis.__dshanaHana = null;
@@ -182,7 +192,7 @@ function makeShutdown(state, exitCodeLog) {
 export async function main(argv) {
   let opts;
   try {
-    opts = parseArgs(argv);
+    opts = parseRuntimeConfig(argv, (p) => readFileSync(p, "utf8"));
   } catch (e) {
     if (e instanceof UsageError) {
       process.stderr.write(e.message + "\n\n" + USAGE);
@@ -194,7 +204,7 @@ export async function main(argv) {
     process.stdout.write(USAGE);
     return EXIT.OK;
   }
-  info(`dsh-host 启动（managed node runtime entry）：port=${opts.port} dataDir=${opts.dataDir}`);
+  info(`dsh-host 启动（managed node runtime entry）：dshPort=${opts.dshPort} bridgePort=${opts.bridgePort} dataDir=${opts.dataDir}`);
 
   const entryFile = fileURLToPath(import.meta.url);
   let installRoot;
@@ -209,7 +219,7 @@ export async function main(argv) {
   // 依赖根默认指向 App 安装目录（随包物化的 node_modules）；--deps-root 可覆盖（调试）。
   const depsRoot = resolve(opts.depsRoot || join(installRoot, "node_modules"));
   const cordisSrc = resolve(opts.cordisSrc || join(installRoot, "cordis"));
-  const state = { hana: null, ctx: null, stopBridge: null, stopApproval: null };
+  const state = { hana: null, ctx: null, stopBridge: null, stopApproval: null, bridge: null };
   const shutdown = makeShutdown(state, info);
 
   // ---- 1) 宿主 IPC（先于一切：非受管运行时立刻给出可操作报错，不输出 READY）----
@@ -287,14 +297,14 @@ export async function main(argv) {
 
   // ---- 5) 子进程内 boot DSH（profile dshana；显式端口；--no-open）----
   const environment = located.appBoot.loadLayeredEnv("dsh");
-  info(`runProfile({ profile: ${PROFILE_NAME}, port: ${opts.port} }) …`);
+  info(`runProfile({ profile: ${PROFILE_NAME}, port: ${opts.dshPort} }) …`);
   let boot;
   try {
     boot = await located.profileBoot.runProfile({
       environment,
       profile: PROFILE_NAME,
       patchFiles: [],
-      args: ["--port", String(opts.port), "--no-open"],
+      args: ["--port", String(opts.dshPort), "--no-open"],
     });
   } catch (e) {
     const text = (e && e.message) || String(e);
@@ -308,7 +318,7 @@ export async function main(argv) {
 
   // ---- 6) 就绪门：webServer 服务端口 === 期望端口 且 HTTP 探测成功，才打 readyMarker ----
   try {
-    await waitWebReady({ ctx: boot.ctx, expectedPort: opts.port, log: info });
+    await waitWebReady({ ctx: boot.ctx, expectedPort: opts.dshPort, log: info });
   } catch (e) {
     const text = (e && e.message) || String(e);
     const kind = /未在期望端口/.test(text) ? "port-unreachable" : "boot-failed";
@@ -317,18 +327,60 @@ export async function main(argv) {
     await shutdown("ready-failed", EXIT.PORT);
     return EXIT.PORT;
   }
-  info(`webserver 已在 127.0.0.1:${opts.port} 真实监听——打印 readyMarker`);
+  info(`webserver 已在 127.0.0.1:${opts.dshPort} 真实监听——准备凭据交换与中继`);
   // ---- 7) 桥挂载（步骤 3 + 步骤 4a）：订阅 DSH 事件 → Hana task/审批。
   // 先于 readyMarker（App 等到 ready 后才提交 session.create/prompt，事件在 prompt 之后
   // 才发生——先挂订阅无遗漏窗口）。失败不阻断就绪（桥不可用时任务将无终态/审批回投，
   // 由 App 侧日志与超时暴露——见 DESIGN「已测/未测边界」）。----
-  const serviceBaseUrl = "http://127.0.0.1:" + opts.port;
+  // ---- 6.5) DSH 凭据交换 + 中继（本 App 唯一服务面）----
+  // 官方 connection（BrowserAuth）生效后，宿主 runtime 代理会剥 cookie，App 页/App 主进程都
+  // 无法直接携带 DSH 凭据。交换得到 DSH cookie 后由中继统一注入——注册给宿主的 service.port
+  // 是中继端口，DSH 真实端口只在中继上游出现（对齐官方样例 hana-dsh 的 bootstrap.mjs）。
+  const upstreamOrigin = "http://127.0.0.1:" + opts.dshPort;
+  let dshCookie = "";
+  try {
+    const connection = typeof boot.ctx.get === "function" ? boot.ctx.get("connection") : null;
+    if (!connection || typeof connection.authenticatedUrl !== "function") {
+      throw new Error("dshana profile 未提供官方 connection（BrowserAuth 凭据面）——检查 bundle 层序：需含 @deepseek-ai/dsh-web-app");
+    }
+    const launch = connection.authenticatedUrl(upstreamOrigin);
+    const exchange = await fetch(launch, { redirect: "manual" });
+    const setCookie = typeof exchange.headers.getSetCookie === "function"
+      ? exchange.headers.getSetCookie()[0]
+      : exchange.headers.get("set-cookie");
+    await exchange.body?.cancel().catch(() => {});
+    if (!setCookie) throw new Error("DSH 浏览器凭据交换失败（未返回 Set-Cookie）");
+    dshCookie = String(setCookie).split(";", 1)[0];
+    info("DSH 凭据已交换（BrowserAuth cookie 就绪）");
+  } catch (e) {
+    err("auth", "DSH 凭据交换失败（中继无法通过 DSH 鉴权）：" + ((e && e.message) || e));
+    err("exit", "exit=" + EXIT.PORT + " kind=auth-exchange");
+    await shutdown("auth-failed", EXIT.PORT);
+    return EXIT.PORT;
+  }
+  try {
+    state.bridge = await startDshBridge({
+      port: opts.bridgePort,
+      bridgeKey: opts.bridgeKey,
+      upstreamOrigin,
+      upstreamCookie: dshCookie,
+      log: (s) => info("dshbridge", s),
+    });
+  } catch (e) {
+    err("dshbridge", "中继启动失败：" + ((e && e.message) || e));
+    err("exit", "exit=" + EXIT.PORT + " kind=bridge-bind");
+    await shutdown("bridge-failed", EXIT.PORT);
+    return EXIT.PORT;
+  }
+  // 反向 session.cancel 经中继（带 bridgeKey）；不再直连免鉴权 DSH 端口。
+  const serviceBaseUrl = "http://127.0.0.1:" + opts.bridgePort;
   try {
     state.stopBridge = startTaskBridge({
       ctx: boot.ctx,
       hana,
       dataDir,
-      serviceBaseUrl, // 宿主任务取消反向触发 → 本进程 DSH session.cancel（只本会话）
+      serviceBaseUrl, // 宿主任务取消反向触发 → 本进程 DSH session.cancel（只本会话，经中继）
+      bridgeKey: opts.bridgeKey,
       log: (s) => info("bridge", s),
     });
   } catch (e) {

@@ -33,7 +33,7 @@ import { nextRpcId } from "./rpc-envelope.js";
 import { writeTaskMap, removeTaskMap, isValidSessionId, pruneTaskMaps } from "./task-map.js";
 import { withSessionTurn, enterSessionTurn } from "./session-serialize.js";
 import { readDshDefaultModel } from "./config.js";
-import { serviceBase } from "./service-base.js";
+import { serviceBase, serviceFetch } from "./service-base.js";
 import { rpcCallWithFetch } from "./dsh-rpc.js";
 import { resolveTaskTimeoutSec, resolveApprovalTimeoutMs, cancelSessionWork } from "./cancel-chain.js";
 
@@ -103,7 +103,7 @@ async function rpcCall(ctx, base, opts) {
   if (!ctx || !ctx.network || typeof ctx.network.fetch !== "function") {
     throw new Error("session-run: 宿主 ctx.network.fetch 不可用（缺 network 授权）");
   }
-  return rpcCallWithFetch((url, init) => ctx.network.fetch(url, init), base, opts);
+  return rpcCallWithFetch(serviceFetch((url, init) => ctx.network.fetch(url, init)), base, opts);
 }
 
 function sleep(ms) {

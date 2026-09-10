@@ -102,11 +102,12 @@ export function classifyDshEvent(event, args) {
  * sessionId 一个条目即可，不用 turn 级坐标（v1 的复杂终点源于跨任务共享会话）。
  */
 class SessionBridge {
-  constructor({ hana, dataDir, log, serviceBaseUrl, cancelModelRequests }) {
+  constructor({ hana, dataDir, log, serviceBaseUrl, bridgeKey, cancelModelRequests }) {
     this.hana = hana;
     this.dataDir = dataDir;
     this.log = log;
     this.serviceBaseUrl = typeof serviceBaseUrl === "string" && serviceBaseUrl ? serviceBaseUrl : null;
+    this.bridgeKey = typeof bridgeKey === "string" && bridgeKey ? bridgeKey : null;
     this.cancelModelRequests = cancelModelRequests; // (sessionId) => Promise（可注入便于测试）
     this.map = null; // task-map 记录（进入首个事件时载入）
     this.taskId = null;
@@ -235,7 +236,13 @@ class SessionBridge {
     );
     // ② 通知 DSH session.cancel（本机回环 RPC）；失败记录（DSH 可能已自行中止）
     try {
-      const fetchImpl = (url, init) => fetch(url, init);
+      const fetchImpl = (url, init) => fetch(url, {
+        ...init,
+        headers: {
+          ...((init && init.headers) || {}),
+          ...(this.bridgeKey ? { "x-hana-dsh-bridge": this.bridgeKey } : {}),
+        },
+      });
       await rpcSessionCancel(fetchImpl, this.serviceBaseUrl, this.sessionId, { timeoutMs: 10000 });
     } catch (e) {
       this.note("反向 session.cancel 失败（继续收尾）：" + ((e && e.message) || e));
@@ -318,7 +325,7 @@ class SessionBridge {
  */
 const BRIDGE_PRUNE_AT = 128; // bridges 有界（已终态条目在超限时清理）
 
-export function startTaskBridge({ ctx, hana, dataDir, log, serviceBaseUrl, cancelModelRequests }) {
+export function startTaskBridge({ ctx, hana, dataDir, log, serviceBaseUrl, bridgeKey, cancelModelRequests }) {
   const offs = [];
   const bridges = new Map(); // sessionId → SessionBridge（终态后惰性清理）
   const doCancelModels = typeof cancelModelRequests === "function"
@@ -351,7 +358,7 @@ export function startTaskBridge({ ctx, hana, dataDir, log, serviceBaseUrl, cance
         let b = bridges.get(frame.sessionId);
         if (!b) {
           pruneSettled();
-          b = new SessionBridge({ hana, dataDir, log, serviceBaseUrl, cancelModelRequests: doCancelModels });
+          b = new SessionBridge({ hana, dataDir, log, serviceBaseUrl, bridgeKey, cancelModelRequests: doCancelModels });
           b.sessionId = frame.sessionId;
           bridges.set(frame.sessionId, b);
         }

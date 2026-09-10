@@ -21,7 +21,7 @@
 import { appCtx, appDataDir, appConfig } from "./app-runtime.js";
 import { readTaskMap, markCancelRequested } from "./task-map.js";
 import { rpcSessionCancel, cancelAccepted } from "./dsh-rpc.js";
-import { serviceBase } from "./service-base.js";
+import { serviceBase, serviceFetch } from "./service-base.js";
 
 export const CANCEL_CONFIRM_MS = 15000; // DSH 中止确认窗口（超窗升级宿主 cancel）
 export const CANCEL_ESCALATE_REASON = "cancel-confirm-timeout";
@@ -61,7 +61,7 @@ export async function executeCancel({ dataDir, sessionId, reason, log }) {
     // 无映射（空闲/映射已清）：仍向 DSH 发幂等 cancel，防「宿主侧已清、DSH 仍在跑」
     let dshAccepted = null;
     try {
-      const value = await rpcSessionCancel((url, init) => ctx.network.fetch(url, init), serviceBase(), sid);
+      const value = await rpcSessionCancel(serviceFetch((url, init) => ctx.network.fetch(url, init)), serviceBase(), sid);
       dshAccepted = cancelAccepted(value);
     } catch (e) {
       logWarn(log, "[dsh-session] cancel RPC（无映射兜底）失败：" + ((e && e.message) || e));
@@ -81,7 +81,7 @@ export async function executeCancel({ dataDir, sessionId, reason, log }) {
   let dshAccepted = null;
   let dshError = null;
   try {
-    const value = await rpcSessionCancel((url, init) => ctx.network.fetch(url, init), serviceBase(), sid);
+    const value = await rpcSessionCancel(serviceFetch((url, init) => ctx.network.fetch(url, init)), serviceBase(), sid);
     dshAccepted = cancelAccepted(value);
   } catch (e) {
     dshError = (e && e.message) || String(e);
