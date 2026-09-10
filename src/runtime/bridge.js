@@ -116,11 +116,15 @@ function waitForDrain(response, signal) {
 
 /**
  * 起中继（监听 127.0.0.1:port）。
- * @param {{port:number, bridgeKey:string, upstreamOrigin:string, upstreamCookie?:string, log?:(s:string)=>void}} opts
+ * @param {{port:number, bridgeKey:string, controlKey?:string, upstreamOrigin:string,
+ *   upstreamCookie?:string, onControl?:(action:string, args:any)=>Promise<any>,
+ *   log?:(s:string)=>void}} opts
  * @returns {Promise<{port:number, close:()=>Promise<void>}>}
  */
 export async function startDshBridge(opts) {
-  const { port, bridgeKey, upstreamOrigin, upstreamCookie = "", log = () => {} } = opts || {};
+  const {
+    port, bridgeKey, controlKey, upstreamOrigin, upstreamCookie = "", onControl, log = () => {},
+  } = opts || {};
   const upstream = new URL(upstreamOrigin);
   if (upstream.protocol !== "http:" || upstream.hostname !== "127.0.0.1") {
     throw new Error("dshana bridge：上游必须是 127.0.0.1 的 loopback HTTP 源");
@@ -137,6 +141,34 @@ export async function startDshBridge(opts) {
   }
 
   const server = createServer(async (req, res) => {
+    // 控制面（App 工具经 controller.invoke → ctx.runtime.fetch(runtimeId, "/_control")）：
+    // controlKey 鉴权（与 bridgeKey 分离——浏览器侧不该拿到控制权），body {action,args}。
+    if (new URL(req.url || "/", "http://bridge.invalid").pathname === "/_control") {
+      if (!controlKey || !matchesKey(req.headers["x-hana-dsh-control"], controlKey)) {
+        rejectJson(res, 403, "DSH control authorization required");
+        return;
+      }
+      if (req.method !== "POST" || typeof onControl !== "function") {
+        rejectJson(res, 405, "DSH control method unavailable");
+        return;
+      }
+      try {
+        const chunks = [];
+        let bytes = 0;
+        for await (const chunk of req) {
+          bytes += chunk.length;
+          if (bytes > 256 * 1024) throw new Error("DSH control request is too large");
+          chunks.push(chunk);
+        }
+        const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        const result = await onControl(body && body.action, (body && body.args) || {});
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(result === undefined ? {} : result));
+      } catch (e) {
+        rejectJson(res, 409, (e && e.message) || String(e));
+      }
+      return;
+    }
     const authorized = authorizeBridgeRequest(req.url, req.headers["x-hana-dsh-bridge"], bridgeKey);
     if (!authorized) {
       rejectJson(res, 403, "DSH bridge authorization required");

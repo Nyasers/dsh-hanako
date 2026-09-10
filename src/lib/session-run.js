@@ -33,8 +33,8 @@ import { nextRpcId } from "./rpc-envelope.js";
 import { writeTaskMap, removeTaskMap, isValidSessionId, pruneTaskMaps } from "./task-map.js";
 import { withSessionTurn, enterSessionTurn } from "./session-serialize.js";
 import { readDshDefaultModel } from "./config.js";
-import { serviceBase, serviceFetch } from "./service-base.js";
-import { rpcCallWithFetch } from "./dsh-rpc.js";
+import { serviceBase } from "./service-base.js";
+import { rpcViaControl } from "./controller.js";
 import { resolveTaskTimeoutSec, resolveApprovalTimeoutMs, cancelSessionWork } from "./cancel-chain.js";
 
 // ---- 归一/校验（纯函数面，便于单测）----
@@ -97,13 +97,11 @@ export function resolveModelSelection(parsed, dshHome) {
   return { provider, model, ...(e ? { reasoningEffort: e } : {}) };
 }
 
-// ---- loopback HTTP RPC（ctx.network.fetch 门；manifest network 声明放行 127.0.0.1）----
-// 实现收敛到 lib/dsh-rpc.js rpcCallWithFetch（cancel-chain 等步骤 4a 模块共用同一封装）。
-async function rpcCall(ctx, base, opts) {
-  if (!ctx || !ctx.network || typeof ctx.network.fetch !== "function") {
-    throw new Error("session-run: 宿主 ctx.network.fetch 不可用（缺 network 授权）");
-  }
-  return rpcCallWithFetch(serviceFetch((url, init) => ctx.network.fetch(url, init)), base, opts);
+// ---- DSH 一元 RPC（经 runtime 控制面转发；App 侧不直连 DSH HTTP）----
+// 载体 = lib/controller.js rpcViaControl（controller.invoke → /_control → runtime 带 cookie 转发）。
+// 保留 DSHana 特色编排（ctx.tasks.create / 串行化 / task-map 回投）不变——只换 DSH 访问通道。
+async function rpcCall(ctx, _base, opts) {
+  return rpcViaControl(ctx, opts);
 }
 
 function sleep(ms) {

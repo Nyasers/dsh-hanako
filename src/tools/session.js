@@ -152,7 +152,11 @@ async function doExecute(input, ctx) {
     // callToken 由宿主工具调用上下文提供（input.context.callToken，v2 契约），只在
     // ctx.tasks.create 消费一次，不落盘不落日志（指南 §5）。
     const callToken = (input && input.context && input.context.callToken) || "";
-    const loc = await submitDshTask({ action, input, callToken, log: ctx && ctx.log });
+    // submitDshTask 返回 { promise, ready }：ready 在 prompt 被 DSH 接受后 resolve 定位键
+    // （sessionId/rpcId/taskId），提交阶段失败则 reject（错误上抛给工具面）；promise 是后台
+    // 生命周期（等 task 终态、释放串行锁），本处不 await。
+    const { ready } = submitDshTask({ action, input, callToken, log: ctx && ctx.log });
+    const loc = await ready;
     const actionName = loc.action === "send" ? "send（续会话）" : "create（新建会话）";
     const sid = String(loc.sessionId || "");
     const rpc = String(loc.rpcId || "");

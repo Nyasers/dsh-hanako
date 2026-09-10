@@ -362,8 +362,29 @@ export async function main(argv) {
     state.bridge = await startDshBridge({
       port: opts.bridgePort,
       bridgeKey: opts.bridgeKey,
+      controlKey: opts.controlKey,
       upstreamOrigin,
       upstreamCookie: dshCookie,
+      // 控制面：App 工具（controller.invoke）经宿主 ctx.runtime.fetch(runtimeId, "/_control") 到达
+      // 这里，由本进程带 cookie 转发到 DSH /api（App 侧不直接摸 DSH HTTP，也不需 network 到中继）。
+      // 参数 = 客户端信封本身（buildClientRequest 产物，含 rpcId/method/payload）。
+      onControl: async (action, args) => {
+        if (action !== "rpc") throw new Error("未知控制动作：" + String(action));
+        const body = args && args.body;
+        if (!body || typeof body !== "object" || typeof body.method !== "string") {
+          throw new Error("rpc 控制动作需要客户端信封 body（{ type, rpcId, method, payload }）");
+        }
+        const res = await fetch(upstreamOrigin + "/api/" + body.method, {
+          method: "POST",
+          headers: { "content-type": "application/json", cookie: dshCookie },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) {
+          const text = await res.text().catch(() => "");
+          throw new Error("DSH /api/" + body.method + " HTTP " + res.status + (text ? "：" + text.slice(0, 300) : ""));
+        }
+        return await res.json();
+      },
       log: (s) => info("dshbridge", s),
     });
   } catch (e) {

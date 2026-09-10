@@ -53,6 +53,8 @@ export function normalizeRuntimeConfig(input) {
   if (dshPort === bridgePort) throw new UsageError("配置项 dshPort 与 bridgePort 不能相同");
   const bridgeKey = typeof input.bridgeKey === "string" ? input.bridgeKey : "";
   if (bridgeKey.length < 16) throw new UsageError("配置项 bridgeKey 必填且不短于 16 字符");
+  const controlKey = typeof input.controlKey === "string" ? input.controlKey : "";
+  if (controlKey.length < 16) throw new UsageError("配置项 controlKey 必填且不短于 16 字符");
   const readyMarker = typeof input.readyMarker === "string" && input.readyMarker ? input.readyMarker : "DSH_READY";
   if (/\n|\r/.test(readyMarker)) throw new UsageError("配置项 readyMarker 不得含换行（宿主按整行匹配）");
   return {
@@ -60,6 +62,7 @@ export function normalizeRuntimeConfig(input) {
     dshPort,
     bridgePort,
     bridgeKey,
+    controlKey,
     readyMarker,
     cordisSrc: typeof input.cordisSrc === "string" && input.cordisSrc ? input.cordisSrc : null,
     depsRoot: typeof input.depsRoot === "string" && input.depsRoot ? input.depsRoot : null,
