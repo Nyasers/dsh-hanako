@@ -1,17 +1,20 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/ui/dshana/app-shell.js — dsh-hanako App v2 壳页逻辑（main/sidebar 共用；浏览器 ESM）
+// src/ui/app-shell.js — dsh-hanako App v2 壳页逻辑（main/sidebar 共用；浏览器 ESM）
 //
 // 相对资源纪律（迁移指南 §10）：经 <script type="module" src="./app-shell.js"> 相对引入，
-// 页面内不出现根路径绝对 URL。到本 App 后端路由一律 hana.api.fetch（@hana/plugin-sdk）：
-// 宿主在 App surface iframe URL 附 appSurfaceSession query，SDK 注入
+// 页面内不出现根路径绝对 URL。浏览器 SDK = 官方 @hana/plugin-sdk（devDependencies，
+// file:vendor/hana-app-sdk/hana-plugin-sdk-0.0.0.tgz），构建期由 rspack 静态打进本文件（见
+// src/ui/rspack.config.mjs）——浏览器 ESM 不解析裸包名（宿主不注入 importmap），所以依赖
+// 由打包器 resolve、产物自包含，不在 dist/ui 另放 vendored 拷贝。到本 App 后端路由一律
+// hana.api.fetch：宿主在 App surface iframe URL 附 appSurfaceSession query，SDK 注入
 // X-Hana-App-Surface-Session header——裸 fetch 会被宿主网关 403 missing_credential
 // （真机实测 0.930.1）。受管 runtime iframe 首访透传 appSurfaceSession（宿主按 surface
 // 授权并种 hana_app_runtime cookie）。视觉沿袭 v1 webui-shell 纸张风（CSS 变量 +
 // fallback 纸张色），数据语义 v2 boot-state（phase idle/starting/ready/error/stopped +
 // logTail/logPath）。
-import { hana } from "./vendor/hana-plugin-sdk.js";
+import { hana } from "@hana/plugin-sdk";
 
 (function () {
   "use strict";
@@ -43,7 +46,7 @@ import { hana } from "./vendor/hana-plugin-sdk.js";
       .catch(function (err) {
         var msg = err && err.message ? err.message : String(err);
         if (/appSurfaceSession/.test(msg)) {
-          throw new Error("页面缺少 App surface 会话凭据，请从 Card Center 重新打开本卡");
+          throw new Error(SURFACE_MISSING);
         }
         throw err;
       });
@@ -53,36 +56,64 @@ import { hana } from "./vendor/hana-plugin-sdk.js";
       .then(function (res) { return res.json().catch(function () { return {}; }); });
   }
 
-  // 受管 runtime iframe 载入前置：宿主在「带 surface 凭据的 runtime 代理请求」响应里
-  // Set-Cookie hana_app_runtime（HttpOnly，Path=/api/apps/<id>/routes/_runtime/<rid>/，
-  // 实证 0.930.1）。iframe 无法自定义 header，必须先在壳页同源 fetch 一次 proxyPrefix
-  // 种下 cookie，后续 iframe 同源请求才自动携带并通过宿主代理鉴权。
-  function warmRuntimeCookie(prefix) {
-    try {
-      var ss = new URLSearchParams(location.search).get("appSurfaceSession");
-      if (!ss) return Promise.resolve(false);
-      return fetch(prefix, {
-        headers: { "X-Hana-App-Surface-Session": ss },
-        cache: "no-store",
-        credentials: "same-origin",
-      })
-        .then(function (r) {
-          return r.text().catch(function () { return ""; }).then(function () { return r.ok; });
-        })
-        .catch(function () { return false; });
-    } catch (e) {
-      return Promise.resolve(false);
-    }
+  // ---- App surface 凭据（iframe 不能自定 header，两条路一起走）----
+  // 宿主 0.946.2 runtime 代理（bundle ffe/kLt/ELt）认四条：Authorization/query token、
+  // 头 X-Hana-App-Surface-Session、cookie hana_app_runtime（HttpOnly，Path 锁在
+  // /api/apps/<id>/routes/_runtime/<rid>/）、以及「路径票据」
+  //   /api/apps/<id>/routes/_runtime/<rid>/_surface/<appSurfaceSession>/<rest>
+  // （宿主按 ffe 解析，并把上游 302 的 Location 重写回同一基路径；官方样例
+  //  @hana/plugin-sdk 的 hana.api.url(path, /*authenticateRuntime*/ true) 就是这一形态）。
+  // iframe 只认后两条：路径票据让「文档请求自身」就带凭据（不赌 cookie 时序/作用域），
+  // cookie 兜住 iframe 内丢掉前缀的绝对路径子请求。
+  function surfaceSession() {
+    try { return new URLSearchParams(location.search).get("appSurfaceSession"); }
+    catch (e) { return null; }
   }
-  // 受管 runtime iframe URL：proxyPrefix 尾带 "/"；首访经 warmRuntimeCookie 预请求种
-  // hana_app_runtime cookie（iframe 无 header 能力），URL 只带视图参数（appSurfaceSession
-  // query 宿主转发时剥除，非鉴权通道）。
+  // 代理前缀 → 带路径票据的前缀（已带则不重复插）
+  function withSurfaceTicket(prefix, ss) {
+    if (!ss) return prefix;
+    var m = /^(\/api\/apps\/[^/]+\/routes\/_runtime\/[^/]+)\/?(.*)$/.exec(prefix);
+    if (!m) return prefix;
+    if (/^_surface\//.test(m[2])) return prefix;
+    return m[1] + "/_surface/" + encodeURIComponent(ss) + "/" + m[2];
+  }
+  // 同源预请求一次代理前缀：带上 header，宿主会在响应里种下 hana_app_runtime cookie
+  // （bundle 109816：`req.query(appSurfaceSession) || req.header(X-Hana-App-Surface-Session)`
+  // → Set-Cookie Path=代理前缀；HttpOnly，JS 读不到，只当保险丝用）。
+  function warmRuntimeCookie(prefix) {
+    var ss = surfaceSession();
+    if (!ss) return Promise.resolve(false);
+    return fetch(prefix, {
+      headers: { "X-Hana-App-Surface-Session": ss },
+      cache: "no-store",
+      credentials: "same-origin",
+    })
+      .then(function (r) {
+        return r.text().catch(function () { return ""; }).then(function () { return r.ok; });
+      })
+      .catch(function () { return false; });
+  }
+  // 受管 runtime iframe URL：代理前缀（带路径票据）+ 视图参数（给 DSH 视图装配）。
   function runtimeUiUrl(prefix) {
     var q = new URLSearchParams();
     var view = shell && shell.getAttribute("data-dshana-view");
     if (view) q.set("dshana-view", view);
     var qs = q.toString();
-    return prefix + (qs ? "?" + qs : "");
+    var base = withSurfaceTicket(prefix, surfaceSession());
+    return base + (qs ? "?" + qs : "");
+  }
+  // 本页没拿到 surface 会话时的说明（appSurfaceSession 由宿主开页时附在 iframe URL 上）
+  var SURFACE_MISSING = "状态读取失败：本页缺少 App surface 会话凭据，请从 Card Center 重新打开本卡";
+  function credMissingHtml() {
+    return '<div class="card">'
+      + '<h2 class="card-label">缺少 App surface 会话凭据</h2>'
+      + '<div class="guide"><div class="guide-label">问题</div>'
+      + "本页 URL 上没有 appSurfaceSession，DSH 运行时经宿主代理时会被直接拒（missing_credential）。"
+      + "状态面（hana.api.fetch）与内嵌视图都拿不到。"
+      + "</div>"
+      + '<div class="note auto">DSH 已就绪，只是这个页面没凭据。请从 Card Center 重新打开本卡；'
+      + "若反复如此，说明这层 surface（功能面板/新窗口）宿主没发凭据，需要改走主卡推送。</div>"
+      + "</div>";
   }
 
   // ---- 视图判定（v2 phase → 壳视图）----
@@ -188,6 +219,18 @@ import { hana } from "./vendor/hana-plugin-sdk.js";
     var frame = $("#dsh-frame");
     var panel = $("#boot-panel");
     if (view === "ready") {
+      if (!surfaceSession()) {
+        // DSH 已就绪但本页 URL 没带 appSurfaceSession（宿主没发）：代理对无凭据请求一律
+        // 403 missing_credential，下挂 iframe 只会把那段 JSON 画出来。停在 action 视图
+        // 把原因写清，不挂 iframe。
+        body.setAttribute("data-view", "action");
+        if (spin) spin.hidden = true;
+        if (frameWrap) frameWrap.hidden = true;
+        if (frame) { frame.removeAttribute("src"); frame.hidden = true; }
+        if (panel) panel.innerHTML = credMissingHtml();
+        schedulePoll(POLL_SLOW_MS);
+        return;
+      }
       body.setAttribute("data-view", "ready");
       if (spin) spin.hidden = true;
       if (panel) panel.innerHTML = "";
@@ -268,9 +311,26 @@ import { hana } from "./vendor/hana-plugin-sdk.js";
     var btnStart = $("[data-dsh-start]", main);
     var btnStop = $("[data-dsh-stop]", main);
 
+    // FP = DSH Web UI 的 sidebar 本体：就绪后整块让给侧栏——本页自带的标题/状态/按钮 chrome
+    // （[data-dsh-chrome]）全部收起（DSH sidebar 自带 brand 行，叠一层重复）；未就绪时才露
+    // chrome 当占位。data-dsh-ready 同时撤掉 .panel 内边距，iframe 贴边占满。
+    var chromeEls = main.querySelectorAll("[data-dsh-chrome]");
+    for (var ci = 0; ci < chromeEls.length; ci++) chromeEls[ci].hidden = view === "ready";
+    if (view === "ready") main.setAttribute("data-dsh-ready", "1");
+    else main.removeAttribute("data-dsh-ready");
+
     if (view === "ready") {
-      if (detail) detail.textContent = "DSH 已就绪。";
-      if (meta) { meta.hidden = false; meta.textContent = "runtime " + (s.runtimeId || "–") + (s.service && s.service.port ? " · port " + s.service.port : ""); }
+      if (!surfaceSession()) {
+        // FP 页没拿到 surface 会话：侧栏 iframe 同样 403，chrome 留着把原因写在 detail 上
+        for (var ck = 0; ck < chromeEls.length; ck++) chromeEls[ck].hidden = false;
+        main.removeAttribute("data-dsh-ready");
+        if (detail) { detail.textContent = SURFACE_MISSING; detail.classList.add("err"); }
+        if (frameZone) frameZone.hidden = true;
+        if (frame) { frame.removeAttribute("src"); frame.hidden = true; }
+        schedulePoll(POLL_SLOW_MS);
+        return;
+      }
+      if (meta) meta.textContent = "runtime " + (s.runtimeId || "–") + (s.service && s.service.port ? " · port " + s.service.port : "");
       if (logEl) logEl.hidden = true;
       if (frameZone) frameZone.hidden = false;
       if (frame) {
@@ -453,6 +513,9 @@ import { hana } from "./vendor/hana-plugin-sdk.js";
     if (!root) return;
     shell = root;
     isSidebar = root.getAttribute("data-dshana-view") === "sidebar";
+    // 宿主握手（对齐官方样例 hana-dsh 的 bootstrap：页面挂载即 hana.ready()，宿主据此
+    // 确认本页已接管；payload 省略——本 App 无额外就绪声明）。
+    try { if (hana && typeof hana.ready === "function") hana.ready(); } catch (e) { /* 宿主未提供则忽略 */ }
     // 就绪后定时向 iframe 推主题（render 每轮也会触发一次首推）
     var obs = setInterval(function () {
       if (document.body.getAttribute("data-view") === "ready" || (isSidebar && frameWindow())) {

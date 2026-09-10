@@ -18,11 +18,12 @@
 // 用法：node src/build.js [RSPACK_ENV=<构建环境目录>]
 // 注意：.mjs 不被 collectSource 收集（只收 .js），本文件不随 bundle 打包。
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 import fs from "fs-extra";
 import config from "./rspack.config.mjs"; // 同目录（src 域配置随源码）
 import runtimeConfig from "./runtime/rspack.config.mjs"; // runtime/ 域（受管 runtime 入口）
+import uiConfig from "./ui/rspack.config.mjs"; // ui/ 域（壳页脚本 bundle；浏览器 SDK 构建期内联）
 import {
   collectSource,
   makeUrlRewriter,
@@ -99,8 +100,19 @@ const uiSrc = join(ROOT, "src", "ui");
 if (!fs.pathExistsSync(uiSrc)) {
   throw new Error("App ui/ 静态树缺失（src/ui）：contributes.cards 的 route 指向 ui 内页面（见 manifest.json）");
 }
-fs.copySync(uiSrc, join(DIST_DIR, "ui"));
-console.log("ui/ -> dist/ui（壳页 + app-shell.js；contributes.cards route 资源面）");
+// 静态面（*.html 等）直接拷贝；app-shell.js 由 ui bundle 产出（浏览器 SDK 构建期内联），
+// rspack.config.mjs 是构建源、不随包。
+fs.copySync(uiSrc, join(DIST_DIR, "ui"), {
+  filter: (src) => {
+    const name = basename(src);
+    return name !== "app-shell.js" && name !== "rspack.config.mjs";
+  },
+});
+console.log("ui/ 静态面 -> dist/ui（*.html 等；app-shell.js 由 ui bundle 产出）");
+
+// ui bundle 编译（dist/ui/app-shell.js；clean:false 只写该文件，静态页已被 copy）
+await compile(uiConfig, "build:src ui bundle");
+console.log("ui bundle -> dist/ui/app-shell.js（浏览器 SDK 构建期内联）");
 
 // 3) 二次 terser（主区）+ 静态 URL 断言
 await extraTerser(DIST_DIR);

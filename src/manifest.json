@@ -19,11 +19,7 @@
   ],
   "network": {
     "allowedHosts": [
-      "127.0.0.1",
-      "registry.npmjs.org",
-      "registry.npmmirror.com",
-      "mirrors.cloud.tencent.com",
-      "mirrors.huaweicloud.com"
+      "127.0.0.1"
     ],
     "methods": [
       "GET",
@@ -38,23 +34,19 @@
       {
         "id": "dshana",
         "title": "DSHana",
-        "description": "DSHana 主卡：DSH 受管 runtime 状态壳页（boot 三态：启动中/失败原因与重试指引/就绪后内嵌 DSH Web UI）。壳页经本 App 后端路由 /routes/dshana/boot-state 轮询状态；就绪后把 iframe 指向宿主自动暴露的运行时服务代理前缀 /routes/_runtime/<runtimeId>/。",
-        "route": "/dshana/main.html",
-        "cardForm": "flush",
+        "description": "DSHana bootstrap and workspace",
+        "route": "/main.html",
         "realization": "page",
-        "siteNavEntry": true
-      },
-      {
-        "id": "dshana-sidebar",
-        "title": "DSHana 状态",
-        "description": "DSHana 侧栏卡：挂在 dshana 页（pageOf）上的状态摘要视图（复用 boot-state 轮询 + DSH Web UI sidebar 视图）。",
-        "route": "/dshana/sidebar.html",
-        "cardForm": "flush",
-        "pageOf": "dshana",
         "functionPanel": {
-          "id": "dshana-sidebar-panel",
-          "label": "DSHana 状态"
-        }
+          "id": "sidebar",
+          "label": "DSHana",
+          "route": "/sidebar.html"
+        },
+        "siteNavEntry": true,
+        "fpFullPanel": true,
+        "closable": false,
+        "cardForm": "flush",
+        "titlebar": "translucent"
       }
     ],
     "settings": {

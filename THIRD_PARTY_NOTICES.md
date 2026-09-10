@@ -4,9 +4,10 @@ dsh-hanako 随包分发的第三方组件及其许可声明。主项目许可见
 
 ## @hana/plugin-sdk
 
-- 版本：宿主 0.930.1 配套（source-manifest packedVersion 0.930.0）；浏览器构建 dist/browser.js 原样引入，经构建复制进 `dist/ui/dshana/vendor/`（同版本 tgz 已随 `vendor/hana-app-sdk/` 备好，待重建）
-- 用途：App 壳页浏览器面——`hana.api.fetch`（App surface 会话凭据注入 `X-Hana-App-Surface-Session`）、assets/theme/ui 等
-- 来源：宿主随包 `skills2set/hana-app-creator/assets/sdk/hana-plugin-sdk-0.0.0.tgz`（副本：`vendor/hana-app-sdk/hana-plugin-sdk-0.0.0.tgz`）
+- 版本：0.946.2（source-manifest packedVersion 0.946.2；官方 @hana/plugin-sdk 浏览器构建 dist/browser.js）
+- 用途：App 壳页浏览器面——`hana.api.fetch`/`hana.api.url`（App surface 会话凭据注入 `X-Hana-App-Surface-Session` + runtime 代理路径票据）、surface/theme/clipboard/storage 等
+- 形态：devDependency（`file:vendor/hana-app-sdk/hana-plugin-sdk-0.0.0.tgz`），经 rspack 构建期内联进 `dist/ui/app-shell.js`（见 `src/ui/rspack.config.mjs`）；不另放 vendored 拷贝。升级 = 换 tgz + `pnpm install` + 重建
+- 来源：宿主 App Creator 随包 SDK（副本：`vendor/hana-app-sdk/hana-plugin-sdk-0.0.0.tgz`；打包清单见同目录 `source-manifest.json`）
 - 许可：Apache License 2.0（全文见下）
 
 ## @hana/app-sdk

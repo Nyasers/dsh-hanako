@@ -166,7 +166,7 @@ export function apply(ctx) {
   // 浏览器通道由宿主自动暴露在 /api/apps/dsh-hanako/routes/_runtime/<runtimeId>/（服务
   // readyMarker 后成立，自动代理 HTTP/SSE/WS + 重定向重写 + HttpOnly cookie）——本 registrar
   // 不需要转发受管服务，只提供壳页消费的 boot 状态与启动/停止面。
-  // ui/ 壳页（dist/ui/dshana/*.html）以相对同源 fetch 本组端点轮询（页面经 App surface
+  // ui/ 壳页（dist/ui/*.html）以相对同源 fetch 本组端点轮询（页面经 App surface
   // 授权加载；真机对账点：surface cookie/hana.api 形态见 DESIGN 已测/未测清单）。
   let unregisterRoutes = null;
   if (ctx.routes && typeof ctx.routes.register === "function") {
