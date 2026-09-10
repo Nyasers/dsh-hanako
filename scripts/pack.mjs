@@ -8,7 +8,8 @@
 // 解压即断）。物化在 _tmp/pkg-root/ 隔离进行，不触碰仓库 node_modules。
 // 流程：复制交付清单（prepack 钩子已先行 build）→ 物化生产依赖 → 断言多平台资产 → zip → SHA256。
 // 用法：pnpm run pack（prepack 自动前置 build；单独 node scripts/pack.mjs 要求 dist/ 已构建）
-// 产出：releases/dsh-hanako-v<version>.zip + .sha256；铺平目录 _tmp/pkg/（zip 中间原料，可清空）
+// 产出：releases/dsh-hanako-v<version>[-<target>].zip + .sha256（多目标见 --targets）；
+//   临时目录 _tmp/pkg、_tmp/pkg-root 起手清残留、逐目标用完即清、收尾无論成败都清。
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -285,16 +286,22 @@ function isEsm(code) {
 //    GNU tar（Linux）不认 .zip 后缀会静默产出 tar 伪 zip（CI ubuntu 踩坑 2026-08-14）
 const relDir = join(ROOT, "releases");
 fs.ensureDirSync(relDir);
+// 临时目录纪律（曾因多目标连跑堆积 2.2 GB 把宿主压崩）：
+//   · 起手清残留（上次运行/中途崩溃留下的）；
+//   · 逐目标用完即清（暂存树 + 铺平目录），峰值 → 单目标；
+//   · 收尾全清由 package.json 的 postpack 钩子承担（scripts/clean-tmp.mjs），CI 里也可单独调。
+// 中间原料与暂存树都可再生，真正的产物只有 releases/ 下的 zip + sha256。
+const pkgRoot = join(ROOT, "_tmp", "pkg");
+for (const stale of [pkgRoot, stagingRoot]) fs.removeSync(stale);
 for (const spec of selectedSpecs) {
   const modules = materializeProdDeps(spec);
   // 命名：通用包无后缀（既有 CI/脚本按 dsh-hanako-v<ver>.zip 取件），平台包带目标后缀
   const base = spec.name === "universal" ? `dsh-hanako-v${version}` : `dsh-hanako-v${version}-${spec.name}`;
-  const pkgDir = join(ROOT, "_tmp", "pkg", base); // 铺平目录（zip 中间原料，放 _tmp 可随时清空）
+  const pkgDir = join(pkgRoot, base); // 铺平目录（zip 中间原料）
   fs.removeSync(pkgDir);
   fs.copySync(distDir, pkgDir);
   fs.copySync(modules, join(pkgDir, "node_modules"));
-  // 暂存树用完即删：逐目标运行时的峰值磁盘从「所有目标叠加」降到「单目标」，
-  // 减少长时打包（尤其本地多目标连跑）对磁盘与宿主内存的压力（曾因此把宿主撑崩）。
+  // 暂存树用完即删：逐目标峰值磁盘从「所有目标叠加」降到「单目标」
   fs.removeSync(join(stagingRoot, spec.name));
   console.log(`[pack] ${spec.name}：代码 + 依赖树已就位（${base}），暂存树已清理`);
   const zipPath = join(relDir, `${base}.zip`);
@@ -317,4 +324,7 @@ for (const spec of selectedSpecs) {
   console.log(`[pack] ${zipPath}`);
   console.log(`[pack] zip ${(buf.length / 1048576).toFixed(1)} MB · SHA256 ${sha}`);
   fs.writeFileSync(`${zipPath}.sha256`, sha, "utf8");
+  // 该目标的铺平目录已入包，即用即清（峰值 → 单目标）
+  fs.removeSync(pkgDir);
 }
+// 收尾全清 → postpack 钩子（scripts/clean-tmp.mjs）

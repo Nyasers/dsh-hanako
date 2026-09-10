@@ -13,6 +13,7 @@
     "changelog": "node scripts/changelog.mjs",
     "prepack": "pnpm run syncver && pnpm run build",
     "pack": "node scripts/pack.mjs",
+    "postpack": "node scripts/clean-tmp.mjs",
     "preversion": "pnpm run build",
     "version": "node scripts/version-hook.mjs"
   },
