@@ -1,0 +1,71 @@
+{
+  "generatedBy": "npm run pack:plugin-sdk",
+  "packedVersion": "0.946.2",
+  "packages": {
+    "@hana/plugin-protocol": {
+      "dir": "packages/plugin-protocol",
+      "tarball": "hana-plugin-protocol-0.0.0.tgz",
+      "sources": {
+        "index.ts": "beb3bb428a7ac7693ac5d1a451d103e638f7e2175a3a1d1bcdcbfbb6ac0181cc",
+        "package.json": "8857ebf761c4e4495310d7f80e7e89251146bed78980c69554530bfc27e4f85f"
+      }
+    },
+    "@hana/plugin-sdk": {
+      "dir": "packages/plugin-sdk",
+      "tarball": "hana-plugin-sdk-0.0.0.tgz",
+      "sources": {
+        "index.ts": "67d8ec1d1b68853c549837e97609c1f24a72fb4b152da7eebf939532d2f86640",
+        "package.json": "09934249d427e9e743c437155e99391a6f116a126d47f8af5a27488fb34d968c",
+        "README.md": "a4e598a8de560dfc03fff1284f2ff8362d2f7a5689fba7269dc267502ebfc311",
+        "scripts/build-browser.mjs": "59f4fc82c128d7fc663db01a7121b397fa9ba05605f13bc4d450a0a06c4f4b8d"
+      }
+    },
+    "@hana/plugin-components": {
+      "dir": "packages/plugin-components",
+      "tarball": "hana-plugin-components-0.0.0.tgz",
+      "sources": {
+        "__tests__/settings-entry.test.tsx": "c57f564f49e9201e505b389c0c6a7fa77da68f1eacfc1d5e4112c0014fbfeb80",
+        "classnames.ts": "5cc544aceac83642c4887e33a7432b00e9a7964f99ede4f388bc9df046b110ff",
+        "controls.tsx": "7c1cf29421474ce2852f01bc974a42e9712f2e1954db9d09644548c3538e0b59",
+        "index.ts": "0dad623c694944ad1c359187b1d45503682cd7a7194a4ef55a612a5138eefa4f",
+        "layout.tsx": "7b3d51a2a1a71e269d2859d6456f26af80367bb25c087233ab434388df80e70c",
+        "settings-contract.ts": "93a6a693f04bffcc8aade470e34ee079f2fca090baed1123ec29c2a45ce0465a",
+        "settings-entry.tsx": "1446c40f3fa20f1b4814ad0c0430b7262613295bdb52b0da0ddb851fbfbd640e",
+        "theme.tsx": "aa8fd534868bf5e16fc91dcfcdad5511122c869b0d0345f59b5d2e73929db992",
+        "package.json": "767e61a9a1300b0a107b9f8154a725945b1393eeeb4c9bbbd200fbcf584c20ff",
+        "README.md": "0cfd638c90d7a519147ba51364e1eaacea4db7b188922934c0f98c0f5d77e3b3",
+        "styles.css": "c019c9fad98a5896ef4ba4fd9ec4828962e254bb2d0293148ce28acf9fc85a62",
+        "scripts/build-settings.mjs": "4b75c392748c5603a7b7d966f20f23e2b3bdda6fca843b14687cf8c383047af3",
+        "scripts/settings-foundation.mjs": "4b1de4f1c88d144dc7fbf0ebad5ec5b9d686754c5d04c5f03f178343e45ccb7e",
+        "tsconfig.settings.json": "9f00cfc7f057fcfa1a154c3001892a4106cc5230937cf3b78c6f295c8f519a70",
+        "host/desktop/src/styles.css": "b6ef6320d2ad2e2d45761b26b0b79472df62b82cd44ac061c2c611ea81fb7e30"
+      }
+    },
+    "@hana/app-sdk": {
+      "dir": "packages/app-sdk",
+      "tarball": "hana-app-sdk.tgz",
+      "sources": {
+        "activation.ts": "2c8d9eda7e1ae9ac34ee69c0e3d78bad3d614b93eb61901a921c1d6786c8e4d8",
+        "agents.ts": "e3f64fe338d65604e3296719de41bfbec0a19d96c315f981d44f260b4b3d996a",
+        "app-services.ts": "dc421d3cff676626b728a9a589d590f13818f6ee9f6b92c0d550db8ced718826",
+        "catalog.ts": "7dd766f325da82f42b698747845eeadb6d3ff9deb23f71b49843ff69c57d3dbb",
+        "cli.ts": "958ef3f57af7ec6aacd7320d6937c98a189230902d070e390da3eadc05171516",
+        "config-state.ts": "c1c500d3bed0f9bc5717c6c4049b36b2037b28859211d833c64cbb3e8ac14a6d",
+        "context.ts": "23901be21557b58935933fa53e9b4177aa3fcfa7fdf69938d4475fddbbdd367f",
+        "dynamic-ui.ts": "3b6c7c6c84fe48ac972e0a0d48ac0940b61619e83447f85ba433aa050ddb6a45",
+        "index.ts": "12fa147846a0e966ec879e924a7040df3fe96606de1db7eae59905c05fc3f291",
+        "manifest.ts": "da8aa30f4c2f660473e2764eefff48344d8268577d7d2f50b6333f0fa4367f02",
+        "mcp.ts": "5c3a84dc66070d0a118b7ee8bd259738489b50062087292f27298b8fc017d48a",
+        "media.ts": "f2411350aafc77461e9f186e82b279facb6416bccbc3db7218f5efa67e226799",
+        "models.ts": "b94ac5b16948200cf9e317cdb66d3030edcd54bd84cc3603ce48a25b7f98801a",
+        "providers.ts": "88918d98e0c7f581d5cf8d09525cdf9c920e65642e6d2c970e49c8d31c67b449",
+        "queries.ts": "7ac61b8f8c60272b4b82b7d5cbd074779c05ead526b61af307e2f9d8571616c9",
+        "runtime-client.ts": "94879c989e0c68eadc7f5b5e0946fd2d4ad9ce453e9908580bbaa480aa1c9e65",
+        "runtime.ts": "ad60af689d136c626746bf936b8cce2c13389aaa22dcf8c140113886434a09ff",
+        "sessions.ts": "e54b5142f34f0789c63a15726853c3d9a77f59a26620da072d51383ae2acd3c0",
+        "tasks.ts": "553ac74e3f944de41b53ee77b2864c460d80155f3e54b39e20b332b5d20b5127",
+        "package.json": "0f86c3a2c3cc67a9a3e28fa2801a6b3aa90789f01abd8c480f373a4c188cad18"
+      }
+    }
+  }
+}

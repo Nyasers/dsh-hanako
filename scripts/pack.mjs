@@ -64,8 +64,8 @@ for (const item of staticItems) {
 
 // 1.5) cordis 包 version 一致性校验（防回归，与 manifest 校验对称）：cordis 包（roster
 //   bundle dshana + 10 子插件）version 与主 package.json 同批由 syncver/version-hook（pnpm
-//   version 发版流程）同步（v2 域：单一事实源 = 主 package.json 2.0.0-beta.x，cordis 包跟随
-//   等值，无独立版本线；build metadata +dsh-<dsh 依赖> 由 version-hook 在发版时统一拼回），
+//   version 发版流程）同步（单一事实源 = 主 package.json，cordis 包跟随等值，无独立版本线；
+//   build metadata +dsh-<dsh 依赖> 由 version-hook 在发版时统一拼回），
 //   pack 时读 dist 产物校验一致——手改/漏同步即出包版本漂移。
 function assertCordisDistVersions(outDir) {
   const cordisRoot = join(outDir, "cordis");

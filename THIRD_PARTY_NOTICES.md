@@ -4,16 +4,16 @@ dsh-hanako 随包分发的第三方组件及其许可声明。主项目许可见
 
 ## @hana/plugin-sdk
 
-- 版本：宿主 0.930.1 配套（source-manifest packedVersion 0.930.0）；浏览器构建 dist/browser.js 原样引入，经构建复制进 `dist/ui/dshana/vendor/`
+- 版本：宿主 0.930.1 配套（source-manifest packedVersion 0.930.0）；浏览器构建 dist/browser.js 原样引入，经构建复制进 `dist/ui/dshana/vendor/`（同版本 tgz 已随 `vendor/hana-app-sdk/` 备好，待重建）
 - 用途：App 壳页浏览器面——`hana.api.fetch`（App surface 会话凭据注入 `X-Hana-App-Surface-Session`）、assets/theme/ui 等
-- 来源：宿主随包 `skills2set/hana-app-creator/assets/sdk/hana-plugin-sdk-0.0.0.tgz`
+- 来源：宿主随包 `skills2set/hana-app-creator/assets/sdk/hana-plugin-sdk-0.0.0.tgz`（副本：`vendor/hana-app-sdk/hana-plugin-sdk-0.0.0.tgz`）
 - 许可：Apache License 2.0（全文见下）
 
 ## @hana/app-sdk
 
-- 版本：0.930.0（随宿主 Hana 0.930.x App 契约；升级 = 替换 `sdk/hana-app-sdk.tgz` 后重建）
+- 版本：0.946.2（随宿主 Hana 0.946.2 App 契约；升级 = 替换 `vendor/hana-app-sdk/hana-app-sdk.tgz` 后 `pnpm install` + 重建）
 - 用途：`connectAppRuntime()` 受管 runtime 私有 IPC 客户端运行时实现（tasks/models/network.fetch/close），经 rspack 静态内联进 `dist/runtime/dsh-host.mjs`
-- 来源：Hana App SDK（宿主 0.930.1 配套分发），`sdk/hana-app-sdk.tgz`
+- 来源：Hana App SDK（宿主 0.946.2 自产打包，`vendor/hana-app-sdk/hana-app-sdk.tgz`；打包清单见同目录 `source-manifest.json`）
 - 许可：Apache License 2.0（见下全文）
 - 版权：Copyright (c) 2026 Hana App SDK authors（含源文件头 SPDX 标注）
 

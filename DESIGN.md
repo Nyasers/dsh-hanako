@@ -97,7 +97,7 @@ DSH 设置页「DSHana 设置」分页（settings.section slot，id `dshana-sett
 
 **已落地（步骤 1：manifest / apply 入口 / 设置 / 工具注册，验证 list/get）：**
 
-- `src/manifest.json` 改为 App v2 契约：`version 2.0.0-beta.1`、`entry index.js`、`icon assets/icon.png`、`minAppVersion 0.930.1`、capabilities 取指南 §3 七项（`app/tools.expose-to-model`、`app/tasks.manage`、`app/session.start-turn`、`app/models.infer`、`app/runtime.execute`、`app/runtime.native`、`app/runtime.network`）。v1 专属/过时字段移除：`author`、`trust`、`activationEvents`（v2 无）、`ui.hostCapabilities`、`contributes.cards`（UI 迁移步骤回归）、`contributes.configuration → contributes.settings`、`network` 白名单（步骤 1 无 App 级 fetch；DSH 外网走受管 runtime 自身网络）。
+- `src/manifest.json` 改为 App v2 契约：`version 1.0.0-beta.5`、`entry index.js`、`icon assets/icon.png`、`minAppVersion 0.930.1`、capabilities 取指南 §3 七项（`app/tools.expose-to-model`、`app/tasks.manage`、`app/session.start-turn`、`app/models.infer`、`app/runtime.execute`、`app/runtime.local-machine`、`app/runtime.network`）。v1 专属/过时字段移除：`author`、`trust`、`activationEvents`（v2 无）、`ui.hostCapabilities`、`contributes.cards`（UI 迁移步骤回归）、`contributes.configuration → contributes.settings`、`network` 白名单（步骤 1 无 App 级 fetch；DSH 外网走受管 runtime 自身网络）。
 - `src/index.js`：`class + onload()` → `export apply(ctx)`（兼导出 `default { apply }`）；apply 注册完即返回。统一日志平移写 `ctx.dataDir/logs`；globalThis 宿主单例退役 → `src/lib/app-runtime.js` module-scope 运行包。
 - 工具注册：`ctx.tools.register`，工具名保留 `dsh_session`（v2 无自动 `pluginId_` 前缀、全局唯一；决策与冲突面见 `src/tools/session.js` 头注释）。action 参数与返回语义不变；本步骤仅 `list`/`get` 可用（DSH 未启动仍离线可读），`create`/`send`/`cancel`/`approve` 返回明确「待迁移步骤 2 接线」错误。
 - 设置：`contributes.settings`（approvalTimeoutSec / defaultTimeoutSec / nodejsPath），工具执行期经 `ctx.config.get`（apply 完成后才登记，apply 顶层不读）。
@@ -322,12 +322,12 @@ DSH 设置页「DSHana 设置」分页（settings.section slot，id `dshana-sett
   （先停旧插件写入，主上下文与姐姐协调）。Windows：path.join 原生分隔符、junction 在跳过
   列表、reparse 不入复制。
 
-### 交付 5：pack/syncver 收口（v2 版本域）
+### 交付 5：pack/syncver 收口（版本线）
 
-- **版本域定案**：主 package.json / manifest = App 域 2.0.0-beta.x；cordis 包（roster +
-  plugins，11 个 package.json）**等值跟随**（无独立版本线）；build metadata
-  （+dsh-<dsh 依赖>）由 version-hook 发版时统一拼回再同步（本刀执行 syncver 把 cordis 从
-  v1 域 1.0.0-beta.5+dsh-0.1.2-rc.1 对齐到 2.0.0-beta.1）。syncver.mjs 头注释记录 v2 域语义。
+- 版本线为单一 1.x 线（开发期停在最后已发布基线、发版经 `pnpm version` 推进、DSH 跟随策略），
+  细节与依据见 `specs/dshana-v2-定案与待议-2026-09-10.md` §5；cordis 包（roster + plugins，
+  11 个 package.json）**等值跟随**主版本（无独立版本线）；build metadata（+dsh-<dsh 依赖>）由
+  version-hook 发版时统一拼回再同步。syncver.mjs 头注释记录版本线语义。
 - pack.mjs：静态项补 THIRD_PARTY_NOTICES.md；cordis dist 断言扩为 11 包（补 acp-assist）；
   新增 dist/ui 断言（route 资源 fail-closed）；zip 形态不变（dist 根 manifest/index.js +
   三件套 + NOTICE/THIRD_PARTY_NOTICES + cordis + ui，无 node_modules）。
