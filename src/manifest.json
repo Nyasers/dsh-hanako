@@ -15,7 +15,6 @@
     "app/runtime.execute",
     "app/runtime.local-machine",
     "app/runtime.network",
-    "app/process.spawn",
     "app/ui.clipboard-write"
   ],
   "network": {

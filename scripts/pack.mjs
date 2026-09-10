@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// scripts/pack.mjs — dsh-hanako 轻量化打包（适配单 bundle 收敛架构；构建脚本不随源码编译）
-// 交付物 = 代码 bundle（dist/）+ 配置 + 技能 + cordis 插件 + lockfile，零依赖（Agent pnpm i 装，
-// pnpm 运行时引导：tools/lib/pnpm.js ensurePnpm 下载单文件 pnpm.mjs 到数据目录 pnpm-dist/，
-// 供 tools/lib/install.js 部署 @deepseek-ai/dsh）。
-// 流程：复制交付清单（prepack 钩子已先行 build）→ zip → SHA256。
+// scripts/pack.mjs — dsh-hanako 自包含打包（适配单 bundle 收敛架构；构建脚本不随源码编译）
+// 交付物 = 代码 bundle（dist/）+ cordis 插件 + ui/ 静态树 + **物化后的生产依赖树**
+// （含 win32/darwin/linux × x64/arm64 预编译资产），安装即用、无需 npm install。
+// 依赖物化形态对齐样例 hana-dsh：hoisted 布局（顶层真实目录、无软链接——软链进 zip 跨机
+// 解压即断）。物化在 _tmp/pkg-root/ 隔离进行，不触碰仓库 node_modules。
+// 流程：复制交付清单（prepack 钩子已先行 build）→ 物化生产依赖 → 断言多平台资产 → zip → SHA256。
 // 用法：pnpm run pack（prepack 自动前置 build；单独 node scripts/pack.mjs 要求 dist/ 已构建）
 // 产出：releases/dsh-hanako-v<version>.zip + .sha256；铺平目录 _tmp/pkg/（zip 中间原料，可清空）
 import { createRequire } from "node:module";
@@ -40,8 +41,8 @@ const staticItems = [
   "package.json",
   // manifest.json 与 skills 已随 src 域（src/manifest.json、src/skills/，build:src 产出
   // dist 副本），不再经根级静态复制
-  "pnpm-workspace.yaml",
-  "pnpm-lock.yaml",
+  // 注（自包含打包后）：pnpm-workspace.yaml / pnpm-lock.yaml 不再随包——安装侧不再执行任何
+  // pnpm install（依赖已物化进包），两份文件的唯一消费方（旧 ensure 链）已退役
 ];
 const distDir = join(ROOT, "dist");
 for (const item of staticItems) {
@@ -116,6 +117,56 @@ function assertUiTree(outDir) {
 }
 assertUiTree(distDir);
 
+// 1.7) 生产依赖物化（自包含打包）：在隔离的 _tmp/pkg-root/ 用 hoisted 布局装出生产树（含多平台
+//   预编译资产），再整体复制进包。安装方无需 npm install。
+//   · 为什么 hoisted：仓库默认的符号链接布局进 zip 后跨机解压即断（软链指向 .pnpm 虚拟store）；
+//     样例 hana-dsh 同样是顶层真实目录、无 .pnpm。
+//   · 为什么不直接复制仓库 node_modules：那是 dev+prod 混合树，且动它会触发 pnpm 重建
+//     （Windows 上曾遇清理被拒导致树损坏），隔离目录能完全避开这类风险。
+const stagingRoot = join(ROOT, "_tmp", "pkg-root");
+const stagingModules = join(stagingRoot, "node_modules");
+
+// 多平台预编译资产清单（target 集与样例 PRODUCTION-INVENTORY 一致）
+const PLATFORM_ASSETS = [
+  { tag: "darwin-arm64", koffi: "@koromix/koffi-darwin-arm64", rab: "node-addon-require-builtin-darwin-arm64", sharp: "@img/sharp-darwin-arm64" },
+  { tag: "darwin-x64", koffi: "@koromix/koffi-darwin-x64", rab: "node-addon-require-builtin-darwin-x64", sharp: "@img/sharp-darwin-x64" },
+  { tag: "linux-arm64", koffi: "@koromix/koffi-linux-arm64", rab: "node-addon-require-builtin-linux-arm64-gnu", sharp: "@img/sharp-linux-arm64" },
+  { tag: "linux-x64", koffi: "@koromix/koffi-linux-x64", rab: "node-addon-require-builtin-linux-x64-gnu", sharp: "@img/sharp-linux-x64" },
+  { tag: "win32-x64", koffi: "@koromix/koffi-win32-x64", rab: "node-addon-require-builtin-win32-x64-msvc", sharp: "@img/sharp-win32-x64" },
+];
+
+function materializeProdDeps() {
+  const { spawnSync } = require("node:child_process");
+  fs.removeSync(stagingRoot);
+  fs.ensureDirSync(stagingRoot);
+  fs.copySync(join(ROOT, "package.json"), join(stagingRoot, "package.json"));
+  fs.copySync(join(ROOT, "pnpm-lock.yaml"), join(stagingRoot, "pnpm-lock.yaml"));
+  // 工作区设置沿用仓库那份（allowBuilds / supportedArchitectures / minimumReleaseAgeExclude
+  // 单一来源），仅前置 nodeLinker: hoisted——必须在工作区文件里，CLI 传参形式实测不生效。
+  const wsYaml = "# pack.mjs 生成（每次打包重建，勿手改）\nnodeLinker: hoisted\n\n" +
+    fs.readFileSync(join(ROOT, "pnpm-workspace.yaml"), "utf8");
+  fs.writeFileSync(join(stagingRoot, "pnpm-workspace.yaml"), wsYaml, "utf8");
+  console.log("[pack] 物化生产依赖（hoisted 布局，隔离目录 _tmp/pkg-root）...");
+  const res = spawnSync("pnpm", ["install", "--prod", "--frozen-lockfile"], {
+    cwd: stagingRoot,
+    stdio: "inherit",
+    shell: process.platform === "win32",
+  });
+  if (res.status !== 0) throw new Error(`生产依赖物化失败（pnpm install --prod 退出码 ${res.status}）`);
+  if (!fs.pathExistsSync(stagingModules)) throw new Error("生产依赖物化失败：node_modules 未生成");
+  const missing = [];
+  for (const t of PLATFORM_ASSETS) {
+    for (const name of [t.koffi, t.rab, t.sharp]) {
+      if (!fs.pathExistsSync(join(stagingModules, name, "package.json"))) missing.push(`${t.tag} ${name}`);
+    }
+  }
+  if (missing.length) {
+    throw new Error("多平台预编译资产缺失（包无法跨平台运行）：\n  - " + missing.join("\n  - "));
+  }
+  console.log(`[pack] 生产依赖物化完成，多平台资产齐备（${PLATFORM_ASSETS.length} 个 target × 3 类）`);
+}
+materializeProdDeps();
+
 // 2. 静态资产压缩（terser JS 纯语法级 + clean-css CSS 压缩，覆盖写回 dist 副本）
 //     cordis 插件（dist/cordis/*/index.js，由 build 从
 //     src-cordis 组装）被 dsh 运行时 import() 加载、client.js 被浏览器
@@ -183,6 +234,9 @@ function isEsm(code) {
 const pkgDir = join(ROOT, "_tmp", "pkg", `dsh-hanako-v${version}`);
 fs.removeSync(pkgDir);
 fs.copySync(distDir, pkgDir);
+// 生产依赖树随包（自包含；见 1.7）：安装即用，无需 npm install
+fs.copySync(stagingModules, join(pkgDir, "node_modules"));
+console.log("[pack] 依赖树已随包（node_modules）");
 
 // 4. zip + SHA256（发布产物归档 releases/，与项目群惯例一致）
 //    archiver 纯 Node 跨平台 zip（对齐 hana-remote-dev）：不用 tar -a -cf——

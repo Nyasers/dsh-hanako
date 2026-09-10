@@ -7,12 +7,12 @@
 // "node", entry: "runtime/dsh-host.mjs", ... }) 加载后自持生命周期，不再回宿主进程）。
 // 职责（与 v1 进程内 boot 拆分对照）：
 //   1. 解析 App 自有参数（--port/--data-dir/--hana-task-id/--deps-root/--cordis-src/
-//      --ready-marker/--no-ensure，见 options.js）——参数名与 App 主进程
+//      --ready-marker，见 options.js）——参数名与 App 主进程
 //      src/lib/managed-runtime.js buildRuntimeArgs() 对偶一致；
 //   2. connectAppRuntime() 连宿主（tasks/models/network.fetch/close；无父 IPC fd 时给
 //      可操作报错 + 退出码 3，绝不假装能跑）；
 //   3. 设置本进程自有 env（DSH_HOME/DSHANA_*，不污染宿主进程环境——迁移指南 §4）；
-//   4. 依赖 ensure（默认 <data-dir>/runtime 安装区，方案见 ensure-deps.js/DESIGN）；
+//   4. 依赖就位（随包物化在 <installRoot>/node_modules，无运行时安装）；
 //   5. profile 种子化（profiles/dshana → installDir cordis scope 链接，seed.js）；
 //   6. 子进程内 boot DSH（locateDsh → appBoot.loadLayeredEnv → profileBoot.runProfile，
 //      复用 v1 loadInprocDsh 思路；webserver 监听显式 --port）；
@@ -37,7 +37,7 @@ import { connectAppRuntime } from "@hana/app-sdk";
 import { startTaskBridge } from "./task-bridge.js"; // 步骤 3：DSH 事件 → Hana task 回投
 import { startApprovalBridge } from "./approval-bridge.js"; // 步骤 4a：DSH 审批 → Hana requestApproval/watch 对账
 import { resolveInstallRoot, locateDsh } from "./locate.js";
-import { ensureDeps } from "./ensure-deps.js";
+// 依赖 ensure 已退役（2026-09-10）：依赖随包物化在安装目录 node_modules。
 import { seedDshanaProfile } from "./seed.js";
 
 /** 退出码约定（App 主进程 managed-runtime.js classify 读 exitCode 归类；勿随意改）。 */
@@ -206,7 +206,8 @@ export async function main(argv) {
   }
   const dataDir = resolve(opts.dataDir);
   const runtimeDir = join(dataDir, "runtime");
-  const depsRoot = resolve(opts.depsRoot || join(runtimeDir, "node_modules"));
+  // 依赖根默认指向 App 安装目录（随包物化的 node_modules）；--deps-root 可覆盖（调试）。
+  const depsRoot = resolve(opts.depsRoot || join(installRoot, "node_modules"));
   const cordisSrc = resolve(opts.cordisSrc || join(installRoot, "cordis"));
   const state = { hana: null, ctx: null, stopBridge: null, stopApproval: null };
   const shutdown = makeShutdown(state, info);
@@ -252,21 +253,8 @@ export async function main(argv) {
   if (!process.env.DSHANA_BUS_SECRET) process.env.DSHANA_BUS_SECRET = randomUUID();
   info(`env：DSH_HOME=${dshHome} DSHANA_ROOT=${runtimeDir} DSHANA_HOME=${dataDir}`);
 
-  // ---- 3) 依赖 ensure（默认 <data-dir>/runtime 安装区；noEnsure/预置场景跳过）----
-  const ensured = await ensureDeps({
-    dataDir,
-    installRoot,
-    runtimeDir,
-    depsRoot,
-    noEnsure: opts.noEnsure,
-    log: (s) => info("deps", s),
-  });
-  if (ensured.status === "error") {
-    err("deps", `[${ensured.kind}] ${ensured.message}`);
-    err("exit", "exit=" + EXIT.DEPS + " kind=deps-" + ensured.kind);
-    return EXIT.DEPS;
-  }
-  info(`依赖状态：${ensured.status}（dsh@${ensured.dsh} cordis@${ensured.cordis}）`);
+  // ---- 3) 依赖就位（自包含打包：依赖随包在 <installRoot>/node_modules，无运行时安装）----
+  info(`依赖区：${depsRoot}（随包物化，无 ensure）`);
 
   // ---- 4) 定位 DSH + 种子化 profile（runProfile 前必须就位，否则 loadProfile 抛）----
   let located;

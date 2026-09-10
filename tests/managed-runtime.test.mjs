@@ -36,17 +36,16 @@ test("buildRuntimeArgs: 基础形态（与 options.js 对偶）", () => {
   assert.deepEqual(args, ["--port", "4317", "--data-dir", "/hana/app-data/dsh-hanako", "--hana-task-id", "task-1", "--ready-marker", READY_MARKER]);
 });
 
-test("buildRuntimeArgs: 覆盖项（cordis-src/deps-root/no-ensure）只在显式传时出现", () => {
+test("buildRuntimeArgs: 覆盖项（cordis-src/deps-root）只在显式传时出现", () => {
   const base = buildRuntimeArgs({ port: 8080, dataDir: "/x" });
   assert.ok(!base.includes("--deps-root"));
   assert.ok(!base.includes("--cordis-src"));
-  assert.ok(!base.includes("--no-ensure"));
+  // no-ensure 已随 ensure 链退役
   const full = buildRuntimeArgs({
     port: 8080,
     dataDir: "/x",
     cordisSrc: "/install/cordis",
     depsRoot: "/deps/node_modules",
-    noEnsure: true,
     readyMarker: "MY_READY",
   });
   assert.deepEqual(full, [
@@ -55,7 +54,6 @@ test("buildRuntimeArgs: 覆盖项（cordis-src/deps-root/no-ensure）只在显�
     "--cordis-src", "/install/cordis",
     "--deps-root", "/deps/node_modules",
     "--ready-marker", "MY_READY",
-    "--no-ensure",
   ]);
 });
 

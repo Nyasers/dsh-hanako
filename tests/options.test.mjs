@@ -19,27 +19,23 @@ test("parseArgs: 完整合法参数（--flag value 与 --flag=value 混用）", 
   assert.equal(o.dataDir, "/hana/app-data/dsh-hanako");
   assert.equal(o.taskId, "task-1");
   assert.equal(o.readyMarker, "DSH_READY");
-  assert.equal(o.noEnsure, false);
   assert.equal(o.depsRoot, null);
   assert.equal(o.cordisSrc, null);
 });
 
-test("parseArgs: 默认值（readyMarker 默认 DSH_READY / noEnsure 默认 false）", () => {
+test("parseArgs: 默认值（readyMarker 默认 DSH_READY）", () => {
   const o = parseArgs(["--port", "8080", "--data-dir", "/tmp/x"]);
   assert.equal(o.readyMarker, "DSH_READY");
-  assert.equal(o.noEnsure, false);
 });
 
-test("parseArgs: 可选 flag 传值（deps-root/cordis-src/no-ensure）", () => {
+test("parseArgs: 可选 flag 传值（deps-root/cordis-src）", () => {
   const o = parseArgs([
     "--port", "8080", "--data-dir", "/tmp/x",
     "--deps-root", "/tmp/deps/node_modules",
     "--cordis-src", "/app/cordis",
-    "--no-ensure",
   ]);
   assert.equal(o.depsRoot, "/tmp/deps/node_modules");
   assert.equal(o.cordisSrc, "/app/cordis");
-  assert.equal(o.noEnsure, true);
 });
 
 test("parseArgs: 端口契约——0 / 负 / 越界 / 非数均拒绝（显式端口契约禁随机）", () => {

@@ -27,7 +27,6 @@ export const FLAGS = [
   "deps-root",
   "cordis-src",
   "ready-marker",
-  "no-ensure",
   "help",
 ];
 
@@ -37,10 +36,9 @@ export const USAGE = `用法：dsh-host.mjs（dsh-hanako App v2 受管 Node runt
   --data-dir <dir>     App ctx.dataDir 绝对路径（dsh-home / runtime 依赖区 / logs 均在 dataDir 下）
 可选参数：
   --hana-task-id <id>  发起本次启动的 Hana taskId（信息性；任务/会话映射在迁移步骤 3 接入）
-  --deps-root <dir>    依赖 node_modules 根（默认 <data-dir>/runtime/node_modules；调试/预置覆盖）
+  --deps-root <dir>    依赖 node_modules 根（默认 <App 安装目录>/node_modules，随包物化；调试覆盖）
   --cordis-src <dir>   @dsh-hanako cordis 产物 scope 根（默认 <App 安装目录>/cordis）
   --ready-marker <s>   服务就绪标记（默认 DSH_READY；必须与 start.service.readyMarker 完全一致）
-  --no-ensure          跳过依赖 ensure（deps 已预置场景；缺失时给出清晰错误并退出）
   --help               显示本帮助
 `;
 
@@ -53,9 +51,9 @@ function takeValue(argv, i, flag, inline) {
   return { value: v, next: i + 2 };
 }
 
-/** 带值参数集（--flag <value> / --flag=<value>）；no-ensure/help 是无值开关。 */
+/** 带值参数集（--flag <value> / --flag=<value>）；help 是无值开关。 */
 const VALUE_FLAGS = new Set(["port", "data-dir", "hana-task-id", "deps-root", "cordis-src", "ready-marker"]);
-const BOOL_FLAGS = new Set(["no-ensure", "help"]);
+const BOOL_FLAGS = new Set(["help"]);
 
 /**
  * 解析 argv（不含 node/script 前缀的纯参数数组）。
@@ -70,7 +68,6 @@ export function parseArgs(argv) {
     depsRoot: null,
     cordisSrc: null,
     readyMarker: "DSH_READY",
-    noEnsure: false,
     help: false,
   };
   for (let i = 0; i < raw.length; ) {
@@ -85,8 +82,7 @@ export function parseArgs(argv) {
       if (inline !== undefined) {
         throw new UsageError(`--${name} 是无值开关，不接受 =value`);
       }
-      if (name === "no-ensure") opts.noEnsure = true;
-      else if (name === "help") opts.help = true;
+      opts.help = true;
       i += 1;
       continue;
     }
