@@ -244,6 +244,14 @@ export async function injectDshIndex(indexHtml, privateBase, opts) {
     await appendScript(resolveIndexAssetUrl(src, privateBase).toString());
   }
   if (!moduleEntry) throw new Error("DSH index did not declare a module entry");
+  // body 内联脚本（**必须早于 module entry**）：dsh 自己的 boot-theme 行就在 <body> 开头——
+  // 它设 documentElement.style.colorScheme、body[data-ds-dark-theme]、--dsh-content-font-size。
+  // 旧实现只搬 head，这行就丢了：dsh 的明暗标记与内容字号从未初始化（真机 2026-09-12）。
+  for (const source of parsed.body.querySelectorAll("script:not([src])")) {
+    const script = document.createElement("script");
+    script.textContent = source.textContent;
+    document.head.append(script);
+  }
   await appendScript(resolveIndexAssetUrl(moduleEntry, privateBase).toString(), true);
 }
 

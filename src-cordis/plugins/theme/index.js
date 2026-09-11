@@ -9,11 +9,12 @@
 //     theme.css 变量生效，getComputedStyle 读到当前主题 16 个变量的渲染值。
 //     随宿主更新：宿主切主题 → dataset.theme 变 → 插件 iframe 重载 → 壳桥
 //     回传新值；宿主新增/修改主题无需插件更新（无静态主题表）。
-// 边界：dsh preference 经 settings/describe 读取（加载时一次回读 + 变更事件驱动——
-//   vY T7b 后 0.1.2 无旧 /api/events.host WS；vZ 起事件化：宿主侧 bridge 订阅
-//   remote.mux $events 的 settings/document-updated（ui-theme）→ 总线 → /webui/events
-//   → 壳页 postMessage dshHanaPref → 注入脚本重读一次，替代早期 3s 轮询）。
-//   system → 覆盖 Hana 配色；light/dark → 完全原生。
+// 边界（2026-09-12 改）：dsh preference 由**壳页随主题推送下发**——壳页从 DSH index 的
+//   boot-theme 行取 `const preference = "..."`，与主题变量一起 postMessage 给桥（见
+//   src/ui/app-shell.js readIndexThemePreference）。旧的 settings/describe RPC 自读、以及
+//   “宿主 bridge 订阅 remote.mux → dshanaBus → /webui/events → dshHanaPref”事件链已退役：
+//   前者信封在 0.1.5 未验（读不到就永远停在 system，把 UI 钉住），后者是宿主未能力时的自补。
+//   system → 覆盖 Hana 配色；light/dark → 完全原生；未知 → 不动手（等壳页推送）。
 //
 // 机制：经 dsh-host-webserver 的 tapIndex 扩展点，向每个 index 响应注入：
 //   1) 静态 <style>：无脚本/桥失败时的默认主题 fallback

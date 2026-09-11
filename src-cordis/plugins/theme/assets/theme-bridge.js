@@ -29,6 +29,10 @@
   // vY（T7b 后 dsh 0.1.2）：preference 默认 system——跟随宿主配色（壳桥 vars 即应用）；
   // 读 dsh settings/describe 失败/缺失时按 system 处理，主题不因此失效。
   var pref = "system";
+  // 偏好是否已经由壳页告知过一次：未告知前不动手（否则会先按 system 压一遍 Hana 配色，
+  // 等壳页首次推送过来才纠正，中间那一下是可见的闪烁）。壳桥永久失败时本值恒 false，
+  // 静态 fallback 就一直留着——这正是旧行为。
+  var prefKnown = false;
   function cssOf(v) {
     var c = "";
     for (var i = 0; i < m.length; i++) {
@@ -66,12 +70,12 @@
     }
     return hits ? v : null;
   }
-  // 是否跟随宿主主题：**只在 dsh 自己的 preference 为 system 时**才把 Hana 配色压下去；
-  // preference 明确为 light/dark 时完全原生——这是既有的产品语义，不能被“嵌入式”这个
-  // 运行形态括掉（2026-09-12：我一度写成“装了 __DSH_TRANSPORT__ 就无条件跟随”，
-  // 把这条特性抬掉了，真机反馈纠正，现收回）。读不到 preference 时按 system 处理，
-  // 主题不因读取失败而失效。
-  function followHost() { return pref === "system"; }
+  function followHost() {
+    // 仅在**已知且明确**偏好为 system 时跟随宿主；已知为 light/dark 时完全原生；
+    // 尚未得知偏好时不动手（等壳页首次推送）。2026-09-12：我一度写成“装了
+    // __DSH_TRANSPORT__ 就无条件跟随”，把这条特性抬掉了，真机反馈纠正后收回。
+    return prefKnown && pref === "system";
+  }
   // 从文档根读取并应用；读到有效变量返 true。
   function pull() {
     var v = readDocumentVars();
@@ -102,8 +106,11 @@
     if (e.source !== window && e.source !== window.parent) return;
     if (e.source !== window && parentOrigin && e.origin !== parentOrigin) return;
     if (e.data && e.data.dshHanaTheme) {
-      // 壳页的这条消息只当“主题变了”的通知用：值以文档根为权威（同文档下我们读得到）。
-      // 读不到（非同文档部署等）才回退用载荷里的 vars。
+      // 偏好随推送下发（来源见文件头）：拿到就先换门，再取变量重跑应用。
+      var p = e.data.dshHanaTheme.preference;
+      if (p === "light" || p === "dark" || p === "system") { pref = p; prefKnown = true; }
+      // 值以文档根为权威（同文档下我们读得到）；读不到才回退用载荷里的 vars。
+      // pull() 内部会 applyOrRemove() + maybeDropStatic()，所以换门后不必再跑一遍。
       if (!pull()) {
         var v = e.data.dshHanaTheme.vars;
         if (v && typeof v === "object" && Object.keys(v).length) {
@@ -114,55 +121,12 @@
       }
       if (cur && askTimer) { clearInterval(askTimer); askTimer = null; }
     }
-    // DSH 主题偏好变更通知（壳页经 /webui/events 收到 settings/document-updated 的
-    // ui-theme 后 postMessage 转发，只带 revision）：重读一次 preference（事件驱动，
-    // 替代旧 3s 轮询 settings/describe——变更时才读，describe 调用量与官方
-    // startup-rpc-budget 语义一致）。
-    if (e.data && e.data.dshHanaPref) {
-      refreshPref();
-    }
   });
-  // 回读一次 preference 并重跑 applyOrRemove（加载时 + 偏好变更时共用）。
-  function refreshPref() {
-    // vY（T7b 后 dsh 0.1.2）：settings.describe 端点改斜杠 settings/describe（0.1.1
-    // 点号端点已退役）；信封 payload 走 { args }（0.1.2 Remote 约定）。
-    // vZ（2026-09-12 真机 403 定位）：**不得裸 fetch(location.origin + "/api/...")**——宿主
-    // 凭据闸只认 App 的私有运行时基址。样例 hana-dsh 自己的 ui/bootstrap.js 把同一条
-    // settings/describe 发到 /api/apps/hana-dsh/routes/_runtime/<rid>/_surface/<ticket>
-    // /_hana/<bridgeKey>/api/settings/describe 得到 200；裸发则 403 missing_credential。
-    // 本脚本由 tapIndex 注入 DSH 文档，而 __DSH_TRANSPORT__（src/ui/dsh-inject.js 在注入
-    // DSH index 前装）在同一文档里已可用：经它发出的请求会被重写到私有前缀（同源凭据由
-    // 壳页持有）。退路：transport 缺席（例如脚本落到非 DSH 文档）仍走原生 fetch，读不到按 system。
-    var transport = window.__DSH_TRANSPORT__;
-    var transportFetch = transport && transport.fetch;
-    var send = typeof transportFetch === "function"
-      ? function (path, init) { return transportFetch.call(transport, path, init); }
-      : function (path, init) { return fetch(path, init); };
-    send("/api/settings/describe", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type: "client-request", rpcId: "theme-pref-" + Date.now(), method: "settings/describe", payload: { args: {} } })
-    })
-      .then(function (r) { return r.json(); })
-      .then(function (d) {
-        var ns = d && d.result && d.result.value && d.result.value.namespaces;
-        if (Array.isArray(ns)) {
-          for (var i = 0; i < ns.length; i++) {
-            if (ns[i] && ns[i].ns === "ui-theme" && ns[i].value) { pref = ns[i].value.preference || "system"; break; }
-          }
-        }
-        applyOrRemove();
-        maybeDropStatic();
-      })
-      .catch(function () { });
-  }
-  refreshPref();
-  // 偏好实时化（vY→vZ：T7b 后 dsh 0.1.2 无 /api/events.host（旧 0.1.1 端点）——官方
-  // 主题 preference 走服务端注入 + client presenter，注入脚本无法访问 ctx.remote.$on；
-  // 先退化为 3s 轻量轮询 settings/describe（0.1.2→0.1.3 期间），后改事件驱动：宿主侧
-  // bridge 订阅 remote.mux $events 的 settings/document-updated（ui-theme）→ 总线
-  // events 频道 → /webui/events → 壳页 postMessage dshHanaPref → 上方 message 监听
-  // 调 refreshPref 重读一次（变更时才读，替换周期轮询）。加载时保留一次回读兑底。
+  // 主题偏好不再由本脚本 RPC 自读：旧实现打 settings/describe，信封在新版本未验；读不到就
+  // 永远停在 system、把 UI 钉住（真机 2026-09-12）。现改由壳页随每次主题推送下发（来源：
+  // DSH index 的 boot-theme 行，见 src/ui/app-shell.js readIndexThemePreference）；
+  // 原先“宿主侧 bridge 订阅 remote.mux → dshanaBus → /webui/events → dshHanaPref”的
+  // 事件链也一并退役（那是宿主没给能力时的自补）。
   var mq = window.matchMedia && matchMedia("(prefers-color-scheme: dark)");
   if (mq && mq.addEventListener) mq.addEventListener("change", ask);
   // 竞态修复：壳页（宿主 iframe 外层）主题桥的注册可能与 dsh 页面加载不同步——脚本加载时
