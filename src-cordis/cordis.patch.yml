@@ -55,8 +55,15 @@
     - id: '@dsh-hanako/provider'
       name: '@dsh-hanako/provider'
 
-    - id: '@dsh-hanako/settings'
-      name: '@dsh-hanako/settings'
+    # 注（2026-09-11 退役）：@dsh-hanako/settings 整块退场——它在 dsh 设置页提供的
+    # 「DSHana 设置」分页预定由**宿主面设置页**（contributes.settings.ui.route）替代；
+    # 且它早已不可用：read/save 走的是 v1 路由 /api/hana-settings.*，App v2 下裸 fetch
+    # 一直 403（真机 2026-09-11 实测，同批 403 见 dsh-upgrade-0.1.5 规范）。
+    # 它不 provide 任何 service（inject 全是消费方：webServer/agentDefaultModel/
+    # hanaLogger/dshanaBus），销毁无副作用，同时少一个 dshanaBus 消费者。
+    # 需求交接：宿主面设置页需接住「dsh 默认模型（settings.yaml 的 agent-default-model）
+    # 的读与写」；版本显示用构建期常量即可（v2 起版本锁插件发版，无远端检查）。
+    # 原实现可在 git 历史里找回：src-cordis/plugins/settings/。
 
     # v1 遗留总线（dshana.bus WS 服务端）：v2 宿主不再连它，控制面改走 ctx.runtime.fetch
     # 到 runtime 中继的 /_control（见 src/runtime/bridge.js）。退役候选，暂留待真机确认无
