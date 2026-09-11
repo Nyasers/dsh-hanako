@@ -105,12 +105,10 @@ test("模拟 apply → marker → already-migrated（幂等）→ verify", () =>
   }
 });
 
-test("legacySettingsSuggestions: 可迁移键映射（webPort 非默认才近似建议）", () => {
-  const sug = legacySettingsSuggestions({ global: { approvalTimeoutSec: 45, defaultTimeoutSec: 3600, nodejsPath: "C:/x", webPort: 3080 } });
-  const keys = sug.map((s) => s.key);
-  assert.deepEqual(keys, ["approvalTimeoutSec", "defaultTimeoutSec", "nodejsPath"]);
-  const sug2 = legacySettingsSuggestions({ global: { webPort: 5000 } });
-  assert.ok(sug2.some((s) => s.key === "servicePort" && s.approx));
+test("legacySettingsSuggestions: 可迁移键映射（新契约无落点的键不映射）", () => {
+  const sug = legacySettingsSuggestions({ global: { approvalTimeoutSec: 45, defaultTimeoutSec: 3600, nodejsPath: "C:/x", servicePort: 4317, webPort: 5000 } });
+  assert.deepEqual(sug.map((s) => s.key), ["approvalTimeoutSec", "defaultTimeoutSec"]);
+  assert.deepEqual(legacySettingsSuggestions({ global: { webPort: 5000 } }), []);
   assert.deepEqual(legacySettingsSuggestions({}), []);
 });
 

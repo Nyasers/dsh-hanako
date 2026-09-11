@@ -6,12 +6,14 @@
 // 与单测，session 侧只留接线注释/桩）
 //
 // 职责：
-//   managedStart/ensureManagedRuntime：解析 servicePort（App 设置，见 manifest
-//     contributes.settings.servicePort）→ ctx.runtime.start({ runtime:"node",
-//     entry:"runtime/dsh-host.mjs", profile:"local-machine", network:"external", service:{
-//     port, readyMarker:"DSH_READY" }, ... }) → 状态轮询等到 ready / failed / exited。
+//   managedStart/ensureManagedRuntime：父进程随机选取「中继端口（注册给宿主的 service.port）
+//     + DSH 内部端口」→ ctx.runtime.start({ runtime:"node", entry:"runtime/dsh-host.mjs",
+//     profile:"local-machine", network:"external", cwd:ctx.dataDir, service:{ port:中继端口,
+//     readyMarker:带随机 opaque }, ... }) → 状态轮询等到 ready / failed / exited。
 //     绝不把 runtimeId 当就绪（指南 §6）：starting 只是宿主已拉起进程，DSH 真就绪 = 子
 //     进程真实监听后打印的 readyMarker → host 侧 service.state=ready。
+//     端口不再暴露给用户（裁决 4）：区间随机 + 占用自动换端口重试；就绪缓存每次经
+//     runtime.get 探活，子进程崩溃可被父侧识别并重起（对齐样例 controller 边界）。
 //   单例语义（本步设计）：一个 App runtime 服务多个 DSH 会话（每会话的 taskId 经后续
 //     步骤的任务桥各自携带，不把单次启动任务绑成全局焦点——指南 §7）；首次 create 时
 //     启动（tools/session.js 接线点），ready 后所有 action 复用。runtime 终止后清除
@@ -20,24 +22,29 @@
 //     会话日志（dataDir/logs/*.log，appendLog 同款行式）；镜像失败只 warn 不阻断。
 //
 // 参数契约（与 src/runtime/options.js 对偶；增删需两处同步 + tests/）：
-//   --hana-task-id/--port/--data-dir/--cordis-src/--deps-root/--ready-marker
-//   buildRuntimeArgs() 是本模块对子进程唯一的参数来源。
+//   唯一的子进程入参是私有运行时配置文件路径（argv[1]），由 writeRuntimeConfigFile 落盘、
+//   buildRuntimeConfig 生产 schema；不再有命令行明文参数（凭据/端口不进 argv）。
 import { join } from "node:path";
 import { mkdirSync, writeFileSync, chmodSync, rmSync } from "node:fs";
 import { randomInt, randomBytes } from "node:crypto";
-import { appConfig, appDataDir, appLogger, getAppRuntime } from "./app-runtime.js";
+import { appDataDir, appLogger, getAppRuntime } from "./app-runtime.js";
 // 依赖就位（自包含打包，2026-09-10）：依赖随包物化在安装目录 <installRoot>/node_modules，
 // 运行时不再安装、不再 spawn（原 ensure-deps.js 与 lib/pnpm.js 已删除；app/process.spawn
 // 能力随之退役）。
 
-export const READY_MARKER = "DSH_READY";
+export const READY_MARKER = "DSH_READY"; // 标记前缀；每次启动拼随机 opaque（宿主按整行匹配）
 export const RUNTIME_ENTRY = "runtime/dsh-host.mjs"; // 相对 App 安装目录（宿主校验在安装/数据目录内）
-export const DEFAULT_SERVICE_PORT = 4317; // manifest contributes.settings.servicePort 默认（宿主 service 端口契约 1024..65535）
+/** 受管端口选取区间（与官方样例 hana-dsh controller.mjs 同款；宿主 service 端口契约 1024..65535 的确定整数，禁 0/随机哨兵）。 */
+export const PORT_MIN = 38000;
+export const PORT_MAX = 52000;
+export const MAX_START_ATTEMPTS = 3; // 端口占用（随机撞车）自动换端口重试上限
+/** runtime 终态集合（宿主 runtime state 契约）。 */
+export const TERMINAL_STATES = new Set(["failed", "exited", "stopped"]);
 export const READY_POLL_MS = 300;
 export const READY_TIMEOUT_MS = 240000; // 首次启动含 profile 种子化与 DSH boot，需更宽容限
 export const START_ERROR_HINTS = {
-  "port-busy": "端口被占用或 DSH 无法监听（服务代理未就绪）。改 App 设置 servicePort 为未占用端口后重试，或释放占用端口的进程。",
-  "port-unreachable": "DSH 已在期望端口监听失败（webServer 服务端口与期望不符或探测失败）。查看 runtime 日志定位，必要时换 servicePort。",
+  "port-busy": "端口被占用或 DSH 无法监听（服务代理未就绪）。已自动换随机端口重试，仍失败请查看 runtime 日志并确认本机回环端口可用。",
+  "port-unreachable": "DSH 未在期望端口完成监听（webServer 服务端口与期望不符或探测失败）。查看 runtime 日志定位。",
   "boot-failed": "DSH runProfile 启动失败（见 runtime 日志）。",
   deps: "DSH 依赖缺失：包内 node_modules 不完整（依赖应随包物化）。请重新安装本 App。",
   seed: "dshana profile 初始化失败（见 runtime 日志；profile 迁移拒绝/scope 链接失败由种子化引导）。",
@@ -77,15 +84,36 @@ export function resetManagedRuntime() {
 }
 
 /**
- * servicePort 解析（纯函数，便于单测）：raw 为 ctx.config.get('servicePort') 的原始值。
- * 合法整数 1024..65535 返回原值（宿主 runtime service 端口契约下限 1024——特权口/0/随机
- * 一律不接受，见迁移核对记录）；非法/缺省返回 fallback（默认 DEFAULT_SERVICE_PORT）。
- * 显式 <1024/负/越界/非数都不作为随机端口——指南 §10 禁随机端口契约（宿主不认子进程自报）。
+ * 访问面归零（端口与两把 key）。失败收尾/停止/重起前调用——否则 bridgeAccess() 会把
+ * 已死的中继端口继续发给调用方。runtimeId 一并清（与访问面同生命周期）。
  */
-export function parseServicePort(raw, fallback = DEFAULT_SERVICE_PORT) {
-  const n = typeof raw === "number" ? raw : typeof raw === "string" && raw.trim() !== "" ? Number(raw) : NaN;
-  if (Number.isInteger(n) && n >= 1024 && n <= 65535) return n;
-  return Number.isInteger(fallback) && fallback >= 1024 && fallback <= 65535 ? fallback : DEFAULT_SERVICE_PORT;
+function clearRuntimeIdentity() {
+  managed.runtimeId = null;
+  managed.bridgePort = null;
+  managed.bridgeKey = null;
+  managed.controlKey = null;
+}
+
+/**
+ * 端口选取（纯函数，可注入 rng 便于单测）：[PORT_MIN, PORT_MAX) 内的确定整数。
+ * 宿主 runtime service 端口契约要求显式整数（1024..65535，禁 0/随机哨兵），故只能由父进程
+ * 自选后传入，不能交给宿主分配；区间随机使端口不再需要用户配置（裁决 4）。
+ */
+export function choosePort(rng = randomInt) {
+  return rng(PORT_MIN, PORT_MAX);
+}
+
+/** 同次启动的两个端口：中继端口（service.port）与 DSH 内部端口，保证不相等。 */
+export function pickPorts(rng = randomInt) {
+  const bridgePort = choosePort(rng);
+  let dshPort = choosePort(rng);
+  while (dshPort === bridgePort) dshPort = choosePort(rng);
+  return { bridgePort, dshPort };
+}
+
+/** 本次启动的就绪标记：前缀 + 随机 opaque（跨实例不撞、不可预测；不得含换行）。 */
+export function makeReadyMarker() {
+  return READY_MARKER + ":" + randomBytes(18).toString("base64url");
 }
 
 /**
@@ -222,14 +250,80 @@ async function mirrorRuntimeLogs(ctx, runtimeId) {
  * 成功返回 { runtimeId, info }（state=ready）；失败抛 Error（message 含归类与用户指引），
  * 单例清空以便下次调用重试。首次调用 = profile 种子化 + DSH boot（日志可见）。
  */
+/** 等 runtime 到终态（停业确认）；超时或查询失败返回 null。 */
+async function waitTerminal(ctx, runtimeId, timeoutMs = 15000) {
+  if (!runtimeId || !ctx || typeof ctx.runtime?.get !== "function") return null;
+  const until = Date.now() + timeoutMs;
+  for (;;) {
+    const cur = await ctx.runtime.get(runtimeId).catch(() => null);
+    if (!cur || TERMINAL_STATES.has(cur.state)) return cur;
+    if (Date.now() >= until) return null;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}
+
+/**
+ * 就绪探活：宿主 runtime.get 到 ready 才算仍活着。子进程崩溃/被回收后 state 变终态 →
+ * 返回 null（调用方转重起），不再拿陈旧缓存冒充 ready。查询本身失败时保守视为仍就绪
+ * （避免宿主查询抖动引起不必要的重起/双 runtime）。
+ */
+async function probeLiveRuntime() {
+  const app = getAppRuntime();
+  const runtimeId = managed.runtimeId;
+  if (!app || !app.ctx || typeof app.ctx.runtime?.get !== "function" || !runtimeId) return null;
+  let cur;
+  try {
+    cur = await app.ctx.runtime.get(runtimeId);
+  } catch (e) {
+    logApp("warn", "[managed-runtime] runtime.get 探活失败（保守视为仍就绪）：" + ((e && e.message) || e));
+    return managed.lastInfo;
+  }
+  if (cur && (cur.state === "ready" || (cur.service && cur.service.state === "ready"))) {
+    managed.lastInfo = cur;
+    return cur;
+  }
+  return null;
+}
+
+/**
+ * 失败收尾：runtime 未到终态则停掉并等终态，之后访问面（端口 + 两把 key）与 runtimeId 归零。
+ * 重试前必须先做——旧 runtime 不收掉，新一次的中继访问面会与它纠缠。
+ */
+async function reapFailedRuntime(ctx) {
+  const runtimeId = managed.runtimeId;
+  clearRuntimeIdentity();
+  if (!runtimeId || !ctx || typeof ctx.runtime?.get !== "function") return;
+  try {
+    const cur = await ctx.runtime.get(runtimeId);
+    if (cur && !TERMINAL_STATES.has(cur.state) && typeof ctx.runtime.stop === "function") {
+      await ctx.runtime.stop(runtimeId);
+      await waitTerminal(ctx, runtimeId);
+    }
+  } catch (e) {
+    logApp("warn", "[managed-runtime] 失败 runtime 收尾异常（宿主可能已回收）：" + ((e && e.message) || e));
+  }
+}
+
+/**
+ * 启动 + 等到就绪（single-flight 单例）。opts: { taskId?, cordisSrc?, depsRoot? }。
+ * 成功返回 { runtimeId, info }（state=ready）；失败抛 Error（message 含归类与用户指引），
+ * 单例清空以便下次调用重试。首次调用 = profile 种子化 + DSH boot（日志可见）。
+ * 每次命中 ready 缓存都先探活（runtime.get）；子进程崩溃/被回收则清单例并重起。
+ */
 export async function ensureManagedRuntime(opts = {}) {
   if (managed.phase === "ready" && managed.runtimeId) {
-    return { runtimeId: managed.runtimeId, info: managed.lastInfo };
+    const live = await probeLiveRuntime();
+    if (live) return { runtimeId: managed.runtimeId, info: live };
+    logApp("warn", "[managed-runtime] 缓存 ready 但 runtime 已不在就绪态（子进程退出/宿主回收），重新启动");
+    const app = getAppRuntime();
+    await reapFailedRuntime(app && app.ctx);
+    managed.phase = "idle";
+    managed.lastInfo = null;
   }
   if (managed.phase === "starting" && managed.promise) {
     return managed.promise; // 并发首启共享同一 promise
   }
-  const promise = doStartManaged(opts);
+  const promise = startWithPortRetry(opts);
   managed.phase = "starting";
   managed.promise = promise;
   try {
@@ -241,14 +335,30 @@ export async function ensureManagedRuntime(opts = {}) {
   } catch (e) {
     managed.phase = "error";
     managed.lastError = e;
-    managed.runtimeId = null;
+    clearRuntimeIdentity(); // 失败不留死端口/死 key（bridgeAccess 不得再发出去）
     throw e;
   } finally {
     managed.promise = null;
   }
 }
 
-async function doStartManaged(opts) {
+/** 端口占用（本机随机撞车）自动换随机端口重试；其他失败直接上抛。 */
+async function startWithPortRetry(opts) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= MAX_START_ATTEMPTS; attempt++) {
+    try {
+      return await doStartManaged(opts, attempt);
+    } catch (e) {
+      lastError = e;
+      await reapFailedRuntime(getAppRuntime()?.ctx);
+      if (!(e && e.code === "port-busy") || attempt >= MAX_START_ATTEMPTS) throw e;
+      logApp("warn", "[managed-runtime] 端口占用（第 " + attempt + " 次尝试）——换随机端口重试");
+    }
+  }
+  throw lastError || new Error(START_ERROR_HINTS.unknown);
+}
+
+async function doStartManaged(opts, attempt = 1) {
   const app = getAppRuntime();
   if (!app || !app.ctx || typeof app.ctx.runtime?.start !== "function") {
     throw new Error("managed-runtime: App 运行包未初始化（apply 未注入 ctx.runtime）");
@@ -256,22 +366,22 @@ async function doStartManaged(opts) {
   const ctx = app.ctx;
   const dataDir = appDataDir();
   if (!dataDir) throw new Error("managed-runtime: ctx.dataDir 缺失");
-  const bridgePort = parseServicePort(appConfig("servicePort"));
+  const { bridgePort, dshPort } = pickPorts();
   const bridgeKey = randomBytes(24).toString("base64url");
   const controlKey = randomBytes(24).toString("base64url");
-  let dshPort = randomInt(38000, 52000);
-  while (dshPort === bridgePort) dshPort = randomInt(38000, 52000);
+  const readyMarker = makeReadyMarker();
   const config = buildRuntimeConfig({
     dataDir,
     dshPort,
     bridgePort,
     bridgeKey,
     controlKey,
+    readyMarker,
     cordisSrc: typeof opts.cordisSrc === "string" && opts.cordisSrc ? opts.cordisSrc : undefined,
     depsRoot: typeof opts.depsRoot === "string" && opts.depsRoot ? opts.depsRoot : undefined,
   });
   const configPath = writeRuntimeConfigFile(dataDir, config);
-  logApp("info", "[managed-runtime] 启动 DSH 受管 runtime（entry=runtime/dsh-host.mjs dshPort=" + dshPort + " bridgePort=" + bridgePort + "）");
+  logApp("info", "[managed-runtime] 启动 DSH 受管 runtime（attempt " + attempt + "/" + MAX_START_ATTEMPTS + " entry=runtime/dsh-host.mjs dshPort=" + dshPort + " bridgePort=" + bridgePort + "）");
   // 权限档 = local-machine（定案 2026-09-10，见 specs/dshana-v2-定案与待议-2026-09-10.md §1）：
   // 明确不是沙箱——受管程序自持工作区与命令策略，可读写当前用户可及的一切文件（含其他应用
   // 数据与磁盘凭据），仅保留 stop / 撤销 / 进程树回收的托管语义。宿主契约**禁止**传
@@ -282,8 +392,9 @@ async function doStartManaged(opts) {
     entry: RUNTIME_ENTRY,
     profile: "local-machine",
     network: "external",
+    cwd: dataDir,
     args: [configPath],
-    service: { port: bridgePort, readyMarker: READY_MARKER },
+    service: { port: bridgePort, readyMarker },
   };
   let info;
   try {
@@ -357,7 +468,7 @@ export async function stopManagedRuntime() {
   const app = getAppRuntime();
   const runtimeId = managed.runtimeId;
   managed.phase = "stopped";
-  managed.runtimeId = null;
+  clearRuntimeIdentity();
   managed.lastInfo = null;
   if (managed.mirrorCancel) {
     try {

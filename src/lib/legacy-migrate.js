@@ -209,16 +209,13 @@ export function planLegacyMigration({ legacyRoot, dataDir, force = false }) {
   };
 }
 
-/** v1 config.json 全局键 → v2 contributes.settings 建议（只读映射；webPort 不同契约不映射）。 */
+/** v1 config.json 全局键 → v2 contributes.settings 建议（只读映射；webPort/nodejsPath/servicePort 在新契约下无落点，不映射）。 */
 export function legacySettingsSuggestions(configJson) {
   const g = configJson && configJson.global && typeof configJson.global === "object" ? configJson.global : {};
   const out = [];
-  for (const key of ["approvalTimeoutSec", "defaultTimeoutSec", "nodejsPath", "servicePort"]) {
+  for (const key of ["approvalTimeoutSec", "defaultTimeoutSec"]) {
     const val = g[key];
     if (val !== undefined && val !== null && val !== "") out.push({ key, value: val, source: "config.json.global." + key });
-  }
-  if (typeof g.webPort === "number" && g.webPort !== 3080) {
-    out.push({ key: "servicePort", value: g.webPort, source: "config.json.global.webPort（旧 Web 端口；v2 显式端口契约，仅在 1024..65535 时可用，宿主禁 0/随机）", approx: true });
   }
   return out;
 }

@@ -22,7 +22,6 @@ import { appCtx, appDataDir, appConfig } from "./app-runtime.js";
 import { readTaskMap, markCancelRequested } from "./task-map.js";
 import { rpcSessionCancel, cancelAccepted } from "./dsh-rpc.js";
 import { rpcViaControl } from "./controller.js";
-import { serviceBase, serviceFetch } from "./service-base.js";
 
 export const CANCEL_CONFIRM_MS = 15000; // DSH 中止确认窗口（超窗升级宿主 cancel）
 export const CANCEL_ESCALATE_REASON = "cancel-confirm-timeout";

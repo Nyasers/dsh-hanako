@@ -7,7 +7,7 @@
 // App 主进程 → 受管 runtime 内 DSH web 服务的指令 = loopback HTTP Unary RPC，
 // **信封/翻译器协议复用 v1 已验证格式**（v1 lib/protocol.js callUnary/callUnaryBus 的
 // HTTP 兑底路径 + 总线翻译器自环同款，见 src-cordis/plugins/bus/index.js）：
-//   POST http://127.0.0.1:<servicePort>/api/<method 点号→斜杠> ，
+//   POST http://127.0.0.1:<中继端口>/api/<method 点号→斜杠> ，
 //   body = { type:"client-request", rpcId, method, payload:{ args: <inner> } }
 //   · session.* 方法 payload 须包成 gateway 信封（request/_request + 注入 requestId，
 //     jsonl data.source.rpcId 定位键）；session.list 用 _request，其余 session 用 request；
