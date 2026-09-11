@@ -43,7 +43,6 @@
           "label": "DSHana",
           "route": "/sidebar.html"
         },
-        "siteNavEntry": true,
         "fpFullPanel": true,
         "closable": false,
         "cardForm": "flush",
