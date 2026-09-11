@@ -100,16 +100,7 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
       })
       .catch(function () { return false; });
   }
-  // 受管 runtime iframe URL：代理前缀（带路径票据）+ 视图参数（给 DSH 视图装配）。
-  function runtimeUiUrl(prefix) {
-    var q = new URLSearchParams();
-    var view = shell && shell.getAttribute("data-dshana-view");
-    if (view) q.set("dshana-view", view);
-    var qs = q.toString();
-    var base = withSurfaceTicket(prefix, surfaceSession());
-    return base + (qs ? "?" + qs : "");
-  }
-  // 本页没拿到 surface 会话时的说明（appSurfaceSession 由宿主开页时附在 iframe URL 上）
+  // 本页没拿到 surface 会话时的说明（appSurfaceSession 由宿主开页时附在 surface URL 上）
   var SURFACE_MISSING = "状态读取失败：本页缺少 App surface 会话凭据，请从 Card Center 重新打开本卡";
   function credMissingHtml() {
     return '<div class="card">'
@@ -130,6 +121,19 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
     if (s.phase === "starting") return "booting";
     if (s.phase === "error" || s.phase === "stopped") return "action";
     return "idle";
+  }
+
+  // 台面上唯一那行小字（官方 loading 里 “Loading plugins…” 的对应物）；细节一律进 #boot-panel。
+  function statusText(view, s) {
+    if (view === "booting") return "正在启动 DSH…";
+    if (view === "idle") return "DSH 未启动";
+    if (view === "action") {
+      var t = (s && s.error && s.error.userText) || (s && s.note) || "";
+      t = String(t).split("\n")[0].slice(0, 120);
+      if (t) return t;
+      return s && s.phase === "stopped" ? "DSH 已停止" : "启动失败，需要处理";
+    }
+    return "";
   }
 
   // ---- 时间线片段（预期流程；v2 无细分上报，booting 时全程待命，不假装具体阶段）----
@@ -172,14 +176,14 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
       + "</div>";
   }
   function bootingViewHtml(s) {
-    return '<div class="card">'
-      + '<h2 class="card-label">正在启动 DSH</h2>'
+    // 启动中台面上只留 loader，诊断收进折叠区：启动卡住时展开看时间线/日志尾。
+    return '<details class="raw-details"><summary>启动详情</summary>'
       + '<p class="desc">受管 runtime 正在拉起（profile 种子化 + 服务监听）。'
       + "就绪后本页自动载入 DSH Web UI。</p>"
       + timelineHtml()
       + logBlock(s && s.logTail)
       + metaHtml(s)
-      + "</div>";
+      + "</details>";
   }
   function actionViewHtml(s) {
     var isErr = !s || s.phase === "error";
@@ -220,19 +224,15 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
 
     // main 卡
     var spin = $("#dsh-spin");
-    var stage = $("#dsh-stage");
-    var frameWrap = $("#frame-wrap");
-    var frame = $("#dsh-frame");
+    var status = $("#dsh-status");
     var panel = $("#boot-panel");
     if (view === "ready") {
       if (!surfaceSession()) {
         // DSH 已就绪但本页 URL 没带 appSurfaceSession（宿主没发）：代理对无凭据请求一律
-        // 403 missing_credential，下挂 iframe 只会把那段 JSON 画出来。停在 action 视图
-        // 把原因写清，不挂 iframe。
+        // 403 missing_credential。停在 action 视图，把原因写清。
         body.setAttribute("data-view", "action");
         if (spin) spin.hidden = true;
-        if (frameWrap) frameWrap.hidden = true;
-        if (frame) { frame.removeAttribute("src"); frame.hidden = true; }
+        if (status) status.textContent = "缺少 App surface 会话凭据";
         if (panel) panel.innerHTML = credMissingHtml();
         schedulePoll(POLL_SLOW_MS);
         return;
@@ -240,8 +240,6 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
       body.setAttribute("data-view", "ready");
       if (spin) spin.hidden = true;
       if (panel) panel.innerHTML = "";
-      if (frameWrap) frameWrap.hidden = true;
-      if (frame) { frame.removeAttribute("src"); frame.hidden = true; }
       startInjection(s.proxyPrefix);
       schedulePoll(POLL_SLOW_MS);
       return;
@@ -249,8 +247,7 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
 
     body.setAttribute("data-view", view === "booting" ? "booting" : view === "action" ? "action" : "idle");
     if (spin) spin.hidden = view !== "booting";
-    if (frameWrap) frameWrap.hidden = true;
-    if (frame) { frame.removeAttribute("src"); frame.hidden = true; }
+    if (status) status.textContent = statusText(view, s);
     if (panel) {
       var html = view === "booting" ? bootingViewHtml(s)
         : view === "action" ? actionViewHtml(s)
@@ -424,14 +421,12 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
     var detail = $("[data-dsh-detail]", main);
     var meta = $("[data-dsh-meta]", main);
     var logEl = $("[data-dsh-log]", main);
-    var frameZone = $("[data-dsh-frame-zone]", main);
-    var frame = $("[data-dsh-frame]", main);
     var btnStart = $("[data-dsh-start]", main);
     var btnStop = $("[data-dsh-stop]", main);
 
     // FP = DSH Web UI 的 sidebar 本体：就绪后整块让给侧栏——本页自带的标题/状态/按钮 chrome
     // （[data-dsh-chrome]）全部收起（DSH sidebar 自带 brand 行，叠一层重复）；未就绪时才露
-    // chrome 当占位。data-dsh-ready 同时撤掉 .panel 内边距，iframe 贴边占满。
+    // chrome 当占位。data-dsh-ready 同时撤掉 .panel 内边距。
     var chromeEls = main.querySelectorAll("[data-dsh-chrome]");
     for (var ci = 0; ci < chromeEls.length; ci++) chromeEls[ci].hidden = view === "ready";
     if (view === "ready") main.setAttribute("data-dsh-ready", "1");
@@ -443,23 +438,17 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
         for (var ck = 0; ck < chromeEls.length; ck++) chromeEls[ck].hidden = false;
         main.removeAttribute("data-dsh-ready");
         if (detail) { detail.textContent = SURFACE_MISSING; detail.classList.add("err"); }
-        if (frameZone) frameZone.hidden = true;
-        if (frame) { frame.removeAttribute("src"); frame.hidden = true; }
         schedulePoll(POLL_SLOW_MS);
         return;
       }
       if (meta) meta.textContent = "runtime " + (s.runtimeId || "–") + (s.service && s.service.port ? " · port " + s.service.port : "");
       if (logEl) logEl.hidden = true;
-      if (frameZone) frameZone.hidden = true;
-      if (frame) { frame.removeAttribute("src"); frame.hidden = true; }
       if (btnStart) btnStart.hidden = true;
       if (btnStop) btnStop.hidden = true;
       startInjection(s.proxyPrefix);
       schedulePoll(POLL_SLOW_MS);
       return;
     }
-    if (frameZone) frameZone.hidden = true;
-    if (frame) { frame.removeAttribute("src"); frame.hidden = true; }
     if (btnStop) btnStop.hidden = true;
     var note = s && s.note ? s.note : "";
     var errTxt = s && s.error && s.error.userText;
@@ -541,21 +530,20 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
   }
 
   // ---- 壳桥：主题 + 剪贴板（内层 DSH Web UI 的 v1 契约应答）----
+  // 只传宿主当前的真实值：**不做固定值兜底**（拿不到就传空，桥会跳过空值 → DSH 保持内置 token）。
+  // 制造用户没选过的颜色比不跟随更糟：样例 README 原话是 “A failed swap keeps the current
+  // theme rather than falling back to a built-in palette”。
   var THEME_VARS = [
-    ["--bg", "#F5EFE4"], ["--bg-card", "#FBF7EE"], ["--sidebar-bg", "#EFE8DB"],
-    ["--text", "#2A2622"], ["--text-light", "#4A433C"], ["--text-muted", "#6B6158"],
-    ["--accent", "#537D96"], ["--accent-hover", "#3F6179"],
-    ["--border", "#D8CFBE"], ["--green", "#4A6B4A"], ["--danger", "#8B2C1F"],
-    ["--overlay-strong", "rgba(42,38,34,0.15)"], ["--overlay-medium", "rgba(42,38,34,0.08)"],
-    ["--user-bg", "rgba(83,125,150,0.08)"], ["--accent-light", "rgba(83,125,150,0.08)"],
+    "--bg", "--bg-card", "--sidebar-bg", "--text", "--text-light", "--text-muted",
+    "--accent", "--accent-hover", "--accent-light", "--border", "--green", "--danger",
+    "--overlay-strong", "--overlay-medium", "--user-bg",
   ];
   function readThemeVars() {
     var cs = getComputedStyle(document.documentElement);
     var out = {};
     for (var i = 0; i < THEME_VARS.length; i++) {
-      var name = THEME_VARS[i][0];
-      var val = cs.getPropertyValue(name).trim();
-      out[name] = val || THEME_VARS[i][1];
+      var name = THEME_VARS[i];
+      out[name] = cs.getPropertyValue(name).trim();
     }
     try {
       out.themeId = new URLSearchParams(location.search).get("hana-theme") || "inherit";
@@ -572,11 +560,6 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
   // ——这就是主卡 / FP 主题不跟随的原因（旧 iframe 形态下 parent 恰好是壳页，才一直正常）。
   function pushThemeToSelf() {
     try { window.postMessage({ dshHanaTheme: { vars: readThemeVars() } }, "*"); } catch (e) { /* 忽略 */ }
-  }
-  function frameWindow() {
-    var main = $("[data-dshana-shell]");
-    var f = isSidebar ? $("[data-dsh-frame]", main) : $("#dsh-frame");
-    return f && !f.hidden ? f.contentWindow : null;
   }
   window.addEventListener("message", function (e) {
     var data = e.data;
@@ -609,9 +592,7 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
   // 完成（“the repaint happens without this”），订阅只是给需要跟着做别的事的插件用——
   // 我们属于后者（要把变量转成 DSH token 告知内层），所以变化时推一次就够，无定时推送。
   function pushThemeNow() {
-    if (injected.started) { pushThemeToSelf(); return; }
-    var cw = frameWindow();
-    if (cw) sendThemeTo(cw);
+    pushThemeToSelf();
   }
   // 宿主主题（宿主的原生能力，取代我们自补的一切）：
   //   宿主经 App surface iframe 的 URL 参数给 hana-theme / hana-css / hana-theme-appearance，

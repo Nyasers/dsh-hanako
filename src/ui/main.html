@@ -25,31 +25,34 @@
     color: var(--text, #2A2622);
     background: var(--bg, #F5EFE4);
   }
-  /* 遗留壳容器与 iframe（同文档注入已取代 iframe）：壳脚本始终把它们置 hidden，故**任何**
-     显示规则都不得覆盖它——2026-09-11 真机曾因 body[data-view="ready"] #frame-wrap{display:flex}
-     盖过 [hidden]、加上 height:100vh，在 ready 态顶上留出一整屏空白。整块死壳清理归 T2。 */
-  iframe#dsh-frame, #frame-wrap { display: none; }
-
-  /* 自举舞台（非 ready 全屏覆盖，booting / idle / action 共用） */
+  /* 自举舞台（非 ready 全屏覆盖，booting / idle / action 共用）：对齐官方 loading 的形态——
+     字标 + 细圆环 + 一行小字。时间线/日志/错误详情全部降级进 #boot-panel（真出问题时才露面）。
+     #frame-wrap / #dsh-frame（旧 iframe 壳）已整块删除：同文档注入之后它们是死件。 */
   #dsh-stage {
     position: fixed; inset: 0;
-    display: flex; align-items: center; justify-content: center;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 20px;
     padding: 24px; box-sizing: border-box; overflow: auto;
   }
   body[data-view="ready"] #dsh-stage { display: none; }
-  .boot-panel { max-width: 640px; width: 100%; }
-  .view-head { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
-  .view-title { font-size: 19px; font-weight: 600; margin: 0; }
-  .view-sub { font-size: 13px; color: var(--text-muted, #6B6158); margin: 0 0 16px; }
-
-  .spin {
-    width: 15px; height: 15px; flex: none;
+  .loader { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+  .wordmark {
+    font-size: 21px; font-weight: 600;
+    letter-spacing: .34em; text-indent: .34em;
+    color: var(--text, #2A2622);
+  }
+  .ring {
+    width: 22px; height: 22px; flex: none;
     border: 2px solid var(--border, #D8CFBE);
     border-top-color: var(--accent, #537D96);
     border-radius: 50%;
     animation: dsh-spin 0.9s linear infinite;
   }
   @keyframes dsh-spin { to { transform: rotate(360deg); } }
+  #dsh-status { font-size: 12.5px; color: var(--text-muted, #6B6158); margin: 0; }
+  /* 诊断容器：空则完全不占版面；有内容时是 loader 下方一张安静的小卡 */
+  #boot-panel { width: 100%; max-width: 620px; text-align: left; }
+  #boot-panel:empty { display: none; }
 
   .card {
     border: 1px solid var(--border, #D8CFBE);
@@ -122,55 +125,30 @@
 
   /* 动作区 */
   .actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 4px; }
-  button {
+  /* 只打自己的按钮：DSH 前端是**注入同一文档**的，裸 button 选择器会把 padding / border-radius
+     泼到 DSH 的控件上（2026-09-12 真机：输入栏那颗 28×28、border-radius:999px 的圆形"+"
+     被 padding:8px 20px 撑成椭圆——`.add` 只压得住自己声明过的属性，padding 不在其中）。
+     壳页此后所有 tag 选择器都必须先落到自己的容器上。 */
+  #dsh-stage button {
     font: inherit; font-size: 13.5px;
     padding: 8px 20px; border-radius: 7px; cursor: pointer;
     border: 1px solid var(--border, #D8CFBE);
     background: var(--bg-card, #FBF7EE);
     color: var(--text, #2A2622);
   }
-  button.primary { background: var(--accent, #537D96); border-color: var(--accent, #537D96); color: #fff; }
-  button:hover { filter: brightness(0.97); }
-  button.ghost { background: transparent; }
-
-  /* ready 顶栏 */
-  #runtime-bar {
-    flex: 0 0 auto;
-    display: flex; align-items: center; gap: 10px;
-    padding: 8px 14px;
-    border-bottom: 1px solid var(--border, #D8CFBE);
-    background: var(--bg-card, #FBF7EE);
-    font-size: 12.5px;
-  }
-  .chip {
-    padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 500;
-    background: rgba(74,107,74,.14); color: var(--green, #4A6B4A);
-  }
-  .bar-id { font-variant-numeric: tabular-nums; color: var(--text-muted, #6B6158); }
-  #runtime-bar button { padding: 4px 14px; font-size: 12.5px; margin-left: auto; }
-  /* 注入模式就绪：壳页自举层整体让位给注入的 DSH 前端（#root 占满） */
-  body[data-view="ready"] #dsh-stage { display: none; }
+  #dsh-stage button.primary { background: var(--accent, #537D96); border-color: var(--accent, #537D96); color: #fff; }
+  #dsh-stage button:hover { filter: brightness(0.97); }
+  #dsh-stage button.ghost { background: transparent; }
 </style>
 </head>
 <body data-view="idle" data-dshana-shell data-dshana-view="main">
   <div id="dsh-stage">
-    <div class="boot-panel">
-      <div class="view-head">
-        <span class="spin" id="dsh-spin" hidden></span>
-        <h1 class="view-title">DSHana</h1>
-      </div>
-      <p class="view-sub">DeepSeek Harness 受管运行时 · App v2</p>
-      <div id="boot-panel"><div class="card"><p class="muted">正在读取状态……</p></div></div>
+    <div class="loader">
+      <span class="wordmark">HARNESS</span>
+      <span class="ring" id="dsh-spin" hidden></span>
+      <p id="dsh-status">正在读取状态…</p>
     </div>
-  </div>
-  <div id="frame-wrap" hidden>
-    <div id="runtime-bar">
-      <span class="chip">就绪</span>
-      <span class="bar-id" data-dsh-runtime>runtime –</span>
-      <span class="bar-id" data-dsh-port>–</span>
-      <button data-dsh-stop>停止 DSH</button>
-    </div>
-    <iframe id="dsh-frame" title="DSH Web UI" hidden></iframe>
+    <div id="boot-panel"></div>
   </div>
   <script type="module" src="./app-shell.js"></script>
 </body>
