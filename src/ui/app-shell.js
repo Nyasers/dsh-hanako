@@ -42,15 +42,7 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
     }).then(function (res) {
       if (!res.ok) throw new Error("boot-state HTTP " + res.status);
       return res.json();
-    }).then(function (d) {
-      var st = (d && d.state) || null;
-      // 主题偏好随 boot-state 轮询刷新（后端读 dsh 的 durable settings，见 dshana-routes）：
-      // 在 dsh 设置里改偏好不必重开卡片，下一次轮询就换门（ready 态轮询间隔 6s）。
-      if (st && (st.themePreference === "light" || st.themePreference === "dark" || st.themePreference === "system")) {
-        themePreference = st.themePreference;
-      }
-      return st;
-    })
+    }).then(function (d) { return (d && d.state) || null; })
       .catch(function (err) {
         var msg = err && err.message ? err.message : String(err);
         if (/appSurfaceSession/.test(msg)) {
@@ -625,27 +617,15 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
       function () { return false; }
     );
   }
-  // 主题跟随：SDK 主题订阅（宿主变更 → 推送内层）+ 定时兜底推送（frame 存在时）
-  var themePushTimer = null;
-  function startThemePush() {
-    if (injected.started) {
-      pushThemeToSelf();
-      clearInterval(themePushTimer);
-      themePushTimer = setInterval(function () {
-        if (injected.started) pushThemeToSelf();
-        else { clearInterval(themePushTimer); themePushTimer = null; }
-      }, 2000);
-      return;
-    }
+  // 主题跟随（**事件驱动，不轮询**）：宿主主题变化由 SDK 通知（事件名 hana.theme.changed，
+  // 常量见 @hana/plugin-protocol 的 THEME_CHANGED），SDK 侧即 hana.theme.subscribe；
+  // 当前主题的官方读法是 hana.theme.getSnapshot()。SDK README 另写明：重绘本身由 SDK
+  // 完成（“the repaint happens without this”），订阅只是给需要跟着做别的事的插件用——
+  // 我们属于后者（要把变量转成 DSH token 告知内层），所以变化时推一次就够，无定时推送。
+  function pushThemeNow() {
+    if (injected.started) { pushThemeToSelf(); return; }
     var cw = frameWindow();
-    if (!cw) return;
-    sendThemeTo(cw);
-    clearInterval(themePushTimer);
-    themePushTimer = setInterval(function () {
-      var w = frameWindow();
-      if (w) sendThemeTo(w);
-      else { clearInterval(themePushTimer); themePushTimer = null; }
-    }, 2000);
+    if (cw) sendThemeTo(cw);
   }
   // 宿主主题（宿主的原生能力，取代我们自补的一切）：
   //   宿主经 App surface iframe 的 URL 参数给 hana-theme / hana-css / hana-theme-appearance，
@@ -678,9 +658,8 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
         (document.head || document.documentElement).appendChild(el);
       }
       if (el.textContent !== css) el.textContent = css;
-      // CSS 落地后立即再推一次：只靠 documentElement 的属性变化通知会早于样式表到位，
-      // 桥那一刻读到的还是旧值，只能等下一条 2s 兜底推送——这是“切主题延迟高”的来源。
-      try { if (injected.started) pushThemeToSelf(); else startThemePush(); } catch (e) { /* 忽略 */ }
+      // CSS 落地后立即再推一次：属性变化通知会早于样式表到位，桥那一刻读到的还是旧值。
+      try { pushThemeNow(); } catch (e) { /* 忽略 */ }
     }).catch(function (err) {
       // 主题拿不到不致命：页面仍用 HTML 里写好的纸张 fallback 色。
       try { console.warn("[dshana] 宿主主题样式表加载失败", err && err.message ? err.message : err); } catch (e) { /* 忽略 */ }
@@ -698,7 +677,12 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
     } catch (e) { /* 忽略 */ }
     applyThemeCss(snap.cssUrl);
   }
-  // 首屏兜底：SDK 主题面不可用时，直接读 URL 参数（参数名由宿主白名单固定）。
+  // 首屏主题：官方读法 hana.theme.getSnapshot()（宿主报过来的实况）；
+  // 拿不到再退 URL 参数（宿主白名单参数名）。
+  try {
+    var themeSnap = hana && hana.theme && typeof hana.theme.getSnapshot === "function" ? hana.theme.getSnapshot() : null;
+    if (themeSnap) applyHostTheme(themeSnap);
+  } catch (e) { /* 忽略 */ }
   try {
     var themeParams = new URLSearchParams(location.search);
     if (themeParams.get("hana-css") || themeParams.get("hana-theme")) {
@@ -711,9 +695,9 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
   } catch (e) { /* 忽略 */ }
   try {
     if (hana && hana.theme && typeof hana.theme.subscribe === "function") {
-      hana.theme.subscribe(function (snap) { applyHostTheme(snap); startThemePush(); });
+      hana.theme.subscribe(function (snap) { applyHostTheme(snap); pushThemeNow(); });
     }
-  } catch (e) { /* SDK 主题订阅不可用则只走定时推送 */ }
+  } catch (e) { /* SDK 主题订阅不可用则只靠首屏那一次 */ }
 
   // ---- 认面：页面自己声明为准，宿主 slot 只作兜底 ----
   // 与样例 hana-dsh 同一姿势："我是哪个面"写在**页面自己身上**（样例用 <meta name="hana-dsh-role">，
@@ -758,15 +742,9 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
       window.addEventListener("pagehide", function () {
         if (injected.dispose) { try { injected.dispose(); } catch (e) { /* 忽略 */ } }
       }, { once: true });
-      // 就绪后定时推主题（render 每轮也会触发一次首推）
-      var obs = setInterval(function () {
-        if (document.body.getAttribute("data-view") === "ready" || (isSidebar && frameWindow())) {
-          startThemePush();
-        }
-        if (document.body.getAttribute("data-view") !== "ready" && !isSidebar) {
-          clearInterval(obs);
-        }
-      }, 1500);
+      // 主题不再定时推送（原有一个 1.5s 轮询，只为等“壳页就绪后再推”）：首屏由
+      // getSnapshot()+URL 参数落地，注入完成后在 startInjection 的完成回调里推一次，
+      // 此后完全由 hana.theme.subscribe（hana.theme.changed）事件驱动。
       poll();
     }
     // 等宿主交面（样例协议）：已有 context 立即开始；否则订一次变更事件，并留 1.5s 兜底
