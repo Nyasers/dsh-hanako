@@ -26,7 +26,7 @@
   },
   "dependencies": {
     "@deepseek-ai/cordis": "4.0.2",
-    "@deepseek-ai/dsh": "0.1.2-rc.1"
+    "@deepseek-ai/dsh": "0.1.5-rc.2"
   },
   "devDependencies": {
     "@hana/app-sdk": "file:vendor/hana-app-sdk/hana-app-sdk.tgz",
