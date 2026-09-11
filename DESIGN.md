@@ -79,7 +79,7 @@ DSHana 以**单卡 + 自带功能面板**注册（manifest `contributes.cards[0]
 **已落地（步骤 1：manifest / apply 入口 / 设置 / 工具注册，验证 list/get）：**
 
 - `src/manifest.json` 改为 App v2 契约：`version 1.0.0-beta.5`、`entry index.js`、`icon assets/icon.png`、`minAppVersion 0.930.1`、capabilities 取指南 §3 七项（`app/tools.expose-to-model`、`app/tasks.manage`、`app/session.start-turn`、`app/models.infer`、`app/runtime.execute`、`app/runtime.local-machine`、`app/runtime.network`）。v1 专属/过时字段移除：`author`、`trust`、`activationEvents`（v2 无）、`ui.hostCapabilities`、`contributes.cards`（UI 迁移步骤回归）、`contributes.configuration → contributes.settings`、`network` 白名单（步骤 1 无 App 级 fetch；DSH 外网走受管 runtime 自身网络）。
-- `src/index.js`：`class + onload()` → `export apply(ctx)`（兼导出 `default { apply }`）；apply 注册完即返回。统一日志平移写 `ctx.dataDir/logs`；globalThis 宿主单例退役 → `src/lib/app-runtime.js` module-scope 运行包。
+- `src/index.js`：`class + onload()` → `export apply(ctx)`（兼导出 `default { apply }`）；apply 注册完即返回。统一日志只走宿主 `ctx.logger`（App 侧文件日志与 runtime watch 镜像已退役，见 spec §8 j）；globalThis 宿主单例退役 → `src/lib/app-runtime.js` module-scope 运行包。
 - 工具注册：`ctx.tools.register`，工具名保留 `dshana_session`（v2 无自动 `pluginId_` 前缀、全局唯一；决策与冲突面见 `src/tools/session.js` 头注释）。action 参数与返回语义不变；本步骤仅 `list`/`get` 可用（DSH 未启动仍离线可读），`create`/`send`/`cancel`/`approve` 返回明确「待迁移步骤 2 接线」错误。
 - 设置：`contributes.settings`（approvalTimeoutSec / defaultTimeoutSec），工具执行期经 `ctx.config.get`（apply 完成后才登记，apply 顶层不读）。原先的 nodejsPath 与 servicePort 已随 T5 裁撤（无消费方 / 端口不再暴露）。
 - 数据读路径迁到 `ctx.dataDir`（宿主 `app-data/<id>/`）：list/get 读当前源的 `<DSH_HOME>/...`（projcache + jsonl zstd）；旧插件数据迁移只留接缝（`lib/app-runtime.js appDataDir` 注释），本步骤不做迁移脚本。
@@ -327,7 +327,7 @@ DSHana 以**单卡 + 自带功能面板**注册（manifest `contributes.cards[0]
 | theme | 壳页 postMessage 主题注入（tapIndex 注入桥） | **保留（桥壳页侧需对账）** | v2 壳页 app-shell.js 已实现 dshHanaThemeRequest 应答（best-effort）；TOKEN_MAP 对齐待真机 |
 | clipboard | 剪贴板桥（宿主 capability 写剪贴板） | **保留（桥降级 best-effort）** | v2 无宿主 capability 白名单——壳页 navigator.clipboard/execCommand 兜底，失败如实回执；正式路径待 hana.clipboard 能力面确认 |
 | settings | DSH Web 设置页「DSHana 设置」分页（默认模型/版本卡 + 更新总线） | **惰性保留（需删改 v1 更新段）** | v1 更新链路（dshana.bus → 宿主）v2 无宿主侧；本地版本卡/默认模型 UI 保留；更新段退役（App 发版即 DSH 升级）——真机验收刀随 UI 修剪 |
-| logger | DSH 内日志收集 → dshanaBus → 宿主会话文件 | **惰性保留（通道退化为缓冲）** | v2 无宿主 WS 连接，总线缓冲不再送达；受管 runtime stdout 已由 host watch 镜像进 dataDir/logs（等价覆盖）——真机后移除总线转发段 |
+| logger | DSH 内日志收集 → dshanaBus → 宿主会话文件 | **惰性保留（通道退化为缓冲）** | v2 无宿主 WS 连接，总线缓冲不再送达；受管 runtime stdout 由宿主 runtime 日志承载（App 侧不再落盘，见 spec §8 j）——真机后移除总线转发段 |
 | bus | dshana.bus WS 服务端（宿主插件 IPC 通道） | **退役候选（roster 惰性保留）** | v2 宿主不再连 dshana.bus：App→runtime = loopback HTTP RPC（决策 A），runtime→宿主 = connectAppRuntime（tasks/models）。无消费方即死代码——真机确认 logger/settings 无注入依赖后从 patch.yml 移除 |
 | acp-assist | dsh-acp agent 工厂 setup 后置（补 ACP 会话缺的默认 preset） | **已退役（2026-09-10）** | v2 不装载 dsh-acp，patch 对象不存在；roster 行与插件目录已删。依据见 `specs/dshana-v2-定案与待议-2026-09-10.md` §10 |
 

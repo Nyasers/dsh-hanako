@@ -10,8 +10,7 @@
 //
 //   v1 onload 职责                             v2 落点（本文件 / 关联模块）
 //   ─────────────────────────────────────────  ─────────────────────────────────
-//   统一日志（dataDir/logs 时间戳会话文件）      apply 开头（写 ctx.dataDir/logs，
-//     + 旧日志 zstd 归档（log-archive））           logPath/appendLog 进运行包）
+//   统一日志（文件）                             → 退役（spec §8 j 裁决：全量走宿主 ctx.logger）
 //   globalThis 单例（bus/resources/network/      lib/app-runtime.js module-scope 运行包
 //     web host 启动器、自动链状态机）              （apply 注入；不再依赖宿主态 globalThis）
 //   ctx.registerTool（宿主自动加 pluginId_ 前缀）  ctx.tools.register（v2 无自动前缀，
@@ -41,11 +40,6 @@
 // （package.json dependencies 单一事实源，无独立升级通道）；cordis 产物（@dsh-hanako/*）
 // 随包在安装目录 cordis/，profile 经 junction 链接（见 src/runtime/seed.js）。受管子进程
 // 入口 = runtime/dsh-host.mjs（dist 构建产物，见 src/build.js 与 src/runtime/）。
-import { mkdirSync, appendFileSync } from "node:fs";
-import { join, dirname } from "node:path";
-// 日志生命周期（v1 同源复用：旧日志 zstd 压缩归档 + 时间戳日志文件命名）
-import { archiveOldLogs, nextTimestampLogPath } from "./lib/log-archive.js";
-// App v2 运行包持有者（替代 v1 globalThis 单例，见 lib/app-runtime.js 头注释）
 import { initAppRuntime } from "./lib/app-runtime.js";
 // 受管 DSH runtime 启动封装（迁移步骤 2 落位；disposer 负责收尾。启动触发：工具首调
 // 兜底（tools/session.js 接线桩）+ **apply 级自动链**（注册完成即后台拉起受管 runtime，
@@ -59,72 +53,34 @@ import * as dshSession from "./tools/session.js";
 // ctx.routes.register 只挂本 App 后端面；到受管 runtime 服务由宿主代理自动暴露，不转发）
 import { registerDshanaRoutes, defaultDshanaRouteDeps } from "./routes/dshana-routes.js";
 
-// ---- 统一日志（时间戳会话文件；与 v1 同格式，写 App dataDir）----
-// DSHana App 全量运行日志：每次 App 进程会话创建 <YYYYMMDD-HHmmss-SSS>.log 真实文件
-// （dataDir/logs/）。行格式 [<HH:mm:ss.SSS>] [<src>] <内容>，src ∈ out/err/…（v1 沿用）。
-// 旧会话日志（更早时间戳 .log）在 apply 开头压缩为 .log.zst 保留（全部保留不删除，
-// 与 dsh session 持久化同策略）。
-function logTs() {
-  const d = new Date();
-  const p = (n, w) => String(n).padStart(w || 2, "0");
-  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
-}
-function appendLogLine(logPath, src, chunk) {
-  try {
-    if (!logPath) return;
-    mkdirSync(dirname(logPath), { recursive: true });
-    const lines = String(chunk ?? "")
-      .replace(/\r\n/g, "\n")
-      .replace(/\r/g, "\n")
-      .split("\n")
-      .map((l) => l.trimEnd())
-      .filter((l) => l.length > 0);
-    if (!lines.length) return;
-    const ts = logTs();
-    appendFileSync(
-      logPath,
-      lines.map((l) => `[${ts}] [${src}] ${l}`).join("\n") + "\n",
-      "utf8",
-    );
-  } catch {
-    /* 日志失败不阻断 */
-  }
-}
+// ---- 统一日志：只走宿主 ctx.logger（spec §8 j 裁决）----
+// App 侧不再写自己的文件日志（原 <dataDir>/logs/<时间戳>.log、旧日志 zstd 归档、
+// logPath/appendLog 运行包字段一并退役）。ctx.logger 缺失（旧 host）或宿主抛错时回落
+// stderr（经宿主进程日志可见），宁可吵也不静默丢日志。
 
 /**
- * App v2 主入口：注册 dshana_session 工具 + 设置/日志就位后返回（不等待 DSH 服务）。
- * 返回 disposer：宿主卸载/重载本 App 时调用，用于收尾（日志落盘；步骤 2+ 在此关闭
- * 受管 DSH runtime、任务与流）。
+ * App v2 主入口：注册 dshana_session 工具 + 设置/路由就位后返回（不等待 DSH 服务）。
+ * 返回 disposer：宿主卸载/重载本 App 时调用，用于收尾（步骤 2+ 在此关闭受管 DSH
+ * runtime、任务与流）。
  */
 export function apply(ctx) {
   const appId = "dsh-hanako";
   const dataDir = ctx && typeof ctx.dataDir === "string" && ctx.dataDir ? ctx.dataDir : null;
   if (!dataDir) throw new Error(appId + " App v2 apply: ctx.dataDir 缺失（宿主未提供数据目录）");
 
-  // ---- 日志会话开始（archiveOldLogs 先于建新文件：把上一会话 .log 压成 .log.zst）----
-  const logsDir = join(dataDir, "logs");
-  mkdirSync(logsDir, { recursive: true });
-  const { archivedName, compressed } = archiveOldLogs({ dataDir });
-  const logPath = nextTimestampLogPath(logsDir);
-  const appendLog = (src, chunk) => appendLogLine(logPath, src, chunk);
-  if (archivedName) appendLog("hana", `日志归档：${archivedName}（上一 App 会话）`);
-  if (compressed > 0) appendLog("hana", `旧日志压缩：${compressed} 个`);
-  appendLog("hana", "app apply（App v2 会话开始，migration step 2：受管 runtime 封装就位）");
-
-  // ---- 宿主日志器（ctx.logger：debug/info/warn/error）+ 运行包 ----
+  // ---- 宿主日志器（ctx.logger：debug/info/warn/error）----
   const logger = ctx.logger || null;
   const log = (level, ...args) => {
-    appendLog("hana", args.map((a) => (a instanceof Error ? a.stack || a.message : String(a))).join(" "));
     if (logger && typeof logger[level] === "function") {
-      try { logger[level](...args); } catch { /* 宿主日志失败忽略 */ }
+      try { logger[level](...args); return; } catch { /* 宿主日志失败 → 回落 stderr */ }
     }
+    try { console.error(`[dshana] [${level}]`, ...args); } catch { /* 忽略 */ }
   };
+  log("info", "app apply（App v2 会话开始；日志走 ctx.logger，App 侧不写文件日志）");
   // App v2 运行包（module-scope；工具执行经 lib/app-runtime.js 读取）
   const app = {
     ctx,
     dataDir,
-    logPath,
-    appendLog,
     logger,
     // 工具执行期（apply 已完成、settings 已登记）读取 App 设置；未登记/失败返回 undefined
     readConfig: (key) => {
@@ -138,8 +94,8 @@ export function apply(ctx) {
   // 讨论见 tools/session.js 头注释 1）。action 参数与返回语义保持不变；v1 的
   // sessionPermission（external_side_effect + describeSideEffect 函数）为 v1 宿主形态，
   // 无法跨 App 进程序列化，本步骤不注册（外效 action 真正接线时按宿主契约补声明）。
-  // 每个 execute 收到一个工具上下文（v2 execute 上下文袋缺省兼容）：log 写统一日志
-  // 文件并镜像宿主 logger；dataDir/config 供工具业务读取。
+  // 每个 execute 收到一个工具上下文（v2 execute 上下文袋缺省兼容）：log 走宿主 ctx.logger；
+  // dataDir/config 供工具业务读取。
   const makeToolCtx = () => ({
     dataDir,
     config: ctx.config,
@@ -220,12 +176,12 @@ export function apply(ctx) {
     // managed-runtime.js 与 DESIGN「依赖部署（v2）」锁纪律）。disposer 可异步不等待宿主。
     try {
       disposeManagedRuntime().catch((e) => {
-        appendLog("hana", "disposer 停止 DSH runtime 失败：" + ((e && e.message) || e));
+        log("warn", "disposer 停止 DSH runtime 失败：" + ((e && e.message) || e));
       });
     } catch (e) {
-      appendLog("hana", "disposer 停止 DSH runtime 异常：" + ((e && e.message) || e));
+      log("warn", "disposer 停止 DSH runtime 异常：" + ((e && e.message) || e));
     }
-    appendLog("hana", "app apply disposer：工具注销 + 路由注销 + DSH 受管 runtime 收尾完成");
+    log("info", "app apply disposer：工具注销 + 路由注销 + DSH 受管 runtime 收尾完成");
   };
 }
 

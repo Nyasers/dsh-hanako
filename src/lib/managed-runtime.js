@@ -18,8 +18,9 @@
 //     步骤的任务桥各自携带，不把单次启动任务绑成全局焦点——指南 §7）；首次 create 时
 //     启动（tools/session.js 接线点），ready 后所有 action 复用。runtime 终止后清除
 //     单例，下次调用重启。App 卸载/重载经 disposeManagedRuntime 收尾（apply disposer）。
-//   runtime 日志镜像：watch(runtimeId) 的 log 记录（stream stdout/stderr）尽力镜像进 App
-//     会话日志（dataDir/logs/*.log，appendLog 同款行式）；镜像失败只 warn 不阻断。
+//   日志：一律走宿主 ctx.logger（`logApp`）。App 侧不再写文件日志（原 runtime watch 镜像
+//     进 dataDir/logs 的 [dsht] 行随之退役，见 spec §8 j）；受管子进程的 stdout/stderr 归宿主
+//     runtime 日志（有界，可经 ctx.runtime.watch/info 取），不再由 App 自己落盘。
 //
 // 参数契约（与 src/runtime/options.js 对偶；增删需两处同步 + tests/）：
 //   唯一的子进程入参是私有运行时配置文件路径（argv[1]），由 writeRuntimeConfigFile 落盘、
@@ -60,8 +61,6 @@ let managed = {
   promise: null, // starting 阶段共享 promise（并发首启 single-flight）
   lastInfo: null,
   lastError: null,
-  mirrorCancel: null, // watch 日志镜像 AbortController
-  mirrors: [], // 已挂 watch 的 runtimeId（防重复）
   bridgePort: null, // 中继端口（= 注册给宿主的 service.port；浏览器侧访问）
   bridgeKey: null, // 中继鉴权 key（header x-hana-dsh-bridge / _hana 路径；绝不落盘/落日志）
   controlKey: null, // 控制面 key（/_control；App 工具经 controller.invoke 使用）
@@ -75,8 +74,6 @@ export function resetManagedRuntime() {
     promise: null,
     lastInfo: null,
     lastError: null,
-    mirrorCancel: null,
-    mirrors: [],
     bridgePort: null,
     bridgeKey: null,
     controlKey: null,
@@ -179,71 +176,12 @@ export function classifyRuntimeFailure(info) {
 }
 
 function logApp(level, ...args) {
-  const app = getAppRuntime();
-  if (app && typeof app.appendLog === "function") {
-    try {
-      app.appendLog("hana", args.map((a) => (a instanceof Error ? a.stack || a.message : String(a))).join(" "));
-    } catch {
-      /* 日志失败不阻断 */
-    }
-  }
   const logger = appLogger();
   if (logger && typeof logger[level] === "function") {
     try {
       logger[level](...args);
     } catch {
       /* 宿主日志失败忽略 */
-    }
-  }
-}
-
-/** watch 镜像（尽力）：消费 runtime SSE/NDJSON log 记录 → appendLog(src=dsht)。 */
-async function mirrorRuntimeLogs(ctx, runtimeId) {
-  const app = getAppRuntime();
-  if (!app || !app.appendLog) return;
-  if (managed.mirrors.includes(runtimeId)) return;
-  managed.mirrors.push(runtimeId);
-  const ac = new AbortController();
-  managed.mirrorCancel = ac;
-  try {
-    const res = await ctx.runtime.watch(runtimeId);
-    if (!res || !res.body || typeof res.body.getReader !== "function") return;
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let pending = "";
-    for (;;) {
-      if (ac.signal.aborted) break;
-      const { done, value } = await reader.read();
-      if (done) break;
-      pending += decoder.decode(value, { stream: true });
-      let idx;
-      while ((idx = pending.indexOf("\n")) >= 0) {
-        const line = pending.slice(0, idx);
-        pending = pending.slice(idx + 1);
-        consumeLine(line);
-      }
-    }
-  } catch {
-    /* watch 镜像失败：不阻断（宿主 runtime 自带日志，诊断可经 watch 重取） */
-  } finally {
-    try {
-      managed.mirrorCancel = null;
-    } catch { /* ignore */ }
-  }
-  function consumeLine(raw) {
-    const line = String(raw).trim();
-    if (!line) return;
-    let record = null;
-    if (line.startsWith("data:")) {
-      try { record = JSON.parse(line.slice(5).trim()); } catch { /* 非 JSON 数据行 */ }
-    } else {
-      try { record = JSON.parse(line); } catch { /* 非 JSON（日志原文） */ }
-    }
-    const text = record && typeof record.text === "string" ? record.text : line;
-    try {
-      app.appendLog("dsht", text);
-    } catch {
-      /* 忽略 */
     }
   }
 }
@@ -428,12 +366,6 @@ async function doStartManaged(opts, attempt = 1) {
   }
   managed.runtimeId = runtimeId;
   logApp("info", "[managed-runtime] runtimeId=" + runtimeId + " state=" + (info.state || "starting"));
-  // 日志镜像（尽力，不阻塞就绪等待）
-  try {
-    void mirrorRuntimeLogs(ctx, runtimeId);
-  } catch {
-    /* 忽略 */
-  }
   // 轮询等到 ready / failed / exited / stopped（起始 starting；不能把 runtimeId 当就绪）
   const deadline = Date.now() + READY_TIMEOUT_MS;
   for (;;) {
@@ -477,12 +409,6 @@ export async function stopManagedRuntime() {
   managed.phase = "stopped";
   clearRuntimeIdentity();
   managed.lastInfo = null;
-  if (managed.mirrorCancel) {
-    try {
-      managed.mirrorCancel.abort();
-    } catch { /* ignore */ }
-    managed.mirrorCancel = null;
-  }
   if (!runtimeId) return;
   if (app && app.ctx && typeof app.ctx.runtime?.stop === "function") {
     try {

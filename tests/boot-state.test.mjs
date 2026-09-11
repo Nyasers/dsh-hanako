@@ -63,14 +63,14 @@ test("phaseCopy/文案覆盖五态", () => {
   }
 });
 
-test("buildBootSnapshot: logTail/logPath 归一化（默认空、注入透传带限长）", () => {
+test("buildBootSnapshot: 不含日志字段（App 侧文件日志已退役，spec §8 j）", () => {
   const s = buildBootSnapshot({ phase: "starting" });
-  assert.deepEqual(s.logTail, []);
-  assert.equal(s.logPath, null);
-  const s2 = buildBootSnapshot({ phase: "starting" }, { logPath: "/x/2026.log", logTail: ["a", "b", "x".repeat(600)] });
-  assert.equal(s2.logPath, "/x/2026.log");
-  assert.equal(s2.logTail.length, 3);
-  assert.ok(s2.logTail[2].length <= 500);
+  assert.ok(!("logPath" in s));
+  assert.ok(!("logTail" in s));
+  // 传入也不再回显（签名只收 bridgeKey）
+  const s2 = buildBootSnapshot({ phase: "starting" }, { logPath: "/x/2026.log", logTail: ["a"] });
+  assert.ok(!("logPath" in s2));
+  assert.ok(!("logTail" in s2));
 });
 
 test("stripSnapshotMeta: 快照深度等价忽略 updatedAt", () => {

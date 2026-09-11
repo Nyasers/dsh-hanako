@@ -9,7 +9,7 @@
 //   · dsh-home/{sessions, storages, settings.yaml, .anonymous-user-id} → <私有源目录>/…
 //     （DSH_HOME 指向当前数据源的 home，见 src/runtime/main.js env 设置）
 //     ⚠ 源目录名 dsh-home 是 v1 的历史布局（不可改）；目标用 PRIVATE_HOME_NAME（.dsh）
-//   · logs/* → dataDir/logs/*（App 统一日志同目录，时间戳文件不重名）
+//   · logs/* **不迁移**：App 侧文件日志已退役（日志走宿主 ctx.logger，见 spec §8 j），旧日志无落点
 //   · config.json（v1 全局设置）→ 参考拷贝 dataDir/legacy-config.json + 映射建议输出
 //     （v2 设置存宿主 preferences（contributes.settings 经 ctx.config），脚本不代写宿主态）
 //   · profiles/dshana **不复制**：其 node_modules/@dsh-hanako 是 junction/拷贝指向 v1 插件
@@ -186,10 +186,6 @@ export function planLegacyMigration({ legacyRoot, dataDir, force = false }) {
       continue;
     }
     steps.push({ step: "copy", kind, from, to: path.join(targetDshHome, name) });
-  }
-  const legacyLogs = path.join(legacyRoot, "logs");
-  if (existsSync(legacyLogs)) {
-    steps.push({ step: "copy", kind: "dir", from: legacyLogs, to: path.join(dataDir, "logs"), note: "旧插件日志（*.log.zst/当前 .log）并入 App 统一日志目录，不重名不覆盖。" });
   }
   const legacyConfig = path.join(legacyRoot, "config.json");
   if (existsSync(legacyConfig)) {

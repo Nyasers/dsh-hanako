@@ -73,12 +73,12 @@ export function phaseCopy(phase, { ready = false, errText = null } = {}) {
  * lastError = Error 实例或 { code, message }）。返回纯数据对象：
  * {
  *   phase, ready, runtimeId, proxyPrefix, service, error:{code,userText}|null,
- *   logPath, logTail, note, updatedAt
+ *   note, updatedAt
  * }
- * logPath/logTail 由调用方（routes 面，持有 ctx.dataDir 读权）注入：logTail 为 App 会话
- * 日志最新若干行（starting 态壳页滚动展示，含 runtime 启动与 profile 种子化过程镜像）。
+ * 注（spec §8 j）：App 侧文件日志已退役，快照不再携带 logPath/logTail（诊断看宿主日志 +
+ * 受管 runtime 状态：phase/error/userText）。
  */
-export function buildBootSnapshot(details, { logPath = null, logTail = [], bridgeKey = null } = {}) {
+export function buildBootSnapshot(details, { bridgeKey = null } = {}) {
   const d = details && typeof details === "object" ? details : {};
   const phase = typeof d.phase === "string" ? d.phase : "idle";
   const runtimeId = typeof d.runtimeId === "string" && d.runtimeId ? d.runtimeId : null;
@@ -101,9 +101,6 @@ export function buildBootSnapshot(details, { logPath = null, logTail = [], bridg
   // 代理前缀只在「服务真正就绪」后给出：phase/runtimeId 本身不代表宿主已暴露代理
   // （宿主在 readyMarker 出现后才发布服务），UI 绝不提前指向死端点。
   const proxyPrefix = ready ? runtimeProxyPrefix({ runtimeId, bridgeKey }) : null;
-  const logTailOut = (Array.isArray(logTail) ? logTail : [])
-    .map((line) => String(line).slice(0, 500))
-    .slice(-80);
   return {
     phase,
     ready,
@@ -111,8 +108,6 @@ export function buildBootSnapshot(details, { logPath = null, logTail = [], bridg
     proxyPrefix,
     service: service ? { state: service.state, port: typeof service.port === "number" ? service.port : null } : null,
     error,
-    logPath: typeof logPath === "string" && logPath ? logPath : null,
-    logTail: logTailOut,
     note: phaseCopy(phase, { ready, errText: error ? error.userText : null }),
     updatedAt: new Date().toISOString(),
   };

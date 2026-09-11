@@ -33,7 +33,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 function usage() {
   console.log(`
-migrate-legacy — 把 v1 插件数据（dsh-home/logs/config）迁入 App v2 数据区
+migrate-legacy — 把 v1 插件数据（dsh-home/config）迁入 App v2 数据区（旧 logs 不迁移）
 
   --hanako-home <dir>   宿主 home（旧源 = <dir>/plugin-data/dsh-hanako）
   --source <dir>        旧插件数据根（plugin-data/dsh-hanako；优先于 --hanako-home）
