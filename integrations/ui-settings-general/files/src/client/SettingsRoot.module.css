@@ -57,7 +57,10 @@
 }
 
 /* Full-viewport layer (figma Mask 501:29946 #000@24%): mask tokens match the
-   Modal primitive (--dsw-alias-bg-mask-1 + --dsw-mask-blur). */
+   Modal primitive (--dsw-alias-bg-mask-1 + --dsw-mask-blur).
+   hana 集成：pointer-events 必须是 auto——本面板在 workspace 面挂在 AppFrame 的
+   settingsShell 里（而它是 pointer-events:none，.surfaceSettings 也是），不自己打开
+   指针事件就会「显示了但点不动」（真机反馈）。样例 CSS 里就是这一行。 */
 .overlay {
   position: fixed;
   inset: 0;
@@ -65,6 +68,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  pointer-events: auto;
 }
 
 .mask {
