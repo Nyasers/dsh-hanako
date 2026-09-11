@@ -29,9 +29,9 @@
   // vY（T7b 后 dsh 0.1.2）：preference 默认 system——跟随宿主配色（壳桥 vars 即应用）；
   // 读 dsh settings/describe 失败/缺失时按 system 处理，主题不因此失效。
   var pref = "system";
-  // 偏好是否已知：presenter 把偏好投影在 html[data-dsh-theme-preference] 上（见
-  // integrations/ui-layout 的 theme-presenter），未得知前不动手（否则会先按 system
-  // 压一遍 Hana 配色、再被纠正，中间是可见闪烁）。预览器还没跑时本值恒 false。
+  // 偏好是否已知：由本插件的 client 半（src-cordis/plugins/theme/client.js）投影到
+  // html[data-dsh-theme-preference]；未得知前不动手（否则会先按 system 压一遍 Hana
+  // 配色、再被纠正，中间可见闪烁）。client 半未加载时本值恒 false（不压 token）。
   var prefKnown = false;
   /** 读 presenter 投影的偏好属性；非法/缺失返 null。 */
   function readPreference() {

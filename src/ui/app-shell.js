@@ -337,7 +337,7 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
   }
 
   // 挂到宿主桥（__DSHANA__）上的跨面接口：
-  //   设置视图 → integrations/ui-settings-general；会话选中 → integrations/ui-session。
+  //   设置视图 → src-integrations/ui-settings-general；会话选中 → src-integrations/ui-session。
   var SURFACE_API = {
     readSettingsView: readSettingsView,
     writeSettingsView: writeSettingsView,

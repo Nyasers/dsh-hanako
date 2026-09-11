@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// scripts/integrations.mjs — 集成层的漂移闸（见 integrations/README.md 与 specs/current/hana-integrations）
+// scripts/integrations.mjs — 集成层的漂移闸（见 src-integrations/README.md 与 specs/current/hana-integrations）
 //
 // 用法：
 //   node scripts/integrations.mjs verify          # 镜像版本一致 + 每个 overlay 记录的上游哈希仍成立
@@ -90,7 +90,7 @@ export function verifyIntegrations(integrations, readUpstream) {
         problems.push(
           `integration ${name}: overlay ${rel} 已过期 —— 上游 ${upstreamRel} 变了` +
             `（记录 ${recorded.slice(0, 12)}…，实得 ${actual.slice(0, 12)}…）。` +
-            `请把我们的 delta rebase 到 integrations/${name}/files/${rel}，` +
+            `请把我们的 delta rebase 到 src-integrations/${name}/files/${rel}，` +
             `并把 upstreamSha256 更新为 ${actual}`,
         );
         continue;
@@ -110,7 +110,7 @@ export function verifyIntegrations(integrations, readUpstream) {
 
 /** 读 integrations 下各短名目录的 integration.json，附带 dir 与 root。 */
 export function loadIntegrations(rootDir = REPO_ROOT) {
-  const dir = join(rootDir, "integrations");
+  const dir = join(rootDir, "src-integrations");
   if (!existsSync(dir)) return [];
   const out = [];
   for (const ent of readdirSync(dir, { withFileTypes: true })) {
