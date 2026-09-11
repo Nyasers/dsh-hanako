@@ -9,12 +9,17 @@
 //     theme.css 变量生效，getComputedStyle 读到当前主题 16 个变量的渲染值。
 //     随宿主更新：宿主切主题 → dataset.theme 变 → 插件 iframe 重载 → 壳桥
 //     回传新值；宿主新增/修改主题无需插件更新（无静态主题表）。
-// 边界（2026-09-12 改）：dsh preference 由**壳页随主题推送下发**——壳页从 DSH index 的
-//   boot-theme 行取 `const preference = "..."`，与主题变量一起 postMessage 给桥（见
-//   src/ui/app-shell.js readIndexThemePreference）。旧的 settings/describe RPC 自读、以及
-//   “宿主 bridge 订阅 remote.mux → dshanaBus → /webui/events → dshHanaPref”事件链已退役：
-//   前者信封在 0.1.5 未验（读不到就永远停在 system，把 UI 钉住），后者是宿主未能力时的自补。
-//   system → 覆盖 Hana 配色；light/dark → 完全原生；未知 → 不动手（等壳页推送）。
+// 边界（2026-09-12 二改）：dsh preference 有**两段来源**，都在 DSH 侧语义之内——
+//   ① 启动段：壳页从 DSH index 的 boot-theme 行取 `const preference = "..."`（见
+//      src/ui/app-shell.js readIndexThemePreference），随主题载荷 postMessage 给桥，桥拿它
+//      当自举值。官方注释把这行定位成 "the browser's pre-plugin interval"（每个 index 渲染
+//      都嵌入当前持久偏好，插件树激活后 ThemePresenter 接管同一批 DOM 字段）——不借它，
+//      注入完成到插件就位之间 DSH 会一直穿内置配色（空窗，她 2026-09-12 指出）。
+//   ② 稳态段：我们的 client 半（client.js）把 ctx.theme 的偏好投影成
+//      html[data-dsh-theme-preference]，属性出现即接管权威（桥的 readPreference 优先属性）。
+//   门：system → 覆盖 Hana 配色；light/dark → 完全原生；未知 → 不动手。
+//   旧的 settings/describe RPC 自读与宿主 bus 事件链保持退役（前者信封在 0.1.5 未验，
+//   读不到就永远停在 system 把 UI 钉住）。
 //
 // 机制：经 dsh-host-webserver 的 tapIndex 扩展点，向每个 index 响应注入动态桥脚本：
 //   桥向壳页索取主题变量（preference 为 system 时），写 body 层 !important 覆盖
