@@ -29,6 +29,7 @@
     "@deepseek-ai/dsh": "0.1.5-rc.2"
   },
   "devDependencies": {
+    "@deepseek-ai/dsh-host-open-in-app": "0.1.5-rc.2",
     "@hana/app-sdk": "file:vendor/hana-app-sdk/hana-app-sdk.tgz",
     "@hana/plugin-components": "file:vendor/hana-app-sdk/hana-plugin-components-0.0.0.tgz",
     "@hana/plugin-protocol": "file:vendor/hana-app-sdk/hana-plugin-protocol-0.0.0.tgz",
