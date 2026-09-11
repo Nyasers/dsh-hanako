@@ -229,16 +229,32 @@ export async function injectDshIndex(indexHtml, privateBase, opts) {
   await appendScript(resolveIndexAssetUrl(entry.getAttribute("src"), privateBase).toString(), true);
 }
 
-/** 安装 __DSH_TRANSPORT__（注入 index 前调用）。返回 disposer。 */
+/**
+ * 安装 __DSH_TRANSPORT__ 与 __DSH_FILE_UPLOAD__（注入 index 前调用）。返回 disposer。
+ *
+ * 覆盖边界（2026-09-11 真机 403 排查 + 全树核对）：`__DSH_TRANSPORT__` 在全树里**只有
+ * DSH 内核的 connection 客户端（dsh-client-connection）在读**，所以它只兜住内核自己的请求；
+ * 浏览器侧其余 DSH 插件一律走原生 fetch/EventSource 或各自的钩子：
+ *   · dsh-client-file-upload 读 `globalThis.__DSH_FILE_UPLOAD__`（官方为此设的钩子）。不设它
+ *     → 回退到内联 Worker 载体（Blob Worker），而 Worker 里的 fetch 是**同源**（= 当前文档的
+ *     宿主源，不是中继前缀）→ 宿主凭据闸 403 missing_credential。样例 hana-dsh 的
+ *     ui/bootstrap.js 就是在这里一并设的（__DSH_FILE_UPLOAD__ 挨着 __DSH_TRANSPORT__），我们照做。
+ *   · dsh-client-hmr 的 /plugins/events 用**原生 EventSource**打开、dsh-client-ui-open-in-app
+ *     直取 /open-in-app/apps —— 这两条没有钩子可接，会落到宿主源被 403；样例同样如此
+ *     （样例也没补 EventSource），非我们独有的退化。
+ */
 export function installTransport(privateBase) {
   const mux = createStreamMux(privateBase);
+  const runtimeFetch = createRuntimeFetch(privateBase);
   window.__DSH_TRANSPORT__ = {
-    fetch: createRuntimeFetch(privateBase),
+    fetch: runtimeFetch,
     openStream: (endpoint, payload, signal) => mux.openStream(endpoint, payload, signal),
     loadBundle: loadRuntimeBundle(privateBase),
   };
+  window.__DSH_FILE_UPLOAD__ = { fetch: runtimeFetch };
   return () => {
     try { delete window.__DSH_TRANSPORT__; } catch { /* 忽略 */ }
+    try { delete window.__DSH_FILE_UPLOAD__; } catch { /* 忽略 */ }
     mux.dispose();
   };
 }
