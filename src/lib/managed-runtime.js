@@ -34,11 +34,11 @@ export const READY_MARKER = "DSH_READY";
 export const RUNTIME_ENTRY = "runtime/dsh-host.mjs"; // 相对 App 安装目录（宿主校验在安装/数据目录内）
 export const DEFAULT_SERVICE_PORT = 4317; // manifest contributes.settings.servicePort 默认（宿主 service 端口契约 1024..65535）
 export const READY_POLL_MS = 300;
-export const READY_TIMEOUT_MS = 240000; // 首次启动含依赖 ensure（pnpm 下载+安装）需更宽容限
+export const READY_TIMEOUT_MS = 240000; // 首次启动含 profile 种子化与 DSH boot，需更宽容限
 export const START_ERROR_HINTS = {
   "port-busy": "端口被占用或 DSH 无法监听（服务代理未就绪）。改 App 设置 servicePort 为未占用端口后重试，或释放占用端口的进程。",
   "port-unreachable": "DSH 已在期望端口监听失败（webServer 服务端口与期望不符或探测失败）。查看 runtime 日志定位，必要时换 servicePort。",
-  "boot-failed": "DSH runProfile 启动失败（见 runtime 日志）。若依赖刚变更，可尝试重装依赖（删除 dataDir/runtime/.runtime-ok 后重启）。",
+  "boot-failed": "DSH runProfile 启动失败（见 runtime 日志）。",
   deps: "DSH 依赖缺失：包内 node_modules 不完整（依赖应随包物化）。请重新安装本 App。",
   seed: "dshana profile 初始化失败（见 runtime 日志；profile 迁移拒绝/scope 链接失败由种子化引导）。",
   "not-authorized": "宿主未授权本 App 启动受管 runtime（local-machine 能力未授予或已撤销）。检查 App 能力与授权状态。",
@@ -220,7 +220,7 @@ async function mirrorRuntimeLogs(ctx, runtimeId) {
 /**
  * 启动 + 等到就绪（single-flight 单例）。opts: { taskId?, cordisSrc?, depsRoot? }。
  * 成功返回 { runtimeId, info }（state=ready）；失败抛 Error（message 含归类与用户指引），
- * 单例清空以便下次调用重试。首次调用 = 依赖 ensure + DSH boot（可能数分钟，日志可见）。
+ * 单例清空以便下次调用重试。首次调用 = profile 种子化 + DSH boot（日志可见）。
  */
 export async function ensureManagedRuntime(opts = {}) {
   if (managed.phase === "ready" && managed.runtimeId) {
@@ -343,7 +343,7 @@ async function doStartManaged(opts) {
     if (Date.now() >= deadline) {
       const err = new Error(
         "DSH 受管 runtime 启动超时（" + Math.round(READY_TIMEOUT_MS / 1000) + "s 内未就绪）。" +
-        "首次启动含依赖 ensure 与 DSH boot，若仍在进行请稍候；查看 App 日志/runtime 日志。",
+        "首次启动含 profile 种子化与 DSH boot，若仍在进行请稍候；查看 App 日志/runtime 日志。",
       );
       err.code = "timeout";
       throw err;

@@ -129,8 +129,8 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
   // ---- 时间线片段（预期流程；v2 无细分上报，booting 时全程待命，不假装具体阶段）----
   function timelineHtml() {
     var steps = [
-      ["依赖与运行区准备", "首次启动经 pnpm 安装 DSH 依赖（dataDir/runtime）"],
-      ["DSH 服务启动", "cordis profile 装载 + 显式端口监听"],
+      ["运行区与 profile 准备", "受管 runtime 拉起 + profile 种子化（依赖随包，无需安装）"],
+      ["DSH 服务启动", "cordis profile 装载 + 本地端口监听"],
       ["服务就绪确认", "宿主代理 /routes/_runtime/<id>/ 暴露，Web UI 可用"],
     ];
     var html = '<ol class="timeline">';
@@ -160,8 +160,8 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
   function idleViewHtml(s) {
     return '<div class="card">'
       + '<h2 class="card-label">尚未启动</h2>'
-      + '<p class="desc">v2 无自动链：DSH 由会话任务（dsh_session create/send）首次调用自动启动；'
-      + "也可点下方「启动 DSH」手动预热 Web UI。首次启动含依赖安装，可能需要数分钟。</p>"
+      + '<p class="desc">App 加载后会自动拉起 DSH 受管 runtime；也可点下方「启动 DSH」手动触发。'
+      + "就绪后本页自动载入 DSH Web UI。</p>"
       + '<div class="actions"><button class="primary" data-dsh-start>启动 DSH</button></div>'
       + metaHtml(s)
       + "</div>";
@@ -169,7 +169,7 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
   function bootingViewHtml(s) {
     return '<div class="card">'
       + '<h2 class="card-label">正在启动 DSH</h2>'
-      + '<p class="desc">受管 runtime 正在拉起（首次含依赖安装与 profile 种子化，可能需要数分钟）。'
+      + '<p class="desc">受管 runtime 正在拉起（profile 种子化 + 服务监听）。'
       + "就绪后本页自动载入 DSH Web UI。</p>"
       + timelineHtml()
       + logBlock(s && s.logTail)
@@ -183,7 +183,7 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
     var code = s && s.error && s.error.code;
     var guide = userText || (isStop ? "DSH 已停止（手动停止或卸载流程触发）。" : "DSH 启动失败，详情如下。");
     var noteText = isErr
-      ? "可调整 App 设置（servicePort 换未占用端口 / nodejsPath）后重新启动；依赖区异常时可删除 dataDir/runtime/.runtime-ok 触发重装。"
+      ? "可点「启动 DSH」重试；端口被占用会自动换端口。持续失败请看下方详情与日志。"
       : "再次 create/send 或点「启动 DSH」即可重新启动。";
     var raw = [];
     if (code) raw.push("code: " + esc(code));

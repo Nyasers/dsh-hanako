@@ -275,7 +275,7 @@ export function submitDshTask({ action, input, callToken, log }) {
       if (!taskId) throw new Error("ctx.tasks.create 未返回 taskId（宿主契约异常）");
       try { pruneTaskMaps(dataDir); } catch { /* 忽略 */ }
 
-      // ② 受管 runtime 就绪（单例；首启含依赖 ensure）
+      // ② 受管 runtime 就绪（单例；首启含 profile 种子化与 boot）
       try {
         const rt = await ensureManagedRuntime({ taskId });
         logLine(log, "[dsh-session] runtime 就绪 runtimeId=" + (rt && rt.runtimeId) + "（task=" + taskId + "）");

@@ -86,8 +86,8 @@ rewriter(DIST_DIR);
 fs.copySync(join(ROOT, "src", "manifest.json"), join(DIST_DIR, "manifest.json"));
 fs.copySync(join(ROOT, "src", "skills"), join(DIST_DIR, "skills"));
 // App 图标：src/assets/icon.png 为唯一规范源（manifest.icon "assets/icon.png"）；
-// 依赖部署（migration step 2 定案，见 DESIGN「依赖部署（v2）」）：DSH 依赖不随 dist 打包
-// （dataDir runtime/ 安装区，首启 pnpm 安装）；dist 保持轻量壳 + cordis 产物。
+// 依赖部署（2026-09-10 改自包含打包）：DSH 依赖由 pack.mjs 物化进安装目录 node_modules，
+// dist = App 安装目录形态（含 cordis 产物）；运行时不再安装，dist 保持轻量壳。
 const iconSrc = join(ROOT, "src", "assets", "icon.png");
 if (!fs.pathExistsSync(iconSrc))
   throw new Error("App 图标缺失（src/assets/icon.png）：manifest.icon 指向 assets/icon.png，需真实可解码图片");
