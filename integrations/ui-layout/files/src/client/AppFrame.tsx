@@ -253,8 +253,13 @@ export function AppFrame({
           </RightbarColumn>
         </>
       )}
-      {/* 主卡内设置：workspace 面的侧栏槽位是绝对定位浮层（默认不吃指针事件，面板自己开）。 */}
-      {surface === 'workspace' && (
+      {/* 主卡内设置（settingsShell）：样例在 workspace 面把侧栏槽位挂成绝对定位全框浮层，
+          承载的是**宿主自己的**主卡内设置面板（样例 manifest 有 contributes.settings.ui.route，
+          且它打了 ui-settings-general 补丁）。我们还没有那个 occupant：本应用里 sidebar.settings
+          的占据者是官方 dsh-client-ui-settings 的入口，挂进全框浮层就漂在主卡顶部
+          （2026-09-11 真机现象）。故暂不渲染——待 T4 宿主面设置页落地后按样例形态接回。
+          CSS（.settingsShell / .surfaceSettings）与 SidebarRoot 的早退分支都保留，只差 occupant。 */}
+      {false && surface === 'workspace' && (
         <div className={css.settingsShell}>
           {sidebar}
         </div>
