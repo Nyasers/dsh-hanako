@@ -83,13 +83,14 @@ function assertCordisDistVersions(outDir) {
   if (!fs.pathExistsSync(cordisRoot)) {
     throw new Error("cordis 产物缺失（dist/cordis 不存在）：先跑 pnpm run build 再打包");
   }
-  // 完整性：必需 8 包（roster bundle dshana + 7 子插件）全部存在且
+  // 完整性：必需 7 包（roster bundle dshana + 6 子插件）全部存在且
   // package.json 版本一致——缺失/部分产物（含 count=0）一律拒包，防 build 失败后残留部分
   // dist 被误打包。（bridge 已退役：官方 dsh-web-app bundle 提供 connection；app 已退役：
-  // 官方 frontend-static 拥有 index 处理，见 cordis.patch.yml 注。）
+  // 官方 frontend-static 拥有 index 处理；settings 已退役：预定由宿主面设置页替代，见
+  // cordis.patch.yml 该条注释与 specs/current/sample-align T8。）
   const required = [
     "dshana",
-    "bus", "clipboard", "logger", "provider", "settings", "theme", "view",
+    "bus", "clipboard", "logger", "provider", "theme", "view",
   ];
   let count = 0;
   for (const name of required) {
@@ -335,6 +336,40 @@ fs.ensureDirSync(relDir);
 //   · 用完即清（暂存树 + 铺平目录）；
 //   · 收尾全清由 package.json 的 postpack 钩子承担（scripts/clean-tmp.mjs），CI 里也可单独调。
 // 中间原料与暂存树都可再生，真正的产物只有 releases/ 下的 zip + sha256。
+/**
+ * 集成层覆盖：把 integrations 编译出的补丁包盖回物化树（单副本；机制见 integrations/README.md）。
+ * fail-closed：声明了 overlay 却没产物 = 构建没跑全——宁可不打包，也不出「没打补丁」的包。
+ * 版本戳（+hana.N）由 integrations.mjs build 写在补丁包的 package.json 里，此处只原样覆盖。
+ * @param {string} nodeModulesDir 组装台里的 node_modules（交付树，已是 no-link 铺平形态）
+ */
+function applyIntegrations(nodeModulesDir) {
+  const integrationsDir = join(ROOT, "integrations");
+  if (!fs.pathExistsSync(integrationsDir)) return;
+  const builtRoot = join(ROOT, "_tmp", "integrations-built");
+  const pending = [];
+  for (const ent of fs.readdirSync(integrationsDir, { withFileTypes: true })) {
+    if (!ent.isDirectory()) continue;
+    const manifestPath = join(integrationsDir, ent.name, "integration.json");
+    if (!fs.pathExistsSync(manifestPath)) continue;
+    const decl = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    const files = Array.isArray(decl.files) ? decl.files : [];
+    if (files.length === 0) continue; // 尚无 overlay：不算缺口
+    const builtDir = join(builtRoot, ent.name);
+    if (!fs.pathExistsSync(builtDir)) {
+      pending.push(ent.name);
+      continue;
+    }
+    const target = join(nodeModulesDir, decl.package);
+    if (!fs.pathExistsSync(target)) throw new Error(`集成 ${ent.name}：物化树里没有 ${decl.package}`);
+    fs.copySync(builtDir, target, { overwrite: true });
+    const stamped = JSON.parse(fs.readFileSync(join(target, "package.json"), "utf8")).version;
+    console.log(`[pack] 集成覆盖：${decl.package}@${stamped}（${ent.name}，${files.length} 个 overlay）`);
+  }
+  if (pending.length) {
+    throw new Error(`集成产物缺失（${pending.join(", ")}）：先跑 pnpm run build（含 integrations build）再打包`);
+  }
+}
+
 const pkgRoot = join(ROOT, "_tmp", "pkg");
 for (const stale of [pkgRoot, stagingRoot]) fs.removeSync(stale);
 {
@@ -345,6 +380,7 @@ for (const stale of [pkgRoot, stagingRoot]) fs.removeSync(stale);
   fs.removeSync(pkgDir);
   fs.copySync(distDir, pkgDir);
   fs.copySync(modules, join(pkgDir, "node_modules"));
+  applyIntegrations(join(pkgDir, "node_modules"));
   // 暂存树用完即删
   fs.removeSync(join(stagingRoot, spec.name));
   console.log(`[pack] ${spec.name}：代码 + 依赖树已就位（${base}），暂存树已清理`);
