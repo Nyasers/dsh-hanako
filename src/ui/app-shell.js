@@ -272,7 +272,6 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
     if (injected.started) return;
     injected.started = true;
     var view = resolveView(shell);
-    markViewParam(view);
     var privatePrefix = withSurfaceTicket(prefix, surfaceSession());
     var base = new URL(privatePrefix, location.origin);
     injected.dispose = installTransport(base, { role: view === "sidebar" ? "navigation" : "workspace" });
@@ -287,16 +286,9 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
       .then(function (html) { return injectDshIndex(html, base); })
       .catch(function (err) { showInjectionError(err); });
   }
-  // 视图参数写进 URL（DSH 侧 view 插件按 ?dshana-view= 装配；replaceState 不改历史）
-  function markViewParam(view) {
-    try {
-      var u = new URL(location.href);
-      if (u.searchParams.get("dshana-view") !== view) {
-        u.searchParams.set("dshana-view", view);
-        history.replaceState(null, "", u.toString());
-      }
-    } catch (e) { /* 非标准环境忽略 */ }
-  }
+  // 旧的 ?dshana-view= 参数已退役（2026-09-12）：它唯一的消费者是 @dsh-hanako/view 客户端插件，
+  // 而该插件已不在册（官方 ui-layout 放开后就成对换回了）；正式路径读的是 __DSHANA__.role，
+  // 而 role 的事实源是页面自己的声明（meta / 壳属性）。故不再改写当前 URL。
   function showInjectionError(err) {
     var msg = (err && err.message) ? err.message : String(err);
     // 不隐藏根：main 的 data-dshana-shell 就在 <body> 上（hidden 会把整页抹白），
@@ -533,12 +525,11 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
     }
   } catch (e) { /* SDK 主题订阅不可用则只走定时推送 */ }
 
-  // ---- 认面：宿主 slot 优先，页面标记兜底 ----
-  // 样例 hana-dsh 的 boot 协议是「等 hana.surface.getContext() 给出非空 context 再启动」，并按
-  // context.slot 判断自己是哪个面。我们一直用 ?dshana-view= 自己认面，这是偏离：宿主加载 FP 页
-  // （functionPanel.routeUrl）时不会带我们的参数，于是即使 iframe 出来了，我们也会按 workspace
-  // 画（中列+右列、无 DSH 侧栏）——在 164px 宽的 FP 里看上去就是空的。改为 context 驱动，
-  // 拿不到 context（例如我们自己在浏览器里开页调试）再退回页面标记。
+  // ---- 认面：页面自己声明为准，宿主 slot 只作兜底 ----
+  // 与样例 hana-dsh 同一姿势："我是哪个面"写在**页面自己身上**（样例用 <meta name="hana-dsh-role">，
+  // 我们用 <meta name="hana-dshana-role"> + 壳属性 data-dshana-view）。
+  // 为什么不反过来靠宿主：宿主把本页挂进 FP 用的是 functionPanel.routeUrl，不带我们的任何参数；
+  // 而 hostSlot() 可能报 page / widget 这类广义值，比静态声明更不确定。
   var SLOT_VIEW = { "card": "main", "function-panel": "sidebar", "settings": "settings" };
   function hostSlot() {
     try {
@@ -547,10 +538,17 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
       return c && typeof c.slot === "string" ? c.slot : null;
     } catch (e) { return null; }
   }
+  function declaredView(root) {
+    try {
+      var m = document.querySelector('meta[name="hana-dshana-role"]');
+      var v = m && m.getAttribute("content");
+      if (v === "main" || v === "sidebar" || v === "settings") return v;
+    } catch (e) { /* 忽略 */ }
+    var a = root && root.getAttribute("data-dshana-view");
+    return a === "main" || a === "sidebar" || a === "settings" ? a : null;
+  }
   function resolveView(root) {
-    var v = SLOT_VIEW[hostSlot() || ""];
-    if (v) return v;
-    return (root && root.getAttribute("data-dshana-view")) === "sidebar" ? "sidebar" : "main";
+    return declaredView(root) || SLOT_VIEW[hostSlot() || ""] || "main";
   }
 
   // ---- 启动 ----

@@ -3,6 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- 本页的面（role）的事实源：静态声明，和样例 hana-dsh 的 <meta name="hana-dsh-role"> 同一姿势。
+     宿主加载本页时不会带我们的任何参数（FP 走 functionPanel.routeUrl），所以"我是谁"只能写在页面自己身上。 -->
+<meta name="hana-dshana-role" content="main">
 <title>DSHana</title>
 <!-- src/ui/main.html — dsh-hanako App v2 主壳页（contributes.cards dshana route，单卡）。
      视觉沿袭 v1 webui-shell 纸张风（宿主主题变量 + fallback 纸张色，明暗随主题），
