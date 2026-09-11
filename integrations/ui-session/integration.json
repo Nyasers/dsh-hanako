@@ -1,0 +1,28 @@
+{
+  "package": "@deepseek-ai/dsh-client-ui-session",
+  "upstreamVersion": "0.1.5-rc.2",
+  "upstreamDir": "packages/client/ui-session",
+  "hana": 1,
+  "files": [
+    {
+      "path": "src/client/index.ts",
+      "upstreamSha256": "17a924acc9cd309c8775de57fd08441dd2b3131cffda7265617edb8a8f1733eb"
+    }
+  ],
+  "notes": [
+    "批次②：跨面会话选中同步（「FP 点会话、主卡跟着切」）。",
+    "缝选在这里：ui-session 的 apply(ctx) 手握 ctx.sessions（list / open / clear），",
+    "且它同时被 FP 与主卡两个 DSH 实例加载——一份 overlay 同时落发射端与接收端，按 role 分派。",
+    "role='navigation'（FP/sidebar）= 发射端：订阅 ctx.sessions.list，本地选中变化 →",
+    "  bridge.writeSelection(current)；只发不收。",
+    "role='workspace'（主卡）= 接收端：bridge.onSelectionChanged → bridge.readSelection →",
+    "  ctx.sessions.open(id) / ctx.sessions.clear()；只收不发（主卡无切换 UI，不与本地选择打架）。",
+    "settings / standalone 不参与。无回环。",
+    "启动握手靠读快照：载体是 App 全局存储（始终有当前值），不会像 BroadcastChannel 那样",
+    "「接收端晚启动就错过宣告」。两个边界：列表 phase!=='ready' 不宣告（避开恢复中间态）；",
+    "启动宣告为「无选中」时不写 null（视为无意见），免得清掉主卡自己恢复出来的选中。",
+    "上游 v1 实现（@dsh-hanako/view 的 sync-bridge.js，BroadcastChannel 'dshana.sync'，",
+    "协议 {v:1,type:'select'|'clear'}）已退役，其 V4 单向收敛结论（导航源只在 sideba、",
+    "main 无切换 UI）原样保留为这里的设计依据；载体从 BroadcastChannel 换成 App 全局存储。"
+  ]
+}
