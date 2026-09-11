@@ -123,7 +123,7 @@ function createCssModulePlugin(id) {
  *   require 解析清单（默认 react 系）；defines = 包级 tsdown define 常量（合并进环境
  *   默认 define）。
  */
-export async function buildClientBundle({ id, pkgDir, outDir, externals = ["react", "react/jsx-runtime"], defines = {}, entry = "client.js" }) {
+export async function buildClientBundle({ id, pkgDir, outDir, externals = ["react", "react/jsx-runtime"], defines = {}, entry = "client.js", alias = {} }) {
   // 环境常量默认（官方 tsdown.client.ts clientBuildEnvironmentDefines 同款姿势：
   // 空 process.env 兜底 + 显式 NODE_ENV；浏览器无 process 全局，静态读取落到空对象即
   // undefined 不抛 ReferenceError）
@@ -142,6 +142,11 @@ export async function buildClientBundle({ id, pkgDir, outDir, externals = ["reac
     sourcemap: false,
     minify: true, // 与 rspack 链 minimize 对齐：产物即时压缩（pack terser 二次压缩兜底）
     define: { ...envDefines, ...defines }, // 包级 defines 覆盖环境默认（如 DSH_CLIENT_TITLE）
+    // 待内联库的解析别名（specifier → 绝对文件路径）。为什么需要：pnpm 在 Windows 长路径
+    // 下把实体放进带哈希的 .pnpm 目录，而根级链接指向一个不存在的名字（dangling）——
+    // 从 stages 目录向上走到的 <repo>/node_modules/<pkg> 因此解不开。调用侧（integrations.mjs）
+    // 对**待内联**的 specifier 用 .pnpm/node_modules/<name> 解析后传进来。
+    alias,
     deps: {
       neverBundle: (spec) => externals.includes(spec), // requested 保持外部，其余内联
     },

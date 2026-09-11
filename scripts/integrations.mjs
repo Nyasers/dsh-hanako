@@ -13,6 +13,7 @@
 // 构建时用**当前镜像**重算比对；不一致 = 上游动过 → 构建失败并指名要 rebase 的文件。
 // 于是"拷贝即冻结"在流程上不可能发生（这正是 0.1.2 冻结导致真机黑屏的根因）。
 import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, cpSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -227,6 +228,33 @@ export function templatePackageDir(pkgName, repoRoot = REPO_ROOT) {
 }
 
 /**
+ * 把「待内联的非相对 specifier」解析成绝对文件的 alias 表。
+ * 为何需要：pnpm 在 Windows 长路径下把包实体放进带哈希的 .pnpm 目录，而根级链接指向一个
+ * 不存在的名字（dangling）——从 stages 向上走到的 <repo>/node_modules/<pkg> 解不开，打包器
+ * 就把它当 external，于是产物带悬空外部引用。原版包本来就走 .pnpm/node_modules/<name>
+ * （templatePackageDir），待内联的库沿用同一路径最直；CI 上也不赌链接形态。
+ * 只处理 externals 之外的 specifier：React 这类必须保持外部，内联成副本反而错。
+ * @param {Iterable<string>} specifiers 待内联的 specifier
+ * @param {string} repoRoot 仓库根
+ * @returns {Record<string,string>} specifier → 绝对路径
+ */
+export function resolveInlineAliases(specifiers, repoRoot = REPO_ROOT) {
+  const req = createRequire(import.meta.url);
+  const alias = {};
+  for (const spec of specifiers) {
+    const pkg = spec.startsWith("@") ? spec.split("/").slice(0, 2).join("/") : spec.split("/")[0];
+    const hoisted = templatePackageDir(pkg, repoRoot);
+    if (!existsSync(hoisted)) continue;
+    try {
+      alias[spec] = req.resolve(spec, { paths: [hoisted] });
+    } catch {
+      // 解析不到就交给打包器自己试（纯类型导入本就无需解析）
+    }
+  }
+  return alias;
+}
+
+/**
  * 编译一个集成：把上游 src 摊到 _tmp/integrations-src/<短名>/，覆盖 overlay，
  * 用我们的 client preset 编译出 lib/client.js，再以原版包为模板组装成
  * _tmp/integrations-built/<短名>/（版本戳 +hana.N）。
@@ -275,11 +303,18 @@ export async function buildIntegrations(integrations, { tag, mirrorDir = MIRROR,
       externals = [...sourceSpecifiers(join(stage, "src"))];
       console.log(`[integrations] ${short}: 原版 bundle 零 require（client 半仅类型导入），externals 取自有源码（${externals.join(", ") || "空"}）`);
     }
+    // 源码里的非相对导入（后面判悬空与算别名都用它，只算一次）
+    const imported = sourceSpecifiers(join(stage, "src"));
 
     // 4) 编译 client 半
     const outDir = join(stage, "lib");
     const entryRel = files.includes(`${upstreamDir}/src/client/index.ts`) ? "src/client/index.ts" : "src/client/index.tsx";
-    await buildClientBundle({ id: pkg, pkgDir: stage, outDir, externals, entry: entryRel });
+    // 待内联的库得先能解到（见 resolveInlineAliases 注释：pnpm 长路径下根级链接是悬空的）。
+    const alias = resolveInlineAliases([...imported].filter((s) => !externals.includes(s)), repoRoot);
+    if (Object.keys(alias).length) {
+      console.log(`[integrations] ${short}: 内联别名 ${Object.keys(alias).join(", ")}`);
+    }
+    await buildClientBundle({ id: pkg, pkgDir: stage, outDir, externals, entry: entryRel, alias });
 
     // 4b) 悬空外部引用闸：产物里出现 externals 之外的引用 = loader 模块表答不上 → 运行时必炸。
     // 典型成因：上游 bundle 内联的第三方库（如 clsx）在本仓库 node_modules 里缺失，
@@ -289,7 +324,6 @@ export async function buildIntegrations(integrations, { tag, mirrorDir = MIRROR,
     // 这类同名调用的字符串字面会被误认成 require）。判据收紧为「确实是源码里的非相对导入」：
     // 只有这类 specifier 悬空才是真问题（clsx 就属于此类：源码 import 了它、产物 require 了它、
     // 而 externals 里没有它）。
-    const imported = sourceSpecifiers(join(stage, "src"));
     const dangling = produced.filter((s) => !externals.includes(s) && imported.has(s));
     const noise = produced.filter((s) => !externals.includes(s) && !imported.has(s));
     if (noise.length) console.log(`[integrations] ${short}: 产物抽取忽略 ${noise.length} 个非导入字面（假阳性）：${noise.join(", ")}`);

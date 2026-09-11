@@ -122,6 +122,9 @@ importers:
         specifier: 0.1.5-rc.2
         version: 0.1.5-rc.2(2d719903432ef8d4898364566adfb0a3)
     devDependencies:
+      '@deepseek-ai/dsh-host-open-in-app':
+        specifier: 0.1.5-rc.2
+        version: 0.1.5-rc.2
       '@hana/app-sdk':
         specifier: file:vendor/hana-app-sdk/hana-app-sdk.tgz
         version: file:vendor/hana-app-sdk/hana-app-sdk.tgz
