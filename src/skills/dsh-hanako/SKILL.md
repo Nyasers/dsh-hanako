@@ -30,7 +30,7 @@ DSHana 把 DeepSeek Harness（DSH）作为**受管子代理执行器**接进 Han
 | 就绪（ready） | 页面装载 DSH Web UI | 直接用 |
 | 需要处理（error / stopped） | 失败原因 + 原始错误折叠 | 看指引重试；端口占用会自动换端口 |
 
-**读状态的两个出口**：`boot-state`（壳页与 Agent 都用）、App 会话日志 `<dataDir>/logs/<YYYYMMDD-HHmmss-SSS>.log`（行前缀 `[hana]` = App 生命周期，`[out]`/`[err]` = runtime 子进程输出）。
+**读状态的出口**：`boot-state`（壳页与 Agent 都用；含 phase/error/userText）。App 侧不再写文件日志——日志一律走宿主 `ctx.logger`，受管子进程输出由宿主运行日志捕获。
 
 ## 工具速查
 

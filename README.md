@@ -33,7 +33,7 @@ DSH 主题偏好为 `system` 时跟随宿主配色；在 DSH 内显式选 light/
 把现象丢给 Agent 即可（技能 `dsh-hanako` 里有按三态组织的排错表）。也可以直接看：
 
 - 卡上状态与原始错误（`需要处理` 态会展开）
-- App 会话日志 `<数据目录>/logs/<时间戳>.log`：`[hana]` 是 App 生命周期，`[out]`/`[err]` 是 runtime 子进程输出
+- 宿主日志面（本 App 一律走 `ctx.logger`，不再写自己的文件日志）：DSH 子进程的 stdout/stderr 由宿主受管 runtime 捕获
 
 ## License
 

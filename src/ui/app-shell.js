@@ -12,8 +12,7 @@
 // X-Hana-App-Surface-Session header——裸 fetch 会被宿主网关 403 missing_credential
 // （真机实测 0.930.1）。受管 runtime iframe 首访透传 appSurfaceSession（宿主按 surface
 // 授权并种 hana_app_runtime cookie）。视觉沿袭 v1 webui-shell 纸张风（CSS 变量 +
-// fallback 纸张色），数据语义 v2 boot-state（phase idle/starting/ready/error/stopped +
-// logTail/logPath）。
+// fallback 纸张色），数据语义 v2 boot-state（phase idle/starting/ready/error/stopped）。
 import { hana } from "@hana/plugin-sdk";
 import { injectDshIndex, installTransport } from "./dsh-inject.js";
 
@@ -152,7 +151,6 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
     var bits = [];
     if (s && s.runtimeId) bits.push("runtimeId " + esc(s.runtimeId));
     if (s && s.service && s.service.port) bits.push("port " + esc(String(s.service.port)));
-    if (s && s.logPath) bits.push("日志 " + esc(s.logPath));
     return bits.length ? '<p class="meta-line">' + bits.join(" · ") + "</p>" : "";
   }
 
