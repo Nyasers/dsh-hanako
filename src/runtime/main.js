@@ -369,6 +369,28 @@ export async function main(argv) {
       // 这里，由本进程带 cookie 转发到 DSH /api（App 侧不直接摸 DSH HTTP，也不需 network 到中继）。
       // 参数 = 客户端信封本身（buildClientRequest 产物，含 rpcId/method/payload）。
       onControl: async (action, args) => {
+        // prepare-switch：数据源切换前的忙判定守门（冻结标志由中继置位/解除）。0.1.2 下 DSH
+        // 无稳定对外「忙」服务口，故按可用性尽力判定：agents 服务在则查运行中/排队中的
+        // agent；不在则放行（会话忙判定的正式接入见数据源切换刀 T3）。
+        if (action === "prepare-switch") {
+          let busy = false;
+          try {
+            const agents = typeof boot.ctx.get === "function" ? boot.ctx.get("agents") : null;
+            const list = agents && typeof agents.list === "function" ? agents.list() : null;
+            busy = Array.isArray(list) && list.some((agent) => agent && (
+              agent.status === "running"
+              || (agent.inbox && (
+                (Array.isArray(agent.inbox.nextTurn) && agent.inbox.nextTurn.length > 0)
+                || (Array.isArray(agent.inbox.nextStep) && agent.inbox.nextStep.length > 0)
+              ))
+            ));
+          } catch (e) {
+            err("switch-gate", "agents 忙判定不可用（放行）：" + ((e && e.message) || e));
+          }
+          if (busy) throw new Error("DSH 仍有运行中/排队中的任务，先结束或停止它们再切换数据源。");
+          info("switch-gate：无在途工作，允许切换数据源（prepare-switch）");
+          return { ready: true };
+        }
         if (action !== "rpc") throw new Error("未知控制动作：" + String(action));
         const body = args && args.body;
         if (!body || typeof body !== "object" || typeof body.method !== "string") {
