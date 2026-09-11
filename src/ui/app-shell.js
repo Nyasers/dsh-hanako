@@ -271,7 +271,10 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
     var privatePrefix = withSurfaceTicket(prefix, surfaceSession());
     var base = new URL(privatePrefix, location.origin);
     injected.dispose = installTransport(base);
-    hana.api.fetch(privatePrefix + "index.html", { cache: "no-store" })
+    // 取 index：privatePrefix 已是完整代理路径（含 _surface 票据，宿主路由直认），用原生同源
+    // fetch——hana.api.fetch 的入参是「App 路由相对路径」（会再拼 /api/apps/<id>/routes/），
+    // 传完整路径会重复前缀 404。
+    fetch(privatePrefix + "index.html", { cache: "no-store", credentials: "same-origin" })
       .then(function (r) {
         if (!r.ok) throw new Error("DSH index HTTP " + r.status);
         return r.text();
@@ -291,7 +294,8 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
   }
   function showInjectionError(err) {
     var msg = (err && err.message) ? err.message : String(err);
-    if (shell) shell.hidden = true;
+    // 不隐藏根：main 的 data-dshana-shell 就在 <body> 上（hidden 会把整页抹白），
+    // sidebar 的根就是 .panel。统一用 data-view 回到自举态让错误可见。
     document.body.setAttribute("data-view", "action");
     var panel = $("#boot-panel") || $(".panel");
     if (!panel) { panel = document.createElement("div"); document.body.append(panel); }
