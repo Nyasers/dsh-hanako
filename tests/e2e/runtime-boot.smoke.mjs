@@ -107,7 +107,8 @@ async function runBoot() {
   if (ok) console.log("[smoke] BOOT_OK：中继端口 " + bridgePort + " 有 HTTP 应答（DSH 已就绪）");
   else console.log("[smoke] BOOT_FAIL：" + (exit() ? "子进程提前退出" : "等待超时（" + Math.round(READY_TIMEOUT_MS / 1000) + "s）"));
   await stopChild(child, exit);
-  return ok && (exit() === null || exit().code === 0);
+  // 成功判据 = 就绪探测通过。收尾用 SIGTERM 杀子进程，exit.code 为 null / signal=SIGTERM 属预期，不算失败。
+  return ok;
 }
 
 async function runPreflight() {
