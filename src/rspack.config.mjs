@@ -7,8 +7,8 @@
 //   - 输出 ESM module（纯 ESM 无原生模块，不需要 CJS+loadBundle 沙箱；宿主直接 import）
 //   - library.type=module：入口具名导出（pluginRoutes）真 emit 成 ESM export，
 //     dist/routes/index.js 壳 import bundle 转发；default 导出插件类（宿主 new + onload）
-//   - asset/source：src/assets 下前端资源（webui-shell.jinja2 / card-op|dep.jinja2 模板 + card.js /
-//     card.css），模板经 template-loader（doT）编译为自包含渲染函数，js/css 经 minify-loader 压缩内联
+//   - src/assets 只剩 icon.png（App 图标，由 build.js 原样 copy，不进 bundle）；v1 的 jinja2
+//     模板与 card.js/css 已随 W6 清理删除，template-loader / minify-loader 不再被引用
 //   - externalsPresets.node：node 内置模块保持外部 import（零运行时依赖）
 // rspack 解析路径走 scripts/build.mjs 的 resolveRspackEntry（RSPACK_ENV 或本地 node_modules）
 import path from "node:path";
@@ -31,32 +31,10 @@ export default {
   },
   experiments: { outputModule: true },
   externalsPresets: { node: true },
-  module: {
-    rules: [
-      {
-        // HTML 模板：构建期经 template-loader（doT）编译为自包含渲染函数（ESM 默认导出）。
-        // 产物不含 doT（零运行时依赖，dependencies 恒空）；每请求直接调用渲染函数。
-        // 模板语法见 template-loader.mjs 头注释（{{= it.xxx }} 等，it = render scope）。
-        test: /\.jinja2$/, // 模板文件用 .jinja2 扩展名（避免静态检查器按 HTML 误报 {{= }} 语法）
-        include: [path.join(root, "src", "assets")],
-        // src 域 loader（jinja2 编译专用，随 src：template-loader.mjs 与 rspack.config 同目录）
-        use: [path.join(root, "src", "template-loader.mjs")],
-        // 显式 JS 模块类型：loader 输出 ESM 渲染函数，必须按 JS 解析（rspack 默认把未知
-        // 扩展名当 asset module，import 会得到 { jinja2: ... } 命名对象而非默认导出函数）
-        type: "javascript/esm", // 强制 ESM 语义：loader 输出 ESM（export default/具名），避免 rspack 对大模块走 CJS interop
-      },
-      {
-        // 其余前端资产（js/css）：asset/source 内联为字符串（构建机路径零泄漏）。
-        // minify-loader（terser / clean-css）压缩后内联。
-        test: /\.(js|css)$/,
-        include: [path.join(root, "src", "assets")],
-        use: [path.join(root, "scripts", "minify-loader.mjs")],
-        type: "asset/source",
-      },
-    ],
-  },
-  // usedExports: false + sideEffects: false —— 关闭导出级 tree-shaking（同旧 build.mjs
-  // 纪律：入口导出无外部消费者会被整体摇成空壳，插件本体全部保留）
+  // v1 的 assets 前端资源（jinja2 模板 + card.js/css）已随 W6 清理删除，无需 asset/source 与
+  // template-loader 规则（src/assets 只剩 icon.png，由 build.js 原样 copy，不进 bundle）。
+  // usedExports: false + sideEffects: false —— 关闭导出级 tree-shaking（入口导出无外部
+  // 消费者会被整体摇成空壳，插件本体全部保留）
   optimization: { minimize: true, usedExports: false, sideEffects: false },
   devtool: false,
   node: false,
