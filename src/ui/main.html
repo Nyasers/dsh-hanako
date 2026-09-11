@@ -22,10 +22,10 @@
     color: var(--text, #2A2622);
     background: var(--bg, #F5EFE4);
   }
-  iframe#dsh-frame { width: 100%; height: 100%; border: 0; display: none; background: transparent; }
-  body[data-view="ready"] iframe#dsh-frame { display: block; }
-  body[data-view="ready"] #frame-wrap { display: flex; }
-  #frame-wrap { display: none; flex-direction: column; height: 100vh; }
+  /* 遗留壳容器与 iframe（同文档注入已取代 iframe）：壳脚本始终把它们置 hidden，故**任何**
+     显示规则都不得覆盖它——2026-09-11 真机曾因 body[data-view="ready"] #frame-wrap{display:flex}
+     盖过 [hidden]、加上 height:100vh，在 ready 态顶上留出一整屏空白。整块死壳清理归 T2。 */
+  iframe#dsh-frame, #frame-wrap { display: none; }
 
   /* 自举舞台（非 ready 全屏覆盖，booting / idle / action 共用） */
   #dsh-stage {
