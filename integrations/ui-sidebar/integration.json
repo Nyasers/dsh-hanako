@@ -1,0 +1,12 @@
+{
+  "package": "@deepseek-ai/dsh-client-ui-sidebar",
+  "upstreamVersion": "0.1.5-rc.2",
+  "upstreamDir": "packages/client/ui-sidebar",
+  "hana": 1,
+  "files": [],
+  "notes": [
+    "批次①。样例集成：SidebarRoot 读 __HANA_DSH__?.role，当 role 为 settings/workspace 时改渲染",
+    "renderSlot('sidebar.settings', { wide: true })，即把 DSH 设置槽放进宿主自己的设置面。",
+    "我们还要在此承载 FP 面板的纯侧栏语义（原 view 的 SidebarOnlyFrame 职责）。"
+  ]
+}
