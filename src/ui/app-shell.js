@@ -66,8 +66,15 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
   // iframe 只认后两条：路径票据让「文档请求自身」就带凭据（不赌 cookie 时序/作用域），
   // cookie 兜住 iframe 内丢掉前缀的绝对路径子请求。
   function surfaceSession() {
-    try { return new URLSearchParams(location.search).get("appSurfaceSession"); }
-    catch (e) { return null; }
+    try {
+      var q = new URLSearchParams(location.search).get("appSurfaceSession");
+      if (q) return q;
+      // 宿主 FP / 主卡的 iframe 用的是**路径票据**形态（functionPanel.routeUrl 经
+      // /api/apps/iframe-ticket 换回 uiBasePath，票据在路径里），不会带我们的查询参数；
+      // 只认查询参数会把这类页面判成「缺少凭据」。这里也认路径形态。
+      var m = /\/_surface\/([^\/]+)\//.exec(location.pathname || "");
+      return m ? decodeURIComponent(m[1]) : null;
+    } catch (e) { return null; }
   }
   // 代理前缀 → 带路径票据的前缀（已带则不重复插）
   function withSurfaceTicket(prefix, ss) {
@@ -264,7 +271,7 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
   function startInjection(prefix) {
     if (injected.started) return;
     injected.started = true;
-    var view = (shell && shell.getAttribute("data-dshana-view")) || "main";
+    var view = resolveView(shell);
     markViewParam(view);
     var privatePrefix = withSurfaceTicket(prefix, surfaceSession());
     var base = new URL(privatePrefix, location.origin);
@@ -526,29 +533,68 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
     }
   } catch (e) { /* SDK 主题订阅不可用则只走定时推送 */ }
 
+  // ---- 认面：宿主 slot 优先，页面标记兜底 ----
+  // 样例 hana-dsh 的 boot 协议是「等 hana.surface.getContext() 给出非空 context 再启动」，并按
+  // context.slot 判断自己是哪个面。我们一直用 ?dshana-view= 自己认面，这是偏离：宿主加载 FP 页
+  // （functionPanel.routeUrl）时不会带我们的参数，于是即使 iframe 出来了，我们也会按 workspace
+  // 画（中列+右列、无 DSH 侧栏）——在 164px 宽的 FP 里看上去就是空的。改为 context 驱动，
+  // 拿不到 context（例如我们自己在浏览器里开页调试）再退回页面标记。
+  var SLOT_VIEW = { "card": "main", "function-panel": "sidebar", "settings": "settings" };
+  function hostSlot() {
+    try {
+      if (!hana || !hana.surface || typeof hana.surface.getContext !== "function") return null;
+      var c = hana.surface.getContext();
+      return c && typeof c.slot === "string" ? c.slot : null;
+    } catch (e) { return null; }
+  }
+  function resolveView(root) {
+    var v = SLOT_VIEW[hostSlot() || ""];
+    if (v) return v;
+    return (root && root.getAttribute("data-dshana-view")) === "sidebar" ? "sidebar" : "main";
+  }
+
   // ---- 启动 ----
   function boot() {
     var root = $("[data-dshana-shell]");
     if (!root) return;
     shell = root;
-    isSidebar = root.getAttribute("data-dshana-view") === "sidebar";
     // 宿主握手（对齐官方样例 hana-dsh 的 bootstrap：页面挂载即 hana.ready()，宿主据此
     // 确认本页已接管；payload 省略——本 App 无额外就绪声明）。
     try { if (hana && typeof hana.ready === "function") hana.ready(); } catch (e) { /* 宿主未提供则忽略 */ }
-    // 卸载释放注入的 transport（WS 载体等）
-    window.addEventListener("pagehide", function () {
-      if (injected.dispose) { try { injected.dispose(); } catch (e) { /* 忽略 */ } }
-    }, { once: true });
-    // 就绪后定时向 iframe 推主题（render 每轮也会触发一次首推）
-    var obs = setInterval(function () {
-      if (document.body.getAttribute("data-view") === "ready" || (isSidebar && frameWindow())) {
-        startThemePush();
+    var began = false;
+    function begin() {
+      if (began) return;
+      began = true;
+      isSidebar = resolveView(root) === "sidebar";
+      // 卸载释放注入的 transport（WS 载体等）
+      window.addEventListener("pagehide", function () {
+        if (injected.dispose) { try { injected.dispose(); } catch (e) { /* 忽略 */ } }
+      }, { once: true });
+      // 就绪后定时推主题（render 每轮也会触发一次首推）
+      var obs = setInterval(function () {
+        if (document.body.getAttribute("data-view") === "ready" || (isSidebar && frameWindow())) {
+          startThemePush();
+        }
+        if (document.body.getAttribute("data-view") !== "ready" && !isSidebar) {
+          clearInterval(obs);
+        }
+      }, 1500);
+      poll();
+    }
+    // 等宿主交面（样例协议）：已有 context 立即开始；否则订一次变更事件，并留 1.5s 兜底
+    // （自己在浏览器里开页调试时宿主不会给 context）。
+    if (hostSlot() !== null) { begin(); return; }
+    try {
+      if (hana && hana.surface && typeof hana.surface.onContextChanged === "function") {
+        var off = hana.surface.onContextChanged(function (next) {
+          var slot = next && typeof next.slot === "string" ? next.slot : null;
+          if (!slot) return;
+          try { if (typeof off === "function") off(); } catch (e) { /* 忽略 */ }
+          begin();
+        });
       }
-      if (document.body.getAttribute("data-view") !== "ready" && !isSidebar) {
-        clearInterval(obs);
-      }
-    }, 1500);
-    poll();
+    } catch (e) { /* SDK 未提供则只走兜底 */ }
+    setTimeout(begin, 1500);
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);
   else boot();
