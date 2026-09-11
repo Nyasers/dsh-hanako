@@ -289,7 +289,9 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
     var privatePrefix = withSurfaceTicket(prefix, surfaceSession());
     var base = new URL(privatePrefix, location.origin);
     injected.dispose = installTransport(base, {
-      role: view === "sidebar" ? "navigation" : "workspace",
+      // 面 → role：sidebar（FP）= navigation（只有侧栏）；standalone（拆窗）= standalone
+      // （完整 DSH UI，可折叠）；其余（主卡 / 设置）= workspace（中列 + 右列，无 DSH 侧栏）。
+      role: view === "sidebar" ? "navigation" : view === "standalone" ? "standalone" : "workspace",
       bridge: SURFACE_API,
     });
     // 取 index：privatePrefix 已是完整代理路径（含 _surface 票据，宿主路由直认），用原生同源
@@ -659,9 +661,12 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
   // ---- 认面：页面自己声明为准，宿主 slot 只作兜底 ----
   // 与样例 hana-dsh 同一姿势："我是哪个面"写在**页面自己身上**（样例用 <meta name="hana-dsh-role">，
   // 我们用 <meta name="hana-dshana-role"> + 壳属性 data-dshana-view）。
+  // 四个面：main（主卡，无 DSH 侧栏）/ sidebar（FP，只有侧栏）/ settings（设置面）/ standalone（拆窗，
+  // 完整 DSH UI）——与 AppFrame 的四分支一一对应。
   // 为什么不反过来靠宿主：宿主把本页挂进 FP 用的是 functionPanel.routeUrl，不带我们的任何参数；
   // 而 hostSlot() 可能报 page / widget 这类广义值，比静态声明更不确定。
   var SLOT_VIEW = { "card": "main", "function-panel": "sidebar", "settings": "settings" };
+  var VIEWS = ["main", "sidebar", "settings", "standalone"];
   function hostSlot() {
     try {
       if (!hana || !hana.surface || typeof hana.surface.getContext !== "function") return null;
@@ -673,10 +678,10 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
     try {
       var m = document.querySelector('meta[name="hana-dshana-role"]');
       var v = m && m.getAttribute("content");
-      if (v === "main" || v === "sidebar" || v === "settings") return v;
+      if (VIEWS.indexOf(v) >= 0) return v;
     } catch (e) { /* 忽略 */ }
     var a = root && root.getAttribute("data-dshana-view");
-    return a === "main" || a === "sidebar" || a === "settings" ? a : null;
+    return a && VIEWS.indexOf(a) >= 0 ? a : null;
   }
   function resolveView(root) {
     return declaredView(root) || SLOT_VIEW[hostSlot() || ""] || "main";

@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- 本页的面（role）的事实源：静态声明，和样例 hana-dsh 的 <meta name="hana-dsh-role"> 同一姿势。
+     宿主把它当作本卡的 detached.route 打开时，不带任何我们的参数——"我是拆窗那面"只能写在这里。 -->
+<meta name="hana-dshana-role" content="standalone">
+<title>DSHana · 独立窗口</title>
+<!-- src/ui/standalone.html — dsh-hanako App v2 的拆窗页（contributes.cards[].detached.route）。
+     detached 的语义（APPS.md）：同一张卡的独立窗口加载本页、**不再额外挂载 functionPanel**，
+     钉回时恢复原 route 与 FP；卡 ID / App 后台 / 持久状态不变。所以这张面渲染的是完整的 DSH
+     Web UI（侧栏 + 中列 + 右列——AppFrame 的 standalone 分支），与主卡（无 DSH 侧栏）不同。
+
+     顶上让出 44px：独立窗口沿用宿主那条半透明 chrome，页面顶部会被它盖住。这个常量取自官方
+     样例（bootstrap.css 为设置面留的同一块区域，注释 "Settings sits below Hana's translucent
+     card chrome."），并同样把留白放在**固定高度的 #root 内部**——这样 DSH 自己的滚动容器
+     仍占满剩余视口，而不是延伸到 chrome 底下。 -->
+<style>
+  html, body { height: 100%; margin: 0; }
+  html { color-scheme: light dark; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    font-size: 14px;
+    color: var(--text, #2A2622);
+    background: var(--bg, #F5EFE4);
+  }
+  /* 注入进来的 DSH 前端容器：留白在内部，滚动容器占满余下视口。 */
+  #root {
+    height: 100%;
+    box-sizing: border-box;
+    padding-top: 44px;
+  }
+  /* 自举舞台：与主卡同一副台面（DSHANA 字标 + 细圆环 + 一行状态小字），只是顶上也让出 chrome。 */
+  #dsh-stage {
+    position: fixed; inset: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 20px;
+    padding: 24px; padding-top: calc(24px + 44px); box-sizing: border-box; overflow: auto;
+  }
+  body[data-view="ready"] #dsh-stage { display: none; }
+  .loader { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+  .wordmark {
+    font-size: 21px; font-weight: 600;
+    letter-spacing: .34em; text-indent: .34em;
+    color: var(--text, #2A2622);
+  }
+  .ring {
+    width: 22px; height: 22px; flex: none;
+    border: 2px solid var(--border, #D8CFBE);
+    border-top-color: var(--accent, #537D96);
+    border-radius: 50%;
+    animation: dsh-spin 0.9s linear infinite;
+  }
+  @keyframes dsh-spin { to { transform: rotate(360deg); } }
+  #dsh-status { font-size: 12.5px; color: var(--text-muted, #6B6158); margin: 0; }
+  /* 诊断容器：空则完全不占版面；有内容时就是一块 <pre> */
+  #boot-panel { width: 100%; max-width: 620px; text-align: left; }
+  #boot-panel:empty { display: none; }
+  /* 实时日志/报错块（与主卡同一形态） */
+  .diag-progress {
+    white-space: pre-wrap; word-break: break-all;
+    font-family: ui-monospace, SFMono-Regular, Consolas, "Courier New", monospace;
+    font-size: 12px; line-height: 1.6;
+    color: var(--text-light, #4A433C);
+    background: var(--accent-light, rgba(83,125,150,0.08));
+    border-radius: 4px; padding: 8px 10px; margin: 10px 0 0;
+    max-height: 200px; overflow-y: auto;
+    scrollbar-width: none; -ms-overflow-style: none;
+  }
+  .diag-progress::-webkit-scrollbar { display: none; width: 0; height: 0; }
+  /* 动作区 */
+  .actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 12px 0 0; }
+  /* 只打自己的按钮：DSH 前端注入同一文档，裸 button 会把 padding / border-radius 泼到
+     DSH 的控件上（2026-09-12 真机：输入栏那颗 28×28 / border-radius:999px 的圆钮被撑成椭圆）。 */
+  #dsh-stage button {
+    font: inherit; font-size: 13.5px;
+    padding: 8px 20px; border-radius: 7px; cursor: pointer;
+    border: 1px solid var(--border, #D8CFBE);
+    background: var(--bg-card, #FBF7EE);
+    color: var(--text, #2A2622);
+  }
+  #dsh-stage button.primary { background: var(--accent, #537D96); border-color: var(--accent, #537D96); color: #fff; }
+  #dsh-stage button:hover { filter: brightness(0.97); }
+</style>
+</head>
+<body data-view="idle" data-dshana-shell data-dshana-view="standalone">
+  <div id="dsh-stage">
+    <div class="loader">
+      <span class="wordmark">DSHANA</span>
+      <span class="ring" id="dsh-spin" hidden></span>
+      <p id="dsh-status">正在读取状态…</p>
+    </div>
+    <div id="boot-panel"></div>
+  </div>
+  <script type="module" src="./app-shell.js"></script>
+</body>
+</html>
