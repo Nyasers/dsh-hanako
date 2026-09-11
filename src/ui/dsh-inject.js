@@ -239,9 +239,10 @@ export async function injectDshIndex(indexHtml, privateBase, opts) {
  *     → 回退到内联 Worker 载体（Blob Worker），而 Worker 里的 fetch 是**同源**（= 当前文档的
  *     宿主源，不是中继前缀）→ 宿主凭据闸 403 missing_credential。样例 hana-dsh 的
  *     ui/bootstrap.js 就是在这里一并设的（__DSH_FILE_UPLOAD__ 挨着 __DSH_TRANSPORT__），我们照做。
- *   · dsh-client-hmr 的 /plugins/events 用**原生 EventSource**打开、dsh-client-ui-open-in-app
- *     直取 /open-in-app/apps —— 这两条没有钩子可接，会落到宿主源被 403；样例同样如此
- *     （样例也没补 EventSource），非我们独有的退化。
+ *   · dsh-client-hmr 的 /plugins/events（EventSource）与 dsh-client-ui-open-in-app 的
+ *     /open-in-app/apps（裸 fetch）没有官方钩子可接，会落到宿主源被 403；样例的做法是**逐个打补丁**
+ *     （它打了 client-hmr 与 ui-open-in-app）：EventSource 换 URL（桥的 runtimeUrl）、fetch 换
+ *     __DSH_TRANSPORT__.fetch。我们同法（integrations/client-hmr、integrations/ui-open-in-app）。
  */
 export function installTransport(privateBase, { role } = {}) {
   const mux = createStreamMux(privateBase);
@@ -254,8 +255,13 @@ export function installTransport(privateBase, { role } = {}) {
   window.__DSH_FILE_UPLOAD__ = { fetch: runtimeFetch };
   // 宿主桥：DSH 客户端集成（integrations/ui-layout 等）读此对象判断「本文件属于哪个面」。
   // 名字是我们的（样例叫 __HANA_DSH__，我们写自己的 overlay，不沿用它的全局名）。
-  // 目前只放 role：main 卡 → workspace（中+右，无 DSH 侧栏）；FP 面板 → navigation（纯侧栏）。
-  window.__DSHANA__ = { role: role || "workspace" };
+  //   role       main 卡 → workspace（中+右，无 DSH 侧栏）；FP 面板 → navigation（纯侧栏）。
+  //   runtimeUrl 把路径映射到私有运行时基址——给**不能被 fetch 型 transport 包装**的载体用：
+  //              dsh-client-hmr 的 EventSource 只能换地址（样例 bridge.runtimeUrl(EVENTS_ENDPOINT)）。
+  window.__DSHANA__ = {
+    role: role || "workspace",
+    runtimeUrl: (path) => mapRuntimeUrl(String(path), privateBase, window.location.origin).toString(),
+  };
   return () => {
     try { delete window.__DSH_TRANSPORT__; } catch { /* 忽略 */ }
     try { delete window.__DSH_FILE_UPLOAD__; } catch { /* 忽略 */ }

@@ -158,6 +158,34 @@ export function stageIntegrations(integrations, rootDir = REPO_ROOT) {
   return staged;
 }
 
+/**
+ * 递归收集目录下源码文件里的**非相对导入 specifier**（含 type-only：列出无害）。
+ * 用途有二：① 原版产物零 require 时充当 externals；② 收紧产物侧抽取的假阳性。
+ * 根因：压缩后工厂参数被改名成单字符（如 e），`e("data-plugin")` 这种同名调用的字符串
+ * 字面会被 extractRequires 误认成 require；而真正的外部依赖一定在源码里是 import。
+ * @param {string} rootDir 源码根目录
+ * @returns {Set<string>} specifier 集合
+ */
+function sourceSpecifiers(rootDir) {
+  const seen = new Set();
+  const declRe = /(?:from|import)\s*\(?\s*["']([^"'.][^"']*)["']/g;
+  const walk = (dir) => {
+    let entries;
+    try { entries = readdirSync(dir, { withFileTypes: true }) } catch { return }
+    for (const e of entries) {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) { walk(p); continue }
+      if (!/\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/.test(e.name)) continue;
+      let text;
+      try { text = readFileSync(p, "utf8") } catch { continue }
+      let m;
+      while ((m = declRe.exec(text)) !== null) seen.add(m[1]);
+    }
+  };
+  walk(rootDir);
+  return seen;
+}
+
 // ---------- 编译进包（摊源 → 覆盖 overlay → 编译 → 装包 + 版本戳） ----------
 
 /**
@@ -235,11 +263,18 @@ export async function buildIntegrations(integrations, { tag, mirrorDir = MIRROR,
       cpSync(src, dst);
     }
 
-    // 3) externals = 原版 bundle 自己的 require 集合
+    // 3) externals = 原版 bundle 自己的 require 集合。
+    //    例外：client 半只有类型导入的包（如 dsh-client-hmr）——原版产物里**零 require**。
+    //    这不能当「抽取失败」（fail-closed 会误杀整个集成）：改为从缓存的源码取非相对
+    //    specifier 作 externals——真正的外部依赖仍保持外部化（不被内联成重复副本），
+    //    类型导入列出来无害（会被构建抹掉）。
     const pristineClient = join(template, "lib", "client.js");
     if (!existsSync(pristineClient)) throw new Error(`integration ${short}: 原版缺 lib/client.js（${pristineClient}）`);
-    const externals = extractRequires(readFileSync(pristineClient, "utf8"));
-    if (externals.length === 0) throw new Error(`integration ${short}: 从原版 bundle 抽不到任何 require，externals 不可信`);
+    let externals = extractRequires(readFileSync(pristineClient, "utf8"));
+    if (externals.length === 0) {
+      externals = [...sourceSpecifiers(join(stage, "src"))];
+      console.log(`[integrations] ${short}: 原版 bundle 零 require（client 半仅类型导入），externals 取自有源码（${externals.join(", ") || "空"}）`);
+    }
 
     // 4) 编译 client 半
     const outDir = join(stage, "lib");
@@ -250,7 +285,14 @@ export async function buildIntegrations(integrations, { tag, mirrorDir = MIRROR,
     // 典型成因：上游 bundle 内联的第三方库（如 clsx）在本仓库 node_modules 里缺失，
     // 解析不到就被当成 external。处理：把该库加进 devDependencies（devDep 会被内联，不进运行时）。
     const produced = extractRequires(readFileSync(join(outDir, "client.js"), "utf8"));
-    const dangling = produced.filter((s) => !externals.includes(s));
+    // 产物侧抽取在**压缩后**会出假阳性（minifier 把工厂参数改成单字符，`e("data-plugin")`
+    // 这类同名调用的字符串字面会被误认成 require）。判据收紧为「确实是源码里的非相对导入」：
+    // 只有这类 specifier 悬空才是真问题（clsx 就属于此类：源码 import 了它、产物 require 了它、
+    // 而 externals 里没有它）。
+    const imported = sourceSpecifiers(join(stage, "src"));
+    const dangling = produced.filter((s) => !externals.includes(s) && imported.has(s));
+    const noise = produced.filter((s) => !externals.includes(s) && !imported.has(s));
+    if (noise.length) console.log(`[integrations] ${short}: 产物抽取忽略 ${noise.length} 个非导入字面（假阳性）：${noise.join(", ")}`);
     if (dangling.length) {
       throw new Error(
         `integration ${short}: 产物含悬空外部引用 ${dangling.join(", ")} —— ` +
