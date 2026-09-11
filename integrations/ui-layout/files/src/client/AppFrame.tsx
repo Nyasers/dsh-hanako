@@ -225,12 +225,17 @@ export function AppFrame({
       ref={frameRef}
       className={css.frame}
       style={{
-        // 轨道与渲染同源：sidebar（若显示）→ 中间列 → rightbar（若显示）
-        gridTemplateColumns: [
-          showSidebar ? `${cols.sidebar}px` : null,
-          'minmax(0, 1fr)',
-          showMain ? `${cols.rightbar}px` : null,
-        ].filter((track): track is string => track !== null).join(' '),
+        // 轨道 = 面 × 每列的宽度语义，不能只看两个布尔量：
+        //   纯侧栏面（navigation / settings）：侧栏**就是整张面** → 单轨铺满（宽由 cols.sidebar 计会把
+        //   它挤到 56px 甚至 0 → 看不见，2026-09-11 真机就是这样白的）。
+        //   其余面：sidebar（若显示）→ 中间列 → rightbar（若显示）。
+        gridTemplateColumns: showSidebar && !showMain
+          ? 'minmax(0, 1fr)'
+          : [
+            showSidebar ? `${cols.sidebar}px` : null,
+            'minmax(0, 1fr)',
+            showMain ? `${cols.rightbar}px` : null,
+          ].filter((track): track is string => track !== null).join(' '),
       }}
       data-sidebar-collapsed={sidebarCollapsed || undefined}
       data-rightbar-collapsed={cols.rightbar === 0 || undefined}
