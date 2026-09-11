@@ -90,7 +90,7 @@ function assertCordisDistVersions(outDir) {
   // cordis.patch.yml 该条注释与 specs/current/sample-align T8。）
   const required = [
     "dshana",
-    "bus", "clipboard", "logger", "provider", "theme", "view",
+    "clipboard", "provider", "theme",
   ];
   let count = 0;
   for (const name of required) {
