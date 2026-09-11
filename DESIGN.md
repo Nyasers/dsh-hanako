@@ -44,8 +44,8 @@ Hana 宿主进程（App 隔离进程内加载 dist/index.js）
 
 DSHana 以**单卡 + 自带功能面板**注册（manifest `contributes.cards[0]`：卡 id `dshana`、route `/main.html`、`functionPanel.route` = `/sidebar.html`；`siteNavEntry` 为本项目有意保留的形态差异）：
 
-- **三态自举页**：壳页轮询 `GET /api/apps/dsh-hanako/routes/dshana/boot-state`（idle/starting 快轮询、ready 慢轮询）——idle（说明 + 「启动 DSH」）/ booting（阶段时间线 + 日志尾滚动）/ ready（装载 DSH Web UI）/ action（error/stopped：错误码 + 人话指引 + 重试）。
-- **角色与视图**：`?dshana-view=main|sidebar` URL 参数 + `@dsh-hanako/view` 子插件装配（主卡 = 主视图，FP = 纯侧栏，两者单向下行桥接）。
+- **自举台**：DSHANA 字标 + 细圆环 + 一行状态小字；报错时下方直接一块 `<pre>`（时间线/折叠详情已撤）。boot-state 由**主卡单独轮询**，FP 只读跨面共享快照（订阅，不重复取）；owner 不在场（快照不存在/下线/过旧）时 FP 才自取。
+- **四个面**：main（主卡，无 DSH 侧栏）/ sidebar（FP，只有侧栏）/ settings（App 自己的设置页，`ui.route`）/ standalone（detached 拆窗，完整 DSH UI + 顶部 44px 让位宿主 chrome）。面由**页面静态声明**（`<meta name="hana-dshana-role">` + `data-dshana-view`）；装配走官方 ui-layout + src-integrations 覆盖，`?dshana-view=` 与 `@dsh-hanako/view` 均已退役。
 - **注入鉴权**：壳页以 `appSurfaceSession` 作为 `_surface` 路径段取得运行时代理凭据（同源预请求种 `hana_app_runtime` cookie 兜住子请求）；未取得票据时不下挂内容，面板上说明原因。
 
 ### 设置面
@@ -284,8 +284,9 @@ DSHana 以**单卡 + 自带功能面板**注册（manifest `contributes.cards[0]
 - src/ui/{main.html, sidebar.html, app-shell.js}（build:src 复制到 dist/ui/）：
   页面同层相对引用（`./app-shell.js`），无根路径绝对 URL；appId/路由前缀由页面
   location.pathname 推导（/api/apps/<appId>/... 段），不硬编码整 URL。壳页轮询 boot-state、
-  POST start/stop；响应 v1 壳桥消息（`dshHanaThemeRequest`/剪贴板 `__dshCopy`）best-effort
-  （无浏览器 SDK 依赖；真机对账补充 TOKEN_MAP 对齐与 hana.clipboard 能力面）。
+  POST start/stop；主题桥（同文档，`dshHanaThemeRequest`）best-effort。剪贴板已改由
+  `@dsh-hanako/clipboard` 的 client 半 shadow `navigator.clipboard.writeText`，原生被据时直调
+  `__DSHANA__.clipboardWrite`（旧 `__dshCopy` 消息协议已删）。
 
 ### 交付 4：旧插件数据迁移（交付代码与 --check 路径，本刀不真跑）
 
@@ -325,10 +326,10 @@ DSHana 以**单卡 + 自带功能面板**注册（manifest `contributes.cards[0]
 | app | serve fork 官方前端到根路径（宿主 WebUI iframe 载体） | **保留（惰性优先）** | DSH Web UI 根页面服务仍走 webserver fallback；v2 经代理前缀访问不变；内容面待 UI 真机验收 |
 | view | client 端 root 装配（main/sidebar 视图、layout 服务） | **保留（惰性优先）** | DSH UI 视图装配属 DSH 侧；URL 三态参数与壳页 ?dshana-view 约定一致即可 |
 | theme | 壳页 postMessage 主题注入（tapIndex 注入桥） | **保留（桥壳页侧需对账）** | v2 壳页 app-shell.js 已实现 dshHanaThemeRequest 应答（best-effort）；TOKEN_MAP 对齐待真机 |
-| clipboard | 剪贴板桥（宿主 capability 写剪贴板） | **保留（桥降级 best-effort）** | v2 无宿主 capability 白名单——壳页 navigator.clipboard/execCommand 兜底，失败如实回执；正式路径待 hana.clipboard 能力面确认 |
-| settings | DSH Web 设置页「DSHana 设置」分页（默认模型/版本卡 + 更新总线） | **惰性保留（需删改 v1 更新段）** | v1 更新链路（dshana.bus → 宿主）v2 无宿主侧；本地版本卡/默认模型 UI 保留；更新段退役（App 发版即 DSH 升级）——真机验收刀随 UI 修剪 |
-| logger | DSH 内日志收集 → dshanaBus → 宿主会话文件 | **惰性保留（通道退化为缓冲）** | v2 无宿主 WS 连接，总线缓冲不再送达；受管 runtime stdout 由宿主 runtime 日志承载（App 侧不再落盘，见 spec §8 j）——真机后移除总线转发段 |
-| bus | dshana.bus WS 服务端（宿主插件 IPC 通道） | **退役候选（roster 惰性保留）** | v2 宿主不再连 dshana.bus：App→runtime = loopback HTTP RPC（决策 A），runtime→宿主 = connectAppRuntime（tasks/models）。无消费方即死代码——真机确认 logger/settings 无注入依赖后从 patch.yml 移除 |
+| clipboard | 剪贴板桥（宿主 capability 写剪贴板） | **保留（改为 client 半 shadow）** | v2 无宿主 capability 白名单——壳页 navigator.clipboard/execCommand 兜底，失败如实回执；正式路径待 hana.clipboard 能力面确认 |
+| settings | DSH Web 设置页「DSHana 设置」分页（默认模型/版本卡 + 更新总线） | **已退役（2026-09-12，改由 App 自己设置页承担）** | v1 更新链路（dshana.bus → 宿主）v2 无宿主侧；本地版本卡/默认模型 UI 保留；更新段退役（App 发版即 DSH 升级）——真机验收刀随 UI 修剪 |
+| logger | DSH 内日志收集 → dshanaBus → 宿主会话文件 | **已退役（2026-09-12）** | bus 一走它只剩“写一行到 cordis logger”，无存在价值；唯一消费者 theme 改为直接用内建 LoggerService（行首 `[theme]`） | v2 无宿主 WS 连接，总线缓冲不再送达；受管 runtime stdout 由宿主 runtime 日志承载（App 侧不再落盘，见 spec §8 j）——真机后移除总线转发段 |
+| bus | dshana.bus WS 服务端（宿主插件 IPC 通道） | **已退役（2026-09-12）** | v2 宿主不再连 dshana.bus：App→runtime = loopback HTTP RPC（决策 A），runtime→宿主 = connectAppRuntime（tasks/models）。无消费方即死代码——真机确认 logger/settings 无注入依赖后从 patch.yml 移除 |
 | acp-assist | dsh-acp agent 工厂 setup 后置（补 ACP 会话缺的默认 preset） | **已退役（2026-09-10）** | v2 不装载 dsh-acp，patch 对象不存在；roster 行与插件目录已删。依据见 `specs/dshana-v2-定案与待议-2026-09-10.md` §10 |
 
 ### 已测/未测边界（本刀）

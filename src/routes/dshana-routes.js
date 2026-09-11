@@ -25,9 +25,53 @@
 //
 // 依赖注入（可测性）：deps = { appId, version, getSnapshot(), start(), stop(), log() }。
 // 默认实现经 src/lib/managed-runtime.js 读取真实单例；测试注入 fake。
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { managedRuntimeDetails, ensureManagedRuntime, stopManagedRuntime, bridgeAccess } from "../lib/managed-runtime.js";
 import { buildBootSnapshot, APP_ID } from "../lib/boot-state.js";
+import { resolveApprovalTimeoutSec, resolveDefaultTimeoutSec } from "../lib/config.js";
 export const DASHANA_ROUTE_PREFIX = "/dshana";
+
+// ---- 应用设置（GET/POST /dshana/settings）----
+// 只认两项（原 manifest contributes.settings.schema 的那两个键），值落在 dataDir/config.json
+// 的 global.*——和宿主设置界面当初写的是同一处，也正是 src/lib/config.js 里
+// resolveApprovalTimeoutSec / resolveDefaultTimeoutSec 优先直读的那份值：改完即时生效，
+// 不需要重启。
+// 为什么不再用 schema（她的决定）：设置标签页直接渲染本 App 自己的页
+// （contributes.settings.ui.route），配置经 App 自己的后端读写，宿主不再代画表单；缺省值
+// 随之由 lib/config.js 的 APP_SETTING_DEFAULTS 持有（值不变：30 / 1800）。
+const APP_SETTING_KEYS = ["approvalTimeoutSec", "defaultTimeoutSec"];
+const APP_SETTING_LEGACY = { approvalTimeoutSec: "approvalTimeoutMs", defaultTimeoutSec: "defaultTimeoutMs" };
+
+/** 读 dataDir/config.json（缺失/坏 JSON 一律当空对象：设置面不该把诊断面拖下水）。 */
+function readConfigJson(dataDir) {
+  try {
+    const f = join(dataDir, "config.json");
+    if (!existsSync(f)) return {};
+    const j = JSON.parse(readFileSync(f, "utf8"));
+    return j && typeof j === "object" ? j : {};
+  } catch {
+    return {};
+  }
+}
+
+/** 只挑白名单键、只认有限非负数；其余忽略（设置面不接受任意键写入）。 */
+function pickAppSettings(input) {
+  const out = {};
+  for (const k of APP_SETTING_KEYS) {
+    const v = input ? input[k] : undefined;
+    if (typeof v === "number" && Number.isFinite(v) && v >= 0) out[k] = Math.round(v);
+  }
+  return out;
+}
+
+/** 生效值（与运行时同一读法）：交给 config.js 的 resolver 从 config.json + 缺省值算出。 */
+function effectiveSettings(dataDir) {
+  return {
+    approvalTimeoutSec: resolveApprovalTimeoutSec({ dataDir }),
+    defaultTimeoutSec: resolveDefaultTimeoutSec({ dataDir }),
+  };
+}
 
 /** 默认依赖实现（读 App 运行包 + 受管 runtime 单例；模块级状态在 App 进程内共享）。 */
 
@@ -39,10 +83,27 @@ export function defaultDshanaRouteDeps(ctx) {
       /* 忽略 */
     }
   };
+  // 设置面用 App 自己的私有数据目录（ctx.config.dataDir，宿主提供）
+  const dataDir = ctx && ctx.config && typeof ctx.config.dataDir === "string" ? ctx.config.dataDir : "";
   return {
     appId: (ctx && ctx.appId) || APP_ID,
     version: "",
     log,
+    readSettings: () => effectiveSettings(dataDir),
+    writeSettings: (patch) => {
+      if (!dataDir) throw new Error("ctx.config.dataDir 不可用，无法写应用设置");
+      const j = readConfigJson(dataDir);
+      const global = j.global && typeof j.global === "object" ? { ...j.global } : {};
+      for (const [k, v] of Object.entries(patch)) {
+        global[k] = v;
+        // 新键落盘即撤旧毫秒键（config.js 的兼容分支随之不再命中，免单位误读）
+        const legacy = APP_SETTING_LEGACY[k];
+        if (legacy) delete global[legacy];
+      }
+      j.global = global;
+      writeFileSync(join(dataDir, "config.json"), JSON.stringify(j, null, 2) + "\n", "utf8");
+      return effectiveSettings(dataDir);
+    },
     getSnapshot: () => {
       const access = bridgeAccess();
       return buildBootSnapshot(managedRuntimeDetails(), { bridgeKey: access ? access.key : null });
@@ -62,6 +123,8 @@ export function registerDshanaRoutes(app, deps) {
   const getSnapshot = typeof d.getSnapshot === "function" ? d.getSnapshot : () => buildBootSnapshot(managedRuntimeDetails());
   const start = typeof d.start === "function" ? d.start : () => ensureManagedRuntime({});
   const stop = typeof d.stop === "function" ? d.stop : () => stopManagedRuntime();
+  const readSettings = typeof d.readSettings === "function" ? d.readSettings : () => ({});
+  const writeSettings = typeof d.writeSettings === "function" ? d.writeSettings : (patch) => patch;
 
   const json = (c, status, body) => {
     if (typeof c?.json !== "function") {
@@ -89,6 +152,16 @@ export function registerDshanaRoutes(app, deps) {
           ts: new Date().toISOString(),
         });
       } catch (e) {
+        return json(c, 500, { ok: false, error: (e && e.message) || String(e) });
+      }
+    });
+
+    // ---- GET /dshana/settings：设置页读生效值 ----
+    app.get(DASHANA_ROUTE_PREFIX + "/settings", (c) => {
+      try {
+        return json(c, 200, { ok: true, settings: readSettings() });
+      } catch (e) {
+        log("warn", "/dshana/settings 读取失败：" + ((e && e.message) || e));
         return json(c, 500, { ok: false, error: (e && e.message) || String(e) });
       }
     });
@@ -125,6 +198,21 @@ export function registerDshanaRoutes(app, deps) {
         return json(c, 500, { ok: false, error: (e && e.message) || String(e) });
       }
     });
+
+    // ---- POST /dshana/settings：设置页写回（只收白名单两项）----
+    app.post(DASHANA_ROUTE_PREFIX + "/settings", async (c) => {
+      try {
+        const body = c && c.req && typeof c.req.json === "function" ? await c.req.json() : null;
+        const patch = pickAppSettings(body);
+        if (Object.keys(patch).length === 0) {
+          return json(c, 400, { ok: false, error: "没有可写入的设置项（只认 " + APP_SETTING_KEYS.join("/") + "，数值且 ≥ 0）" });
+        }
+        return json(c, 200, { ok: true, settings: writeSettings(patch) });
+      } catch (e) {
+        log("warn", "/dshana/settings 写入失败：" + ((e && e.message) || e));
+        return json(c, 500, { ok: false, error: (e && e.message) || String(e) });
+      }
+    });
   }
 
   return app;
@@ -135,7 +223,9 @@ export function dshanaRoutesTable() {
   return [
     ["GET", DASHANA_ROUTE_PREFIX + "/boot-state"],
     ["GET", DASHANA_ROUTE_PREFIX + "/health"],
+    ["GET", DASHANA_ROUTE_PREFIX + "/settings"],
     ["POST", DASHANA_ROUTE_PREFIX + "/start"],
     ["POST", DASHANA_ROUTE_PREFIX + "/stop"],
+    ["POST", DASHANA_ROUTE_PREFIX + "/settings"],
   ];
 }

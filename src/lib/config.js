@@ -79,6 +79,12 @@ export function resolveReasoningEffort(explicit) {
 
 // 毫秒 → 秒 换算（旧键兜底共用）：0=禁用语义保留（0 → 0）；正数取整到秒
 // （Math.round；极端 <500ms 的正数钳到 1s，保留「正数 = 启用」语义，避免 0 被误判禁用）。
+// 应用设置的缺省值（单位：秒）：2026-09-12 起由代码持有。
+// 背景：设置页改成 App 自己的页（contributes.settings.ui.route），manifest 不再声明 schema，
+// 于是运行时缺省的来源从“配置快照”变成这里——值沿用原 schema 里的 default（30 / 1800），
+// 行为不变；设置页读写经 App 后端路由直接落 dataDir/config.json 的 global.*。
+export const APP_SETTING_DEFAULTS = { approvalTimeoutSec: 30, defaultTimeoutSec: 1800 };
+
 function msToSec(ms) {
   if (!Number.isFinite(ms)) return null;
   if (ms <= 0) return 0;
@@ -107,7 +113,7 @@ export function resolveApprovalTimeoutSec(cfg) {
   } catch {
     /* 读配置失败忽略 */
   }
-  const v = Number(cfg.approvalTimeoutSec);
+  const v = Number(cfg?.approvalTimeoutSec ?? APP_SETTING_DEFAULTS.approvalTimeoutSec);
   if (Number.isFinite(v) && v > 0) return v;
   const old = msToSec(Number(cfg.approvalTimeoutMs));
   if (old !== null && old > 0) return old;
@@ -132,7 +138,7 @@ export function resolveDefaultTimeoutSec(cfg) {
   } catch {
     /* 读配置失败忽略 */
   }
-  const v = Number(cfg.defaultTimeoutSec);
+  const v = Number(cfg?.defaultTimeoutSec ?? APP_SETTING_DEFAULTS.defaultTimeoutSec);
   if (Number.isFinite(v) && v > 0) return v;
   const old = msToSec(Number(cfg.defaultTimeoutMs));
   if (old !== null && old > 0) return old;
