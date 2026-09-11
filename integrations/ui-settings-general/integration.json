@@ -1,0 +1,37 @@
+{
+  "package": "@deepseek-ai/dsh-client-ui-settings-general",
+  "upstreamVersion": "0.1.5-rc.2",
+  "upstreamDir": "packages/client/ui-settings-general",
+  "hana": 1,
+  "files": [
+    {
+      "path": "src/client/SettingsRoot.tsx",
+      "upstreamSha256": "e99a8749b502626fcd766cffc7dd07d1434ebf2f62478b2aea57405b5ef56b68"
+    },
+    {
+      "path": "src/client/SettingsRoot.module.css",
+      "upstreamSha256": "b98543d7cb35f732764669b781adfd1089d4acdd22ab05667bf877406c6904fe"
+    },
+    {
+      "path": "src/client/locales.ts",
+      "upstreamSha256": "b0cdfc09f19ab51f5f3894d66a908ad28111fb2449c894d52239da802d590f2c"
+    }
+  ],
+  "notes": [
+    "批次②：设置跨面——“FP（navigation）点设置、主卡（workspace）打开”。逐字照样例 0.7.0 的",
+    "ui-settings-general 补丁（它的 SettingsRoot.tsx 是整套机制的读写端）。",
+    "三处分叉（样例同款）：",
+    "  role 从宿主桥取（bridge?.role ?? 'navigation'），来自 window.__DSHANA__.role",
+    "  role==='settings'  → SettingsPanel embedded（占满整列；panel/embeddedPanel 新 CSS）",
+    "  role==='workspace' → 只渲染 {panel}{syncFailure}{onboarding}，**不画触发器**（这就是它不漂顶的原因）",
+    "  其余（navigation=FP）→ triggerRow（齿轮）+ panel + syncFailure + onboarding",
+    "共享状态：publish() 把 {open, section} 经 bridge.writeSettingsView 写出去（revision 守卫防晚到覆盖）；",
+    "只有 workspace/standalone 订阅 bridge.readSettingsView + onSettingsViewChanged 跟随（FP 是发射端）。",
+    "所以 FP 点齿轮 → 写共享状态 → 主卡读到就开面板；两边都开着时是主卡出面、FP 只留入口。",
+    "配套改动（同一批）：integrations/ui-layout 恢复 workspace 的 settingsShell（落点）；",
+    "src/ui/app-shell.js 发布 VIEW_STATE_API（read/write/onChanged，落在 hana.storage.global，",
+    "键 dshana.card.<cardInstanceId>.settings-view——主卡与其 FP 同 cardInstanceId，宿主文档明载）；",
+    "src/ui/dsh-inject.js 的 installTransport 把 bridge 面合并进 __DSHANA__。",
+    "样例额外按 sourceId 分域；我们单源，注释里留了位。locales.ts 加 view.readError/writeError/retry 三键。"
+  ]
+}

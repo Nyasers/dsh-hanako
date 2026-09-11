@@ -244,7 +244,7 @@ export async function injectDshIndex(indexHtml, privateBase, opts) {
  *     （它打了 client-hmr 与 ui-open-in-app）：EventSource 换 URL（桥的 runtimeUrl）、fetch 换
  *     __DSH_TRANSPORT__.fetch。我们同法（integrations/client-hmr、integrations/ui-open-in-app）。
  */
-export function installTransport(privateBase, { role } = {}) {
+export function installTransport(privateBase, { role, bridge } = {}) {
   const mux = createStreamMux(privateBase);
   const runtimeFetch = createRuntimeFetch(privateBase);
   window.__DSH_TRANSPORT__ = {
@@ -261,6 +261,9 @@ export function installTransport(privateBase, { role } = {}) {
   window.__DSHANA__ = {
     role: role || "workspace",
     runtimeUrl: (path) => mapRuntimeUrl(String(path), privateBase, window.location.origin).toString(),
+    // 壳页传入的额外桥面（当前是设置视图读/写/订阅，见 src/ui/app-shell.js 的 VIEW_STATE_API）：
+    // integrations/ui-settings-general 靠它做「FP 点设置、主卡打开」。
+    ...(bridge && typeof bridge === "object" ? bridge : {}),
   };
   return () => {
     try { delete window.__DSH_TRANSPORT__; } catch { /* 忽略 */ }
