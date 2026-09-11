@@ -27,7 +27,6 @@
 // 默认实现经 src/lib/managed-runtime.js 读取真实单例；测试注入 fake。
 import { managedRuntimeDetails, ensureManagedRuntime, stopManagedRuntime, bridgeAccess } from "../lib/managed-runtime.js";
 import { buildBootSnapshot, APP_ID } from "../lib/boot-state.js";
-import { readDshThemePreference } from "../lib/config.js";
 export const DASHANA_ROUTE_PREFIX = "/dshana";
 
 /** 默认依赖实现（读 App 运行包 + 受管 runtime 单例；模块级状态在 App 进程内共享）。 */
@@ -46,13 +45,7 @@ export function defaultDshanaRouteDeps(ctx) {
     log,
     getSnapshot: () => {
       const access = bridgeAccess();
-      const details = managedRuntimeDetails();
-      const snap = buildBootSnapshot(details, { bridgeKey: access ? access.key : null });
-      // 主题偏好：壳页靠它决定“跟随 Hana 配色”还是“原生明暗”（见 theme 子插件的跟随门）。
-      // 直接读 durable settings（与 dsh 自己写的是同一份），所以壳页轮询就能拿到变更——
-      // 在 dsh 设置里改偏好不必重开卡片。
-      if (details && details.dshHome) snap.themePreference = readDshThemePreference(details.dshHome);
-      return snap;
+      return buildBootSnapshot(managedRuntimeDetails(), { bridgeKey: access ? access.key : null });
     },
     start: () => ensureManagedRuntime({}),
     stop: () => stopManagedRuntime(),

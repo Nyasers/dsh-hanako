@@ -15,6 +15,10 @@
     {
       "path": "src/client/AppFrame.module.css",
       "upstreamSha256": "3ea2d3c3035a26484ee5e7760f5f6d53719b5a665cac1e09dca96bf88e8e44ec"
+    },
+    {
+      "path": "src/client/theme-presenter.ts",
+      "upstreamSha256": "001261573958431973a454020abc310b9b97dd47642454df615a0c38cebbcd66"
     }
   ],
   "notes": [
@@ -33,6 +37,9 @@
     "全局名用我们自己的 __DSHANA__（样例叫 __HANA_DSH__）。",
     "productTitle 仍走上游 process.env.DSH_CLIENT_TITLE ?? t('brand.localBuild')（样例硬编码成产品名），属最小 delta。",
     "index.ts / stores.ts / DocumentTitle.tsx 不改；样例对 index 的改动是主题 token 映射与 inject 列表，属后续批次。",
-    "发布侧：壳页 src/ui/app-shell.js 在注入 DSH 前写 window.__DSHANA__（当前只有 role）。"
+    "发布侧：壳页 src/ui/app-shell.js 在注入 DSH 前写 window.__DSHANA__（当前只有 role）。",
+    "第 4 个 overlay（theme-presenter.ts）：投影用户主题偏好到 html[data-dsh-theme-preference]。选 presenter",
+    "而不是 ui-theme——偏好由 ui-theme 服务拥有，但它显式声明 never touches the DOM，写 DOM 的职责在 presenter；",
+    "消费方是 DSH 内注入的主题桥（跟随门：仅 system 时压 Hana 配色），靠属性变化事件驱动，无轮询。"
   ]
 }

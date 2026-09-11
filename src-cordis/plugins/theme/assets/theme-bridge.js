@@ -29,10 +29,17 @@
   // vY（T7b 后 dsh 0.1.2）：preference 默认 system——跟随宿主配色（壳桥 vars 即应用）；
   // 读 dsh settings/describe 失败/缺失时按 system 处理，主题不因此失效。
   var pref = "system";
-  // 偏好是否已经由壳页告知过一次：未告知前不动手（否则会先按 system 压一遍 Hana 配色，
-  // 等壳页首次推送过来才纠正，中间那一下是可见的闪烁）。壳桥永久失败时本值恒 false，
-  // 静态 fallback 就一直留着——这正是旧行为。
+  // 偏好是否已知：presenter 把偏好投影在 html[data-dsh-theme-preference] 上（见
+  // integrations/ui-layout 的 theme-presenter），未得知前不动手（否则会先按 system
+  // 压一遍 Hana 配色、再被纠正，中间是可见闪烁）。预览器还没跑时本值恒 false。
   var prefKnown = false;
+  /** 读 presenter 投影的偏好属性；非法/缺失返 null。 */
+  function readPreference() {
+    try {
+      var v = document.documentElement.getAttribute("data-dsh-theme-preference");
+      return v === "light" || v === "dark" || v === "system" ? v : null;
+    } catch (e) { return null; }
+  }
   function cssOf(v) {
     var c = "";
     for (var i = 0; i < m.length; i++) {
@@ -78,22 +85,18 @@
   }
   // 从文档根读取并应用；读到有效变量返 true。
   function pull() {
+    // 先采纳偏好（presenter 写的 html 属性；属性一变就重新算门——事件驱动，无轮询）。
+    var p = readPreference();
+    if (p !== null) { pref = p; prefKnown = true; }
     var v = readDocumentVars();
     if (!v) return false;
     cur = v;
     applyOrRemove();
-    maybeDropStatic();
     return true;
   }
-  // 移除静态 fallback（DEFAULT_THEME）：仅在拿到有效宿主主题（cur 已应用）或确认
-  // 非 system 偏好（pref 明确 light/dark，静态默认即正确）之后——壳桥永久失败时
-  // 保留 DEFAULT_THEME 兜底，页面不致裸样式（CodeRabbit）。
-  function maybeDropStatic() {
-    if ((cur && Object.keys(cur).length) || (pref && pref !== "system")) {
-      var se = document.getElementById("@dsh-hanako/theme");
-      if (se && se.remove) se.remove();
-    }
-  }
+  // 已无静态 fallback 可撤：拿不到宿主主题时就保持 dsh 内置 token（官方明暗）——
+  // 不从宿主搬固定值充数（2026-09-12 她定）。旧实现会在这里摘掉静态 <style>，
+  // 随 STATIC 一起退役。
   function ask() {
     // 旧拓扑（iframe 套 iframe）里壳页是本页的 parent；同文档注入后本页的 parent 是**宿主**，
     // 投过去没人答。两个目标都投一份：自身（现壳页的 message 监听就在同文档里）与 parent（兼容）。
@@ -106,17 +109,14 @@
     if (e.source !== window && e.source !== window.parent) return;
     if (e.source !== window && parentOrigin && e.origin !== parentOrigin) return;
     if (e.data && e.data.dshHanaTheme) {
-      // 偏好随推送下发（来源见文件头）：拿到就先换门，再取变量重跑应用。
-      var p = e.data.dshHanaTheme.preference;
-      if (p === "light" || p === "dark" || p === "system") { pref = p; prefKnown = true; }
       // 值以文档根为权威（同文档下我们读得到）；读不到才回退用载荷里的 vars。
-      // pull() 内部会 applyOrRemove() + maybeDropStatic()，所以换门后不必再跑一遍。
+      // （偏好不在这里——它由 presenter 的属性承载，见 pull()。）
+      // pull() 内部已 applyOrRemove()，所以换门后不必再跑一遍。
       if (!pull()) {
         var v = e.data.dshHanaTheme.vars;
         if (v && typeof v === "object" && Object.keys(v).length) {
           cur = v;
           applyOrRemove();
-          maybeDropStatic();
         }
       }
       if (cur && askTimer) { clearInterval(askTimer); askTimer = null; }
@@ -139,7 +139,10 @@
   // 主题切换（壳页写 documentElement 的 data-theme / data-appearance）即时感知，不等 1s 轮询。
   try {
     var mo = new MutationObserver(function () { pull(); });
-    mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "data-appearance"] });
+    mo.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-theme", "data-appearance", "data-dsh-theme-preference"],
+    });
   } catch (e) { /* 忽略 */ }
   pull();
   ask();

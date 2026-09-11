@@ -370,26 +370,12 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
         if (!r.ok) throw new Error("DSH index HTTP " + r.status);
         return r.text();
       })
-      .then(function (html) {
-        // 在注入前把「dsh 自己的主题偏好」抽出来：index 的 boot-theme 行（body 开头那段
-        // 内联脚本）由服务端按 durable settings 生成，内嵌 `const preference = "..."`。
-        // 这是同文档下我们拿得到的、也是 dsh 自己认的那个值——主题桥的跟随门靠它分叉。
-        themePreference = readIndexThemePreference(html);
-        return injectDshIndex(html, base);
-      })
+      .then(function (html) { return injectDshIndex(html, base); })
       .catch(function (err) { showInjectionError(err); });
   }
-  // 从 DSH index 的 boot-theme 行取偏好（见 src/lib/../theme 的 boot-theme.ts：
-  //   const preference = <JSON>\n  document.documentElement.style.colorScheme = …
-  //   document.body.toggleAttribute('data-ds-dark-theme', dark)）
-  // 取不到或形状变了按 system 处理（宁可多跟随，不可把 UI 钉住）。
-  function readIndexThemePreference(html) {
-    try {
-      var m = /const\s+preference\s*=\s*"([a-z]+)"/.exec(String(html));
-      var v = m && m[1];
-      return v === "light" || v === "dark" || v === "system" ? v : "system";
-    } catch (e) { return "system"; }
-  }
+  // 注：原先这里有个 readIndexThemePreference()（从 index 的 boot-theme 行抽 dsh 偏好）。
+  // 偏好已改由 ui-layout 的 presenter 投影到 html 属性、DSH 内桥自己观察（见文件头三段分工），
+  // 壳页不再转发，故该函数退役。
   // 旧的 ?dshana-view= 参数已退役（2026-09-12）：它唯一的消费者是 @dsh-hanako/view 客户端插件，
   // 而该插件已不在册（官方 ui-layout 放开后就成对换回了）；正式路径读的是 __DSHANA__.role，
   // 而 role 的事实源是页面自己的声明（meta / 壳属性）。故不再改写当前 URL。
@@ -577,7 +563,7 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
     return out;
   }
   function sendThemeTo(dst) {
-    var msg = { dshHanaTheme: { vars: readThemeVars(), preference: themePreference } };
+    var msg = { dshHanaTheme: { vars: readThemeVars() } };
     try { dst.postMessage(msg, "*"); } catch (e) { /* 目标不可达忽略 */ }
   }
   // 同文档注入形态（当前主路径）：主题桥就在本页里，向本窗口广播即可被它收到。
@@ -585,7 +571,7 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
   // 同文档注入后本页的 parent 是**宿主**而不是壳页，那个请求到不了这里，壳也就没机会回
   // ——这就是主卡 / FP 主题不跟随的原因（旧 iframe 形态下 parent 恰好是壳页，才一直正常）。
   function pushThemeToSelf() {
-    try { window.postMessage({ dshHanaTheme: { vars: readThemeVars(), preference: themePreference } }, "*"); } catch (e) { /* 忽略 */ }
+    try { window.postMessage({ dshHanaTheme: { vars: readThemeVars() } }, "*"); } catch (e) { /* 忽略 */ }
   }
   function frameWindow() {
     var main = $("[data-dshana-shell]");
@@ -638,11 +624,10 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
   //   才会是真实的 Hana 配色。
   var THEME_STYLE_ATTR = "data-hana-theme-style";
   var themeCssUrl = null;
-  // dsh 自己的主题偏好（light/dark/system）：仅在 system 时才把 Hana 配色压上去
-  // （显式 light/dark = 完全原生，这是既有产品语义）。值来自 index 的 boot-theme 行，
-  // 随每次主题推送下发给桥——桥不再自己 RPC 去读（那条 settings/describe 在老版本
-  // 可用、新版本形状未验；读不到就会永远停在 system，把 UI 钉住——真机 2026-09-12）。
-  var themePreference = "system";
+  // 注：dsh 自己的主题偏好（system/light/dark）**不由壳页判断**——它是 DSH 侧的事实
+  // （宿主主题 API 里也没有它）。现由 ui-layout 的 presenter 投影到
+  // html[data-dsh-theme-preference]，DSH 内的主题桥直接观察该属性决定是否跟随。
+  // 壳页在这里只负责一件事：维持宿主主题变量（样式表）。
   function applyThemeCss(cssUrl) {
     if (typeof cssUrl !== "string" || !cssUrl) return;
     themeCssUrl = cssUrl;
