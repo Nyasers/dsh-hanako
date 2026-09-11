@@ -170,10 +170,15 @@ export function AppFrame({
   }, [actions])
 
   const narrow = surface === 'standalone' && viewport < SIDEBAR_AUTO_COLLAPSE
-  const sidebarCollapsed = surface === 'standalone' && (narrow ? !layoutInfo.narrowExpanded : layoutInfo.sidebar === 0)
-  const sidebarPreference = sidebarCollapsed
-    ? 0
-    : layoutInfo.sidebar === 0 ? SIDEBAR_DEFAULT : layoutInfo.sidebar
+  // 实装反馈（2026-09-12）：拆窗面不再套用「收起」机制——独立窗口的侧栏始终在。
+  // 依据：上游 stores.ts 的初值是 SIDEBAR_DEFAULT（280），所以「sidebar === 0」只可能是
+  // 持久化的收起状态（主卡与 FP 都不渲染可折叠的侧栏轨，那个 0 往往来自别处的旧状态 /
+  // 宿主快捷键）；原逻辑（source === 'standalone' && (narrow ? !narrowExpanded : sidebar === 0)）
+  // 会把它当成收起 → frameSidebarPreference = 0 → 侧栏被零宽吞掉 = 她说的 omit。
+  // 现在：宽度取持久值（> 0 尊重用户拖过的宽度），≤ 0 视为没设过 → 用默认宽度；
+  // narrow 自动收起也一并去掉（拆窗是用户主动开的窗口，不该替他藏侧栏）。
+  const sidebarCollapsed = false
+  const sidebarPreference = layoutInfo.sidebar > 0 ? layoutInfo.sidebar : SIDEBAR_DEFAULT
   // 侧栏作为**轨道**只在 standalone 存在；其余面没有可折叠的侧栏轨（见 columns.ts 的
   // sidebarPresent）：workspace 的侧栏槽位是设置浮层，navigation 的侧栏就是整张面。
   const sidebarPresent = surface === 'standalone'
