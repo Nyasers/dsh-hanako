@@ -56,21 +56,8 @@
     ],
     "settings": {
       "title": "DSHana",
-      "schema": {
-        "properties": {
-          "approvalTimeoutSec": {
-            "type": "number",
-            "default": 30,
-            "title": "审批超时（秒）",
-            "description": "审批超时自动拒绝（单位：秒）；显式设 0 禁用自动拒绝"
-          },
-          "defaultTimeoutSec": {
-            "type": "number",
-            "default": 1800,
-            "title": "任务默认超时（秒）",
-            "description": "单次任务默认超时（单位：秒）；0 或缺失回落 600 秒"
-          }
-        }
+      "ui": {
+        "route": "/settings.html"
       }
     }
   }

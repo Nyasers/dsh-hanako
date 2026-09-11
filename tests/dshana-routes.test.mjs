@@ -45,18 +45,66 @@ function makeFakeDeps(over = {}) {
   };
 }
 
-test("挂载清单：GET boot-state/health + POST start/stop（前缀 dshana）", () => {
+test("挂载清单：GET boot-state/health/settings + POST start/stop/settings（前缀 dshana）", () => {
   const { app, routes } = makeFakeApp();
   registerDshanaRoutes(app, makeFakeDeps());
   const paths = routes.map(([m, p]) => m + " " + p).sort();
   assert.deepEqual(paths, [
     "GET /dshana/boot-state",
     "GET /dshana/health",
+    "GET /dshana/settings",
+    "POST /dshana/settings",
     "POST /dshana/start",
     "POST /dshana/stop",
   ]);
   assert.deepEqual(dshanaRoutesTable().map(([m, p]) => m + " " + p).sort(), paths);
   assert.equal(DASHANA_ROUTE_PREFIX, "/dshana");
+});
+
+test("GET /dshana/settings: 200 返回生效值（deps 注入）", () => {
+  const { app, routes } = makeFakeApp();
+  registerDshanaRoutes(app, makeFakeDeps({
+    readSettings: () => ({ approvalTimeoutSec: 30, defaultTimeoutSec: 1800 }),
+  }));
+  const [,, handler] = routes.find(([m, p]) => m === "GET" && p === "/dshana/settings");
+  const ctx = makeFakeCtx();
+  handler(ctx);
+  assert.equal(ctx.status, 200);
+  assert.equal(ctx.body.ok, true);
+  assert.deepEqual(ctx.body.settings, { approvalTimeoutSec: 30, defaultTimeoutSec: 1800 });
+});
+
+test("POST /dshana/settings: 白名单过滤 + 写回 + 返回生效值", async () => {
+  const { app, routes } = makeFakeApp();
+  let written = null;
+  registerDshanaRoutes(app, makeFakeDeps({
+    writeSettings: (patch) => {
+      written = patch;
+      return { approvalTimeoutSec: patch.approvalTimeoutSec ?? 30, defaultTimeoutSec: 1800 };
+    },
+  }));
+  const [,, handler] = routes.find(([m, p]) => m === "POST" && p === "/dshana/settings");
+  const ctx = makeFakeCtx();
+  ctx.req = { json: async () => ({ approvalTimeoutSec: 45, bogus: 1, defaultTimeoutSec: -3 }) };
+  await handler(ctx);
+  assert.equal(ctx.status, 200);
+  assert.deepEqual(written, { approvalTimeoutSec: 45 }, "只写白名单且仅有限非负数（负数被剔）");
+  assert.equal(ctx.body.settings.approvalTimeoutSec, 45);
+});
+
+test("POST /dshana/settings: 无合法项 → 400（不写盘）", async () => {
+  const { app, routes } = makeFakeApp();
+  let called = 0;
+  registerDshanaRoutes(app, makeFakeDeps({
+    writeSettings: () => { called += 1; return {}; },
+  }));
+  const [,, handler] = routes.find(([m, p]) => m === "POST" && p === "/dshana/settings");
+  const ctx = makeFakeCtx();
+  ctx.req = { json: async () => ({ bogus: "x" }) };
+  await handler(ctx);
+  assert.equal(ctx.status, 400);
+  assert.equal(ctx.body.ok, false);
+  assert.equal(called, 0, "无合法项时不应调用写回");
 });
 
 test("GET /dshana/boot-state: 200 归一化快照（ok+app+state）", () => {

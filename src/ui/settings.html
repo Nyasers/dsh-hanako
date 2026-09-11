@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- 本页的面（role）的事实源：静态声明（与卡壳页同一姿势）。设置页没有 DSH 前端要注入，
+     所以它只有这一个身份标记，不带 data-dshana-shell（那是壳脚本 app-shell.js 的根锚）。 -->
+<meta name="hana-dshana-role" content="settings">
+<title>DSHana 设置</title>
+<!-- src/ui/settings.html — DSHana App 自己的设置页（contributes.settings.ui.route）。
+     宿主设置区左侧的「DSHana」标签页直接渲染本页，配置经 App 后端读写
+     （GET/POST /dshana/settings → dataDir/config.json 的 global.*，即运行时优先直读的那份值），
+     所以改完立刻生效、不需要重启，也不存在"宿主表单 + 我们表单两份值"的分叉。
+     本页脚本 settings.js 只做两件事：跟随宿主主题、读写这两项。 -->
+<style>
+  html, body { height: 100%; margin: 0; }
+  html { color-scheme: light dark; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    font-size: 14px;
+    color: var(--text, #2A2622);
+    background: var(--bg, #F5EFE4);
+  }
+  /* 只打自己的容器：这个页面不注入任何外部 UI，但仍按壳页的纪律收窄选择器。 */
+  .page { max-width: 560px; padding: 20px 22px 28px; box-sizing: border-box; }
+  .page .title { font-size: 17px; font-weight: 600; margin: 0 0 4px; }
+  .page .sub { font-size: 12.5px; color: var(--text-muted, #6B6158); margin: 0 0 20px; }
+  .page .field { display: block; margin: 0 0 18px; }
+  .page .label { display: block; font-size: 13px; font-weight: 600; margin: 0 0 6px; }
+  .page input {
+    font: inherit; font-size: 13.5px; width: 100%; box-sizing: border-box;
+    padding: 7px 10px; border-radius: 7px;
+    border: 1px solid var(--border, #D8CFBE);
+    background: var(--bg-card, #FBF7EE);
+    color: var(--text, #2A2622);
+  }
+  .page input:focus { outline: 2px solid var(--accent, #537D96); outline-offset: 1px; }
+  .page .hint { display: block; font-size: 12px; color: var(--text-muted, #6B6158); margin: 6px 0 0; }
+  .page .actions { display: flex; align-items: center; gap: 12px; margin-top: 4px; }
+  .page button {
+    font: inherit; font-size: 13.5px; cursor: pointer;
+    padding: 8px 20px; border-radius: 7px;
+    border: 1px solid var(--border, #D8CFBE);
+    background: var(--bg-card, #FBF7EE);
+    color: var(--text, #2A2622);
+  }
+  .page button.primary {
+    background: var(--accent, #537D96);
+    border-color: var(--accent, #537D96);
+    color: #fff;
+  }
+  .page button:disabled { opacity: .6; cursor: default; }
+  .page .status { font-size: 12.5px; color: var(--text-muted, #6B6158); }
+  .page .status.err { color: var(--danger, #8B2C1F); }
+  .page .status.ok { color: var(--green, #4A6B4A); }
+</style>
+</head>
+<body>
+  <main class="page">
+    <h1 class="title">DSHana 设置</h1>
+    <p class="sub">这里的改动立刻生效，不需要重启 DSH。</p>
+    <form id="form" autocomplete="off">
+      <label class="field">
+        <span class="label">审批超时（秒）</span>
+        <input id="approvalTimeoutSec" type="number" min="0" step="1" inputmode="numeric">
+        <span class="hint">审批超时自动拒绝；填 0 = 禁用自动拒绝。</span>
+      </label>
+      <label class="field">
+        <span class="label">任务默认超时（秒）</span>
+        <input id="defaultTimeoutSec" type="number" min="0" step="1" inputmode="numeric">
+        <span class="hint">单次任务默认超时；填 0 或留空按 600 秒。</span>
+      </label>
+      <div class="actions">
+        <button id="save" type="button" class="primary">保存</button>
+        <span id="status" class="status"></span>
+      </div>
+    </form>
+  </main>
+  <script type="module" src="./settings.js"></script>
+</body>
+</html>
