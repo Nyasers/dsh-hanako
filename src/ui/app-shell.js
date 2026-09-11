@@ -267,7 +267,8 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
   }
 
   // 挂到宿主桥（__DSHANA__）上的跨面接口：
-  //   设置视图 → src-integrations/ui-settings-general；会话选中 → src-integrations/ui-session。
+  //   设置视图 → src-integrations/ui-settings-general；会话选中 → src-integrations/ui-session；
+  //   剪贴板 → @dsh-hanako/clipboard 的 client 半（同文档，直接调，无消息协议）。
   var SURFACE_API = {
     readSettingsView: readSettingsView,
     writeSettingsView: writeSettingsView,
@@ -275,6 +276,7 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
     readSelection: readSelection,
     writeSelection: writeSelection,
     onSelectionChanged: function (listener) { return onSharedChanged("selection", listener); },
+    clipboardWrite: writeClipboard,
   };
 
   // ---- DSH 注入（对齐官方样例：同文档注入 + __DSH_TRANSPORT__，不再用 iframe）----
@@ -559,18 +561,12 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
     var data = e.data;
     if (!data || typeof data !== "object") return;
     if (data.dshHanaThemeRequest) { try { sendThemeTo(e.source); } catch (err) { /* 忽略 */ } }
-    if (data.__dshCopy) {
-      writeClipboard(typeof data.text === "string" ? data.text : "").then(function (ok) {
-        try {
-          if (data.port2 && data.port2.postMessage) data.port2.postMessage({ __dshCopyResult: { ok: ok } });
-          else if (e.ports && e.ports[0]) e.ports[0].postMessage({ __dshCopyResult: { ok: ok } });
-        } catch (err) { /* 忽略 */ }
-      });
-    }
   });
-  // 复制必须走宿主能力门（app/ui.clipboard-write）：iframe 内由 postMessage 触发的复制没有
-  // 用户手势，navigator.clipboard 与 document.execCommand 都会被拒——v1 真机实测过，那两条
-  // 兜底全是白写，故不再保留。SDK 侧 hana.clipboard.writeText 失败会 reject。
+  // 剪贴板：走宿主能力门（app/ui.clipboard-write）。本窗口（嵌入场景）里
+  // navigator.clipboard 被宿主的 Permissions-Policy 拒（'denied'），所以 DSH 侧那个
+  // shadow 在原生失败时改调 __DSHANA__.clipboardWrite，最终落到这里：
+  // 由宿主主窗口执行 hana.clipboard.writeText，不受插件 iframe 权限链限制。
+  // （旧路径是 DSH 内脚本 postMessage 一条 __dshCopy 过来；同文档注入后协议整套删除。）
   function writeClipboard(text) {
     if (!hana || !hana.clipboard || typeof hana.clipboard.writeText !== "function") {
       return Promise.resolve(false);
