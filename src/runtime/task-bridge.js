@@ -28,7 +28,7 @@
 //     requestId（model-requests.js）——只停本工作资源，单例 runtime 内不误停他人会话。
 //   · 宿主取消路径可能先于 DSH turn/end 到达：DSH 回合随后中止事件照常到，settle 幂等。
 //
-// 容错纪律：订阅/回投失败只记日志不阻断 runtime；映射不存在（非 dsh_session 发起的
+// 容错纪律：订阅/回投失败只记日志不阻断 runtime；映射不存在（非 dshana_session 发起的
 // 会话，如 DSH Web UI 直开）的事件直接忽略。
 import { readTaskMap, removeTaskMap } from "../lib/task-map.js";
 import { runWatchReconcile } from "../lib/watch-sse.js";
@@ -120,7 +120,7 @@ class SessionBridge {
     this.hostCancelDone = false; // 宿主取消反向触发只做一次
   }
 
-  /** 首个事件载入映射；无映射（非 dsh_session 会话）返回 false。 */
+  /** 首个事件载入映射；无映射（非 dshana_session 会话）返回 false。 */
   load() {
     if (this.map) return true;
     const m = readTaskMap(this.dataDir, this.sessionId);

@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/lib/approve-respond.js — dsh_session approve 应答编排（App 主进程侧，步骤 4a）
+// src/lib/approve-respond.js — dshana_session approve 应答编排（App 主进程侧，步骤 4a）
 //
 // 职责（迁移指南 §9 审批链在 App 侧的半边，决策 G 见 DESIGN「步骤 4a 架构决策」）：
-//   用户/Agent 经 dsh_session(action=approve, sessionId, approvalId, outcome) 应答 →
+//   用户/Agent 经 dshana_session(action=approve, sessionId, approvalId, outcome) 应答 →
 //   本模块校验审批归属（task-map approvals 表：approvalId 属于该会话且仍 pending——
 //   防串会话/重复应答）→ ctx.tasks.respondApproval({ approvalId, outcome }) 结算宿主
 //   审批 → 受管 runtime 的 approval-bridge 经 watch(approvalId) 观察到终态 outcome，

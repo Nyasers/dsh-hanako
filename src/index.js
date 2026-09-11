@@ -25,7 +25,7 @@
 //
 // 启动触发模型（v2 无 activationEvents/onStartup，指南 §3/§11）：
 // apply 不启动 DSH——只注册工具/设置并返回。DSH 受管运行时采用「工具首调兜底 + 需要时
-// 自启」模型：dsh_session 的 create/send/cancel/approve 首调时若 DSH runtime 未就绪则
+// 自启」模型：dshana_session 的 create/send/cancel/approve 首调时若 DSH runtime 未就绪则
 // 触发启动（ctx.runtime.start → 轮询 get 到 ready → 注册调用）；list/get 纯本地读永远
 // 可用，不依赖 DSH 启动。稳定后再启用 manifest activation 的 on-demand 模式。步骤 2
 // 已把启动封装落位（lib/managed-runtime.js ensureManagedRuntime 单例），步骤 3 在
@@ -92,7 +92,7 @@ function appendLogLine(logPath, src, chunk) {
 }
 
 /**
- * App v2 主入口：注册 dsh_session 工具 + 设置/日志就位后返回（不等待 DSH 服务）。
+ * App v2 主入口：注册 dshana_session 工具 + 设置/日志就位后返回（不等待 DSH 服务）。
  * 返回 disposer：宿主卸载/重载本 App 时调用，用于收尾（日志落盘；步骤 2+ 在此关闭
  * 受管 DSH runtime、任务与流）。
  */
@@ -134,7 +134,7 @@ export function apply(ctx) {
   initAppRuntime(app);
 
   // ---- 工具注册（v2 ctx.tools.register；execute 由宿主在 App 进程内经 RPC 回调执行）----
-  // 工具名 = dshSession.name（"dsh_session"，全局唯一，v2 不自动加前缀——决策与冲突面
+  // 工具名 = dshSession.name（"dshana_session"，全局唯一，v2 不自动加前缀——决策与冲突面
   // 讨论见 tools/session.js 头注释 1）。action 参数与返回语义保持不变；v1 的
   // sessionPermission（external_side_effect + describeSideEffect 函数）为 v1 宿主形态，
   // 无法跨 App 进程序列化，本步骤不注册（外效 action 真正接线时按宿主契约补声明）。
@@ -180,7 +180,7 @@ export function apply(ctx) {
       throw e;
     }
   } else {
-    log("warn", "ctx.routes.register 缺失（宿主低于 0.930.1？）：壳页诊断面不可用，DSH Web UI 仅经 dsh_session 使用");
+    log("warn", "ctx.routes.register 缺失（宿主低于 0.930.1？）：壳页诊断面不可用，DSH Web UI 仅经 dshana_session 使用");
   }
 
   // ---- apply 级自动链：注册完成即后台拉起受管 DSH runtime（不 await，不阻塞 apply 返回）----
@@ -189,7 +189,7 @@ export function apply(ctx) {
   // ensureManagedRuntime（single-flight 幂等：已 starting/ready 时 no-op 共享同一启动）。
   // 依赖随包物化（安装目录 node_modules），启动只做 runtime boot（秒级）——fire-and-forget，
   // 状态经 boot-state 由壳页轮询展示（starting 日志滚动）；失败不 crash apply，落在 runtime
-  // 状态机（phase=error + userText），壳页展示重试指引，dsh_session 首调仍可再触发。
+  // 状态机（phase=error + userText），壳页展示重试指引，dshana_session 首调仍可再触发。
   // 注（2026-09-10）：依赖随包物化，app/process.spawn 能力与 ensure 链已退役，不再需要
   // --allow-child-process。
   {
