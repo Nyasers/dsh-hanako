@@ -6,16 +6,16 @@
 // 打包产物：dist/runtime/dsh-host.mjs（rspack ESM bundle；宿主 ctx.runtime.start({ runtime:
 // "node", entry: "runtime/dsh-host.mjs", ... }) 加载后自持生命周期，不再回宿主进程）。
 // 职责（与 v1 进程内 boot 拆分对照）：
-//   1. 解析 App 自有参数（--port/--data-dir/--hana-task-id/--deps-root/--cordis-src/
-//      --ready-marker，见 options.js）——参数名与 App 主进程
-//      src/lib/managed-runtime.js buildRuntimeArgs() 对偶一致；
+//   1. 解析 App 自有配置（唯一 argv = 私有运行时配置文件路径，0600，启动即删；schema 见
+//      options.js）——字段与 App 主进程 src/lib/managed-runtime.js buildRuntimeConfig()
+//      对偶一致（凭据/端口不经 argv/环境变量/日志）；
 //   2. connectAppRuntime() 连宿主（tasks/models/network.fetch/close；无父 IPC fd 时给
 //      可操作报错 + 退出码 3，绝不假装能跑）；
 //   3. 设置本进程自有 env（DSH_HOME/DSHANA_*，不污染宿主进程环境——迁移指南 §4）；
 //   4. 依赖就位（随包物化在 <installRoot>/node_modules，无运行时安装）；
 //   5. profile 种子化（profiles/dshana → installDir cordis scope 链接，seed.js）；
 //   6. 子进程内 boot DSH（locateDsh → appBoot.loadLayeredEnv → profileBoot.runProfile，
-//      复用 v1 loadInprocDsh 思路；webserver 监听显式 --port）；
+//      复用 v1 loadInprocDsh 思路；webserver 监听配置中的 dshPort）；
 //   7. 真实监听成功（webServer 服务端口 === 期望端口 + HTTP 探测）才向 stdout 打印
 //      约定 readyMarker（独占一行、无前缀）——任何失败路径绝不打印 READY（指南 §10）；
 //   8. SIGTERM/SIGINT/父进程 disconnect → 优雅释放：关 DSH fiber（含 webserver）→ 再

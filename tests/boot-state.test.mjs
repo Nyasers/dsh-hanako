@@ -49,7 +49,7 @@ test("buildBootSnapshot: ready 需 phase+runtimeId+service.state=ready（绝不�
 });
 
 test("buildBootSnapshot: error 携带 code + userText", () => {
-  const err = new Error("端口被占用或 DSH 无法监听。改 App 设置 servicePort 后重试。");
+  const err = new Error("端口被占用或 DSH 无法监听。已自动换随机端口重试。");
   err.code = "port-busy";
   const s = buildBootSnapshot({ phase: "error", runtimeId: null, info: null, lastError: err });
   assert.equal(s.ready, false);

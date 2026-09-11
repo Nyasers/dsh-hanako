@@ -64,20 +64,6 @@
             "default": 1800,
             "title": "任务默认超时（秒）",
             "description": "单次任务默认超时（单位：秒）；0 或缺失回落 600 秒"
-          },
-          "nodejsPath": {
-            "type": "string",
-            "default": "",
-            "title": "自定义 NodeJS 路径",
-            "description": "可选：DSH 受管运行时使用的 NodeJS 可执行文件绝对路径；留空使用宿主 Node；修改后需重启 DSH 生效"
-          },
-          "servicePort": {
-            "type": "integer",
-            "minimum": 1024,
-            "maximum": 65535,
-            "default": 4317,
-            "title": "DSH 本地服务端口",
-            "description": "DSH Web 服务监听的显式本地端口（迁移指南 §10 显式端口契约；宿主 runtime service 端口契约 1024..65535，禁 0/随机/特权口）。被占用时 DSH 启动失败（runtime 状态 failed），改此值或释放端口后重试。多 App/多实例需各自不同端口"
           }
         }
       }

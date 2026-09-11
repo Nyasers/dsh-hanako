@@ -7,17 +7,22 @@
 //
 // 形态（2026-09-11 向官方样例 hana-dsh 看齐后）：App 主进程不再直连 DSH 端口（DSH 鉴权面
 // 已交回官方 connection，宿主代理剥 cookie，直连必 401），而是访问 runtime 内的中继——
-// base = http://127.0.0.1:<bridgePort>，请求带 header `x-hana-dsh-bridge: <bridgeKey>`
-// （中继转发时注入 DSH cookie）。中继就绪前（bridgeAccess() 为空）回落设置端口，仅供
-// 启动窗口内的错误路径使用（该窗口内 RPC 本就不会被调用）。
-import { appConfig } from "./app-runtime.js";
-import { parseServicePort, bridgeAccess } from "./managed-runtime.js";
+// base = http://127.0.0.1:<bridgePort>（中继端口由父进程随机选取、随启动注册给宿主，
+// 裁决 4：不再有 servicePort 设置项），请求带 header `x-hana-dsh-bridge: <bridgeKey>`
+// （中继转发时注入 DSH cookie）。
+import { bridgeAccess } from "./managed-runtime.js";
 
-/** 受管 runtime 服务 base（中继就绪取中继端口，否则回落设置端口）。 */
-export function serviceBase(port) {
+/**
+ * 受管 runtime 服务 base = 中继地址（http://127.0.0.1:<随机中继端口>）。
+ * 端口不可预设（随机），因此**没有**“就绪前回落某个端口”的分支：调用方应在
+ * ensureManagedRuntime 之后取用，未就绪直接抛错，不允许拿猜出来的端口发 RPC。
+ */
+export function serviceBase() {
   const access = bridgeAccess();
-  if (access) return access.base;
-  return "http://127.0.0.1:" + parseServicePort(port !== undefined && port !== null ? port : appConfig("servicePort"));
+  if (!access) {
+    throw new Error("DSH 受管 runtime 中继尚未就绪（端口随启动随机分配，无预设值）——请先完成 ensureManagedRuntime。");
+  }
+  return access.base;
 }
 
 /** 包装 fetch：补中继鉴权头（bridgeKey）；中继未就绪时原样透传。 */

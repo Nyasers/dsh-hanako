@@ -2,33 +2,54 @@
 // Copyright (c) 2026 Nyasers
 //
 // tests/managed-runtime.test.mjs — src/lib/managed-runtime.js 纯函数单测（node --test）
-// 覆盖：servicePort 解析（显式端口契约）、子进程参数构造（与 src/runtime/options.js 对偶）、
-// runtime 终态错误归类（退出码契约 → 用户可读分类）。
+// 覆盖：端口选取（区间随机 + 两端口不相等）、就绪标记（opaque）、子进程配置构造（与
+// src/runtime/options.js 对偶）、runtime 终态错误归类（退出码契约 → 用户可读分类）。
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  parseServicePort,
+  choosePort,
+  pickPorts,
+  makeReadyMarker,
   buildRuntimeConfig,
   classifyRuntimeFailure,
   READY_MARKER,
   RUNTIME_ENTRY,
-  DEFAULT_SERVICE_PORT,
+  PORT_MIN,
+  PORT_MAX,
 } from "../src/lib/managed-runtime.js";
 
-test("parseServicePort: 合法整数直通（number / 数字字符串；宿主 service 端口契约 1024..65535）", () => {
-  assert.equal(parseServicePort(4317), 4317);
-  assert.equal(parseServicePort("5000"), 5000);
-  assert.equal(parseServicePort(1024), 1024);
-  assert.equal(parseServicePort(65535), 65535);
+test("choosePort: 落在 [PORT_MIN, PORT_MAX) 的确定整数（宿主 service 端口契约 1024..65535）", () => {
+  assert.equal(choosePort(() => PORT_MIN), PORT_MIN);
+  assert.equal(choosePort(() => PORT_MAX - 1), PORT_MAX - 1);
+  assert.ok(PORT_MIN >= 1024 && PORT_MAX <= 65535);
+  for (let i = 0; i < 200; i++) {
+    const p = choosePort();
+    assert.ok(Number.isInteger(p) && p >= PORT_MIN && p < PORT_MAX, "port=" + p);
+  }
 });
 
-test("parseServicePort: 非法回落默认（禁 <1024/0/负/越界/非数——显式端口契约）", () => {
-  for (const bad of [0, -1, 1, 512, 1023, 65536, "0", "800", "abc", "", null, undefined, 1.5, NaN]) {
-    assert.equal(parseServicePort(bad), DEFAULT_SERVICE_PORT, "raw=" + String(bad));
+test("pickPorts: 中继端口与 DSH 内部端口不相等（撞车时继续取）", () => {
+  const seq = [40000, 40000, 40001];
+  let i = 0;
+  const rng = () => seq[i++];
+  const { bridgePort, dshPort } = pickPorts(rng);
+  assert.equal(bridgePort, 40000);
+  assert.equal(dshPort, 40001);
+  for (let n = 0; n < 100; n++) {
+    const p = pickPorts();
+    assert.notEqual(p.bridgePort, p.dshPort);
+    assert.ok(p.bridgePort >= PORT_MIN && p.bridgePort < PORT_MAX);
+    assert.ok(p.dshPort >= PORT_MIN && p.dshPort < PORT_MAX);
   }
-  // 显式 fallback 参数生效（fallback 也须 ≥1024）
-  assert.equal(parseServicePort("bad", 9000), 9000);
-  assert.equal(parseServicePort("bad", 1), DEFAULT_SERVICE_PORT);
+});
+
+test("makeReadyMarker: 前缀 + 随机 opaque；不含换行；两次不同", () => {
+  const a = makeReadyMarker();
+  const b = makeReadyMarker();
+  assert.ok(a.startsWith(READY_MARKER + ":"));
+  assert.ok(a.length > READY_MARKER.length + 16);
+  assert.ok(!/[\r\n]/.test(a));
+  assert.notEqual(a, b);
 });
 
 test("buildRuntimeConfig: 基础形态（与 options.js normalizeRuntimeConfig 对偶）", () => {
@@ -93,7 +114,9 @@ test("classifyRuntimeFailure: 退出码契约归类（src/runtime/main.js EXIT �
   }
 });
 
-test("常量契约：entry 相对安装根 / marker 默认", () => {
+test("常量契约：entry 相对安装根 / marker 前缀 / 端口区间", () => {
   assert.equal(RUNTIME_ENTRY, "runtime/dsh-host.mjs");
   assert.equal(READY_MARKER, "DSH_READY");
+  assert.equal(PORT_MIN, 38000);
+  assert.equal(PORT_MAX, 52000);
 });
