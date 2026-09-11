@@ -20,7 +20,7 @@
 //   GET  /dshana/boot-state  归一化 boot 快照（idle/starting/ready/error + 文案 +
 //                            logTail/logPath 会话日志尾）——壳页轮询
 //   GET  /dshana/health      存活/连通自检（壳页用于判断「路由面可达」与 surface 授权）
-//   POST /dshana/start       手动触发受管 runtime 启动（v2 无自动链 UI；fire-and-forget，
+//   POST /dshana/start       手动触发受管 runtime 启动（App 自动链之外的兑底入口；fire-and-forget，
 //                            立刻 202 返回，壳页轮询 boot-state 跟进；已就绪/启动中幂等）
 //   POST /dshana/stop        停止受管 runtime（幂等）
 //
@@ -154,7 +154,7 @@ export function registerDshanaRoutes(app, deps) {
         if (before.ready || before.phase === "ready" || before.phase === "starting") {
           return json(c, 200, { ok: true, accepted: false, reason: before.phase === "starting" ? "starting" : "already-ready", state: before });
         }
-        // fire-and-forget：start 可能含依赖 ensure/boot（数分钟），不让 HTTP 请求挂起；
+        // fire-and-forget：start 含 runtime 拉起与 profile 种子化，不让 HTTP 请求挂起；
         // 壳页以轮询 boot-state 跟进。错误只在单例 phase=error 与日志中反映。
         const p = Promise.resolve().then(() => start());
         p.then(

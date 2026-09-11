@@ -17,7 +17,7 @@
 //     壳页在同源下拼 `origin + proxyPrefix` 使用。
 //
 // 阶段（phase，来自 src/lib/managed-runtime.js 单例）：
-//   idle（未启动）/ starting（启动中，首次含依赖 ensure 可能数分钟）/ ready（就绪）/
+//   idle（未启动）/ starting（启动中：runtime 拉起 + profile 种子化 + 服务监听）/ ready（就绪）/
 //   error（上次启动失败，含 code+userText 供重试指引）/ stopped（已停止）
 export const APP_ID = "dsh-hanako";
 
@@ -53,13 +53,13 @@ export function phaseCopy(phase, { ready = false, errText = null } = {}) {
         ? "DSH 已就绪：Web 服务可访问（可通过本页 iframe 或直接在会话中使用 dsh_session）。"
         : "DSH runtime 进程已存在，但服务尚未报告就绪，正在确认监听状态……";
     case "starting":
-      return "DSH 正在启动（首次启动包含依赖安装与 profile 种子化，可能需要数分钟）……";
+      return "DSH 正在启动（受管 runtime 拉起、profile 种子化、服务监听）……";
     case "idle":
-      return "DSH 尚未启动。v2 无自动链：首次 dsh_session create/send 会自动启动；也可点下方「启动 DSH」手动预热 Web UI。";
+      return "DSH 尚未启动。App 加载后会自动拉起受管 runtime；也可点下方「启动 DSH」手动触发。";
     case "error":
       return errText
         ? "DSH 启动失败：" + errText
-        : "DSH 启动失败（无详细错误）。可调整 App 设置（servicePort/nodejsPath）后重试。";
+        : "DSH 启动失败（无详细错误）。可点「启动 DSH」重试；持续失败请看日志。";
     case "stopped":
       return "DSH 已停止（用户或卸载流程触发）。再次 create/send 或点「启动 DSH」可重新启动。";
     default:
@@ -76,7 +76,7 @@ export function phaseCopy(phase, { ready = false, errText = null } = {}) {
  *   logPath, logTail, note, updatedAt
  * }
  * logPath/logTail 由调用方（routes 面，持有 ctx.dataDir 读权）注入：logTail 为 App 会话
- * 日志最新若干行（starting 态壳页滚动展示，含 runtime 启动/依赖 ensure 过程镜像）。
+ * 日志最新若干行（starting 态壳页滚动展示，含 runtime 启动与 profile 种子化过程镜像）。
  */
 export function buildBootSnapshot(details, { logPath = null, logTail = [], bridgeKey = null } = {}) {
   const d = details && typeof details === "object" ? details : {};
