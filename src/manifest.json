@@ -46,6 +46,9 @@
         "siteNavEntry": true,
         "fpFullPanel": true,
         "closable": false,
+        "detached": {
+          "route": "/standalone.html"
+        },
         "cardForm": "flush",
         "titlebar": "translucent"
       }
