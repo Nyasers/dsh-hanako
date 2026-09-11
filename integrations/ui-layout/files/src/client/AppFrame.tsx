@@ -141,6 +141,11 @@ export function AppFrame({
   // 宿主桥由壳页（src/ui/app-shell.js）在注入 DSH 前发布；未发布时按 workspace 退。
   const role = (window as { __DSHANA__?: { role?: string } }).__DSHANA__?.role
   const surface = role === 'navigation' || role === 'settings' || role === 'standalone' ? role : 'workspace'
+  // 一个事实源：哪些列要渲染 = 网格有哪几条轨道。
+  // 曾掉进的坑：只删 sidebarCol 元素、保留三轨模板 → 子元素按顺序错位（centerCol 落进 56px
+  // 侧栏轨、rightbarCol 抢中间大轨）。所以轨道由这两个布尔量拼出来，不允许再手写模板。
+  const showSidebar = surface === 'navigation' || surface === 'settings' || surface === 'standalone'
+  const showMain = surface === 'workspace' || surface === 'standalone'
 
   // Track the frame's own box (not the window): rAF-throttled ResizeObserver.
   useLayoutEffect(() => {
@@ -220,10 +225,12 @@ export function AppFrame({
       ref={frameRef}
       className={css.frame}
       style={{
-        gridTemplateColumns:
-          surface === 'navigation'
-            ? 'minmax(0, 1fr)'
-            : `${cols.sidebar}px minmax(0, 1fr) ${cols.rightbar}px`,
+        // 轨道与渲染同源：sidebar（若显示）→ 中间列 → rightbar（若显示）
+        gridTemplateColumns: [
+          showSidebar ? `${cols.sidebar}px` : null,
+          'minmax(0, 1fr)',
+          showMain ? `${cols.rightbar}px` : null,
+        ].filter((track): track is string => track !== null).join(' '),
       }}
       data-sidebar-collapsed={sidebarCollapsed || undefined}
       data-rightbar-collapsed={cols.rightbar === 0 || undefined}
@@ -236,12 +243,12 @@ export function AppFrame({
         useSessions={useSessions}
         usePanelInfo={usePanelInfo}
       />
-      {(surface === 'navigation' || surface === 'standalone') && (
+      {showSidebar && (
         <div className={css.sidebarCol}>
           {sidebar}
         </div>
       )}
-      {(surface === 'workspace' || surface === 'standalone') && (
+      {showMain && (
         <>
           <CenterColumn>{main}</CenterColumn>
           <RightbarColumn>
