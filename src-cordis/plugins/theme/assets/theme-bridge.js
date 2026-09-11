@@ -33,6 +33,7 @@
     var c = "";
     for (var i = 0; i < m.length; i++) {
       var val = m[i][1][0] === "~" ? m[i][1].slice(1) : (v[m[i][1]] || "");
+      if (!val) continue; // 空值不出手：空自定义属性会让 var() “无效于计算值”（bg 系变 transparent）
       c += m[i][0] + ":" + val + "!important;";
     }
     return c;

@@ -39,117 +39,129 @@ import bridgeBody from "./assets/theme-bridge.js";
 export const name = "@dsh-hanako/theme";
 export const inject = ["hanaLogger"];
 
-// 默认主题 fallback（Hana 默认 new-warm-paper；仅桥不可用时兜底）
+// 默认主题 fallback（Hana 默认 new-warm-paper；仅桥不可用时兜底）。
+// 键 = **宿主主题 CSS 的变量名**（渲染器 themes/*.css 的 --* 名），与 TOKEN_MAP 右侧、
+// theme-bridge 的 readDocumentVars 同一坐标系——这样“从文档读”“用载荷”“静态兜底”
+// 三条路径共用一张表，不再有字段名↔变量名的翻译层（2026-09-12 真机事故：右侧曾是驼峰
+// 字段名 bgCard，而壳页/宿主给的是 --bg-card，取不到 → 拼出空自定义属性 → var() 无效于
+// 计算值 → 属性回落初始值，整个 UI 背景变透明）。
 const DEFAULT_THEME = {
-  bg: "#F5EFE4",
-  bgCard: "#FBF7EE",
-  sidebarBg: "#EFE8DB",
-  text: "#2A2622",
-  textLight: "#4A433C",
-  textMuted: "#6B6158",
-  accent: "#537D96",
-  accentHover: "#3F6179",
-  accentLight: "rgba(83,125,150,0.08)",
-  border: "#D8CFBE",
-  green: "#4A6B4A",
-  danger: "#8B2C1F",
-  userBg: "rgba(83,125,150,0.08)",
-  overlayStrong: "rgba(42,38,34,0.15)",
-  overlayMedium: "rgba(42,38,34,0.08)",
-  dropOverlayBg: "rgba(245,239,228,0.85)",
+  "--bg": "#F5EFE4",
+  "--bg-card": "#FBF7EE",
+  "--sidebar-bg": "#EFE8DB",
+  "--text": "#2A2622",
+  "--text-light": "#4A433C",
+  "--text-muted": "#6B6158",
+  "--accent": "#537D96",
+  "--accent-hover": "#3F6179",
+  "--accent-light": "rgba(83,125,150,0.08)",
+  "--border": "#D8CFBE",
+  "--green": "#4A6B4A",
+  "--danger": "#8B2C1F",
+  "--user-bg": "rgba(83,125,150,0.08)",
+  "--overlay-strong": "rgba(42,38,34,0.15)",
+  "--overlay-medium": "rgba(42,38,34,0.08)",
+  "--drop-overlay-bg": "rgba(245,239,228,0.85)",
 };
 
-// alias/specific token ← 主题字段映射（~ 前缀 = 静态值，不走主题字段）
+// alias/specific token ← 主题字段映射（~ 前缀 = 静态值，不走主题变量）。
+// 右侧一律是**宿主主题 CSS 的变量名**（与 shell 的 THEME_VARS、渲染器 themes/*.css 同名）。
 const TOKEN_MAP = [
   // bg 层次
-  ["--dsw-alias-bg-base", "bg"],
-  ["--dsw-alias-bg-layer-1", "bg"],
-  ["--dsw-alias-bg-layer-2", "bgCard"],
-  ["--dsw-alias-bg-layer-3", "sidebarBg"],
-  ["--dsw-alias-bg-module-platform", "sidebarBg"],
-  ["--dsw-alias-bg-multi-select", "accentLight"],
-  ["--dsw-alias-bg-overlay", "bgCard"],
+  ["--dsw-alias-bg-base", "--bg"],
+  ["--dsw-alias-bg-layer-1", "--bg"],
+  ["--dsw-alias-bg-layer-2", "--bg-card"],
+  ["--dsw-alias-bg-layer-3", "--sidebar-bg"],
+  ["--dsw-alias-bg-module-platform", "--sidebar-bg"],
+  ["--dsw-alias-bg-multi-select", "--accent-light"],
+  ["--dsw-alias-bg-overlay", "--bg-card"],
   // bg-mask：主题化遮罩层次（mask-3 全屏深遮罩/拖放 → drop-overlay；photo 保留黑底）
-  ["--dsw-alias-bg-mask-1", "overlayStrong"],
-  ["--dsw-alias-bg-mask-2", "overlayMedium"],
-  ["--dsw-alias-bg-mask-3", "dropOverlayBg"],
-  ["--dsw-alias-bg-mask-drop", "dropOverlayBg"],
+  ["--dsw-alias-bg-mask-1", "--overlay-strong"],
+  ["--dsw-alias-bg-mask-2", "--overlay-medium"],
+  ["--dsw-alias-bg-mask-3", "--drop-overlay-bg"],
+  ["--dsw-alias-bg-mask-drop", "--drop-overlay-bg"],
   // brand
-  ["--dsw-alias-brand-primary", "accent"],
-  ["--dsw-alias-brand-primary-invert", "accent"],
-  ["--dsw-alias-brand-primary-new-colorprimary-new-color", "accent"],
-  ["--dsw-alias-brand-text", "text"],
+  ["--dsw-alias-brand-primary", "--accent"],
+  ["--dsw-alias-brand-primary-invert", "--accent"],
+  ["--dsw-alias-brand-primary-new-colorprimary-new-color", "--accent"],
+  ["--dsw-alias-brand-text", "--text"],
   // button
-  ["--dsw-alias-button-primary-fill", "accent"],
-  ["--dsw-alias-button-primary-hover", "accentHover"],
-  ["--dsw-alias-button-primary-dimmed", "accentLight"],
-  ["--dsw-alias-button-contrast-fill", "accent"],
-  ["--dsw-alias-button-elevated-fill", "bgCard"],
-  ["--dsw-alias-button-floating-fill", "bgCard"],
-  ["--dsw-alias-button-floating-hover", "accentLight"],
-  ["--dsw-alias-button-info-fill", "accent"],
-  ["--dsw-alias-button-info-hover", "accentHover"],
-  ["--dsw-alias-button-ghost-active-border", "border"],
-  ["--dsw-alias-button-ghost-active-fill", "bgCard"],
-  ["--dsw-alias-button-ghost-active-hover", "accentLight"],
+  ["--dsw-alias-button-primary-fill", "--accent"],
+  ["--dsw-alias-button-primary-hover", "--accent-hover"],
+  ["--dsw-alias-button-primary-dimmed", "--accent-light"],
+  ["--dsw-alias-button-contrast-fill", "--accent"],
+  ["--dsw-alias-button-elevated-fill", "--bg-card"],
+  ["--dsw-alias-button-floating-fill", "--bg-card"],
+  ["--dsw-alias-button-floating-hover", "--accent-light"],
+  ["--dsw-alias-button-info-fill", "--accent"],
+  ["--dsw-alias-button-info-hover", "--accent-hover"],
+  ["--dsw-alias-button-ghost-active-border", "--border"],
+  ["--dsw-alias-button-ghost-active-fill", "--bg-card"],
+  ["--dsw-alias-button-ghost-active-hover", "--accent-light"],
   // label 三阶
-  ["--dsw-alias-label-primary", "text"],
-  ["--dsw-alias-label-primary-bluish", "accent"],
-  ["--dsw-alias-label-primary-dimmed", "textLight"],
-  ["--dsw-alias-label-secondary", "textLight"],
-  ["--dsw-alias-label-tertiary", "textMuted"],
-  ["--dsw-alias-label-caption", "textMuted"],
-  ["--dsw-alias-label-dimmed", "textMuted"],
+  ["--dsw-alias-label-primary", "--text"],
+  ["--dsw-alias-label-primary-bluish", "--accent"],
+  ["--dsw-alias-label-primary-dimmed", "--text-light"],
+  ["--dsw-alias-label-secondary", "--text-light"],
+  ["--dsw-alias-label-tertiary", "--text-muted"],
+  ["--dsw-alias-label-caption", "--text-muted"],
+  ["--dsw-alias-label-dimmed", "--text-muted"],
   // border（Hana 单一 ink-line；darkmode-thin 为 l2 的 dark 特化）
-  ["--dsw-alias-border-l1", "border"],
-  ["--dsw-alias-border-l2", "border"],
-  ["--dsw-alias-border-l2-darkmode-thin", "border"],
-  ["--dsw-alias-border-l3", "border"],
-  ["--dsw-alias-border-l4", "border"],
+  ["--dsw-alias-border-l1", "--border"],
+  ["--dsw-alias-border-l2", "--border"],
+  ["--dsw-alias-border-l2-darkmode-thin", "--border"],
+  ["--dsw-alias-border-l3", "--border"],
+  ["--dsw-alias-border-l4", "--border"],
   // interactive
-  ["--dsw-alias-interactive-bg-hover", "accentLight"],
-  ["--dsw-alias-interactive-bg-active", "accentLight"],
-  ["--dsw-alias-interactive-bg-hover-accent", "accentLight"],
-  ["--dsw-alias-interactive-bg-hover-solid", "bgCard"],
+  ["--dsw-alias-interactive-bg-hover", "--accent-light"],
+  ["--dsw-alias-interactive-bg-active", "--accent-light"],
+  ["--dsw-alias-interactive-bg-hover-accent", "--accent-light"],
+  ["--dsw-alias-interactive-bg-hover-solid", "--bg-card"],
   // markdown
-  ["--dsw-alias-markdown-inline-code", "accentLight"],
-  ["--dsw-alias-markdown-code-block", "bg"],
-  ["--dsw-alias-markdown-code-block-banner", "bgCard"],
-  ["--dsw-alias-markdown-code-segment-selected", "accentLight"],
-  ["--dsw-alias-markdown-code-segment-unselected", "bg"],
-  ["--dsw-alias-markdown-tag", "accentLight"],
-  ["--dsw-alias-markdown-placeholder", "accentLight"],
-  ["--dsw-alias-markdown-citation", "bgCard"],
+  ["--dsw-alias-markdown-inline-code", "--accent-light"],
+  ["--dsw-alias-markdown-code-block", "--bg"],
+  ["--dsw-alias-markdown-code-block-banner", "--bg-card"],
+  ["--dsw-alias-markdown-code-segment-selected", "--accent-light"],
+  ["--dsw-alias-markdown-code-segment-unselected", "--bg"],
+  ["--dsw-alias-markdown-tag", "--accent-light"],
+  ["--dsw-alias-markdown-placeholder", "--accent-light"],
+  ["--dsw-alias-markdown-citation", "--bg-card"],
   // state 语义色
-  ["--dsw-alias-state-business-primary", "accent"],
-  ["--dsw-alias-state-business-tertiary", "accentLight"],
-  ["--dsw-alias-state-error-primary", "danger"],
-  ["--dsw-alias-state-error-secondary", "danger"],
-  ["--dsw-alias-state-success-primary", "green"],
-  ["--dsw-alias-state-success-secondary", "green"],
+  ["--dsw-alias-state-business-primary", "--accent"],
+  ["--dsw-alias-state-business-tertiary", "--accent-light"],
+  ["--dsw-alias-state-error-primary", "--danger"],
+  ["--dsw-alias-state-error-secondary", "--danger"],
+  ["--dsw-alias-state-success-primary", "--green"],
+  ["--dsw-alias-state-success-secondary", "--green"],
   // scrollbar：复刻 Hana 原生语言（中性灰，不主题化）
   ["--dsw-alias-scrollbar-bg-l1", "~rgba(128,128,128,0.2)"],
   ["--dsw-alias-scrollbar-bg-l2", "~rgba(128,128,128,0.2)"],
   ["--dsw-alias-scrollbar-hover-l1", "~rgba(128,128,128,0.4)"],
   ["--dsw-alias-scrollbar-hover-l2", "~rgba(128,128,128,0.4)"],
   // specific 层：bubble 用 Hana userBg（accent 透明遮罩，非实色卡片）
-  ["--dsw-specific-bubble-highlight", "accentLight"],
-  ["--dsw-specific-bubble", "userBg"],
-  ["--dsw-specific-input-major", "bgCard"],
-  ["--dsw-specific-login-input", "bg"],
-  ["--dsw-specific-menu", "sidebarBg"],
-  ["--dsw-specific-selector", "bgCard"],
-  ["--dsw-specific-sidebar-fill", "sidebarBg"],
-  ["--dsw-specific-sidebar-nav-item-active-accent", "accentLight"],
-  ["--dsw-specific-sidebar-nav-item-active", "accentLight"],
-  ["--dsw-specific-sidebar-nav-item-hover", "accentLight"],
-  ["--dsw-specific-tip", "accentLight"],
+  ["--dsw-specific-bubble-highlight", "--accent-light"],
+  ["--dsw-specific-bubble", "--user-bg"],
+  ["--dsw-specific-input-major", "--bg-card"],
+  ["--dsw-specific-login-input", "--bg"],
+  ["--dsw-specific-menu", "--sidebar-bg"],
+  ["--dsw-specific-selector", "--bg-card"],
+  ["--dsw-specific-sidebar-fill", "--sidebar-bg"],
+  ["--dsw-specific-sidebar-nav-item-active-accent", "--accent-light"],
+  ["--dsw-specific-sidebar-nav-item-active", "--accent-light"],
+  ["--dsw-specific-sidebar-nav-item-hover", "--accent-light"],
+  ["--dsw-specific-tip", "--accent-light"],
 ];
 
 function tokenCss(v) {
-  return TOKEN_MAP.map(
-    ([t, k]) => `${t}:${k[0] === "~" ? k.slice(1) : v[k]}!important`,
-  ).join(";");
+  const out = [];
+  for (const [t, k] of TOKEN_MAP) {
+    const val = k[0] === "~" ? k.slice(1) : v[k];
+    // 空值绝不出手：空自定义属性会让 var() “无效于计算值” → 属性回落初始值
+    // （bg 系变 transparent）。宁可留给 dsh 原生 token。
+    if (!val) continue;
+    out.push(`${t}:${val}!important`);
+  }
+  return out.join(";");
 }
 
 // 静态 fallback 写 body 层（压 presenter inline）；脚本启动即移除，仅无脚本时兜底
