@@ -16,10 +16,10 @@
 //   前者信封在 0.1.5 未验（读不到就永远停在 system，把 UI 钉住），后者是宿主未能力时的自补。
 //   system → 覆盖 Hana 配色；light/dark → 完全原生；未知 → 不动手（等壳页推送）。
 //
-// 机制：经 dsh-host-webserver 的 tapIndex 扩展点，向每个 index 响应注入：
-//   1) 静态 <style>：无脚本/桥失败时的默认主题 fallback
-//   2) 动态脚本：postMessage 向壳页面索取 { themeId, vars }，preference 为
-//      system 时写 body 层 !important 覆盖（压 dsh presenter 的 body inline）
+// 机制：经 dsh-host-webserver 的 tapIndex 扩展点，向每个 index 响应注入动态桥脚本：
+//   桥向壳页索取主题变量（preference 为 system 时），写 body 层 !important 覆盖
+//   （压 dsh presenter 的 body inline）。**不再注入任何静态兜底样式**：拿不到宿主主题时
+//   就保持 dsh 内置 token（官方明暗），不从宿主搬一套固定值来充数（2026-09-12 她定）。
 //
 // 注入脚本内容文件化 + 打包内联（review 修订）：桥脚本正文存独立文件
 // assets/theme-bridge.js（纯浏览器 JS），经 rspack asset/source 内联进本包
@@ -39,31 +39,6 @@ import bridgeBody from "./assets/theme-bridge.js";
 
 export const name = "@dsh-hanako/theme";
 export const inject = ["hanaLogger"];
-
-// 默认主题 fallback（Hana 默认 new-warm-paper；仅桥不可用时兜底）。
-// 键 = **宿主主题 CSS 的变量名**（渲染器 themes/*.css 的 --* 名），与 TOKEN_MAP 右侧、
-// theme-bridge 的 readDocumentVars 同一坐标系——这样“从文档读”“用载荷”“静态兜底”
-// 三条路径共用一张表，不再有字段名↔变量名的翻译层（2026-09-12 真机事故：右侧曾是驼峰
-// 字段名 bgCard，而壳页/宿主给的是 --bg-card，取不到 → 拼出空自定义属性 → var() 无效于
-// 计算值 → 属性回落初始值，整个 UI 背景变透明）。
-const DEFAULT_THEME = {
-  "--bg": "#F5EFE4",
-  "--bg-card": "#FBF7EE",
-  "--sidebar-bg": "#EFE8DB",
-  "--text": "#2A2622",
-  "--text-light": "#4A433C",
-  "--text-muted": "#6B6158",
-  "--accent": "#537D96",
-  "--accent-hover": "#3F6179",
-  "--accent-light": "rgba(83,125,150,0.08)",
-  "--border": "#D8CFBE",
-  "--green": "#4A6B4A",
-  "--danger": "#8B2C1F",
-  "--user-bg": "rgba(83,125,150,0.08)",
-  "--overlay-strong": "rgba(42,38,34,0.15)",
-  "--overlay-medium": "rgba(42,38,34,0.08)",
-  "--drop-overlay-bg": "rgba(245,239,228,0.85)",
-};
 
 // alias/specific token ← 主题字段映射（~ 前缀 = 静态值，不走主题变量）。
 // 右侧一律是**宿主主题 CSS 的变量名**（与 shell 的 THEME_VARS、渲染器 themes/*.css 同名）。
@@ -104,6 +79,10 @@ const TOKEN_MAP = [
   ["--dsw-alias-label-primary-bluish", "--accent"],
   ["--dsw-alias-label-primary-dimmed", "--text-light"],
   ["--dsw-alias-label-secondary", "--text-light"],
+  // 反白主文字：wordmark 的 badge 文字、Toast、附件条等都在用它（旧表漏了这一格，
+  // 于是那几个地方只跟着 dsh 自己的明暗走——2026-09-12 真机：sidebar 品牌名处就它变色）。
+  // 它读作“坐在主文字色块上的反白字”，对应 Hana 的页面底色。
+  ["--dsw-alias-label-primary-inverted", "--bg"],
   ["--dsw-alias-label-tertiary", "--text-muted"],
   ["--dsw-alias-label-caption", "--text-muted"],
   ["--dsw-alias-label-dimmed", "--text-muted"],
@@ -153,24 +132,7 @@ const TOKEN_MAP = [
   ["--dsw-specific-tip", "--accent-light"],
 ];
 
-function tokenCss(v) {
-  const out = [];
-  for (const [t, k] of TOKEN_MAP) {
-    const val = k[0] === "~" ? k.slice(1) : v[k];
-    // 空值绝不出手：空自定义属性会让 var() “无效于计算值” → 属性回落初始值
-    // （bg 系变 transparent）。宁可留给 dsh 原生 token。
-    if (!val) continue;
-    out.push(`${t}:${val}!important`);
-  }
-  return out.join(";");
-}
-
-// 静态 fallback 写 body 层（压 presenter inline）；脚本启动即移除，仅无脚本时兜底
-const STATIC = `<style id="@dsh-hanako/theme">
-body{${tokenCss(DEFAULT_THEME)}}
-</style>`;
-
-// 动态脚本：宿主声明（壳桥 vars）直接应用 + preference 边界。正文在
+// 动态脚本：宿主声明（壳桥 vars + preference）直接应用。正文在
 // assets/theme-bridge.js（自包含浏览器 JS），唯一动态点 = TOKEN_MAP 数据表注入
 // （占位符 __DSH_THEME_TOKENS__ 模块初始化时替换为序列化常量）。
 const BRIDGE = `<script id="@dsh-hanako/theme-bridge">
@@ -182,8 +144,8 @@ export function apply(ctx, config) {
     httpCtx.effect(() => {
       try {
         httpCtx.webServer.tapIndex((html) => {
-          if (html.includes('id="@dsh-hanako/theme"')) return html;
-          return html.replace("</head>", STATIC + BRIDGE + "</head>");
+          if (html.includes('id="@dsh-hanako/theme-bridge"')) return html;
+          return html.replace("</head>", BRIDGE + "</head>");
         });
         httpCtx.hanaLogger.log("theme", "主题注入 tapIndex 已注册");
       } catch (e) {

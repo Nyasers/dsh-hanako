@@ -68,7 +68,7 @@ test("闸会响：上游变了 → 抛错并指名 rebase 的文件与新哈希"
     () => verifyIntegrations(integrations, () => Buffer.from(now)),
     (e) => {
       assert.match(e.message, /已过期/);
-      assert.match(e.message, /integrations\/ui-layout\/files\/src\/client\/index\.ts/);
+      assert.match(e.message, /src-integrations\/ui-layout\/files\/src\/client\/index\.ts/);
       assert.ok(e.message.includes(sha256(now)), "报错里要给出新哈希，便于直接更新清单");
       assert.equal(e.problems.length, 1);
       return true;

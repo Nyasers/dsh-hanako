@@ -337,7 +337,7 @@ fs.ensureDirSync(relDir);
 //   · 收尾全清由 package.json 的 postpack 钩子承担（scripts/clean-tmp.mjs），CI 里也可单独调。
 // 中间原料与暂存树都可再生，真正的产物只有 releases/ 下的 zip + sha256。
 /**
- * 集成层覆盖：把 integrations 编译出的补丁包盖回物化树（单副本；机制见 integrations/README.md）。
+ * 集成层覆盖：把 src-integrations 编译出的补丁包盖回物化树（单副本；机制见 src-integrations/README.md）。
  * fail-closed：声明了 overlay 却没产物 = 构建没跑全——宁可不打包，也不出「没打补丁」的包。
  * 版本戳（+hana.N）由 integrations.mjs build 写在补丁包的 package.json 里，此处只原样覆盖。
  * @param {string} nodeModulesDir 组装台里的 node_modules（交付树，已是 no-link 铺平形态）
