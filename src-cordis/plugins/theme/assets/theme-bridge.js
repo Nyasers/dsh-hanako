@@ -80,7 +80,19 @@
   function refreshPref() {
     // vY（T7b 后 dsh 0.1.2）：settings.describe 端点改斜杠 settings/describe（0.1.1
     // 点号端点已退役）；信封 payload 走 { args }（0.1.2 Remote 约定）。
-    fetch("/api/settings/describe", {
+    // vZ（2026-09-12 真机 403 定位）：**不得裸 fetch(location.origin + "/api/...")**——宿主
+    // 凭据闸只认 App 的私有运行时基址。样例 hana-dsh 自己的 ui/bootstrap.js 把同一条
+    // settings/describe 发到 /api/apps/hana-dsh/routes/_runtime/<rid>/_surface/<ticket>
+    // /_hana/<bridgeKey>/api/settings/describe 得到 200；裸发则 403 missing_credential。
+    // 本脚本由 tapIndex 注入 DSH 文档，而 __DSH_TRANSPORT__（src/ui/dsh-inject.js 在注入
+    // DSH index 前装）在同一文档里已可用：经它发出的请求会被重写到私有前缀（同源凭据由
+    // 壳页持有）。退路：transport 缺席（例如脚本落到非 DSH 文档）仍走原生 fetch，读不到按 system。
+    var transport = window.__DSH_TRANSPORT__;
+    var transportFetch = transport && transport.fetch;
+    var send = typeof transportFetch === "function"
+      ? function (path, init) { return transportFetch.call(transport, path, init); }
+      : function (path, init) { return fetch(path, init); };
+    send("/api/settings/describe", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ type: "client-request", rpcId: "theme-pref-" + Date.now(), method: "settings/describe", payload: { args: {} } })
