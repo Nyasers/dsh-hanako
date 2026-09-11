@@ -14,7 +14,7 @@
 // 于是"拷贝即冻结"在流程上不可能发生（这正是 0.1.2 冻结导致真机黑屏的根因）。
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, cpSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, cpSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -158,9 +158,128 @@ export function stageIntegrations(integrations, rootDir = REPO_ROOT) {
   return staged;
 }
 
+// ---------- 编译进包（摊源 → 覆盖 overlay → 编译 → 装包 + 版本戳） ----------
+
+/**
+ * 从 client bundle 里抽出它使用的外部依赖。
+ * 两种姿势都要认：
+ *   · 未压缩/官方产物：字面 `require("spec")`；
+ *   · 我们自己压缩过的产物：banner 里的 factory 参数被改名（`factory:e=>{… e("spec")`）。
+ * externals 的可信来源是**原版** bundle；本函数同样用于事后校验我方产物有无“悬空外部引用”。
+ * @param {string} bundleText client bundle 文本
+ * @returns {string[]} 去重后的 specifier 列表（保序）
+ */
+export function extractRequires(bundleText) {
+  const text = String(bundleText ?? "");
+  const out = [];
+  const push = (s) => { if (s && !out.includes(s)) out.push(s); };
+  const banner = /factory\s*:\s*([A-Za-z_$][\w$]*)\s*=>/.exec(text);
+  if (banner) {
+    const re = new RegExp(banner[1].replace(/\$/g, "\\$") + "\\(\\s*[\"'`]([^\"'`]+)[\"'`]\\s*\\)", "g");
+    for (const m of text.matchAll(re)) push(m[1]);
+  }
+  const literal = /require\(\s*["']([^"']+)["']\s*\)/g;
+  for (const m of text.matchAll(literal)) push(m[1]);
+  return out;
+}
+
+/** 镜像里列出某 tag 下某目录的文件（仓库相对路径）。 */
+export function listMirrorFiles(tag, dir, mirrorDir = MIRROR) {
+  const r = spawnSync("git", ["-C", mirrorDir, "ls-tree", "-r", "--name-only", tag, "--", dir], {
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (r.status !== 0) throw new Error(`ls-tree 失败：${tag}:${dir}`);
+  return String(r.stdout || "").split("\n").map((s) => s.trim()).filter(Boolean);
+}
+
+/** 包名 → 本机依赖树里的原版包目录（模板与 externals 来源）。 */
+export function templatePackageDir(pkgName, repoRoot = REPO_ROOT) {
+  return join(repoRoot, "node_modules", ".pnpm", "node_modules", pkgName);
+}
+
+/**
+ * 编译一个集成：把上游 src 摊到 _tmp/integrations-src/<短名>/，覆盖 overlay，
+ * 用我们的 client preset 编译出 lib/client.js，再以原版包为模板组装成
+ * _tmp/integrations-built/<短名>/（版本戳 +hana.N）。
+ */
+export async function buildIntegrations(integrations, { tag, mirrorDir = MIRROR, repoRoot = REPO_ROOT, log = () => {} } = {}) {
+  const { buildClientBundle } = await import("../src-cordis/build/client-config.mjs");
+  const built = [];
+  for (const it of integrations) {
+    const short = it.dir;
+    const pkg = String(it.package || "");
+    const upstreamDir = String(it.upstreamDir || "");
+    const template = templatePackageDir(pkg, repoRoot);
+    if (!existsSync(template)) throw new Error(`integration ${short}: 本机依赖树找不到原版包 ${template}`);
+
+    // 1) 摊源（上游 src 全量，保留相对路径——entry 就是上游的 src/client/index.ts）
+    const stage = join(repoRoot, "_tmp", "integrations-src", short);
+    rmSync(stage, { recursive: true, force: true });
+    const files = listMirrorFiles(tag, `${upstreamDir}/src`, mirrorDir);
+    if (files.length === 0) throw new Error(`integration ${short}: 镜像 ${tag} 下没有 ${upstreamDir}/src`);
+    for (const rel of files) {
+      const buf = readUpstreamFromMirror(rel, tag, mirrorDir);
+      if (buf === null) throw new Error(`integration ${short}: 读不到 ${rel}`);
+      const dst = join(stage, rel.slice(upstreamDir.length + 1));
+      mkdirSync(dirname(dst), { recursive: true });
+      writeFileSync(dst, buf);
+    }
+
+    // 2) 覆盖我们的 overlay（新文件同样落盘）
+    for (const f of Array.isArray(it.files) ? it.files : []) {
+      const src = join(it.root, "files", f.path);
+      if (!existsSync(src)) throw new Error(`integration ${short}: overlay 文件缺失 ${src}`);
+      const dst = join(stage, f.path);
+      mkdirSync(dirname(dst), { recursive: true });
+      cpSync(src, dst);
+    }
+
+    // 3) externals = 原版 bundle 自己的 require 集合
+    const pristineClient = join(template, "lib", "client.js");
+    if (!existsSync(pristineClient)) throw new Error(`integration ${short}: 原版缺 lib/client.js（${pristineClient}）`);
+    const externals = extractRequires(readFileSync(pristineClient, "utf8"));
+    if (externals.length === 0) throw new Error(`integration ${short}: 从原版 bundle 抽不到任何 require，externals 不可信`);
+
+    // 4) 编译 client 半
+    const outDir = join(stage, "lib");
+    const entryRel = files.includes(`${upstreamDir}/src/client/index.ts`) ? "src/client/index.ts" : "src/client/index.tsx";
+    await buildClientBundle({ id: pkg, pkgDir: stage, outDir, externals, entry: entryRel });
+
+    // 4b) 悬空外部引用闸：产物里出现 externals 之外的引用 = loader 模块表答不上 → 运行时必炸。
+    // 典型成因：上游 bundle 内联的第三方库（如 clsx）在本仓库 node_modules 里缺失，
+    // 解析不到就被当成 external。处理：把该库加进 devDependencies（devDep 会被内联，不进运行时）。
+    const produced = extractRequires(readFileSync(join(outDir, "client.js"), "utf8"));
+    const dangling = produced.filter((s) => !externals.includes(s));
+    if (dangling.length) {
+      throw new Error(
+        `integration ${short}: 产物含悬空外部引用 ${dangling.join(", ")} —— ` +
+          `loader 模块表答不上这些 specifier（上游 bundle 里它们是内联的）。` +
+          `请把对应库装进 devDependencies（devDep 会被内联）后重跑，或确认它确实应是外部。`,
+      );
+    }
+
+    // 5) 以原版包为模板组装（lib/index.js、lib/types、package.json 等原样；client.js 换我们的）
+    const out = join(repoRoot, "_tmp", "integrations-built", short);
+    rmSync(out, { recursive: true, force: true });
+    mkdirSync(out, { recursive: true });
+    cpSync(join(template, "lib"), join(out, "lib"), { recursive: true });
+    cpSync(join(stage, "lib", "client.js"), join(out, "lib", "client.js"));
+    const manifest = JSON.parse(readFileSync(join(template, "package.json"), "utf8"));
+    const hana = Number.isFinite(it.hana) ? it.hana : 1;
+    manifest.version = `${String(manifest.version).split("+")[0]}+hana.${hana}`;
+    writeFileSync(join(out, "package.json"), JSON.stringify(manifest, null, 2));
+
+    const size = readFileSync(join(out, "lib", "client.js")).length;
+    log(`[integrations] ${short}: ${pkg}@${manifest.version} 编译完成（client.js ${size}B，externals ${externals.length} 个）`);
+    built.push({ short, pkg, version: manifest.version, out, externals, bytes: size });
+  }
+  return built;
+}
+
 // ---------- CLI ----------
 
-function main() {
+async function main() {
   const cmd = process.argv[2] || "verify";
   const pkgJson = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8"));
   const version = dshVersionOf(pkgJson);
@@ -220,9 +339,24 @@ function main() {
   if (cmd === "stage") {
     const staged = stageIntegrations(integrations);
     console.log(`[integrations] 已落盘 ${staged.length} 个文件到 _tmp/integrations/`);
+    return;
+  }
+
+  if (cmd === "build") {
+    try {
+      const built = await buildIntegrations(integrations, { tag });
+      for (const b of built) console.log(`[integrations] 产物：${b.out}`);
+    } catch (e) {
+      console.error("[integrations] 编译失败：" + ((e && e.message) || e));
+      process.exit(1);
+    }
+    return;
   }
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
-  main();
+  main().catch((e) => {
+    console.error("[integrations] " + ((e && e.message) || e));
+    process.exit(1);
+  });
 }

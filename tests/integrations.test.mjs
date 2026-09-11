@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   dshVersionOf,
+  extractRequires,
   loadIntegrations,
   sha256,
   stageIntegrations,
@@ -120,6 +121,22 @@ test("仓库真实清单：能解析、字段齐（当前为批次①两枚、�
   }
   const names = list.map((x) => x.dir);
   assert.ok(names.includes("ui-layout") && names.includes("ui-sidebar"));
+});
+
+test("extractRequires：认未压缩产物的字面 require()", () => {
+  const bundle = 'window.__ModuleLoader__.load({ id: "pkg", factory: (require) => { const a = require("react"); const b = require("react/jsx-runtime"); const c = require("react"); return module.exports; } });';
+  assert.deepEqual(extractRequires(bundle), ["react", "react/jsx-runtime"]);
+});
+
+test("extractRequires：也认我们压缩过的产物（factory 参数被改名、引号含反引号）", () => {
+  const bundle = "window.__ModuleLoader__.load({id:`@deepseek-ai/dsh-client-ui-layout`,factory:e=>{var t={exports:{}};let r=e(\"react\"),i=e(`react/jsx-runtime`),a=e('@deepseek-ai/dsh-client-store');return t.exports}});";
+  assert.deepEqual(extractRequires(bundle), ["react", "react/jsx-runtime", "@deepseek-ai/dsh-client-store"]);
+});
+
+test("extractRequires：无 factory banner 时不炸、空输入得空表", () => {
+  assert.deepEqual(extractRequires('const x = require("zustand")'), ["zustand"]);
+  assert.deepEqual(extractRequires(""), []);
+  assert.deepEqual(extractRequires(null), []);
 });
 
 test("stage：把 overlay 落进 _tmp/integrations/<短名>/ 并保内容", () => {
