@@ -234,6 +234,10 @@ export function AppFrame({
       data-rightbar-fullscreen={layoutInfo.rightbarFullscreen || undefined}
       data-rightbar-instant={layoutInfo.rightbarInstant || undefined}
       data-dragging={dragging || undefined}
+      /* 自己的面标记（与 data-dshana-view / hana-dshana-role 同一命名习惯）：
+         给 CSS 一个按面收紧的钩子——FP（navigation）只有一整幅侧栏，
+         侧栏那条 border-right 没有分隔对象（AppFrame.module.css）。 */
+      data-dshana-surface={surface}
     >
       <DocumentTitle
         productTitle={productTitle}

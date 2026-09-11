@@ -40,6 +40,12 @@
   border-right: 0.5px solid var(--dsw-alias-border-l3);
 }
 
+/* FP（navigation）只有一整幅侧栏，右边没有列要分隔，那条 border-right 就只剩边缘一道毛边
+   （她 2026-09-12 提出）。主卡（workspace / standalone）保留：那里它分的是侧栏与中列。 */
+.frame[data-dshana-surface="navigation"] .sidebarCol {
+  border-right: 0;
+}
+
 .centerCol {
   grid-column: 2;
   min-width: 0;

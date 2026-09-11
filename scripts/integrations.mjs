@@ -229,10 +229,17 @@ export function templatePackageDir(pkgName, repoRoot = REPO_ROOT) {
 
 /**
  * 把「待内联的非相对 specifier」解析成绝对文件的 alias 表。
- * 为何需要：pnpm 在 Windows 长路径下把包实体放进带哈希的 .pnpm 目录，而根级链接指向一个
- * 不存在的名字（dangling）——从 stages 向上走到的 <repo>/node_modules/<pkg> 解不开，打包器
- * 就把它当 external，于是产物带悬空外部引用。原版包本来就走 .pnpm/node_modules/<name>
- * （templatePackageDir），待内联的库沿用同一路径最直；CI 上也不赌链接形态。
+ *
+ * 为何需要（本质是幽灵依赖）：集成的 stage 树（_tmp/integrations-src/<短名>）只有 src/ 与 lib/，
+ * 既没有自己的 package.json 也没有 node_modules——它里面每一条非相对导入都只能向上走到**本仓**
+ * 的依赖树去解，也就是在靠 hoisting 碰运气。上游没有这个问题：它的这些包是 monorepo 的
+ * workspace 兄弟，打包器直接从工作区解。
+ * 所以这里不做“碰巧能解到”，只做“显式声明 + 显式解析”：库由配套的 devDependencies 声明
+ * （devDep 会被内联，不进运行时），路径用本脚本已有的同一条约定 .pnpm/node_modules/<name>
+ * （templatePackageDir 取原版包走的就是它）。
+ * 另一层现实：pnpm 在 Windows 长路径下会把实体放进带哈希的 .pnpm 目录，而根级链接指向一个
+ * 不存在的名字（dangling）——本地 <repo>/node_modules/<pkg> 解不开，CI（Linux）上反而正常。
+ * 赌链接形态就是赌构建机，故不赌。
  * 只处理 externals 之外的 specifier：React 这类必须保持外部，内联成副本反而错。
  * @param {Iterable<string>} specifiers 待内联的 specifier
  * @param {string} repoRoot 仓库根
