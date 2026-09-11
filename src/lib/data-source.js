@@ -11,8 +11,9 @@
 //   形态（对齐官方样例 hana-dsh runtime/data-source.mjs）：{version, revision, settings} +
 //   lastShared；0600 + 原子写（.pending → rename）；revision 供乐观并发（T4 的 409 回路）。
 //
-// 源身份：private 恒为内置独立目录（<dataDir>/dsh-home，与既有安装同路径——改名会孤儿化
-// 既有会话，故有意保留，见 spec 裁决 9 同类）；shared 指向外部 DSH 目录（默认 ~/.dsh，或自定义）。
+// 源身份：private 恒为内置独立目录 <dataDir>/.dsh（命名与 DSH 自身默认 ~/.dsh 统一）；
+// shared 指向外部 DSH 目录（DSH 默认 ~/.dsh，或用户经 picker 选定的目录）。
+// 注：早期 v2 用的 <dataDir>/dsh-home 不再读取，**不做迁移**（裁决见 spec D-h）。
 // sourceId 由 home+profile 决定：private 用常量便于人读，shared 用哈希区分同路径不同 profile。
 //
 // 本模块是叶子（只依赖 app-runtime 取值助手），不做 runtime 启停；切换编排见 W3 后续切片。
@@ -24,8 +25,8 @@ import { appDataDir, getAppRuntime } from "./app-runtime.js";
 
 export const SETTINGS_VERSION = 1;
 export const SOURCE_MODES = Object.freeze(["private", "shared"]);
-/** 内置独立目录名（= 既有安装的 DSH_HOME 路径，不改名）。 */
-export const PRIVATE_HOME_NAME = "dsh-home";
+/** 内置独立目录名：与 DSH 自身默认目录 ~/.dsh 命名统一（早期 v2 的 dsh-home 不再读取）。 */
+export const PRIVATE_HOME_NAME = ".dsh";
 /** 内置独立目录固定 profile：runtime 只 seed/启动这一个 profile。 */
 export const PRIVATE_PROFILE = "dshana";
 export const SETTINGS_KEYS = Object.freeze(["mode", "path", "profile"]);

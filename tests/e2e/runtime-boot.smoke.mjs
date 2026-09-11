@@ -87,7 +87,7 @@ async function runBoot() {
   while (dshPort === bridgePort) dshPort = randomInt(38000, 52000);
   const configPath = writeConfig({
     dataDir,
-    dshHome: join(dataDir, "dsh-home"),
+    dshHome: join(dataDir, ".dsh"),
     dshPort,
     bridgePort,
     bridgeKey: opaque(),
@@ -114,7 +114,7 @@ async function runPreflight() {
   const resultPath = join(dataDir, "integration", "preflight-" + opaque(8) + ".json");
   const configPath = writeConfig({
     dataDir,
-    dshHome: join(dataDir, "dsh-home"),
+    dshHome: join(dataDir, ".dsh"),
     preflight: true,
     resultPath,
     cordisSrc,

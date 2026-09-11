@@ -19,7 +19,7 @@
 //     同时保持单工具形态；全仓文档/SKILL/参数描述同步。若宿主加载时报重名，只需改本文件
 //     name 一处，其余字段不变。
 //  2. 数据读路径迁到 ctx.dataDir（宿主 app-data/<id>/；v1 的宿主插件 dataDir / 包根
-//     data/ 布局不再是权威）。list/get 读 dsh-home 的唯一事实源
+//     data/ 布局不再是权威）。list/get 读当前源（DSH_HOME）的唯一事实源
 //     （storages/session_projcache.json + sessions/.../session.jsonl.zstd）——DSH host
 //     未启动仍可读（离线可读验收点）。旧插件数据 → App dataDir 的迁移接缝见
 //     lib/app-runtime.js appDataDir() 注释，本次只留口、不做迁移脚本。
@@ -60,7 +60,7 @@ function dataDirOf() {
 export const name = "dshana_session";
 
 export const description =
-  "DSH 会话全生命周期工具（合并原 dsh_run / dsh_cancel）：list=会话清单（解析 session_projcache，dsh-home 唯一事实源，limit 默认 10）；" +
+  "DSH 会话全生命周期工具（合并原 dsh_run / dsh_cancel）：list=会话清单（解析 session_projcache，DSH_HOME 唯一事实源，limit 默认 10）；" +
   "get=凭 sessionId 直取会话元数据 + 最终结论 summary；" +
   "create=新建会话 + 提交任务（task/cwd 必填，cwd 每次调用显式指定）；" +
   "send=续已有会话发消息（sessionId + task 必填，resume 语义）；" +

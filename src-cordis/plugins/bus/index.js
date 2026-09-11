@@ -547,7 +547,7 @@ export function apply(ctx, config) {
           // 宿主下发的配置（总线形态：握手后 config 帧下发）。总线退役（refactor/
           // bus-inproc）后宿主不再连 dshana.bus——同进程形态兑底：读 process.env
           //（宿主 boot 前注入 DSHANA_ROOT = DSH 包与依赖根（插件根）/ DSHANA_HOME =
-          // 宿主数据目录；DSH_HOME 官方名 = DSHANA_HOME/dsh-home），settings/
+          // 宿主数据目录；DSH_HOME 官方名 = DSHANA_HOME/.dsh），settings/
           // provider/app 的 dshPkgDir/dataDir 消费不再依赖总线 config。env 也缺
           //（极端情况）返回 null（调用方原有「未就绪」语义保留）。
           getConfig: () => {

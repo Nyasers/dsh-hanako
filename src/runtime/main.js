@@ -263,7 +263,7 @@ export async function main(argv) {
   // 依赖根默认指向 App 安装目录（随包物化的 node_modules）；--deps-root 可覆盖（调试）。
   const depsRoot = resolve(opts.depsRoot || join(installRoot, "node_modules"));
   const cordisSrc = resolve(opts.cordisSrc || join(installRoot, "cordis"));
-  const dshHome = opts.dshHome ? resolve(opts.dshHome) : join(dataDir, "dsh-home");
+  const dshHome = opts.dshHome ? resolve(opts.dshHome) : join(dataDir, ".dsh");
   // ---- 0) 预检模式（数据源切换探针）：不连宿主 IPC、不起服务，只验证目标 home 可用性 ----
   if (opts.preflight) {
     return await runPreflight({ opts, dataDir, dshHome, runtimeDir, depsRoot, cordisSrc });

@@ -120,7 +120,7 @@ export function makeReadyMarker() {
 /**
  * 私有运行时配置构造（与 src/runtime/options.js normalizeRuntimeConfig 对偶）。opts:
  * { dataDir, dshHome?, dshPort, bridgePort, bridgeKey, controlKey, cordisSrc?, depsRoot?, readyMarker? }
- * dshHome = 当前数据源（W3）的 DSH_HOME；缺省时子进程回落 dataDir/dsh-home（旧行为）。
+ * dshHome = 当前数据源（W3）的 DSH_HOME；缺省时子进程回落 dataDir/.dsh（旧行为）。
  * 敏感项（bridgeKey）只进本对象→写 0600 文件→argv 只传路径，不出现在 argv/日志。
  */
 export function buildRuntimeConfig(opts) {
@@ -369,7 +369,7 @@ async function doStartManaged(opts, attempt = 1) {
   const ctx = app.ctx;
   const dataDir = appDataDir();
   if (!dataDir) throw new Error("managed-runtime: ctx.dataDir 缺失");
-  // 数据源（W3）：DSH_HOME 由当前源决定（private = <dataDir>/dsh-home；shared = 外部目录）。
+  // 数据源（W3）：DSH_HOME 由当前源决定（private = <dataDir>/.dsh；shared = 外部目录）。
   // 读设置失败即抛错（不得默认切错源）；设置文件不存在时回落 private 默认。
   const source = await currentSource();
   const { bridgePort, dshPort } = pickPorts();

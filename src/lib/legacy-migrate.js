@@ -6,8 +6,9 @@
 // 目标（迁移指南 §12 / DESIGN「步骤 4b/5 收口」）：旧插件数据布局
 //   <hanakoHome>/plugin-data/dsh-hanako/{dsh-home, logs, config.json, node_modules, pnpm-dist}
 // 迁入 App v2 数据区 ctx.dataDir = <hanakoHome>/app-data/dsh-hanako/，使：
-//   · dsh-home/{sessions, storages, settings.yaml, .anonymous-user-id} → dataDir/dsh-home/…
-//     （DSH_HOME 指向 dataDir/dsh-home，见 src/runtime/main.js env 设置——同 v1 语义）
+//   · dsh-home/{sessions, storages, settings.yaml, .anonymous-user-id} → <私有源目录>/…
+//     （DSH_HOME 指向当前数据源的 home，见 src/runtime/main.js env 设置）
+//     ⚠ 源目录名 dsh-home 是 v1 的历史布局（不可改）；目标用 PRIVATE_HOME_NAME（.dsh）
 //   · logs/* → dataDir/logs/*（App 统一日志同目录，时间戳文件不重名）
 //   · config.json（v1 全局设置）→ 参考拷贝 dataDir/legacy-config.json + 映射建议输出
 //     （v2 设置存宿主 preferences（contributes.settings 经 ctx.config），脚本不代写宿主态）
@@ -33,10 +34,12 @@
 // CLI（scripts/migrate-legacy.mjs --apply）——本刀不真跑（旧插件数据是活的）。
 import { readFileSync, writeFileSync, renameSync, existsSync, statSync, mkdirSync, readdirSync } from "node:fs";
 import path from "node:path";
+// 目标私有源目录名与运行时实际读取处同源（data-source.js）；本模块不再自带一份字面值
+import { PRIVATE_HOME_NAME } from "./data-source.js";
 
 export const LEGACY_SUBDIR = "dsh-hanako"; // plugin-data 下的旧插件数据目录名
 export const LEGACY_PLUGIN_DATA_REL = path.join("plugin-data", LEGACY_SUBDIR);
-export const DSH_HOME_NAME = "dsh-home";
+export const DSH_HOME_NAME = "dsh-home"; // v1 源目录名（历史布局，不可改）
 
 // 复制条目（v1 dsh-home 顶层；profiles 由 v2 seed 自愈重建——见头注释）
 export const DSH_HOME_COPY_ENTRIES = [
@@ -50,7 +53,7 @@ export const MARKER_REL = path.join("dshana", "migrated.json");
 
 export const legacyRootOf = (hanakoHome) => path.join(hanakoHome, LEGACY_PLUGIN_DATA_REL);
 export const legacyDshHomeOf = (legacyRoot) => path.join(legacyRoot, DSH_HOME_NAME);
-export const targetDshHomeOf = (dataDir) => path.join(dataDir, DSH_HOME_NAME);
+export const targetDshHomeOf = (dataDir) => path.join(dataDir, PRIVATE_HOME_NAME);
 export const markerPathOf = (dataDir) => path.join(dataDir, MARKER_REL);
 
 /** 读迁移标记；缺失/坏 JSON 返回 null（fail-safe，不抛）。 */
@@ -164,7 +167,7 @@ export function planLegacyMigration({ legacyRoot, dataDir, force = false }) {
         state: "target-present",
         legacyRoot,
         dataDir,
-        reason: "目标 dataDir/dsh-home 已有数据（可能已迁移或 v2 已使用）。不带 --force 拒绝覆盖——请先确认真实来源。",
+        reason: "目标私有源目录已有数据（可能已迁移或 v2 已使用）。不带 --force 拒绝覆盖——请先确认真实来源。",
         warnings,
       };
     }
