@@ -59,10 +59,11 @@
     - id: '@dsh-hanako/bus'
       name: '@dsh-hanako/bus'
 
-    # 宿主专供 WebUI：serve fork 官方前端到根路径（webserver fallback 席位）。官方
-    # web-runtime 亦经 frontend-static 挂同席位——两者重叠，真机 boot 验证谁生效（待验）。
-    - id: '@dsh-hanako/app'
-      name: '@dsh-hanako/app'
+    # 注（2026-09-11 真机验证结论）：@dsh-hanako/app（serve fork 官方前端到根路径）
+    # 已删除。它与官方 web-runtime 的 frontend-static 抢同一个 fallback 席位，导致 index
+    # 请求不经 ctx.connection.authorizeIndex → 进程 token 换 cookie 失败（runtime 启动
+    # 卡在 auth-exchange，exit 7）。官方 frontend-static 自己就是正确的 index 处理者，
+    # 前端服务交回官方。
 
     # fpFullPanel 视图装配插件：替代官方 ui-layout 的 root 装配者角色。
     - id: '@dsh-hanako/view'

@@ -83,12 +83,13 @@ function assertCordisDistVersions(outDir) {
   if (!fs.pathExistsSync(cordisRoot)) {
     throw new Error("cordis 产物缺失（dist/cordis 不存在）：先跑 pnpm run build 再打包");
   }
-  // 完整性：必需 9 包（roster bundle dshana + 8 子插件）全部存在且
+  // 完整性：必需 8 包（roster bundle dshana + 7 子插件）全部存在且
   // package.json 版本一致——缺失/部分产物（含 count=0）一律拒包，防 build 失败后残留部分
-  // dist 被误打包。（bridge 已退役：官方 dsh-web-app bundle 提供 connection，不再需要偽造。）
+  // dist 被误打包。（bridge 已退役：官方 dsh-web-app bundle 提供 connection；app 已退役：
+  // 官方 frontend-static 拥有 index 处理，见 cordis.patch.yml 注。）
   const required = [
     "dshana",
-    "app", "bus", "clipboard", "logger", "provider", "settings", "theme", "view",
+    "bus", "clipboard", "logger", "provider", "settings", "theme", "view",
   ];
   let count = 0;
   for (const name of required) {
