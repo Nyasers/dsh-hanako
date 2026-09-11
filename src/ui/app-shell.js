@@ -263,9 +263,8 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
     schedulePoll(view === "booting" ? POLL_FAST_MS : POLL_MID_MS);
   }
 
-  // ---- 设置视图状态（跨面共享；样例 src/ui/settings/view-state.ts 的同一语义）----
-  // FP（navigation）点设置 → 把 { open, section } 写进 App 自己的全局存储；
-  // 主卡（workspace）订阅同一个键 → 读回来以模态面板打开——“FP 点、主卡开”就靠这一对读写。
+  // ---- 跨面共享状态（样例 src/ui/settings/view-state.ts 的同一语义，载体换成 App 全局存储）----
+  // 两个消费方：设置视图（FP 齿轮点开 → 主卡开面板）与会话选中（FP 点会话 → 主卡跟随）。
   // 作用域：我们单 DSH 源，只按**卡片实例**配对（宿主文档：主卡与其 FP 具有同一 cardInstanceId）；
   // 样例额外按 sourceId 分域，单源下不需要，日后多源时再补。
   // 键在调用时才算：context 可能后到，算早了会拼出错误作用域。
@@ -275,11 +274,11 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
       return c && typeof c.cardInstanceId === "string" && c.cardInstanceId ? c.cardInstanceId : null;
     } catch (e) { return null; }
   }
-  function settingsViewKey() {
-    return "dshana.card." + (cardInstanceIdOf() || "unknown") + ".settings-view";
+  function sharedKey(kind) {
+    return "dshana.card." + (cardInstanceIdOf() || "unknown") + "." + kind;
   }
   // storage.global 在 SDK 里即可调用对象、也可能是工厂（两边兼容地取）。
-  function settingsStore() {
+  function sharedStore() {
     try {
       var g = hana && hana.storage ? hana.storage.global : null;
       if (typeof g === "function") { var s = g(); if (s && typeof s.get === "function") return s; }
@@ -287,39 +286,65 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
     } catch (e) { /* 忽略 */ }
     return null;
   }
-  function readSettingsView() {
-    var st = settingsStore();
-    if (!st) return Promise.resolve({ open: false, section: null });
-    return Promise.resolve(st.get(settingsViewKey())).then(function (entry) {
+  function readShared(kind) {
+    var st = sharedStore();
+    if (!st) return Promise.resolve(null);
+    return Promise.resolve(st.get(sharedKey(kind))).then(function (entry) {
       var v = entry && typeof entry === "object" ? entry.value : null;
-      if (!v || typeof v !== "object") return { open: false, section: null };
-      return {
-        open: v.open === true,
-        section: typeof v.section === "string" && v.section ? v.section : null,
-      };
-    }, function () { return { open: false, section: null }; });
+      return v && typeof v === "object" ? v : null;
+    }, function () { return null; });
   }
-  function writeSettingsView(next) {
-    var st = settingsStore();
+  function writeShared(kind, value) {
+    var st = sharedStore();
     if (!st) return Promise.reject(new Error("hana.storage.global \u4e0d\u53ef\u7528"));
-    var open = !!(next && next.open === true);
-    var section = next && typeof next.section === "string" && next.section ? next.section : null;
-    return Promise.resolve(st.set(settingsViewKey(), { open: open, section: section }));
+    return Promise.resolve(st.set(sharedKey(kind), value));
   }
-  function onSettingsViewChanged(listener) {
-    var st = settingsStore();
-    if (!st || typeof st.onChanged !== "function") return function () { /* SDK 不支持则只靠读时刷新 */ };
-    var key = settingsViewKey();
+  function onSharedChanged(kind, listener) {
+    var st = sharedStore();
+    if (!st || typeof st.onChanged !== "function") return function () { /* 无通知面则只靠读时刷新 */ };
+    var key = sharedKey(kind);
     var off = st.onChanged(function (keys) {
       if (Array.isArray(keys) && keys.indexOf(key) >= 0) { try { listener(); } catch (e) { /* 忽略 */ } }
     });
     return typeof off === "function" ? off : function () { /* 无取消句柄 */ };
   }
-  // 挂到宿主桥（__DSHANA__）上的设置视图接口：供 integrations/ui-settings-general 调用。
-  var VIEW_STATE_API = {
+
+  // 设置视图：{ open, section }。
+  function readSettingsView() {
+    return readShared("settings-view").then(function (v) {
+      return {
+        open: !!(v && v.open === true),
+        section: v && typeof v.section === "string" && v.section ? v.section : null,
+      };
+    });
+  }
+  function writeSettingsView(next) {
+    var open = !!(next && next.open === true);
+    var section = next && typeof next.section === "string" && next.section ? next.section : null;
+    return writeShared("settings-view", { open: open, section: section });
+  }
+
+  // 会话选中：{ sessionId }。启动握手靠读快照（存储有当前值，没有“错过广播”的问题）。
+  function readSelection() {
+    return readShared("selection").then(function (v) {
+      return { sessionId: v && typeof v.sessionId === "string" && v.sessionId ? v.sessionId : null };
+    });
+  }
+  function writeSelection(sessionId) {
+    return writeShared("selection", {
+      sessionId: typeof sessionId === "string" && sessionId ? sessionId : null,
+    });
+  }
+
+  // 挂到宿主桥（__DSHANA__）上的跨面接口：
+  //   设置视图 → integrations/ui-settings-general；会话选中 → integrations/ui-session。
+  var SURFACE_API = {
     readSettingsView: readSettingsView,
     writeSettingsView: writeSettingsView,
-    onSettingsViewChanged: onSettingsViewChanged,
+    onSettingsViewChanged: function (listener) { return onSharedChanged("settings-view", listener); },
+    readSelection: readSelection,
+    writeSelection: writeSelection,
+    onSelectionChanged: function (listener) { return onSharedChanged("selection", listener); },
   };
 
   // ---- DSH 注入（对齐官方样例：同文档注入 + __DSH_TRANSPORT__，不再用 iframe）----
@@ -335,7 +360,7 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
     var base = new URL(privatePrefix, location.origin);
     injected.dispose = installTransport(base, {
       role: view === "sidebar" ? "navigation" : "workspace",
-      bridge: VIEW_STATE_API,
+      bridge: SURFACE_API,
     });
     // 取 index：privatePrefix 已是完整代理路径（含 _surface 票据，宿主路由直认），用原生同源
     // fetch——hana.api.fetch 的入参是「App 路由相对路径」（会再拼 /api/apps/<id>/routes/），
