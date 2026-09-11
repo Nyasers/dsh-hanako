@@ -189,6 +189,10 @@ export function SidebarRoot({
       }}
       onPointerLeave={() => { armLinger() }}
     >
+      {/* 品牌行（logoRow）：FP（navigation 面）不渲染——宿主 FP 自己就写着 DSHana，
+          再叠一行品牌 + 字标是重复（她 2026-09-12 要求去掉，更简洁）。
+          拆分面 / 工作区面保留：那里它担着品牌与新会话快捷（展开态整行就是 New Session）。 */}
+      {surfaceRole !== 'navigation' && (
       <div className={css.logoRow}>
         {/* Expanded, the brand doubles as a New Session shortcut; the
             collapsed rail's logo is the expand toggle below instead. */}
@@ -239,7 +243,8 @@ export function SidebarRoot({
             </button>
           </Tooltip>
         )}
-      </div>
+        </div>
+      )}
 
       {/* Expanded, the button carries its own label — tooltip only on the rail. */}
       <Tooltip label={t('session.new.label')} delayMs={500} disabled={wide}>
