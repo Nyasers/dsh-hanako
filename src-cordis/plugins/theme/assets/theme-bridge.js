@@ -15,6 +15,9 @@
 // dist/cordis/theme/），pack.mjs 静态压缩按 script 语义
 // terser（module=false）。语义与配套见 index.js 头注释（主题注入/明暗/preference）。
 (function () {
+  // 宿主 token 数据表（全文件唯一插值点：index.js 把本行占位符换成 TOKEN_MAP 的序列化结果）。
+  // 注意：服务端用的是 String.replace(pattern, …)，**只换第一处**，所以这行必须全局唯一。
+  var m = __DSH_THEME_TOKENS__;
   // 父窗口（宿主壳页）origin（postMessage 定向 + 回执校验；无 ancestorOrigins 时为 null）
   var parentOrigin = null;
   try {
@@ -27,7 +30,6 @@
   // 读 dsh settings/describe 失败/缺失时按 system 处理，主题不因此失效。
   var pref = "system";
   function cssOf(v) {
-    var m = __DSH_THEME_TOKENS__;
     var c = "";
     for (var i = 0; i < m.length; i++) {
       var val = m[i][1][0] === "~" ? m[i][1].slice(1) : (v[m[i][1]] || "");
@@ -37,12 +39,44 @@
   }
   function applyOrRemove() {
     var st = document.getElementById("@dsh-hanako/theme-dyn");
-    if (pref === "system" && cur) {
+    if (followHost() && cur) {
       if (!st) { st = document.createElement("style"); st.id = "@dsh-hanako/theme-dyn"; document.head.appendChild(st); }
       st.textContent = "body{" + cssOf(cur) + "}";
     } else if (st) {
       st.remove();
     }
+  }
+  // 同文档注入形态（当前主路径，2026-09-12 修）：桥与壳页在同一**文档**里，主题变量直接
+  // 从文档根算就行，不再经 parent/壳页往返。旧的 iframe 套 iframe 拓扑已退役，而本桥仍
+  // 按旧拓扑校验来源（`e.source !== window.parent` 就丢）——壳页现在只能自投
+  // （e.source === window），消息全被丢弃 → 内层 dsh WebUI 永远拿不到主题（真机反馈
+  // “壳页跟随了，DSHWebUI 没有”）。
+  function readDocumentVars() {
+    var cs = null;
+    try { cs = getComputedStyle(document.documentElement); } catch (e) { return null; }
+    var v = {};
+    var hits = 0;
+    for (var i = 0; i < m.length; i++) {
+      var key = m[i][1];
+      if (key.charAt(0) === "~") continue;
+      var val = "";
+      try { val = (cs.getPropertyValue(key) || "").trim(); } catch (e2) { val = ""; }
+      if (val) { v[key] = val; hits++; }
+    }
+    return hits ? v : null;
+  }
+  // 是否跟随宿主主题：嵌入式（壳页在注入 DSH 前装了 __DSH_TRANSPORT__）一律跟随宿主——
+  // App 卡片是 Hana 的一个面，这里不存在“独立 dsh 窗口”的偏好自治语境；非嵌入仍尊重
+  // dsh 自己的 preference（system 才覆盖）。
+  function followHost() { return !!window.__DSH_TRANSPORT__ || pref === "system"; }
+  // 从文档根读取并应用；读到有效变量返 true。
+  function pull() {
+    var v = readDocumentVars();
+    if (!v) return false;
+    cur = v;
+    applyOrRemove();
+    maybeDropStatic();
+    return true;
   }
   // 移除静态 fallback（DEFAULT_THEME）：仅在拿到有效宿主主题（cur 已应用）或确认
   // 非 system 偏好（pref 明确 light/dark，静态默认即正确）之后——壳桥永久失败时
@@ -53,20 +87,29 @@
       if (se && se.remove) se.remove();
     }
   }
-  function ask() { try { window.parent.postMessage({ dshHanaThemeRequest: true }, parentOrigin || "*"); } catch (e) { } }
+  function ask() {
+    // 旧拓扑（iframe 套 iframe）里壳页是本页的 parent；同文档注入后本页的 parent 是**宿主**，
+    // 投过去没人答。两个目标都投一份：自身（现壳页的 message 监听就在同文档里）与 parent（兼容）。
+    try { window.postMessage({ dshHanaThemeRequest: true }, "*"); } catch (e) { }
+    try { window.parent.postMessage({ dshHanaThemeRequest: true }, parentOrigin || "*"); } catch (e) { }
+  }
   window.addEventListener("message", function (e) {
-    // 来源校验：宿主壳页（window.parent）+ 匹配 origin——防第三方窗口伪造 dshHanaTheme
-    if (e.source !== window.parent) return;
-    if (parentOrigin && e.origin !== parentOrigin) return;
+    // 来源校验：只认壳页。同文档注入下壳页的自投消息 e.source === window；旧 iframe 形式下
+    // e.source === window.parent；两者都收，其余来源一律忽略。
+    if (e.source !== window && e.source !== window.parent) return;
+    if (e.source !== window && parentOrigin && e.origin !== parentOrigin) return;
     if (e.data && e.data.dshHanaTheme) {
-      var v = e.data.dshHanaTheme.vars;
-      if (v && Object.keys(v).length) {
-        cur = v;
-        applyOrRemove();
-        maybeDropStatic();
-        // 收到主题 vars：停止周期重试（竞态已破除）
-        if (askTimer) { clearInterval(askTimer); askTimer = null; }
+      // 壳页的这条消息只当“主题变了”的通知用：值以文档根为权威（同文档下我们读得到）。
+      // 读不到（非同文档部署等）才回退用载荷里的 vars。
+      if (!pull()) {
+        var v = e.data.dshHanaTheme.vars;
+        if (v && typeof v === "object" && Object.keys(v).length) {
+          cur = v;
+          applyOrRemove();
+          maybeDropStatic();
+        }
       }
+      if (cur && askTimer) { clearInterval(askTimer); askTimer = null; }
     }
     // DSH 主题偏好变更通知（壳页经 /webui/events 收到 settings/document-updated 的
     // ui-theme 后 postMessage 转发，只带 revision）：重读一次 preference（事件驱动，
@@ -123,8 +166,14 @@
   // 的首次 ask 可能落在壳桥注册前被丢弃（cur 恒 null → 内层 dsh WebUI 不跟随主题）。
   // 周期重试 ask（收到主题 vars 即停止）：消除时序竞态；对已注册的壳桥幂等（postMessage 无副作用）。
   var askTimer = setInterval(function () {
-    if (cur && Object.keys(cur).length) { if (askTimer) { clearInterval(askTimer); askTimer = null; } return; }
+    if (pull() && cur) { if (askTimer) { clearInterval(askTimer); askTimer = null; } return; }
     ask();
   }, 1000);
+  // 主题切换（壳页写 documentElement 的 data-theme / data-appearance）即时感知，不等 1s 轮询。
+  try {
+    var mo = new MutationObserver(function () { pull(); });
+    mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "data-appearance"] });
+  } catch (e) { /* 忽略 */ }
+  pull();
   ask();
 })();

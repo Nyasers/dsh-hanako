@@ -205,28 +205,46 @@ export async function injectDshIndex(indexHtml, privateBase, opts) {
   const base = document.createElement("base");
   base.href = privateBase.toString();
   document.head.prepend(base);
-  // stylesheet / modulepreload
-  for (const link of parsed.querySelectorAll('link[rel="stylesheet"],link[rel="modulepreload"]')) {
-    const href = link.getAttribute("href");
-    if (!href) continue;
-    const next = document.createElement("link");
-    next.rel = link.rel;
-    next.href = resolveIndexAssetUrl(href, privateBase).toString();
-    if (link.crossOrigin) next.crossOrigin = link.crossOrigin;
-    document.head.append(next);
+  // head 忠实搬运，**保持原顺序**（样式与脚本的相对次序决定优先级；只搬不重排）。
+  // 对比旧实现的两处差异：① 多搬 <style>（旧实现漏搬，主题插件的静态 fallback
+  // 就是这样丢的）；② 内联/外部脚本与样式混在同一趟有序遍历里，不再分块。
+  // module entry 最后加载（它依赖前面的东西）。
+  let moduleEntry = null;
+  for (const node of parsed.head.children) {
+    const tag = node.tagName.toLowerCase();
+    if (tag === "link") {
+      const rel = node.getAttribute("rel") || "";
+      if (rel !== "stylesheet" && rel !== "modulepreload") continue;
+      const href = node.getAttribute("href");
+      if (!href) continue;
+      const next = document.createElement("link");
+      next.rel = node.rel;
+      next.href = resolveIndexAssetUrl(href, privateBase).toString();
+      if (node.crossOrigin) next.crossOrigin = node.crossOrigin;
+      document.head.append(next);
+      continue;
+    }
+    if (tag === "style") {
+      const style = document.createElement("style");
+      if (node.id) style.id = node.id;
+      style.textContent = node.textContent;
+      document.head.append(style);
+      continue;
+    }
+    if (tag !== "script") continue;
+    const src = node.getAttribute("src");
+    const isModule = (node.getAttribute("type") || "").toLowerCase() === "module";
+    if (isModule && src) { moduleEntry = src; continue; }
+    if (!src) {
+      const script = document.createElement("script");
+      script.textContent = node.textContent;
+      document.head.append(script);
+      continue;
+    }
+    await appendScript(resolveIndexAssetUrl(src, privateBase).toString());
   }
-  // 内联 script（先于外部按序）
-  for (const source of parsed.querySelectorAll("script:not([type=\"module\"]):not([src])")) {
-    const script = document.createElement("script");
-    script.textContent = source.textContent;
-    document.head.append(script);
-  }
-  for (const source of parsed.querySelectorAll("script[src]:not([type=\"module\"])")) {
-    await appendScript(resolveIndexAssetUrl(source.getAttribute("src"), privateBase).toString());
-  }
-  const entry = parsed.querySelector('script[type="module"][src]');
-  if (!entry) throw new Error("DSH index did not declare a module entry");
-  await appendScript(resolveIndexAssetUrl(entry.getAttribute("src"), privateBase).toString(), true);
+  if (!moduleEntry) throw new Error("DSH index did not declare a module entry");
+  await appendScript(resolveIndexAssetUrl(moduleEntry, privateBase).toString(), true);
 }
 
 /**
