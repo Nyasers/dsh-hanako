@@ -224,8 +224,10 @@ export function SidebarRoot({
         )}
         {/* Rail resting state is the whale mark; hovering swaps in the panel
             icon (the expand affordance, figma sidebar-hover flow). FP（navigation）面
-            不渲染折叠钮：拆窗的面才可折叠，FP 里的侧栏始终整幅。 */}
-        {surfaceRole !== 'navigation' && (
+            不渲染折叠钮：拆窗的面才可折叠，FP 里的侧栏始终整幅。
+            2026-09-12：standalone（拆窗）面也不渲染——见 AppFrame.tsx 里拆窗不再套用
+            「收起」机制那条：独立窗口的侧栏始终在，留一个按不动的钮会误导。 */}
+        {surfaceRole !== 'navigation' && surfaceRole !== 'standalone' && (
           <Tooltip label={collapsed ? t('toggle.open') : t('toggle.collapse')} delayMs={500}>
             <button
               type="button"
