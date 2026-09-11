@@ -15,7 +15,7 @@
      顶上让出 44px：独立窗口沿用宿主那条半透明 chrome，页面顶部会被它盖住。这个常量取自官方
      样例（bootstrap.css 为设置面留的同一块区域，注释 "Settings sits below Hana's translucent
      card chrome."），并同样把留白放在**固定高度的 #root 内部**——这样 DSH 自己的滚动容器
-     仍占满剩余视口，而不是延伸到 chrome 底下。 -->
+     仍占满剩余视口，而不是延伸到 chrome 底下。（自举台不下移：台上内容本来就整体居中。） -->
 <style>
   html, body { height: 100%; margin: 0; }
   html { color-scheme: light dark; }
@@ -31,12 +31,13 @@
     box-sizing: border-box;
     padding-top: 44px;
   }
-  /* 自举舞台：与主卡同一副台面（DSHANA 字标 + 细圆环 + 一行状态小字），只是顶上也让出 chrome。 */
+  /* 自举台：与主卡同一副台面（DSHANA 字标 + 细圆环 + 一行状态小字）。台上内容本来就整体居中，
+     不必为顶上那条 chrome 下移（她 2026-09-12）。 */
   #dsh-stage {
     position: fixed; inset: 0;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
     gap: 20px;
-    padding: 24px; padding-top: calc(24px + 44px); box-sizing: border-box; overflow: auto;
+    padding: 24px; box-sizing: border-box; overflow: auto;
   }
   body[data-view="ready"] #dsh-stage { display: none; }
   .loader { display: flex; flex-direction: column; align-items: center; gap: 14px; }

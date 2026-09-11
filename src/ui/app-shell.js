@@ -307,8 +307,9 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
         dshPreference = readIndexThemePreference(html);
         return injectDshIndex(html, base);
       })
-      // 注入完成后推一次（桥此刻已在文档里）；此后完全由 hana.theme.subscribe 事件驱动。
-      .then(function () { pushThemeNow(); })
+      // 注入完成后推一次（桥此刻已在文档里）；再开标题栏交互区域的上报。此后主题完全由
+      // hana.theme.subscribe 事件驱动。
+      .then(function () { pushThemeNow(); startInteractiveRegions(); })
       .catch(function (err) { showInjectionError(err); });
   }
   // DSH index 的 boot-theme 行（ui-theme/src/boot-theme.ts 生成，紧跟 <body> 开标签）：
@@ -685,6 +686,85 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
   }
   function resolveView(root) {
     return declaredView(root) || SLOT_VIEW[hostSlot() || ""] || "main";
+  }
+
+  // ---- 标题栏内的交互区域（Hana 0.950.0+；“APPS.md・标题栏内的交互区域”）----
+  // 宿主顶部那条半透明标题带会盖住页面内容，落在带内的控件点不到——真机上就是“那个位置
+  // 有按钮也按不了”。官方门：await hana.surface.setInteractiveRegions(regions)，**运行时调用、
+  // 不需要清单权限**，只对**黑板主卡与拆窗主卡**开放（FP / 设置页 / 未就绪页面不行），返回
+  // { applied: true }；坐标是 **iframe 视口的 CSS 像素**。
+  // 契约束（官方要求，不自行简化）：每次调用替换完整集合；上限 64 个矩形；只报控件真实
+  // 边界（不把整条工具栏或 iframe 报上去）；隐藏控件剔除；布局/滚动/尺寸变化后重测，同帧
+  // 合并，集合没变就跳过。
+  var CHROME_BAND_PX = 44; // 与拆窗页/设置面留白同一个常量（样例 bootstrap.css）
+  var IR_LIMIT = 64;
+  var IR_SELECTOR = "button, [role='button'], a[href], input, select, textarea, summary";
+  var irLastSig = null;
+  var irFrame = 0;
+  var irStarted = false;
+  function interactiveRegionRects() {
+    var out = [];
+    var nodes;
+    try { nodes = document.querySelectorAll(IR_SELECTOR); } catch (e) { return out; }
+    var seen = {};
+    for (var i = 0; i < nodes.length && out.length < IR_LIMIT; i++) {
+      var el = nodes[i];
+      if (el.hasAttribute("hidden") || el.getAttribute("aria-hidden") === "true") continue;
+      var r;
+      try { r = el.getBoundingClientRect(); } catch (e) { continue; }
+      if (r.width <= 0 || r.height <= 0) continue;
+      // 只认落在标题带里、且确实有一块可见面积的控件
+      if (r.bottom <= 0 || r.top >= CHROME_BAND_PX) continue;
+      var reg = {
+        x: Math.round(r.left), y: Math.round(r.top),
+        width: Math.round(r.width), height: Math.round(r.height),
+      };
+      var key = reg.x + "," + reg.y + "," + reg.width + "," + reg.height;
+      if (seen[key]) continue;
+      seen[key] = true;
+      out.push(reg);
+    }
+    return out;
+  }
+  function reportInteractiveRegions() {
+    irFrame = 0;
+    var v = resolveView(shell);
+    if (v !== "main" && v !== "standalone") return; // 只有黑板主卡与拆窗卡能调
+    if (!hana || !hana.surface || typeof hana.surface.setInteractiveRegions !== "function") return;
+    var regions = interactiveRegionRects();
+    var sig = regions.map(function (r) { return r.x + "," + r.y + "," + r.width + "," + r.height; }).join(";");
+    if (sig === irLastSig) return; // 集合没变就不上报
+    irLastSig = sig;
+    try {
+      Promise.resolve(hana.surface.setInteractiveRegions(regions)).catch(function () {
+        /* 旧宿主明确失败；也不重试——不是致命能力 */
+      });
+    } catch (e) { /* 忽略 */ }
+  }
+  function scheduleInteractiveRegions() {
+    if (irFrame) return; // 同帧合并
+    try { irFrame = requestAnimationFrame(reportInteractiveRegions); } catch (e) { irFrame = 0; }
+  }
+  /** 注入完成（DSH 已就位）后开始观测；FP / 设置页直接不开这个门。 */
+  function startInteractiveRegions() {
+    if (irStarted) return;
+    var v = resolveView(shell);
+    if (v !== "main" && v !== "standalone") return;
+    irStarted = true;
+    try {
+      if (typeof ResizeObserver === "function") {
+        var ro = new ResizeObserver(scheduleInteractiveRegions);
+        ro.observe(document.documentElement);
+      }
+    } catch (e) { /* 忽略 */ }
+    try { window.addEventListener("resize", scheduleInteractiveRegions); } catch (e) { /* 忽略 */ }
+    // 捕获阶段听滚动：内层滚动容器不会冒泡到 window
+    try { document.addEventListener("scroll", scheduleInteractiveRegions, true); } catch (e) { /* 忽略 */ }
+    try {
+      var mo = new MutationObserver(scheduleInteractiveRegions);
+      mo.observe(document.body, { childList: true, subtree: true });
+    } catch (e) { /* 忽略 */ }
+    scheduleInteractiveRegions();
   }
 
   // ---- 启动 ----

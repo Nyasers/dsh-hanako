@@ -16,7 +16,8 @@
     "app/runtime.execute",
     "app/runtime.local-machine",
     "app/runtime.network",
-    "app/ui.clipboard-write"
+    "app/ui.clipboard-write",
+    "app/ui.open-external"
   ],
   "network": {
     "allowedHosts": [
