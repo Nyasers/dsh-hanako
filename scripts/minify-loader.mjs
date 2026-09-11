@@ -2,11 +2,11 @@
 // Copyright (c) 2026 Nyasers
 //
 // src/scripts/minify-loader.mjs — rspack loader：asset/source 内联前压缩前端资源
-// src/assets/*.js/css 以字符串进 bundle，rspack 压缩器不碰字符串内容，故在
-// asset/source 之前经本 loader 压缩：
-//   card.js  → terser（纯语法级，浏览器脚本直接执行）
-//   card.css → clean-css
-//   *.jinja2 / *.html → 原样放行（模板文件由 template-loader 专门处理，本 loader 不触碰）
+// src-cordis/plugins/*/assets 下的 js/css 以字符串进 bundle，rspack 压缩器不碰字符串内容，
+// 故在 asset/source 之前经本 loader 压缩：
+//   *.js  → terser（浏览器注入脚本/桥脚本）
+//   *.css → clean-css
+//   ＊其余（*.html 等）→ 原样放行
 import { minifyJs, minifyCss } from "./minify-assets.mjs";
 
 export default async function minifyLoader(content) {

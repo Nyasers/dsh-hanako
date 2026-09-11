@@ -220,7 +220,7 @@ function buildHanaAdapter(LlmAdapter, LlmError, deps) {
         throw new LlmError(
           "DSH 会话 " + String((options && options.sessionId) || "?") +
             " 没有 Hana task 绑定（task-map 缺失）：模型推理需要宿主 task scope（app/models.infer）；" +
-            "非 dsh_session 发起的会话（如 Web UI 直开）暂不可推理。",
+            "非 dshana_session 发起的会话（如 Web UI 直开）暂不可推理。",
           "NO_TASK_SCOPE",
         );
       }
