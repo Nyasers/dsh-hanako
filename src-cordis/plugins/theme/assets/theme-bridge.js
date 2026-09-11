@@ -66,10 +66,12 @@
     }
     return hits ? v : null;
   }
-  // 是否跟随宿主主题：嵌入式（壳页在注入 DSH 前装了 __DSH_TRANSPORT__）一律跟随宿主——
-  // App 卡片是 Hana 的一个面，这里不存在“独立 dsh 窗口”的偏好自治语境；非嵌入仍尊重
-  // dsh 自己的 preference（system 才覆盖）。
-  function followHost() { return !!window.__DSH_TRANSPORT__ || pref === "system"; }
+  // 是否跟随宿主主题：**只在 dsh 自己的 preference 为 system 时**才把 Hana 配色压下去；
+  // preference 明确为 light/dark 时完全原生——这是既有的产品语义，不能被“嵌入式”这个
+  // 运行形态括掉（2026-09-12：我一度写成“装了 __DSH_TRANSPORT__ 就无条件跟随”，
+  // 把这条特性抬掉了，真机反馈纠正，现收回）。读不到 preference 时按 system 处理，
+  // 主题不因读取失败而失效。
+  function followHost() { return pref === "system"; }
   // 从文档根读取并应用；读到有效变量返 true。
   function pull() {
     var v = readDocumentVars();
