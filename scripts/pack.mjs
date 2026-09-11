@@ -343,10 +343,17 @@ fs.ensureDirSync(relDir);
  * @param {string} nodeModulesDir 组装台里的 node_modules（交付树，已是 no-link 铺平形态）
  */
 function applyIntegrations(nodeModulesDir) {
-  const integrationsDir = join(ROOT, "integrations");
-  if (!fs.pathExistsSync(integrationsDir)) return;
+  const integrationsDir = join(ROOT, "src-integrations");
+  // fail-closed（2026-09-12 教训）：目录缺失曾是静默 return，而 integrations/ 迁到
+  // src-integrations/ 后这里未同步——于是整包官方包回退成上游原版（role 对、主题好，
+  // 但 ui-layout / ui-sidebar / ui-settings-general 的补丁全丢），日志里那几行“集成覆盖”
+  // 静默消失而打包照旧成功。任何“声明的补丁没盖上”都必须让打包失败。
+  if (!fs.pathExistsSync(integrationsDir)) {
+    throw new Error(`集成目录不存在：${integrationsDir}（预期 src-integrations/；拒绝产出未打补丁的包）`);
+  }
   const builtRoot = join(ROOT, "_tmp", "integrations-built");
   const pending = [];
+  let applied = 0;
   for (const ent of fs.readdirSync(integrationsDir, { withFileTypes: true })) {
     if (!ent.isDirectory()) continue;
     const manifestPath = join(integrationsDir, ent.name, "integration.json");
@@ -363,10 +370,15 @@ function applyIntegrations(nodeModulesDir) {
     if (!fs.pathExistsSync(target)) throw new Error(`集成 ${ent.name}：物化树里没有 ${decl.package}`);
     fs.copySync(builtDir, target, { overwrite: true });
     const stamped = JSON.parse(fs.readFileSync(join(target, "package.json"), "utf8")).version;
+    applied += 1;
     console.log(`[pack] 集成覆盖：${decl.package}@${stamped}（${ent.name}，${files.length} 个 overlay）`);
   }
   if (pending.length) {
     throw new Error(`集成产物缺失（${pending.join(", ")}）：先跑 pnpm run build（含 integrations build）再打包`);
+  }
+  // 声明了补丁却一个也没盖上 = 目录/清单出了问题；宁可不出包。
+  if (applied === 0) {
+    throw new Error(`没有应用任何集成补丁（${integrationsDir} 下无有效 integration.json）：拒绝产出未打补丁的包`);
   }
 }
 
