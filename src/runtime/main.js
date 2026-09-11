@@ -29,6 +29,7 @@ import { randomUUID } from "node:crypto";
 import http from "node:http";
 import { parseRuntimeConfig, UsageError, USAGE } from "./options.js";
 import { startDshBridge } from "./bridge.js";
+import { readFirstFrames } from "./stream-frames.js";
 import { info, warn, err } from "./log.js";
 // @hana/app-sdk 为 devDependencies（file:vendor/hana-app-sdk/hana-app-sdk.tgz，版本随宿主
 // 0.946.2 App 契约）；connectAppRuntime 运行时实现经 rspack 构建时静态内联进本 bundle（只
@@ -440,10 +441,16 @@ export async function main(argv) {
           info("switch-gate：无在途工作，允许切换数据源（prepare-switch）");
           return { ready: true };
         }
-        if (action !== "rpc") throw new Error("未知控制动作：" + String(action));
+        // 控制动作分两类：
+        //   rpc          一元方法：转发客户端信封到 DSH /api/<method>，回 JSON。
+        //   stream-first 流式方法（session/follow 等）：只取前 maxFrames 帧就取消订阅——
+        //                读路径需要开场 snapshot（throughSeq + records）但不持续跟流时用。
+        if (action !== "rpc" && action !== "stream-first") {
+          throw new Error("未知控制动作：" + String(action));
+        }
         const body = args && args.body;
         if (!body || typeof body !== "object" || typeof body.method !== "string") {
-          throw new Error("rpc 控制动作需要客户端信封 body（{ type, rpcId, method, payload }）");
+          throw new Error(action + " 控制动作需要客户端信封 body（{ type, rpcId, method, payload }）");
         }
         const res = await fetch(upstreamOrigin + "/api/" + body.method, {
           method: "POST",
@@ -453,6 +460,9 @@ export async function main(argv) {
         if (!res.ok) {
           const text = await res.text().catch(() => "");
           throw new Error("DSH /api/" + body.method + " HTTP " + res.status + (text ? "：" + text.slice(0, 300) : ""));
+        }
+        if (action === "stream-first") {
+          return { frames: await readFirstFrames(res, args && args.maxFrames) };
         }
         return await res.json();
       },
