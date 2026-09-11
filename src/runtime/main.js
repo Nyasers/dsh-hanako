@@ -22,7 +22,7 @@
 //      hana.close()。顺序纪律（指南 §7）：拿到流式 Response 后不能立刻 close()——本步
 //      尚未消费任何宿主流，hana.close() 只在退出前调用；步骤 3 接流后此处在关闭前须
 //      先结束/取消活动流。
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
@@ -186,6 +186,48 @@ function makeShutdown(state, exitCodeLog) {
 }
 
 /**
+ * 预检模式（数据源切换探针）：只验证「依赖就位 → 定位 DSH → profile 种子化」能否在
+ * 目标 DSH_HOME 上成立，不连宿主 IPC、不 boot DSH、不起中继。
+ * 结果写 resultPath（{ok:true} 或 {ok:false,error}，0600）后立即退出——父侧等终态读结果。
+ * 退出码对齐 classify：0 = 预检通过；4 = deps/locate；5 = profile 种子化未完成。
+ */
+async function runPreflight({ opts, dataDir, dshHome, runtimeDir, depsRoot, cordisSrc }) {
+  const write = (payload) => writeFileSync(opts.resultPath, JSON.stringify(payload), { mode: 0o600 });
+  try {
+    process.env.DSH_HOME = dshHome;
+    process.env.DSHANA_HOME = dataDir;
+    process.env.DSHANA_ROOT = runtimeDir;
+    mkdirSync(dshHome, { recursive: true });
+    mkdirSync(runtimeDir, { recursive: true });
+    info(`预检开始：dshHome=${dshHome} depsRoot=${depsRoot}`);
+    const located = await locateDsh({ depsRoot, log: (s) => info("locate", s) });
+    const outcome = await seedDshanaProfile({
+      dshHome,
+      cordisSrc,
+      appBoot: located.appBoot,
+      log: (s) => info("seed", s),
+    });
+    if (outcome === "missing-source" || outcome === "refused" || outcome === "failed" || outcome === "init-failed") {
+      err("preflight", `profile 种子化未完成（outcome=${outcome}）：cordisSrc=${cordisSrc}`);
+      write({ ok: false, error: `目标数据目录不可用：profile 种子化 ${outcome}（详情见 runtime 日志）` });
+      process.exit(EXIT.SEED);
+    }
+    info(`预检通过（seed=${outcome}）`);
+    write({ ok: true, dshHome });
+    process.exit(EXIT.OK);
+  } catch (e) {
+    const text = (e && e.message) || String(e);
+    err("preflight", "预检失败：" + text);
+    try {
+      write({ ok: false, error: text });
+    } catch (writeErr) {
+      err("preflight", "结果文件写入失败（由父侧超时兜底）：" + ((writeErr && writeErr.message) || writeErr));
+    }
+    process.exit(EXIT.DEPS);
+  }
+}
+
+/**
  * 主流程（导出便于宿主/测试以不同 argv 调用；正常由 bundle 顶部执行）。
  * @returns 退出码（成功就绪后由信号/断连驱动退出，本函数返回 EXIT.OK）
  */
@@ -204,7 +246,9 @@ export async function main(argv) {
     process.stdout.write(USAGE);
     return EXIT.OK;
   }
-  info(`dsh-host 启动（managed node runtime entry）：dshPort=${opts.dshPort} bridgePort=${opts.bridgePort} dataDir=${opts.dataDir}`);
+  info(opts.preflight
+    ? `dsh-host 启动（preflight 预检）：dshHome=${opts.dshHome} dataDir=${opts.dataDir}`
+    : `dsh-host 启动（managed node runtime entry）：dshPort=${opts.dshPort} bridgePort=${opts.bridgePort} dataDir=${opts.dataDir}`);
 
   const entryFile = fileURLToPath(import.meta.url);
   let installRoot;
@@ -219,6 +263,11 @@ export async function main(argv) {
   // 依赖根默认指向 App 安装目录（随包物化的 node_modules）；--deps-root 可覆盖（调试）。
   const depsRoot = resolve(opts.depsRoot || join(installRoot, "node_modules"));
   const cordisSrc = resolve(opts.cordisSrc || join(installRoot, "cordis"));
+  const dshHome = opts.dshHome ? resolve(opts.dshHome) : join(dataDir, "dsh-home");
+  // ---- 0) 预检模式（数据源切换探针）：不连宿主 IPC、不起服务，只验证目标 home 可用性 ----
+  if (opts.preflight) {
+    return await runPreflight({ opts, dataDir, dshHome, runtimeDir, depsRoot, cordisSrc });
+  }
   const state = { hana: null, ctx: null, stopBridge: null, stopApproval: null, bridge: null };
   const shutdown = makeShutdown(state, info);
 
@@ -254,8 +303,7 @@ export async function main(argv) {
   info("宿主 IPC 已连接（connectAppRuntime；tasks/models/network 待步骤 3 消费）");
 
   // ---- 2) 进程级 env（自有受管进程内设置，不改宿主进程环境——指南 §4）----
-  // DSH_HOME = 当前数据源（W3）：由 App 侧解析后经私有配置传入；缺省回落内置独立目录（旧行为）。
-  const dshHome = opts.dshHome || join(dataDir, "dsh-home");
+  // DSH_HOME 已在上方定下（当前数据源 / 旧行为回落）。
   mkdirSync(dshHome, { recursive: true });
   mkdirSync(runtimeDir, { recursive: true });
   process.env.DSH_HOME = dshHome;

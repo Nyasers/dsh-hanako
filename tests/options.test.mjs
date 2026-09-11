@@ -38,6 +38,26 @@ test("parseRuntimeConfig: 可选 cordisSrc/depsRoot", () => {
   assert.equal(o.depsRoot, "/app/node_modules");
 });
 
+test("normalizeRuntimeConfig: preflight 形态——只要 dataDir + dshHome + resultPath，不要端口/凭据", () => {
+  const o = normalizeRuntimeConfig({ dataDir: "/d", dshHome: "/d/dsh-home", preflight: true, resultPath: "/d/integration/pf.json" });
+  assert.deepEqual(o, { dataDir: "/d", dshHome: "/d/dsh-home", preflight: true, resultPath: "/d/integration/pf.json", cordisSrc: null, depsRoot: null });
+  assert.equal(o.dshPort, undefined, "不要求端口");
+  assert.equal(o.bridgeKey, undefined, "不要求凭据");
+});
+
+test("normalizeRuntimeConfig: preflight 缺 dshHome/resultPath / 非法 resultPath 都被拒", () => {
+  assert.throws(() => normalizeRuntimeConfig({ dataDir: "/d", preflight: true, resultPath: "/d/pf.json" }), /dshHome/);
+  assert.throws(() => normalizeRuntimeConfig({ dataDir: "/d", dshHome: "/h", preflight: true }), /resultPath/);
+  assert.throws(() => normalizeRuntimeConfig({ dataDir: "/d", dshHome: "/h", preflight: true, resultPath: "rel.json" }), /resultPath/);
+  assert.throws(() => normalizeRuntimeConfig({ ...GOOD, preflight: "yes" }), /preflight/);
+});
+
+test("parseRuntimeConfig: 预检配置文件经注入读取（不要求端口）", () => {
+  const o = parseRuntimeConfig(["/tmp/pf.json"], read({ dataDir: "/d", dshHome: "/h", preflight: true, resultPath: "/d/r.json" }));
+  assert.equal(o.preflight, true);
+  assert.equal(o.resultPath, "/d/r.json");
+});
+
 test("parseRuntimeConfig: 可选 dshHome（当前数据源 W3）——须绝对路径且不含 NUL", () => {
   const o = parseRuntimeConfig(["/tmp/runtime.json"], read({ ...GOOD, dshHome: "/hana/app-data/dsh-hanako/dsh-home" }));
   assert.equal(o.dshHome, "/hana/app-data/dsh-hanako/dsh-home");
