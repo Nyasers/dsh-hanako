@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Nyasers
 //
 // src/lib/managed-runtime.js — dsh-hanako App v2 受管 DSH runtime 启动封装（迁移指南 §13
-// 步骤 2；消费方 = 后续步骤 dsh_session 的 create/send/cancel/approve 接线，本步先落封装
+// 步骤 2；消费方 = 后续步骤 dshana_session 的 create/send/cancel/approve 接线，本步先落封装
 // 与单测，session 侧只留接线注释/桩）
 //
 // 职责：

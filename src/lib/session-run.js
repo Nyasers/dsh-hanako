@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/lib/session-run.js — dsh_session create/send 提交链（App v2 步骤 3）
+// src/lib/session-run.js — dshana_session create/send 提交链（App v2 步骤 3）
 //
 // 职责：execute（工具执行，App 主进程）内完成：
 //   ① ctx.tasks.create({ callToken, label, metadata }) —— callToken 只在这里消费，
@@ -20,7 +20,7 @@
 // ready 在 prompt 被 DSH 接受（{ accepted:true }）后 resolve 定位键，execute 随即返回；
 // promise 在后台继续等到 Hana task 终态（child task-bridge complete/fail 后，宿主投递
 // 到来源会话，指南 §5）并释放串行化锁。本模块不把 DSH turn 的最终文本带回 execute——
-// 内容读取统一走 dsh_session action=get（v1 minimal 回调语义）。
+// 内容读取统一走 dshana_session action=get（v1 minimal 回调语义）。
 //
 // 与 v1 tools/subtool/run.js 的对应：v1 task:register/deferred 唤醒协议退役，v2 等价物
 // = Hana ctx.tasks + 宿主自动投递；v1 g.ops/审批/取消/超时执行是步骤 4 内容（本步不设

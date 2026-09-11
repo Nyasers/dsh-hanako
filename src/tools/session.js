@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/tools/session.js — dsh_session 会话工具（App v2 迁移步骤 3 形态）
+// src/tools/session.js — dshana_session 会话工具（App v2 迁移步骤 3 形态）
 //
 // 状态（迁移指南 §13 步骤 1-4a）：list/get 离线只读（query subtool）；create/send 已接线
 // （lib/session-run.js submitDshTask：ctx.tasks.create + ensureManagedRuntime + loopback
@@ -12,12 +12,12 @@
 // approve 应答经 approve-respond.js ctx.tasks.respondApproval——决策只投给正确等待者）。
 //
 // v2 变化（相对 v1 tools/session.js，迁移指南 §13 步骤 1/3）：
-//  1. 工具名注册策略：保留原名 "dsh_session"（v1 宿主注册出的 "dsh-hanako_dsh_session"
-//     是宿主按插件 id 自动加前缀的工件，不是作者意图名；v2 ctx.tools.register 不自动
-//     加前缀、工具名全局唯一）。理由：全仓文档/SKILL/参数描述均以 dsh_session 为名，
-//     改名会让模型可见 API 与既有手册脱节；冲突面（宿主内置/其它 App/MCP 工具是否占用
-//     dsh_session）在步骤 1 暂无法从本仓库查证，若宿主加载时报重名，只需改本文件 name
-//     一处（如 dshana_session），其余字段不变。
+//  1. 工具名注册策略：工具名 "dshana_session"（本文件 name 为单一事实源）。
+//     v1 宿主注册出的 "dsh-hanako_dsh_session" 是宿主按插件 id 自动加前缀的工件，不是作者
+//     意图名；v2 ctx.tools.register 不自动加前缀、工具名全局唯一。改名（dsh_session →
+//     dshana_session）随 sample-align W4 落地：借用官方样例 hana_dsh_* 的命名空间习惯，
+//     同时保持单工具形态；全仓文档/SKILL/参数描述同步。若宿主加载时报重名，只需改本文件
+//     name 一处，其余字段不变。
 //  2. 数据读路径迁到 ctx.dataDir（宿主 app-data/<id>/；v1 的宿主插件 dataDir / 包根
 //     data/ 布局不再是权威）。list/get 读 dsh-home 的唯一事实源
 //     （storages/session_projcache.json + sessions/.../session.jsonl.zstd）——DSH host
@@ -57,7 +57,7 @@ function dataDirOf() {
   return (g && g.dataDir) || join(APP_ROOT, "data");
 }
 
-export const name = "dsh_session";
+export const name = "dshana_session";
 
 export const description =
   "DSH 会话全生命周期工具（合并原 dsh_run / dsh_cancel）：list=会话清单（解析 session_projcache，dsh-home 唯一事实源，limit 默认 10）；" +
@@ -164,7 +164,7 @@ async function doExecute(input, ctx) {
       "任务已提交给 DSH（" + actionName + "）：rpcId " + rpc + "，sessionId " + sid +
       (loc.cwd ? "，cwd " + loc.cwd : "") +
       "。任务将在后台执行（Hana task " + loc.taskId + "），完成/失败结果会作为后台结果投递到" +
-      "本会话；需要看执行过程或最终结论时用 dsh_session action=get（sessionId " + sid + "）。";
+      "本会话；需要看执行过程或最终结论时用 dshana_session action=get（sessionId " + sid + "）。";
     return {
       content: [{ type: "text", text }],
       details: {
@@ -187,7 +187,7 @@ async function doExecute(input, ctx) {
     // 时发幂等 cancel（防「宿主清映射、DSH 仍在跑」），返回无副作用说明。
     const sessionId = String((input && input.sessionId) || "").trim();
     if (!sessionId) {
-      throw new Error("cancel 需要 sessionId（dsh_session 提交返回/回调/卡片 URL 里带；取消一律显式传 sessionId）");
+      throw new Error("cancel 需要 sessionId（dshana_session 提交返回/回调/卡片 URL 里带；取消一律显式传 sessionId）");
     }
     const out = await cancelSessionWork({ sessionId, reason: "user", log: ctx && ctx.log });
     const sid = String(out.sessionId || sessionId);
@@ -235,7 +235,7 @@ export async function execute(input, ctx) {
   } catch (e) {
     // ctx 为 App apply 注入的工具上下文（见 index.js makeToolCtx：log = 统一日志文件 +
     // 宿主 logger）；缺失时静默（防御）
-    ctx?.log?.error?.("[dsh-hanako] dsh_session failed:", e?.stack || e?.message || String(e));
+    ctx?.log?.error?.("[dsh-hanako] dshana_session failed:", e?.stack || e?.message || String(e));
     throw e;
   }
 }

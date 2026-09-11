@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// tools/subtool/query.js — dsh_session 的 query 操作（list/get 只读会话查询）
+// tools/subtool/query.js — dshana_session 的 query 操作（list/get 只读会话查询）
 // subtool 源码架构：每个操作一个实现模块（独立 execute），session.js 分派壳按 action
 // 路由。本模块处理 list（会话清单，projcache 本地读）与 get（凭 sessionId 取会话内容：
 // projcache 元数据 + jsonl zstd 多帧容器解压取最后 assistant/message summary）。纯本地
@@ -10,7 +10,7 @@ import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { zstdDecompressSync } from "node:zlib";
-import { textFromMessageBlocks } from "../../lib/protocol.js";
+// assistant/message 文本提取（原 lib/protocol.js 纯函数；v1 协议层随 W6 删除后就地落地）
 // App v2 数据目录（apply 注入运行包；离线兜底见 execute 注释）
 import { appDataDir } from "../../lib/app-runtime.js";
 
@@ -143,6 +143,14 @@ function decompressZstdFrames(buf) {
 // 解析 jsonl：逐行 JSON.parse（容错跳过坏行），返回最后一条 type==="assistant/message"
 // 的文本（data.message.content 中 type==="text" 的 text 拼接，同 protocol.js
 // textFromMessageBlocks 语义）。返回 { text, turns }。
+function textFromMessageBlocks(content) {
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((b) => b && b.type === "text" && typeof b.text === "string")
+    .map((b) => b.text)
+    .join("");
+}
+
 function lastAssistantText(jsonlText) {
   let text = "";
   let turns = 0;
@@ -191,7 +199,7 @@ async function doGet(input, ctx, g, dataDir, projSessions) {
       content: [
         {
           type: "text",
-          text: "找不到会话 " + sessionId + " 的日志文件，无法取会话内容。可用 dsh_session action=list 查会话清单。",
+          text: "找不到会话 " + sessionId + " 的日志文件，无法取会话内容。可用 dshana_session action=list 查会话清单。",
         },
       ],
       details: { dsh: { action: "get", sessionId, ok: false } },

@@ -3,10 +3,9 @@
 //
 // src/rspack.config.mjs — dsh-hanako 主 bundle 构建配置（src 域：随源码根，见布局原则\n// 「领域专用脚本随各自源码」；.mjs 不被 collectSource 收集，不随 bundle 打包）
 // 与 hana-remote-dev 的 rspack.config.mjs 对齐，按 dsh-hanako 实际适配：
-//   - 单入口 src/index.js → 单产物 dist/index.js（生命周期+5 工具+lib+路由+前端资产全部收敛）
+//   - 单入口 src/index.js → 单产物 dist/index.js（生命周期 + dshana_session 工具 + lib + 路由全部收敛）
 //   - 输出 ESM module（纯 ESM 无原生模块，不需要 CJS+loadBundle 沙箱；宿主直接 import）
-//   - library.type=module：入口具名导出（pluginRoutes）真 emit 成 ESM export，
-//     dist/routes/index.js 壳 import bundle 转发；default 导出插件类（宿主 new + onload）
+//   - library.type=module：入口具名导出（apply）真 emit 成 ESM export，宿主直接 import
 //   - src/assets 只剩 icon.png（App 图标，由 build.js 原样 copy，不进 bundle）；v1 的 jinja2
 //     模板与 card.js/css 已随 W6 清理删除，template-loader / minify-loader 不再被引用
 //   - externalsPresets.node：node 内置模块保持外部 import（零运行时依赖）
