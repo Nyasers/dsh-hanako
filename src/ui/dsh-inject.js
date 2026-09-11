@@ -243,7 +243,7 @@ export async function injectDshIndex(indexHtml, privateBase, opts) {
  *     直取 /open-in-app/apps —— 这两条没有钩子可接，会落到宿主源被 403；样例同样如此
  *     （样例也没补 EventSource），非我们独有的退化。
  */
-export function installTransport(privateBase) {
+export function installTransport(privateBase, { role } = {}) {
   const mux = createStreamMux(privateBase);
   const runtimeFetch = createRuntimeFetch(privateBase);
   window.__DSH_TRANSPORT__ = {
@@ -252,9 +252,14 @@ export function installTransport(privateBase) {
     loadBundle: loadRuntimeBundle(privateBase),
   };
   window.__DSH_FILE_UPLOAD__ = { fetch: runtimeFetch };
+  // 宿主桥：DSH 客户端集成（integrations/ui-layout 等）读此对象判断「本文件属于哪个面」。
+  // 名字是我们的（样例叫 __HANA_DSH__，我们写自己的 overlay，不沿用它的全局名）。
+  // 目前只放 role：main 卡 → workspace（中+右，无 DSH 侧栏）；FP 面板 → navigation（纯侧栏）。
+  window.__DSHANA__ = { role: role || "workspace" };
   return () => {
     try { delete window.__DSH_TRANSPORT__; } catch { /* 忽略 */ }
     try { delete window.__DSH_FILE_UPLOAD__; } catch { /* 忽略 */ }
+    try { delete window.__DSHANA__; } catch { /* 忽略 */ }
     mux.dispose();
   };
 }

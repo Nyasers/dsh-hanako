@@ -268,7 +268,7 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
     markViewParam(view);
     var privatePrefix = withSurfaceTicket(prefix, surfaceSession());
     var base = new URL(privatePrefix, location.origin);
-    injected.dispose = installTransport(base);
+    injected.dispose = installTransport(base, { role: view === "sidebar" ? "navigation" : "workspace" });
     // 取 index：privatePrefix 已是完整代理路径（含 _surface 票据，宿主路由直认），用原生同源
     // fetch——hana.api.fetch 的入参是「App 路由相对路径」（会再拼 /api/apps/<id>/routes/），
     // 传完整路径会重复前缀 404。

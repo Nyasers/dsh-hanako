@@ -3,12 +3,21 @@
   "upstreamVersion": "0.1.5-rc.2",
   "upstreamDir": "packages/client/ui-layout",
   "hana": 1,
-  "files": [],
+  "files": [
+    {
+      "path": "src/client/AppFrame.tsx",
+      "upstreamSha256": "69f66f2c725120000014c7fc25b66f79632b3b4bb6899b1b81b0678819158841"
+    }
+  ],
   "notes": [
     "批次①（解黑屏 + FP）。官方 client entry 在 0.1.5 仅 171 行：export inject = ['slots','theme','locale']、",
     "provideRoot({hooks:{panelInfo}})（usePanelInfo 的来源）、reflect.provide('layout')、slots.register({name:'root',",
-    "children:{sidebar, main(keyed), ...}})。样例对它的集成做三件事：AppFrame 读 __HANA_DSH__?.role 决定 surface、",
-    "hana CSS 变量→DSH 主题 token、hanaBridge() 存取器。我们要迁的还有 view 里的三视图（full/main/sidebar）",
-    "与跨边选中桥——目标是迁到 0.1.5 的 main(keyed) 契约上，不是重写。"
+    "children:{sidebar, main(keyed), ...}})。",
+    "overlay 现状：只改 AppFrame.tsx——把样例的 role/surface 分支搬过来（详见文件内注释），",
+    "全局名用我们自己的 __DSHANA__（样例叫 __HANA_DSH__）。role∈{workspace,navigation,settings,standalone}，",
+    "我们当前用前两个：主卡=workspace（中+右，无 DSH 侧栏）、FP=navigation（纯侧栏单列占满）。",
+    "index.ts 暂不改（role 分支全在 AppFrame 里）；样例对 index 的改动是主题 token 映射与 inject 列表，",
+    "属于主题/跨边联动那一批，随后续批次定。",
+    "发布侧：壳页 src/ui/app-shell.js 在注入 DSH 前写 window.__DSHANA__（当前只有 role）。"
   ]
 }
