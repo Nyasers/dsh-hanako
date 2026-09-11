@@ -28,6 +28,7 @@ import { join } from "node:path";
 import { mkdirSync, writeFileSync, chmodSync, rmSync } from "node:fs";
 import { randomInt, randomBytes } from "node:crypto";
 import { appDataDir, appLogger, getAppRuntime } from "./app-runtime.js";
+import { currentSource } from "./data-source.js";
 // 依赖就位（自包含打包，2026-09-10）：依赖随包物化在安装目录 <installRoot>/node_modules，
 // 运行时不再安装、不再 spawn（原 ensure-deps.js 与 lib/pnpm.js 已删除；app/process.spawn
 // 能力随之退役）。
@@ -118,17 +119,19 @@ export function makeReadyMarker() {
 
 /**
  * 私有运行时配置构造（与 src/runtime/options.js normalizeRuntimeConfig 对偶）。opts:
- * { dataDir, dshPort, bridgePort, bridgeKey, cordisSrc?, depsRoot?, readyMarker? }
+ * { dataDir, dshHome?, dshPort, bridgePort, bridgeKey, controlKey, cordisSrc?, depsRoot?, readyMarker? }
+ * dshHome = 当前数据源（W3）的 DSH_HOME；缺省时子进程回落 dataDir/dsh-home（旧行为）。
  * 敏感项（bridgeKey）只进本对象→写 0600 文件→argv 只传路径，不出现在 argv/日志。
  */
 export function buildRuntimeConfig(opts) {
-  const { dataDir, dshPort, bridgePort, bridgeKey, controlKey, cordisSrc, depsRoot, readyMarker = READY_MARKER } = opts || {};
+  const { dataDir, dshHome, dshPort, bridgePort, bridgeKey, controlKey, cordisSrc, depsRoot, readyMarker = READY_MARKER } = opts || {};
   if (typeof dataDir !== "string" || !dataDir) throw new Error("buildRuntimeConfig: dataDir 必填（App ctx.dataDir）");
   if (!Number.isInteger(dshPort) || dshPort < 1 || dshPort > 65535) throw new Error("buildRuntimeConfig: dshPort 必填（1..65535）");
   if (!Number.isInteger(bridgePort) || bridgePort < 1 || bridgePort > 65535) throw new Error("buildRuntimeConfig: bridgePort 必填（1..65535）");
   if (typeof bridgeKey !== "string" || bridgeKey.length < 16) throw new Error("buildRuntimeConfig: bridgeKey 必填（≥16 字符）");
   if (typeof controlKey !== "string" || controlKey.length < 16) throw new Error("buildRuntimeConfig: controlKey 必填（≥16 字符）");
   const config = { dataDir, dshPort, bridgePort, bridgeKey, controlKey, readyMarker };
+  if (typeof dshHome === "string" && dshHome) config.dshHome = dshHome;
   if (typeof cordisSrc === "string" && cordisSrc) config.cordisSrc = cordisSrc;
   if (typeof depsRoot === "string" && depsRoot) config.depsRoot = depsRoot;
   return config;
@@ -366,12 +369,16 @@ async function doStartManaged(opts, attempt = 1) {
   const ctx = app.ctx;
   const dataDir = appDataDir();
   if (!dataDir) throw new Error("managed-runtime: ctx.dataDir 缺失");
+  // 数据源（W3）：DSH_HOME 由当前源决定（private = <dataDir>/dsh-home；shared = 外部目录）。
+  // 读设置失败即抛错（不得默认切错源）；设置文件不存在时回落 private 默认。
+  const source = await currentSource();
   const { bridgePort, dshPort } = pickPorts();
   const bridgeKey = randomBytes(24).toString("base64url");
   const controlKey = randomBytes(24).toString("base64url");
   const readyMarker = makeReadyMarker();
   const config = buildRuntimeConfig({
     dataDir,
+    dshHome: source.home,
     dshPort,
     bridgePort,
     bridgeKey,
@@ -381,7 +388,7 @@ async function doStartManaged(opts, attempt = 1) {
     depsRoot: typeof opts.depsRoot === "string" && opts.depsRoot ? opts.depsRoot : undefined,
   });
   const configPath = writeRuntimeConfigFile(dataDir, config);
-  logApp("info", "[managed-runtime] 启动 DSH 受管 runtime（attempt " + attempt + "/" + MAX_START_ATTEMPTS + " entry=runtime/dsh-host.mjs dshPort=" + dshPort + " bridgePort=" + bridgePort + "）");
+  logApp("info", "[managed-runtime] 启动 DSH 受管 runtime（attempt " + attempt + "/" + MAX_START_ATTEMPTS + " source=" + source.sourceId + " dshHome=" + source.home + " dshPort=" + dshPort + " bridgePort=" + bridgePort + "）");
   // 权限档 = local-machine（定案 2026-09-10，见 specs/dshana-v2-定案与待议-2026-09-10.md §1）：
   // 明确不是沙箱——受管程序自持工作区与命令策略，可读写当前用户可及的一切文件（含其他应用
   // 数据与磁盘凭据），仅保留 stop / 撤销 / 进程树回收的托管语义。宿主契约**禁止**传

@@ -98,6 +98,13 @@ test("buildRuntimeConfig: 必填缺失/非法抛错", () => {
   assert.throws(() => buildRuntimeConfig({ dataDir: "/x", dshPort: 1, bridgePort: 2, bridgeKey: "k".repeat(32) }), /controlKey/);
 });
 
+test("buildRuntimeConfig: dshHome（当前数据源 W3）只在显式传时出现", () => {
+  const base = buildRuntimeConfig({ dataDir: "/x", dshPort: 1, bridgePort: 2, bridgeKey: "k".repeat(32), controlKey: "c".repeat(32) });
+  assert.ok(!("dshHome" in base), "未传时不出现（子进程自回落 <dataDir>/dsh-home）");
+  const withHome = buildRuntimeConfig({ dataDir: "/x", dshHome: "/x/dsh-home", dshPort: 1, bridgePort: 2, bridgeKey: "k".repeat(32), controlKey: "c".repeat(32) });
+  assert.equal(withHome.dshHome, "/x/dsh-home");
+});
+
 test("classifyRuntimeFailure: 退出码契约归类（src/runtime/main.js EXIT 同步）", () => {
   assert.equal(classifyRuntimeFailure({ exitCode: 7 }).kind, "port-busy");
   assert.equal(classifyRuntimeFailure({ exitCode: 4 }).kind, "deps");

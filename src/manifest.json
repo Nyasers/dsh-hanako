@@ -12,6 +12,7 @@
     "app/tasks.manage",
     "app/session.start-turn",
     "app/models.infer",
+    "app/resources.read",
     "app/runtime.execute",
     "app/runtime.local-machine",
     "app/runtime.network",

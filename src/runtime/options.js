@@ -9,14 +9,17 @@
 // argv（进程列表可见）、环境变量或日志里。
 //
 // 配置文件 schema（JSON）：
-//   { dataDir, dshPort, bridgePort, bridgeKey, readyMarker, cordisSrc?, depsRoot? }
-//   · dataDir       App ctx.dataDir 绝对路径（dsh-home / runtime / logs 均在其下）
+//   { dataDir, dshHome?, dshPort, bridgePort, bridgeKey, readyMarker, cordisSrc?, depsRoot? }
+//   · dataDir       App ctx.dataDir 绝对路径（runtime / logs 均在其下）
+//   · dshHome       本源的 DSH_HOME 绝对路径（当前数据源决定；缺省回落 dataDir/dsh-home）
 //   · dshPort       DSH webserver 内部监听端口（1..65535，runtime 自用，不由宿主暴露）
 //   · bridgePort    中继端口 = 注册给宿主的 service.port（宿主代理目标；1..65535）
 //   · bridgeKey     中继鉴权 key（header x-hana-dsh-bridge / 路径 /_hana/<key>/）
 //   · readyMarker   就绪标记（须与 start.service.readyMarker 完全一致，整行匹配）
 //
 // 仍接受 --help（无配置文件时打印用法）。
+import { isAbsolute } from "node:path";
+
 export class UsageError extends Error {
   constructor(message) {
     super(message);
@@ -57,8 +60,13 @@ export function normalizeRuntimeConfig(input) {
   if (controlKey.length < 16) throw new UsageError("配置项 controlKey 必填且不短于 16 字符");
   const readyMarker = typeof input.readyMarker === "string" && input.readyMarker ? input.readyMarker : "DSH_READY";
   if (/\n|\r/.test(readyMarker)) throw new UsageError("配置项 readyMarker 不得含换行（宿主按整行匹配）");
+  const dshHome = typeof input.dshHome === "string" && input.dshHome ? input.dshHome : null;
+  if (dshHome && (!isAbsolute(dshHome) || dshHome.includes("\0"))) {
+    throw new UsageError("配置项 dshHome 必须是绝对路径且不含 NUL（收到 " + JSON.stringify(input.dshHome) + "）");
+  }
   return {
     dataDir,
+    ...(dshHome ? { dshHome } : {}),
     dshPort,
     bridgePort,
     bridgeKey,

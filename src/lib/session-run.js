@@ -28,6 +28,7 @@
 // models.stream 5 分钟/请求兜底）。
 import { join } from "node:path";
 import { appCtx, appDataDir } from "./app-runtime.js";
+import { currentDshHome } from "./data-source.js";
 import { ensureManagedRuntime } from "./managed-runtime.js";
 import { nextRpcId } from "./rpc-envelope.js";
 import { writeTaskMap, removeTaskMap, isValidSessionId, pruneTaskMaps } from "./task-map.js";
@@ -298,7 +299,8 @@ export function submitDshTask({ action, input, callToken, log }) {
       if (parsed.action === "create") releaseNewSessionTurn = enterSessionTurn(sessionId);
 
       // ④ 显式 provider/model/effort → selectModel（model-unavailable 降级不带 effort 重试）
-      const selection = resolveModelSelection(parsed, join(dataDir, "dsh-home"));
+      // dshHome = 当前数据源（W3）：默认模型/预设从当前源的 settings.yaml 解析
+      const selection = resolveModelSelection(parsed, await currentDshHome(dataDir));
       if (selection) {
         try {
           await rpcCall(ctx, base, { method: "session/selectModel", payload: { sessionId, ...selection } });

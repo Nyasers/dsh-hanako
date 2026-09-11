@@ -13,6 +13,8 @@ import { zstdDecompressSync } from "node:zlib";
 // assistant/message 文本提取（原 lib/protocol.js 纯函数；v1 协议层随 W6 删除后就地落地）
 // App v2 数据目录（apply 注入运行包；离线兜底见 execute 注释）
 import { appDataDir } from "../../lib/app-runtime.js";
+// 当前数据源（W3）：DSH_HOME 由来源设置决定（private/shared），不再硬编码 dsh-home
+import { currentDshHome } from "../../lib/data-source.js";
 
 const __here = dirname(fileURLToPath(import.meta.url));
 // APP_ROOT 向上查找含 manifest.json 的目录——源码形态（src/tools/subtool → src/）与
@@ -36,9 +38,9 @@ function clampLimit(raw) {
 }
 
 // 读 + JSON.parse 整个 projcache：任何异常（文件不存在 / JSON 损坏 / 结构不符）返回 null，
-// 由调用方按空清单处理，不抛错
-function readSessionProjcache(dataDir) {
-  const cachePath = join(dataDir, "dsh-home", "storages", "session_projcache.json");
+// 由调用方按空清单处理，不抛错。dshHome = 当前数据源（W3）的 DSH_HOME。
+function readSessionProjcache(dshHome) {
+  const cachePath = join(dshHome, "storages", "session_projcache.json");
   try {
     const j = JSON.parse(readFileSync(cachePath, "utf8"));
     const tbl = j?.tables?.sessions;
@@ -85,8 +87,8 @@ function encodeCwdKey(cwd) {
 
 // 定位会话目录：优先按 projcache identity.cwd 猜编码，失败则遍历 sessions/ 下全部
 // 子目录找 sessionId 同名目录。返回目录路径或 null。
-function locateSessionDir(dataDir, sessionId, projSessions) {
-  const sessionsRoot = join(dataDir, "dsh-home", "sessions");
+function locateSessionDir(dshHome, sessionId, projSessions) {
+  const sessionsRoot = join(dshHome, "sessions");
   if (!existsSync(sessionsRoot)) return null;
   if (projSessions && projSessions[sessionId]) {
     const cwd = projSessions[sessionId]?.identity?.cwd;
@@ -180,7 +182,7 @@ function truncateSummary(text) {
   return chars.slice(0, SUMMARY_MAX).join("") + "…";
 }
 
-async function doGet(input, ctx, g, dataDir, projSessions) {
+async function doGet(input, ctx, g, dshHome, projSessions) {
   const sessionId = String(input.sessionId ?? "").trim();
   if (!sessionId) throw new Error("get 模式必须传 sessionId");
   // 校验 sessionId 格式（session-<UUID>，与 dsh session 创建方生成格式一致）：sessionId
@@ -191,11 +193,11 @@ async function doGet(input, ctx, g, dataDir, projSessions) {
     throw new Error(`sessionId 格式非法（应为 session-<UUID>）：${sessionId}`);
   }
 
-  const sessionDir = locateSessionDir(dataDir, sessionId, projSessions);
+  const sessionDir = locateSessionDir(dshHome, sessionId, projSessions);
   if (!sessionDir) {
     return {
       ok: false,
-      error: "找不到会话 " + sessionId + " 的日志文件（<dataDir>/dsh-home/sessions/ 下无对应目录），无法取会话内容",
+      error: "找不到会话 " + sessionId + " 的日志文件（<DSH_HOME>/sessions/ 下无对应目录），无法取会话内容",
       content: [
         {
           type: "text",
@@ -277,12 +279,14 @@ export async function execute(input, ctx) {
   // lib/app-runtime.js appDataDir()——本刀只把读路径迁到 ctx.dataDir 语义，不做迁移）
   const dataDir = appDataDir() || globalThis.__dshHanako?.dataDir || join(APP_ROOT, "data");
   const action = String(input.action ?? "").trim();
+  // 当前数据源的 DSH_HOME（W3）：会话数据一律读当前源，不再硬编码 <dataDir>/dsh-home。
+  const dshHome = await currentDshHome(dataDir);
 
   if (action === "list") {
     const limit = clampLimit(input.limit);
-    // 会话清单以 dsh-home 为唯一事实源（session_projcache.json）；sessionId 即访问
+    // 会话清单以当前源的 session_projcache.json 为唯一事实源；sessionId 即访问
     // 凭证——list 暴露的 id 即可 get/resume，拿不到 id 天然无所有权，无需额外注册表。
-    const sessions = readSessionProjcache(dataDir);
+    const sessions = readSessionProjcache(dshHome);
     const items = mapSessionItems(sessions);
     // 排序：lastPromptAt 降序（最新在前；缺失时兜底 createdAt，仍缺失排最后）
     items.sort(
@@ -318,9 +322,9 @@ export async function execute(input, ctx) {
     const sessionId = String(input.sessionId ?? "").trim();
     if (!sessionId) throw new Error("get 模式必须传 sessionId");
     // projcache 只在需要时读一次（get 定位 cwd-key + 元数据共用）；
-    // 权限模型：sessionId 即凭证——凭 id 在 dsh-home 存在即读，不存在报错（见 doGet）。
-    const projSessions = readSessionProjcache(dataDir);
-    return doGet(input, ctx, null, dataDir, projSessions);
+    // 权限模型：sessionId 即凭证——凭 id 在当前源存在即读，不存在报错（见 doGet）。
+    const projSessions = readSessionProjcache(dshHome);
+    return doGet(input, ctx, null, dshHome, projSessions);
   }
 
   throw new Error(`query 操作只处理 list / get（收到 "${action}"）`);
