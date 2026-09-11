@@ -290,6 +290,10 @@ export function SettingsRoot(props: SettingsRootComponentProps) {
       onClose={close}
     />
   )
+  // FP（navigation）**只发射状态、自己不渲染面板**：
+  // 样例两面都画，但 FP 只有 160px 宽，面板在那边又窄又挤（真机反馈）。
+  // 这里让步：面板归 workspace 面，FP 只留齿轮入口（点击照常 publish，主卡就会开）。
+  const localPanel = role === 'navigation' ? null : panel
   const onboarding = onboardingStep !== undefined && renderSlot('settings.onboarding', {
     stepId: onboardingStep.id,
     complete: () => { completeOnboardingStep(onboardingStep.id) },
@@ -337,7 +341,7 @@ export function SettingsRoot(props: SettingsRootComponentProps) {
           onReconnect={reconnect}
         />
       </div>
-      {panel}
+      {localPanel}
       {syncFailure}
       {/* Dialog chrome and `#root` inert ownership live inside each step's
           visible branch. A step still deciding (private facts loading)
