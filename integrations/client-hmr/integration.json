@@ -1,0 +1,22 @@
+{
+  "package": "@deepseek-ai/dsh-client-hmr",
+  "upstreamVersion": "0.1.5-rc.2",
+  "upstreamDir": "packages/client/hmr",
+  "hana": 1,
+  "files": [
+    {
+      "path": "src/client/index.ts",
+      "upstreamSha256": "28e1b0ca08560d68821b9e701b5abd7fd5fe42d5cf597e0e082e3bfdc450db74"
+    }
+  ],
+  "notes": [
+    "批次②第一波（与 ui-open-in-app 同批）：EventSource 无法被 fetch 型 transport 包装，",
+    "所以只能把地址换到 App 的私有运行时基址 —— 与样例 0.7.0 的 client-hmr 补丁同一处改法：",
+    "  upstream:  new EventSource(EVENTS_ENDPOINT)",
+    "  样例:      new EventSource(bridge?.runtimeUrl?.(EVENTS_ENDPOINT) ?? EVENTS_ENDPOINT)",
+    "  我们:      new EventSource(globalThis.__DSHANA__?.runtimeUrl?.(EVENTS_ENDPOINT) ?? EVENTS_ENDPOINT)",
+    "桥缺席（非 App 文档）回落裸路径，与上游一致。__DSHANA__.runtimeUrl 由 src/ui/dsh-inject.js",
+    "在 installTransport 里发布（与 __DSH_TRANSPORT__ 同一处，privateBase 已在手）。",
+    "上游路径注意：包名 @deepseek-ai/dsh-client-hmr，镜像目录 packages/client/hmr（不同名）。"
+  ]
+}
