@@ -53,11 +53,21 @@ required: ["action"]
 
 ## action=list：会话清单
 
-解析 `session_projcache.json`：`{ sessionId, title, cwd?, createdAt?, lastPromptAt?, usage?, turns?, steps?, llmMs? }`，按 `lastPromptAt` 降序取最近 N 条。纯本地读，DSH 未启动也可用。
+官方 `session/list` 取数（**需 DSH 运行时在线**，未就绪会先拉起）：`{ sessionId, title, cwd?, updatedAt, lastPromptAt?, turns?, steps?, llmMs?, usage? }`，按 `lastPromptAt`（缺失则 `updatedAt`）降序取最近 N 条。
+
+- `title` 来自会话投影 `projections.values.title`（自动生成或用户改名；未命名的会话为空）
+- DSH 侧摘要**没有 `createdAt`**，所以这里给的是 `updatedAt`（与原口径的差异）
 
 ## action=get：凭 sessionId 取会话内容
 
-projcache 元数据 + summary（jsonl 最后一条 `assistant/message` 的 text，截断 ≤4000）。jsonl 为多帧 zstd 容器（帧 magic `0xFD2FB528`），`node:zlib` 逐帧解压拼接。
+| | |
+|---|---|
+| 取数 | `session/list` 定该会话读位点 `projections.asOfSeq` → `session/page` 在该 cut 上取尾部一窗 records |
+| 口径 | **最后一次 user 消息之后、最后一次 assistant 输出**就是本轮结论（一次 create/send = 一轮）；文本截断 ≤4000 |
+
+会显式标注、不静默篡改的情形：本轮尚无输出（退到更早的最近结论）／窗口内无 user 消息／该轮被中断／**该轮以错误结束**（模型或工具报错时 DSH 只写 `attempt` + `turn/end`，这里把错误原因透出来）／还有更早轮次未读。
+
+注：会话日志已是 V3 格式，**不再自读 `session_projcache.json` / `session.jsonl.zstd`**（格式演进交回官方）；DSH 未启动时 list/get 不可用。
 
 ## 典型用法
 

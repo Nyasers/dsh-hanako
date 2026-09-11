@@ -19,9 +19,9 @@
 //     同时保持单工具形态；全仓文档/SKILL/参数描述同步。若宿主加载时报重名，只需改本文件
 //     name 一处，其余字段不变。
 //  2. 数据读路径迁到 ctx.dataDir（宿主 app-data/<id>/；v1 的宿主插件 dataDir / 包根
-//     data/ 布局不再是权威）。list/get 读当前源（DSH_HOME）的唯一事实源
-//     （storages/session_projcache.json + sessions/.../session.jsonl.zstd）——DSH host
-//     未启动仍可读（离线可读验收点）。旧插件数据 → App dataDir 的迁移接缝见
+//     data/ 布局不再是权威）。list/get 走**官方查询面**（session/list + session/page，
+//     见 tools/subtool/query.js 头注释）——不再是文件直读，也不再具备"离线可读"性
+//     （W4 裁决：会话格式演进交回官方）。旧插件数据 → App dataDir 的迁移接缝见
 //     lib/app-runtime.js appDataDir() 注释，本次只留口、不做迁移脚本。
 //  3. action 参数契约与返回语义不变（list/get/create/send/cancel/approve + 同 schema）。
 //     但 create/send/cancel/approve 依赖 DSH 受管运行时（ctx.runtime.start +
@@ -30,38 +30,18 @@
 //     list/get 步骤 1 时离线工作（W4 起改为经官方查询面取数，见 subtool/query.js 头注释，
 //     从此需要受管 runtime 就绪）。v1 的 run/cancel/approve subtool 实现保留在源码树
 //     （tools/subtool/）供后续步骤复用改造，不再被本模块静态 import。
-import { existsSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
 import { execute as queryExecute } from "./subtool/query.js"; // list/get 只读查询（subtool）
 import { submitDshTask } from "../lib/session-run.js"; // create/send 提交链（步骤 3 接线）
 import { cancelSessionWork } from "../lib/cancel-chain.js"; // cancel 编排（步骤 4a）
 import { respondApprovalAction } from "../lib/approve-respond.js"; // approve 应答编排（步骤 4a）
-import { appDataDir } from "../lib/app-runtime.js";
 
-const __here = dirname(fileURLToPath(import.meta.url));
-// APP_ROOT 向上查找含 manifest.json 的目录——源码形态（src/tools/ 下）与
-// dist bundle 形态（dist/index.js 内联，import.meta.url = dist/）都能正确定位 App 根。
-let APP_ROOT = __here;
-while (!existsSync(join(APP_ROOT, "manifest.json"))) {
-  const parent = dirname(APP_ROOT);
-  if (parent === APP_ROOT)
-    throw new Error("无法定位 App 根：向上未找到 manifest.json");
-  APP_ROOT = parent;
-}
-
-/** 当前数据目录（权威 ctx.dataDir；离线/无宿主兜底包根 data/，与 v1 同语义） */
-function dataDirOf() {
-  const d = appDataDir();
-  if (d) return d;
-  const g = globalThis.__dshHanako; // v1 残留单例兜底（仅离线/未迁移路径，读不写）
-  return (g && g.dataDir) || join(APP_ROOT, "data");
-}
+// 注：list/get 改走官方查询面后，本模块不再自己定位 App 根/数据目录——旧 APP_ROOT 上溯与
+// dataDirOf()（含 v1 单例兜底）随文件直读路径一并退场（数据目录由 query subtool 经 ctx 取）。
 
 export const name = "dshana_session";
 
 export const description =
-  "DSH 会话全生命周期工具（合并原 dsh_run / dsh_cancel）：list=会话清单（解析 session_projcache，DSH_HOME 唯一事实源，limit 默认 10）；" +
+  "DSH 会话全生命周期工具（合并原 dsh_run / dsh_cancel）：list=会话清单（官方 session/list，需 DSH 运行时在线，limit 默认 10）；" +
   "get=凭 sessionId 直取会话元数据 + 最终结论 summary；" +
   "create=新建会话 + 提交任务（task/cwd 必填，cwd 每次调用显式指定）；" +
   "send=续已有会话发消息（sessionId + task 必填，resume 语义）；" +
@@ -141,8 +121,8 @@ async function doExecute(input, ctx) {
   const action = String(input.action ?? "").trim();
 
   if (action === "list" || action === "get") {
-    // 只读查询（list/get）由 query subtool 处理：经控制面走官方查询面（session/list、session/follow
-    // 开场快照），**需要受管 runtime 就绪**（不再有离线直读文件的路径；数据目录 = App ctx.dataDir）
+    // 只读查询（list/get）由 query subtool 处理：经控制面走官方查询面（session/list + session/page），
+    // **需要受管 runtime 就绪**（不再有离线直读文件的路径；数据目录 = App ctx.dataDir）
     return queryExecute(input, ctx);
   }
 
