@@ -14,7 +14,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-// 读 dsh-home/settings.yaml 的 agent-default-model（行级解析，零依赖）——
+// 读 DSH_HOME/settings.yaml 的 agent-default-model（行级解析，零依赖）——
 // dsh 默认模型：dsh models 页设置后写回 settings.yaml（selectModel 同源）。
 // 返回 { provider, model } 或 null。
 export function readDshDefaultModel(dshHome) {
@@ -42,7 +42,7 @@ export function readDshDefaultModel(dshHome) {
   }
 }
 
-// 读 dsh-home/settings.yaml 的 agent-presets.default（行级解析，零依赖）——
+// 读 DSH_HOME/settings.yaml 的 agent-presets.default（行级解析，零依赖）——
 // dsh 默认 agent 预设：Web UI 设置后写回 settings.yaml。返回预设字符串或 null。
 export function readDshDefaultPreset(dshHome) {
   try {
@@ -143,7 +143,7 @@ export function resolveDefaultTimeoutSec(cfg) {
 // global.dshTag（设置界面改动即时生效；Agent 直改文件同样生效），缺失/非字符串回退
 // 配置快照 cfg.dshTag（manifest 默认 "latest"），再缺失回退 "latest"。返回恒为 tag
 // 返回 dsh profile 名（spawn --profile 用）。vX：dshana profile 路线——插件以自己的
-// profile（dsh-home/profiles/dshana，无官方 web-app）启动 dsh；web profile 保留作回退。
+// profile（DSH_HOME/profiles/dshana，无官方 web-app）启动 dsh；web profile 保留作回退。
 // 优先读 config.json global.profileName，缺省 "dshana"。
 export function resolveProfileName(cfg) {
   try {

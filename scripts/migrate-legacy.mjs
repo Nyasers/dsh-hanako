@@ -25,7 +25,7 @@ import {
   countSessions,
   legacySettingsSuggestions,
   DSH_HOME_COPY_ENTRIES,
-  DSH_HOME_NAME,
+  targetDshHomeOf,
 } from "../src/lib/legacy-migrate.js";
 import fs from "node:fs";
 
@@ -130,7 +130,7 @@ function main() {
     if (st.step === "copy") cp(st.from, st.to, st.note || "");
   }
   // 迁移标记（幂等）
-  const stats = { source: opts.source, copied: plan.steps.length, targetDshHome: join(opts.target, DSH_HOME_NAME) };
+  const stats = { source: opts.source, copied: plan.steps.length, targetDshHome: targetDshHomeOf(opts.target) };
   writeMigrationMarker(opts.target, { schemaVersion: 1, source: opts.source, at: new Date().toISOString(), stats, backupDir });
   // 迁移后只读验证
   const v = verifyMigration({ dataDir: opts.target, sourceInfo });
