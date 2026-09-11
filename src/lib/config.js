@@ -72,6 +72,40 @@ export function readDshDefaultPreset(dshHome) {
 
 // reasoningEffort 解析（全局配置已移除，只接受工具显式参数，无配置回退；
 // 不传时由 dsh 默认处理）。返回显式值或 null。
+/**
+ * 读 DSH_HOME/settings.yaml 的 ui-theme.preference（行级解析，零依赖）。
+ * dsh 明暗偏好 = 主题桥的「跟随门」：system 时压 Hana 配色，显式 light/dark 完全原生。
+ * 结构：
+ *   ui-theme:
+ *     preference: light
+ * 取不到/形状不符一律回落 "system"（宁可多跟随，不可把 UI 钉住）。
+ * @param {string} dshHome - DSH_HOME 目录
+ * @returns {"system"|"light"|"dark"}
+ */
+export function readDshThemePreference(dshHome) {
+  try {
+    if (!dshHome) return "system";
+    const f = join(dshHome, "settings.yaml");
+    if (!existsSync(f)) return "system";
+    let inBlock = false;
+    for (const raw of readFileSync(f, "utf8").split(/\r?\n/)) {
+      if (/^ui-theme\s*:/.test(raw)) { inBlock = true; continue; }
+      if (inBlock) {
+        // 退出该块：出现新的顶级键（非缩进行）
+        if (/^\S/.test(raw)) { inBlock = false; continue; }
+        const m = /^\s+preference\s*:\s*["']?([A-Za-z]+)/.exec(raw);
+        if (m) {
+          const v = m[1];
+          return v === "light" || v === "dark" || v === "system" ? v : "system";
+        }
+      }
+    }
+  } catch {
+    /* 读失败不改行为 */
+  }
+  return "system";
+}
+
 export function resolveReasoningEffort(explicit) {
   const v = String(explicit ?? "").trim();
   return v || null;

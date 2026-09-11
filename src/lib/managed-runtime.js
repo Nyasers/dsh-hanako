@@ -61,6 +61,7 @@ let managed = {
   promise: null, // starting 阶段共享 promise（并发首启 single-flight）
   lastInfo: null,
   lastError: null,
+  dshHome: null, // 当前数据源（W3）的 DSH_HOME；启动时记录，供 boot-state 读 durable settings
   bridgePort: null, // 中继端口（= 注册给宿主的 service.port；浏览器侧访问）
   bridgeKey: null, // 中继鉴权 key（header x-hana-dsh-bridge / _hana 路径；绝不落盘/落日志）
   controlKey: null, // 控制面 key（/_control；App 工具经 controller.invoke 使用）
@@ -310,6 +311,7 @@ async function doStartManaged(opts, attempt = 1) {
   // 数据源（W3）：DSH_HOME 由当前源决定（private = <dataDir>/.dsh；shared = 外部目录）。
   // 读设置失败即抛错（不得默认切错源）；设置文件不存在时回落 private 默认。
   const source = await currentSource();
+  managed.dshHome = source.home;
   const { bridgePort, dshPort } = pickPorts();
   const bridgeKey = randomBytes(24).toString("base64url");
   const controlKey = randomBytes(24).toString("base64url");
@@ -446,5 +448,7 @@ export function managedRuntimeDetails() {
     runtimeId: managed.runtimeId,
     info: managed.lastInfo ? { ...managed.lastInfo } : null,
     lastError: managed.lastError || null,
+    // 当前 DSH_HOME（启动时记录）：boot-state 用它读 durable settings（如 ui-theme.preference）。
+    dshHome: managed.dshHome,
   };
 }

@@ -42,7 +42,15 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
     }).then(function (res) {
       if (!res.ok) throw new Error("boot-state HTTP " + res.status);
       return res.json();
-    }).then(function (d) { return (d && d.state) || null; })
+    }).then(function (d) {
+      var st = (d && d.state) || null;
+      // 主题偏好随 boot-state 轮询刷新（后端读 dsh 的 durable settings，见 dshana-routes）：
+      // 在 dsh 设置里改偏好不必重开卡片，下一次轮询就换门（ready 态轮询间隔 6s）。
+      if (st && (st.themePreference === "light" || st.themePreference === "dark" || st.themePreference === "system")) {
+        themePreference = st.themePreference;
+      }
+      return st;
+    })
       .catch(function (err) {
         var msg = err && err.message ? err.message : String(err);
         if (/appSurfaceSession/.test(msg)) {
@@ -670,6 +678,9 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
         (document.head || document.documentElement).appendChild(el);
       }
       if (el.textContent !== css) el.textContent = css;
+      // CSS 落地后立即再推一次：只靠 documentElement 的属性变化通知会早于样式表到位，
+      // 桥那一刻读到的还是旧值，只能等下一条 2s 兜底推送——这是“切主题延迟高”的来源。
+      try { if (injected.started) pushThemeToSelf(); else startThemePush(); } catch (e) { /* 忽略 */ }
     }).catch(function (err) {
       // 主题拿不到不致命：页面仍用 HTML 里写好的纸张 fallback 色。
       try { console.warn("[dshana] 宿主主题样式表加载失败", err && err.message ? err.message : err); } catch (e) { /* 忽略 */ }
