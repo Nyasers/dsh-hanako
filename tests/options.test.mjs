@@ -38,6 +38,17 @@ test("parseRuntimeConfig: 可选 cordisSrc/depsRoot", () => {
   assert.equal(o.depsRoot, "/app/node_modules");
 });
 
+test("parseRuntimeConfig: 可选 dshHome（当前数据源 W3）——须绝对路径且不含 NUL", () => {
+  const o = parseRuntimeConfig(["/tmp/runtime.json"], read({ ...GOOD, dshHome: "/hana/app-data/dsh-hanako/dsh-home" }));
+  assert.equal(o.dshHome, "/hana/app-data/dsh-hanako/dsh-home");
+  assert.ok(!("dshHome" in normalizeRuntimeConfig(GOOD)), "未传时不出现该键（子进程自回落）");
+  assert.throws(
+    () => normalizeRuntimeConfig({ ...GOOD, dshHome: "relative/home" }),
+    (e) => e instanceof UsageError && /dshHome/.test(e.message),
+  );
+  assert.throws(() => normalizeRuntimeConfig({ ...GOOD, dshHome: "/x\0y" }), /dshHome/);
+});
+
 test("parseRuntimeConfig: readyMarker 缺省 DSH_READY", () => {
   const o = normalizeRuntimeConfig({ ...GOOD, readyMarker: undefined });
   assert.equal(o.readyMarker, "DSH_READY");

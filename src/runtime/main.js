@@ -254,7 +254,8 @@ export async function main(argv) {
   info("宿主 IPC 已连接（connectAppRuntime；tasks/models/network 待步骤 3 消费）");
 
   // ---- 2) 进程级 env（自有受管进程内设置，不改宿主进程环境——指南 §4）----
-  const dshHome = join(dataDir, "dsh-home");
+  // DSH_HOME = 当前数据源（W3）：由 App 侧解析后经私有配置传入；缺省回落内置独立目录（旧行为）。
+  const dshHome = opts.dshHome || join(dataDir, "dsh-home");
   mkdirSync(dshHome, { recursive: true });
   mkdirSync(runtimeDir, { recursive: true });
   process.env.DSH_HOME = dshHome;
