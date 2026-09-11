@@ -37,13 +37,13 @@
 // specific 组件/滚动条），功能性颜色保留原生（mask-photo 黑底、danger/warn
 // 语义色、toast/tooltip 深色浮层、工具栏半透明、反白文字/边框、骨架屏）。
 //
-// 依赖注入：webServer 服务（host 半部），与 dsh-client-ui-theme 同姿势；统一日志经
-// @dsh-hanako/logger 服务（inject ['hanaLogger']）写入本次会话日志（行格式 [theme]）。
+// 依赖注入：webServer 服务（host 半部），与 dsh-client-ui-theme 同姿势。日志直接写 cordis
+// 内建 LoggerService（runtime stdout，行首带 [theme] 前缀）——@dsh-hanako/logger 已于
+// 2026-09-12 随 bus 一起退役（它当时只剩三行转发，没有存在价值）。
 
 import bridgeBody from "./assets/theme-bridge.js";
 
 export const name = "@dsh-hanako/theme";
-export const inject = ["hanaLogger"];
 
 // alias/specific token ← 主题字段映射（~ 前缀 = 静态值，不走主题变量）。
 // 右侧一律是**宿主主题 CSS 的变量名**（与 shell 的 THEME_VARS、渲染器 themes/*.css 同名）。
@@ -145,23 +145,16 @@ ${bridgeBody.replace("__DSH_THEME_TOKENS__", JSON.stringify(TOKEN_MAP))}
 </script>`;
 
 export function apply(ctx, config) {
-  ctx.inject(["webServer", "hanaLogger"], (httpCtx) => {
+  ctx.inject(["webServer"], (httpCtx) => {
     httpCtx.effect(() => {
       try {
         httpCtx.webServer.tapIndex((html) => {
           if (html.includes('id="@dsh-hanako/theme-bridge"')) return html;
           return html.replace("</head>", BRIDGE + "</head>");
         });
-        httpCtx.hanaLogger.log("theme", "主题注入 tapIndex 已注册");
+        try { ctx.logger?.info?.("[theme] 主题注入 tapIndex 已注册"); } catch { /* 忽略 */ }
       } catch (e) {
-        httpCtx.hanaLogger.log("theme", `主题注入注册失败：${e?.message || e}`);
-        try {
-          ctx.logger?.warn?.(
-            `[@dsh-hanako/theme] tapIndex 注册失败：${e?.message || e}`,
-          );
-        } catch {
-          /* 忽略 */
-        }
+        try { ctx.logger?.warn?.("[theme] 主题注入注册失败：" + (e?.message || e)); } catch { /* 忽略 */ }
       }
     });
   });
