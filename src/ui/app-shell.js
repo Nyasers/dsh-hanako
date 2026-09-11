@@ -476,6 +476,13 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
     var msg = { dshHanaTheme: readThemeVars() };
     try { dst.postMessage(msg, "*"); } catch (e) { /* 目标不可达忽略 */ }
   }
+  // 同文档注入形态（当前主路径）：主题桥就在本页里，向本窗口广播即可被它收到。
+  // 为什么必须由壳页主动推：桥发的 dshHanaThemeRequest 走的是 parent.postMessage，而
+  // 同文档注入后本页的 parent 是**宿主**而不是壳页，那个请求到不了这里，壳也就没机会回
+  // ——这就是主卡 / FP 主题不跟随的原因（旧 iframe 形态下 parent 恰好是壳页，才一直正常）。
+  function pushThemeToSelf() {
+    try { window.postMessage({ dshHanaTheme: readThemeVars() }, "*"); } catch (e) { /* 忽略 */ }
+  }
   function frameWindow() {
     var main = $("[data-dshana-shell]");
     var f = isSidebar ? $("[data-dsh-frame]", main) : $("#dsh-frame");
@@ -509,6 +516,15 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
   // 主题跟随：SDK 主题订阅（宿主变更 → 推送内层）+ 定时兜底推送（frame 存在时）
   var themePushTimer = null;
   function startThemePush() {
+    if (injected.started) {
+      pushThemeToSelf();
+      clearInterval(themePushTimer);
+      themePushTimer = setInterval(function () {
+        if (injected.started) pushThemeToSelf();
+        else { clearInterval(themePushTimer); themePushTimer = null; }
+      }, 2000);
+      return;
+    }
     var cw = frameWindow();
     if (!cw) return;
     sendThemeTo(cw);
