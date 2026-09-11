@@ -103,15 +103,9 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
   // 本页没拿到 surface 会话时的说明（appSurfaceSession 由宿主开页时附在 surface URL 上）
   var SURFACE_MISSING = "状态读取失败：本页缺少 App surface 会话凭据，请从 Card Center 重新打开本卡";
   function credMissingHtml() {
-    return '<div class="card">'
-      + '<h2 class="card-label">缺少 App surface 会话凭据</h2>'
-      + '<div class="guide"><div class="guide-label">问题</div>'
-      + "本页 URL 上没有 appSurfaceSession，DSH 运行时经宿主代理时会被直接拒（missing_credential）。"
-      + "状态面（hana.api.fetch）与内嵌视图都拿不到。"
-      + "</div>"
-      + '<div class="note auto">DSH 已就绪，只是这个页面没凭据。请从 Card Center 重新打开本卡；'
-      + "若反复如此，说明这层 surface（功能面板/新窗口）宿主没发凭据，需要改走主卡推送。</div>"
-      + "</div>";
+    return '<pre class="diag-progress">缺少 App surface 会话凭据：本页 URL 上没有 appSurfaceSession，\n'
+      + "DSH 运行时经宿主代理会被直接拒（missing_credential），状态面与内嵌视图都拿不到。\n"
+      + "请从 Card Center 重新打开本卡。</pre>";
   }
 
   // ---- 视图判定（v2 phase → 壳视图）----
@@ -123,93 +117,32 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
     return "idle";
   }
 
-  // 台面上唯一那行小字（官方 loading 里 “Loading plugins…” 的对应物）；细节一律进 #boot-panel。
+  // 台面上唯一那行小字：只报状态（报错内容在下方 <pre> 里，不在这里重复）。
   function statusText(view, s) {
     if (view === "booting") return "正在启动 DSH…";
     if (view === "idle") return "DSH 未启动";
-    if (view === "action") {
-      var t = (s && s.error && s.error.userText) || (s && s.note) || "";
-      t = String(t).split("\n")[0].slice(0, 120);
-      if (t) return t;
-      return s && s.phase === "stopped" ? "DSH 已停止" : "启动失败，需要处理";
-    }
+    if (view === "action") return s && s.phase === "stopped" ? "DSH 已停止" : "启动失败";
     return "";
   }
 
-  // ---- 时间线片段（预期流程；v2 无细分上报，booting 时全程待命，不假装具体阶段）----
-  function timelineHtml() {
-    var steps = [
-      ["运行区与 profile 准备", "受管 runtime 拉起 + profile 种子化（依赖随包，无需安装）"],
-      ["DSH 服务启动", "cordis profile 装载 + 本地端口监听"],
-      ["服务就绪确认", "宿主代理 /routes/_runtime/<id>/ 暴露，Web UI 可用"],
-    ];
-    var html = '<ol class="timeline">';
-    for (var i = 0; i < steps.length; i++) {
-      html += '<li class="pending"><span class="tl-dot"></span><span class="tl-body">'
-        + '<div class="tl-name">' + esc(steps[i][0]) + "</div>"
-        + '<div class="tl-desc">' + esc(steps[i][1]) + "</div></span></li>";
-    }
-    return html + "</ol>";
+  // ---- main 视图渲染（#boot-panel innerHTML）----
+  // 只有两件东西值得占版面：启动按钮，和报错时那块 <pre>。时间线与折叠详情都撤了。
+  function idleViewHtml() {
+    return '<div class="actions"><button class="primary" data-dsh-start>启动 DSH</button></div>';
   }
-
-  function logBlock(lines) {
-    var arr = Array.isArray(lines) ? lines : [];
-    if (!arr.length) return "";
-    return '<pre class="diag-progress" data-log-scroll>' + esc(arr.join("\n")) + "</pre>";
-  }
-
-  function metaHtml(s) {
-    var bits = [];
-    if (s && s.runtimeId) bits.push("runtimeId " + esc(s.runtimeId));
-    if (s && s.service && s.service.port) bits.push("port " + esc(String(s.service.port)));
-    return bits.length ? '<p class="meta-line">' + bits.join(" · ") + "</p>" : "";
-  }
-
-  // ---- main 视图渲染（boot-panel 容器 innerHTML）----
-  function idleViewHtml(s) {
-    return '<div class="card">'
-      + '<h2 class="card-label">尚未启动</h2>'
-      + '<p class="desc">App 加载后会自动拉起 DSH 受管 runtime；也可点下方「启动 DSH」手动触发。'
-      + "就绪后本页自动载入 DSH Web UI。</p>"
-      + '<div class="actions"><button class="primary" data-dsh-start>启动 DSH</button></div>'
-      + metaHtml(s)
-      + "</div>";
-  }
-  function bootingViewHtml(s) {
-    // 启动中台面上只留 loader，诊断收进折叠区：启动卡住时展开看时间线/日志尾。
-    return '<details class="raw-details"><summary>启动详情</summary>'
-      + '<p class="desc">受管 runtime 正在拉起（profile 种子化 + 服务监听）。'
-      + "就绪后本页自动载入 DSH Web UI。</p>"
-      + timelineHtml()
-      + logBlock(s && s.logTail)
-      + metaHtml(s)
-      + "</details>";
+  function bootingViewHtml() {
+    return ""; // 启动中台面只有 loader + 状态行
   }
   function actionViewHtml(s) {
-    var isErr = !s || s.phase === "error";
-    var isStop = s && s.phase === "stopped";
-    var userText = s && s.error && s.error.userText;
-    var code = s && s.error && s.error.code;
-    var guide = userText || (isStop ? "DSH 已停止（手动停止或卸载流程触发）。" : "DSH 启动失败，详情如下。");
-    var noteText = isErr
-      ? "可点「启动 DSH」重试；端口被占用会自动换端口。持续失败请看下方详情与日志。"
-      : "再次 create/send 或点「启动 DSH」即可重新启动。";
     var raw = [];
-    if (code) raw.push("code: " + esc(code));
-    if (userText) raw.push("message: " + esc(userText));
-    if (s && s.runtimeId) raw.push("runtimeId: " + esc(s.runtimeId));
-    if (s && s.service && s.service.port) raw.push("port: " + esc(String(s.service.port)));
-    if (s && s.logTail && s.logTail.length) raw.push("最近日志:\n" + esc(s.logTail.slice(-14).join("\n")));
-    return '<div class="card">'
-      + '<h2 class="card-label">' + (isErr ? "启动失败，需要处理" : "已停止") + "</h2>"
-      + '<div class="guide"><div class="guide-label">' + (isErr ? "问题" : "状态") + "</div>"
-      + esc(guide) + "</div>"
-      + '<div class="note ' + (isErr ? "auto" : "stop") + '">' + esc(noteText) + "</div>"
-      + '<div class="actions"><button class="primary" data-dsh-start>重新启动 DSH</button></div>'
-      + (raw.length ? "<details class=\"raw-details\"><summary>原始详情</summary>"
-        + '<pre class="diag-progress">' + raw.join("\n") + "</pre></details>" : "")
-      + metaHtml(s)
-      + "</div>";
+    if (s && s.error && s.error.code) raw.push("code: " + s.error.code);
+    if (s && s.error && s.error.userText) raw.push("message: " + s.error.userText);
+    if (s && s.note) raw.push("note: " + s.note);
+    if (s && s.runtimeId) raw.push("runtimeId: " + s.runtimeId);
+    if (s && s.service && s.service.port) raw.push("port: " + s.service.port);
+    if (s && s.logTail && s.logTail.length) raw.push("最近日志:\n" + s.logTail.slice(-14).join("\n"));
+    return (raw.length ? '<pre class="diag-progress" data-log-scroll>' + esc(raw.join("\n")) + "</pre>" : "")
+      + '<div class="actions"><button class="primary" data-dsh-start>重新启动 DSH</button></div>';
   }
 
   // ---- 渲染 ----
@@ -367,12 +300,29 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
         if (!r.ok) throw new Error("DSH index HTTP " + r.status);
         return r.text();
       })
-      .then(function (html) { return injectDshIndex(html, base); })
+      .then(function (html) {
+        // 先取走 boot-theme 行的偏好再注入：桥在 index 解析时就跑，它要立刻知道门开不开。
+        dshPreference = readIndexThemePreference(html);
+        return injectDshIndex(html, base);
+      })
+      // 注入完成后推一次（桥此刻已在文档里）；此后完全由 hana.theme.subscribe 事件驱动。
+      .then(function () { pushThemeNow(); })
       .catch(function (err) { showInjectionError(err); });
   }
-  // 注：原先这里有个 readIndexThemePreference()（从 index 的 boot-theme 行抽 dsh 偏好）。
-  // 偏好已改由 ui-layout 的 presenter 投影到 html 属性、DSH 内桥自己观察（见文件头三段分工），
-  // 壳页不再转发，故该函数退役。
+  // DSH index 的 boot-theme 行（ui-theme/src/boot-theme.ts 生成，紧跟 <body> 开标签）：
+  //   const preference = "system"|"light"|"dark"
+  // 官方把这行定位成 "the browser's pre-plugin interval"：插件树激活前浏览器手里只有它，
+  // 之后 ui-layout 的 ThemePresenter 接管同一批 DOM 字段。我们读同一处，把偏好随主题载荷
+  // 一起交给桥——于是「插件加载之前」就能决定跟不跟随，不必等我们 DSH 侧的 client 半
+  // （那是插件，加载晚）。权威归属不变：桥的 readPreference() 优先 client 半投影的属性，
+  // 本值只在属性出现前充数。
+  // 注（收回一次退役）：这里一度删掉过这个读取，理由是“偏好不由壳页判断”。收回的只是**启动
+  // 那一段**，取的也是 DSH 自己写在 index 里的字面量，不是壳页的意见。
+  var dshPreference = null;
+  function readIndexThemePreference(html) {
+    var m = /const\s+preference\s*=\s*"([^"]+)"/.exec(String(html || ""));
+    return m && /^(system|light|dark)$/.test(m[1]) ? m[1] : null;
+  }
   // 旧的 ?dshana-view= 参数已退役（2026-09-12）：它唯一的消费者是 @dsh-hanako/view 客户端插件，
   // 而该插件已不在册（官方 ui-layout 放开后就成对换回了）；正式路径读的是 __DSHANA__.role，
   // 而 role 的事实源是页面自己的声明（meta / 壳属性）。故不再改写当前 URL。
@@ -381,11 +331,12 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
     // 不隐藏根：main 的 data-dshana-shell 就在 <body> 上（hidden 会把整页抹白），
     // sidebar 的根就是 .panel。统一用 data-view 回到自举态让错误可见。
     document.body.setAttribute("data-view", "action");
+    var status = $("#dsh-status");
+    if (status) status.textContent = "DSH 前端注入失败";
     var panel = $("#boot-panel") || $(".panel");
     if (!panel) { panel = document.createElement("div"); document.body.append(panel); }
-    panel.innerHTML = '<div class="card"><h2 class="card-label">DSH 前端注入失败</h2>'
-      + '<div class="guide"><div class="guide-label">问题</div>' + esc(msg) + "</div>"
-      + '<div class="note auto">DSH 已就绪，但页面装配失败。重开本卡重试；若反复如此，检查中继前缀与 surface 票据。</div></div>';
+    panel.innerHTML = '<pre class="diag-progress">DSH 前端注入失败：' + esc(msg)
+      + "\nDSH 已就绪，但页面装配失败。重开本卡重试；若反复如此，检查中继前缀与 surface 票据。</pre>";
     schedulePoll(POLL_SLOW_MS);
   }
 
@@ -397,7 +348,7 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
     if (btnStart && !btnStart.dataset.bound) {
       btnStart.dataset.bound = "1";
       btnStart.addEventListener("click", function () {
-        postAction("start").catch(function (e) {
+        postAction("start").then(function () { poll(true); }).catch(function (e) {
           setStateView("error", "启动请求失败：" + ((e && e.message) || e));
         });
       });
@@ -405,7 +356,7 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
     if (btnStop && !btnStop.dataset.bound) {
       btnStop.dataset.bound = "1";
       btnStop.addEventListener("click", function () {
-        postAction("stop").catch(function (e) {
+        postAction("stop").then(function () { poll(true); }).catch(function (e) {
           setStateView("error", "停止请求失败：" + ((e && e.message) || e));
         });
       });
@@ -486,7 +437,7 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
     if (btnStart && !btnStart.dataset.bound) {
       btnStart.dataset.bound = "1";
       btnStart.addEventListener("click", function () {
-        postAction("start").then(function () { poll(); }).catch(function (e) {
+        postAction("start").then(function () { poll(true); }).catch(function (e) {
           setStateView("error", "启动请求失败：" + ((e && e.message) || e));
         });
       });
@@ -494,7 +445,7 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
     if (btnStop && !btnStop.dataset.bound) {
       btnStop.dataset.bound = "1";
       btnStop.addEventListener("click", function () {
-        postAction("stop").then(function () { poll(); }).catch(function (e) {
+        postAction("stop").then(function () { poll(true); }).catch(function (e) {
           setStateView("error", "停止请求失败：" + ((e && e.message) || e));
         });
       });
@@ -509,11 +460,12 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
     if (!isSidebar) {
       var spin = $("#dsh-spin");
       if (spin) spin.hidden = true;
+      var status = $("#dsh-status");
+      if (status) status.textContent = "无法连接 App 后端路由";
       document.body.setAttribute("data-view", "error");
       var panel = $("#boot-panel");
-      if (panel) panel.innerHTML = '<div class="card"><h2 class="card-label">无法连接 App 后端路由</h2>'
-        + '<p class="desc">' + esc(text) + "</p>"
-        + '<p class="muted">请从 Card Center 重新打开本卡以完成 App surface 授权。</p></div>';
+      if (panel) panel.innerHTML = '<pre class="diag-progress">' + esc(text)
+        + "\n请从 Card Center 重新打开本卡以完成 App surface 授权。</pre>";
     }
     schedulePoll(POLL_SLOW_MS);
   }
@@ -522,11 +474,47 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
     if (pollTimer) clearTimeout(pollTimer);
     pollTimer = setTimeout(poll, ms);
   }
-  function poll() {
-    fetchState().then(function (s) { applySnapshot(s); })
-      .catch(function (err) {
-        setStateView("error", (err && err.message) || String(err));
-      });
+  // ---- 轮询去重：一份状态只让一个 owner 去取 ----
+  // 事实只有一个（App 侧 boot-state），但主卡与 FP 是两份文档、各有一个定时器——两路轮询同一份
+  // 状态是重复劳动（2026-09-12 她点出）。定为：**主卡是 owner**，取回快照后写进跨面共享存储；
+  // FP 只订阅 + 读快照，不主动取；只有当快照不存在/被标记下线/老得离谱（owner 悄悄没了）时
+  // FP 才自己取。通道复用设置视图与会话选中那条（hana.storage.global + onChanged），不新开协议。
+  // 代价如实记：owner 非正常消失（没跑到 pagehide）时，FP 最多陈旧 STALE_MS。
+  var BOOT_STATE_STALE_MS = 5 * 60 * 1000;
+  var lastPublishedSig = null;
+  var lastSnapshot = null;
+  function bootSig(s) {
+    if (!s) return "";
+    var e = s.error || {};
+    return [
+      s.phase || "", s.ready ? 1 : 0, s.runtimeId || "",
+      (s.service && s.service.port) || "", e.code || "", e.userText || "", s.note || "",
+      Array.isArray(s.logTail) ? s.logTail.length : 0,
+    ].join("|");
+  }
+  function publishBootState(s) {
+    var sig = bootSig(s);
+    if (sig === lastPublishedSig) return; // 状态没变就不写，免存储抖动
+    lastPublishedSig = sig;
+    writeShared("boot-state", { at: Date.now(), state: s })
+      .catch(function () { /* 拿不到共享面就当没有，本面照常自取 */ });
+  }
+  function fetchOwnState() {
+    fetchState().then(function (s) {
+      if (!isSidebar) { lastSnapshot = s; publishBootState(s); }
+      applySnapshot(s);
+    }).catch(function (err) {
+      setStateView("error", (err && err.message) || String(err));
+    });
+  }
+  /** force=true 忽略共享快照直接自取（本面刚发过动作，必须立刻看到结果）。 */
+  function poll(force) {
+    if (!isSidebar) { fetchOwnState(); return; }
+    readShared("boot-state").then(function (v) {
+      var fresh = v && typeof v.at === "number" && v.at > 0 && Date.now() - v.at < BOOT_STATE_STALE_MS;
+      if (!force && fresh && v.state) { applySnapshot(v.state); return; }
+      fetchOwnState();
+    }, function () { fetchOwnState(); });
   }
 
   // ---- 壳桥：主题 + 剪贴板（内层 DSH Web UI 的 v1 契约应答）----
@@ -551,15 +539,18 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
     return out;
   }
   function sendThemeTo(dst) {
-    var msg = { dshHanaTheme: { vars: readThemeVars() } };
-    try { dst.postMessage(msg, "*"); } catch (e) { /* 目标不可达忽略 */ }
+    try { dst.postMessage(themeMessage(), "*"); } catch (e) { /* 目标不可达忽略 */ }
   }
   // 同文档注入形态（当前主路径）：主题桥就在本页里，向本窗口广播即可被它收到。
   // 为什么必须由壳页主动推：桥发的 dshHanaThemeRequest 走的是 parent.postMessage，而
   // 同文档注入后本页的 parent 是**宿主**而不是壳页，那个请求到不了这里，壳也就没机会回
   // ——这就是主卡 / FP 主题不跟随的原因（旧 iframe 形态下 parent 恰好是壳页，才一直正常）。
+  // 主题载荷：宿主变量 + 启动偏好（boot-theme 行字面量；桥在插件树之前靠它开门）。
+  function themeMessage() {
+    return { dshHanaTheme: { vars: readThemeVars(), preference: dshPreference } };
+  }
   function pushThemeToSelf() {
-    try { window.postMessage({ dshHanaTheme: { vars: readThemeVars() } }, "*"); } catch (e) { /* 忽略 */ }
+    try { window.postMessage(themeMessage(), "*"); } catch (e) { /* 忽略 */ }
   }
   window.addEventListener("message", function (e) {
     var data = e.data;
@@ -704,9 +695,25 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
       if (began) return;
       began = true;
       isSidebar = resolveView(root) === "sidebar";
+      // FP 是投影面：owner（主卡）一写快照就立刻跟随（事件驱动，不等自己的定时器），
+      // 并先用快照渲染首屏（免得空等到第一次定时器）。owner 不在场时下面的 poll 会自己取。
+      if (isSidebar) {
+        onSharedChanged("boot-state", function () {
+          readShared("boot-state").then(function (v) {
+            if (v && v.state) applySnapshot(v.state);
+          }, function () { /* 忽略 */ });
+        });
+        readShared("boot-state").then(function (v) {
+          if (v && v.state) applySnapshot(v.state);
+        }, function () { /* 忽略 */ });
+      }
       // 卸载释放注入的 transport（WS 载体等）
       window.addEventListener("pagehide", function () {
         if (injected.dispose) { try { injected.dispose(); } catch (e) { /* 忽略 */ } }
+        // owner 下线：把快照标成过期（at: 0），FP 不必等 5 分钟安全网就能接上
+        if (!isSidebar && lastSnapshot) {
+          try { writeShared("boot-state", { at: 0, state: lastSnapshot }); } catch (e) { /* 忽略 */ }
+        }
       }, { once: true });
       // 主题不再定时推送（原有一个 1.5s 轮询，只为等“壳页就绪后再推”）：首屏由
       // getSnapshot()+URL 参数落地，注入完成后在 startInjection 的完成回调里推一次，

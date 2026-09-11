@@ -8,14 +8,13 @@
 <meta name="hana-dshana-role" content="main">
 <title>DSHana</title>
 <!-- src/ui/main.html — dsh-hanako App v2 主壳页（contributes.cards dshana route，单卡）。
-     视觉沿袭 v1 webui-shell 纸张风（宿主主题变量 + fallback 纸张色，明暗随主题），
-     数据语义 v2（boot-state 快照 phase idle/starting/ready/error/stopped）。
-     三态：idle/stopped 引导 · starting 自举（时间线 + 实时日志滚动）· error 指引重试 ·
-     ready 顶栏 + iframe 直嵌 DSH Web UI。无 emoji、无渐变/阴影光效。
+     视觉沿袭纸张风（宿主主题变量 + 纸张 fallback，明暗随主题），数据语义 v2（boot-state 快照
+     phase idle/starting/ready/error/stopped）。台面只有一副：DSHANA 字标 + 细圆环 + 一行状态
+     小字，报错时下方直接一块 <pre>（唯一保留的诊断面）。ready 后整块让给注入的 DSH Web UI
+     （同文档注入，不是 iframe）。无 emoji、无渐变/阴影光效。
      到本 App 后端路由一律 hana.api.fetch（surface session 凭据，见 app-shell.js）。
      body 上的 data-dshana-shell 是壳脚本的根锚（app-shell.js boot() 取它，缺失则不轮询）；
-     data-dshana-view="main" 同时是给 DSH 视图装配的参数（就绪后 iframe = ?dshana-view=main，
-     无侧栏——侧栏归本卡的功能面板 /sidebar.html）。 -->
+     data-dshana-view="main" 决定 role（workspace）。侧栏归本卡的功能面板 /sidebar.html。 -->
 <style>
   html, body { height: 100%; margin: 0; }
   html { color-scheme: light dark; }
@@ -50,40 +49,9 @@
   }
   @keyframes dsh-spin { to { transform: rotate(360deg); } }
   #dsh-status { font-size: 12.5px; color: var(--text-muted, #6B6158); margin: 0; }
-  /* 诊断容器：空则完全不占版面；有内容时是 loader 下方一张安静的小卡 */
+  /* 诊断容器：空则完全不占版面；有内容时就是一块 <pre> */
   #boot-panel { width: 100%; max-width: 620px; text-align: left; }
   #boot-panel:empty { display: none; }
-
-  .card {
-    border: 1px solid var(--border, #D8CFBE);
-    border-radius: 8px;
-    background: var(--bg-card, #FBF7EE);
-    padding: 16px 18px;
-    margin: 0 0 10px;
-  }
-  .card-label { font-size: 13px; font-weight: 600; margin: 0 0 10px; }
-
-  /* 阶段时间线（预期流程：依赖准备 → DSH 启动 → 服务就绪） */
-  .timeline { list-style: none; margin: 0; padding: 0; }
-  .timeline li { position: relative; display: flex; gap: 10px; padding: 0 0 14px; }
-  .timeline li:last-child { padding-bottom: 0; }
-  .timeline li::before {
-    content: ""; position: absolute; left: 7px; top: 20px; bottom: 2px;
-    width: 1px; background: var(--border, #D8CFBE);
-  }
-  .timeline li:last-child::before { display: none; }
-  .tl-dot {
-    width: 14px; height: 14px; margin-top: 2px; flex: none;
-    border-radius: 50%; border: 2px solid var(--border, #D8CFBE);
-    background: var(--bg-card, #FBF7EE); box-sizing: border-box;
-  }
-  .timeline li.done .tl-dot { border-color: var(--green, #4A6B4A); background: var(--green, #4A6B4A); }
-  .timeline li.current .tl-dot { border-color: var(--accent, #537D96); background: var(--accent-light, rgba(83,125,150,.08)); }
-  .tl-body { min-width: 0; }
-  .tl-name { font-size: 13px; font-weight: 600; color: var(--text, #2A2622); }
-  .tl-desc { font-size: 12px; color: var(--text-light, #4A433C); }
-  .timeline li.done .tl-name, .timeline li.done .tl-desc { color: var(--text-muted, #6B6158); }
-  .timeline li.current .tl-name { color: var(--accent, #537D96); }
 
   /* 实时日志滚动区（隐藏滚动条 + 内容置底跟随） */
   .diag-progress {
@@ -98,33 +66,8 @@
   }
   .diag-progress::-webkit-scrollbar { display: none; width: 0; height: 0; }
 
-  .muted { font-size: 12px; color: var(--text-muted, #6B6158); }
-  .meta-line { font-size: 12px; color: var(--text-muted, #6B6158); margin: 3px 0 0; font-variant-numeric: tabular-nums; }
-
-  /* 引导 / 说明行 */
-  .desc { font-size: 13.5px; color: var(--text-light, #4A433C); margin: 0 0 14px; line-height: 1.7; }
-
-  /* action-needed：人话指引 + 自动续跑/停等说明 + 原始错误折叠 */
-  .guide {
-    border: 1px solid var(--border, #D8CFBE);
-    border-left: 3px solid var(--accent, #537D96);
-    border-radius: 6px;
-    background: var(--bg-card, #FBF7EE);
-    padding: 10px 12px; font-size: 13px;
-    color: var(--text, #2A2622);
-    white-space: pre-wrap; word-break: break-word;
-    margin: 0 0 10px;
-  }
-  .guide-label { font-size: 12px; font-weight: 600; color: var(--accent, #537D96); margin: 0 0 6px; }
-  .note { border-radius: 6px; padding: 8px 10px; font-size: 12px; margin: 0 0 10px; }
-  .note.auto { background: var(--accent-light, rgba(83,125,150,0.08)); color: var(--text-light, #4A433C); }
-  .note.stop { background: rgba(139,44,31,0.08); color: var(--danger, #8B2C1F); }
-  details.raw-details { font-size: 12px; color: var(--text-muted, #6B6158); }
-  details.raw-details summary { cursor: pointer; color: var(--accent, #537D96); }
-  details.raw-details .diag-progress { margin-top: 8px; max-height: 220px; }
-
   /* 动作区 */
-  .actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 4px; }
+  .actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 12px 0 0; }
   /* 只打自己的按钮：DSH 前端是**注入同一文档**的，裸 button 选择器会把 padding / border-radius
      泼到 DSH 的控件上（2026-09-12 真机：输入栏那颗 28×28、border-radius:999px 的圆形"+"
      被 padding:8px 20px 撑成椭圆——`.add` 只压得住自己声明过的属性，padding 不在其中）。
@@ -144,7 +87,7 @@
 <body data-view="idle" data-dshana-shell data-dshana-view="main">
   <div id="dsh-stage">
     <div class="loader">
-      <span class="wordmark">HARNESS</span>
+      <span class="wordmark">DSHANA</span>
       <span class="ring" id="dsh-spin" hidden></span>
       <p id="dsh-status">正在读取状态…</p>
     </div>

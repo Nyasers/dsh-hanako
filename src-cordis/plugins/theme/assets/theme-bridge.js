@@ -29,16 +29,22 @@
   // vY（T7b 后 dsh 0.1.2）：preference 默认 system——跟随宿主配色（壳桥 vars 即应用）；
   // 读 dsh settings/describe 失败/缺失时按 system 处理，主题不因此失效。
   var pref = "system";
-  // 偏好是否已知：由本插件的 client 半（src-cordis/plugins/theme/client.js）投影到
-  // html[data-dsh-theme-preference]；未得知前不动手（否则会先按 system 压一遍 Hana
-  // 配色、再被纠正，中间可见闪烁）。client 半未加载时本值恒 false（不压 token）。
+  // 偏好是否已知；未得知前不动手（否则会先按 system 压一遍 Hana 配色、再被纠正，中间可见闪烁）。
   var prefKnown = false;
-  /** 读 presenter 投影的偏好属性；非法/缺失返 null。 */
+  // 自举偏好（bootPref）：壳页随主题载荷下发的值，来源 = DSH index 的 boot-theme 行字面量
+  // （ui-theme/src/boot-theme.ts）。官方把这行定位成 "the browser's pre-plugin interval"——
+  // 插件树激活前浏览器手里只有它。为什么需要它：权威来源是我们 client 半投影的属性，而
+  // client 半是**插件**，插件就位前属性不存在、门关着，于是注入完成到插件就位之间 DSH 一直
+  // 穿自己的内置配色（2026-09-12 指出的那段空窗）。借这行字面量把门提前打开。
+  // 权威归属不变：属性一旦出现，readPreference() 优先取属性，本值退场。
+  var bootPref = null;
+  /** 读偏好：① client 半投影的属性（权威）→ ② 壳页载荷里的 boot-theme 字面量（自举）。 */
   function readPreference() {
     try {
       var v = document.documentElement.getAttribute("data-dsh-theme-preference");
-      return v === "light" || v === "dark" || v === "system" ? v : null;
-    } catch (e) { return null; }
+      if (v === "light" || v === "dark" || v === "system") return v;
+    } catch (e) { /* 忽略 */ }
+    return bootPref;
   }
   function cssOf(v) {
     var c = "";
@@ -109,8 +115,10 @@
     if (e.source !== window && e.source !== window.parent) return;
     if (e.source !== window && parentOrigin && e.origin !== parentOrigin) return;
     if (e.data && e.data.dshHanaTheme) {
+      // 先采纳自举偏好（若载荷带了）：插件树之前只有它。属性存在时 readPreference() 优先属性。
+      var bp = e.data.dshHanaTheme.preference;
+      if (bp === "light" || bp === "dark" || bp === "system") bootPref = bp;
       // 值以文档根为权威（同文档下我们读得到）；读不到才回退用载荷里的 vars。
-      // （偏好不在这里——它由 presenter 的属性承载，见 pull()。）
       // pull() 内部已 applyOrRemove()，所以换门后不必再跑一遍。
       if (!pull()) {
         var v = e.data.dshHanaTheme.vars;
@@ -119,23 +127,13 @@
           applyOrRemove();
         }
       }
-      if (cur && askTimer) { clearInterval(askTimer); askTimer = null; }
     }
   });
-  // 主题偏好不再由本脚本 RPC 自读：旧实现打 settings/describe，信封在新版本未验；读不到就
-  // 永远停在 system、把 UI 钉住（真机 2026-09-12）。现改由壳页随每次主题推送下发（来源：
-  // DSH index 的 boot-theme 行，见 src/ui/app-shell.js readIndexThemePreference）；
-  // 原先“宿主侧 bridge 订阅 remote.mux → dshanaBus → /webui/events → dshHanaPref”的
-  // 事件链也一并退役（那是宿主没给能力时的自补）。
-  var mq = window.matchMedia && matchMedia("(prefers-color-scheme: dark)");
-  if (mq && mq.addEventListener) mq.addEventListener("change", ask);
-  // 竞态修复：壳页（宿主 iframe 外层）主题桥的注册可能与 dsh 页面加载不同步——脚本加载时
-  // 的首次 ask 可能落在壳桥注册前被丢弃（cur 恒 null → 内层 dsh WebUI 不跟随主题）。
-  // 周期重试 ask（收到主题 vars 即停止）：消除时序竞态；对已注册的壳桥幂等（postMessage 无副作用）。
-  var askTimer = setInterval(function () {
-    if (pull() && cur) { if (askTimer) { clearInterval(askTimer); askTimer = null; } return; }
-    ask();
-  }, 1000);
+  // 偏好来源两段（都不打 RPC、都不轮询）：启动段 = 壳页载荷里的 boot-theme 字面量（本文件
+  // bootPref）；稳态段 = 我们 client 半投影的 html 属性（权威）。旧实现的 settings/describe
+  // 信封在 0.1.5 未验、读不到就永远停在 system 把 UI 钉住（2026-09-12 真机），已退役。
+  // 不轮询：载荷由壳页在注入完成时推一次、此后每次主题变化再推一次（hana.theme.changed），
+  // 加上首次 ask() 的应答与下面的 MutationObserver——三条都是事件，旧 1s 重试那套已删。
   // 主题切换（壳页写 documentElement 的 data-theme / data-appearance）即时感知，不等 1s 轮询。
   try {
     var mo = new MutationObserver(function () { pull(); });
