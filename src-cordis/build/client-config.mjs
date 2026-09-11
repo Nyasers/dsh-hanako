@@ -123,7 +123,7 @@ function createCssModulePlugin(id) {
  *   require 解析清单（默认 react 系）；defines = 包级 tsdown define 常量（合并进环境
  *   默认 define）。
  */
-export async function buildClientBundle({ id, pkgDir, outDir, externals = ["react", "react/jsx-runtime"], defines = {} }) {
+export async function buildClientBundle({ id, pkgDir, outDir, externals = ["react", "react/jsx-runtime"], defines = {}, entry = "client.js" }) {
   // 环境常量默认（官方 tsdown.client.ts clientBuildEnvironmentDefines 同款姿势：
   // 空 process.env 兜底 + 显式 NODE_ENV；浏览器无 process 全局，静态读取落到空对象即
   // undefined 不抛 ReferenceError）
@@ -133,7 +133,7 @@ export async function buildClientBundle({ id, pkgDir, outDir, externals = ["reac
   };
   await build({
     name: id + "/client",
-    entry: { client: join(pkgDir, "client.js") },
+    entry: { client: join(pkgDir, entry) },
     outDir,
     format: "cjs",
     platform: "browser",
