@@ -1,12 +1,12 @@
 {
   "generatedBy": "npm run pack:plugin-sdk",
-  "packedVersion": "0.946.2",
+  "packedVersion": "0.951.4",
   "packages": {
     "@hana/plugin-protocol": {
       "dir": "packages/plugin-protocol",
       "tarball": "hana-plugin-protocol-0.0.0.tgz",
       "sources": {
-        "index.ts": "beb3bb428a7ac7693ac5d1a451d103e638f7e2175a3a1d1bcdcbfbb6ac0181cc",
+        "index.ts": "3c6419d1c3d5d739045ac7fce9f6b3a8a0d6f2c5a1ec4b62b4a5ad9722f9feb0",
         "package.json": "8857ebf761c4e4495310d7f80e7e89251146bed78980c69554530bfc27e4f85f"
       }
     },
@@ -14,7 +14,7 @@
       "dir": "packages/plugin-sdk",
       "tarball": "hana-plugin-sdk-0.0.0.tgz",
       "sources": {
-        "index.ts": "67d8ec1d1b68853c549837e97609c1f24a72fb4b152da7eebf939532d2f86640",
+        "index.ts": "e471a42724709c9d37e4f6d92185c4510ffdea9be6bc3dc6bfbb0c20f67bddef",
         "package.json": "09934249d427e9e743c437155e99391a6f116a126d47f8af5a27488fb34d968c",
         "README.md": "a4e598a8de560dfc03fff1284f2ff8362d2f7a5689fba7269dc267502ebfc311",
         "scripts/build-browser.mjs": "59f4fc82c128d7fc663db01a7121b397fa9ba05605f13bc4d450a0a06c4f4b8d"
@@ -38,7 +38,7 @@
         "scripts/build-settings.mjs": "4b75c392748c5603a7b7d966f20f23e2b3bdda6fca843b14687cf8c383047af3",
         "scripts/settings-foundation.mjs": "4b1de4f1c88d144dc7fbf0ebad5ec5b9d686754c5d04c5f03f178343e45ccb7e",
         "tsconfig.settings.json": "9f00cfc7f057fcfa1a154c3001892a4106cc5230937cf3b78c6f295c8f519a70",
-        "host/desktop/src/styles.css": "b6ef6320d2ad2e2d45761b26b0b79472df62b82cd44ac061c2c611ea81fb7e30"
+        "host/desktop/src/styles.css": "f417d1add9ff62eaa566f20127c2a17eab9f87a0d23094f1f72ba2bbd4dca202"
       }
     },
     "@hana/app-sdk": {
@@ -51,9 +51,10 @@
         "catalog.ts": "7dd766f325da82f42b698747845eeadb6d3ff9deb23f71b49843ff69c57d3dbb",
         "cli.ts": "958ef3f57af7ec6aacd7320d6937c98a189230902d070e390da3eadc05171516",
         "config-state.ts": "c1c500d3bed0f9bc5717c6c4049b36b2037b28859211d833c64cbb3e8ac14a6d",
-        "context.ts": "23901be21557b58935933fa53e9b4177aa3fcfa7fdf69938d4475fddbbdd367f",
+        "context.ts": "d335378d3eb60727f6ea9ab2bb4d9db8d589fc9a35e591c83d49db492b737b09",
         "dynamic-ui.ts": "3b6c7c6c84fe48ac972e0a0d48ac0940b61619e83447f85ba433aa050ddb6a45",
-        "index.ts": "12fa147846a0e966ec879e924a7040df3fe96606de1db7eae59905c05fc3f291",
+        "index.ts": "afbf5bee0435f37a01c360ec0c7a066bdd47414c6bf0a7a02e4cc9302336d4e1",
+        "input-status.ts": "42f3995656bc2483c666813c78d632f5c1a7a2b618ee39aaa5904f7130736667",
         "manifest.ts": "da8aa30f4c2f660473e2764eefff48344d8268577d7d2f50b6333f0fa4367f02",
         "mcp.ts": "5c3a84dc66070d0a118b7ee8bd259738489b50062087292f27298b8fc017d48a",
         "media.ts": "f2411350aafc77461e9f186e82b279facb6416bccbc3db7218f5efa67e226799",
@@ -64,7 +65,7 @@
         "runtime.ts": "ad60af689d136c626746bf936b8cce2c13389aaa22dcf8c140113886434a09ff",
         "sessions.ts": "e54b5142f34f0789c63a15726853c3d9a77f59a26620da072d51383ae2acd3c0",
         "tasks.ts": "553ac74e3f944de41b53ee77b2864c460d80155f3e54b39e20b332b5d20b5127",
-        "package.json": "0f86c3a2c3cc67a9a3e28fa2801a6b3aa90789f01abd8c480f373a4c188cad18"
+        "package.json": "3f79788f02c5cd57350bad8e712f3fd6fafe528039f710d6166933f950fcb972"
       }
     }
   }
