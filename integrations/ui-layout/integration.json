@@ -1,0 +1,14 @@
+{
+  "package": "@deepseek-ai/dsh-client-ui-layout",
+  "upstreamVersion": "0.1.5-rc.2",
+  "upstreamDir": "packages/client/ui-layout",
+  "hana": 1,
+  "files": [],
+  "notes": [
+    "批次①（解黑屏 + FP）。官方 client entry 在 0.1.5 仅 171 行：export inject = ['slots','theme','locale']、",
+    "provideRoot({hooks:{panelInfo}})（usePanelInfo 的来源）、reflect.provide('layout')、slots.register({name:'root',",
+    "children:{sidebar, main(keyed), ...}})。样例对它的集成做三件事：AppFrame 读 __HANA_DSH__?.role 决定 surface、",
+    "hana CSS 变量→DSH 主题 token、hanaBridge() 存取器。我们要迁的还有 view 里的三视图（full/main/sidebar）",
+    "与跨边选中桥——目标是迁到 0.1.5 的 main(keyed) 契约上，不是重写。"
+  ]
+}
