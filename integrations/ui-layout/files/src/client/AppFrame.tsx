@@ -133,19 +133,14 @@ export function AppFrame({
   // ---- hana 集成（integrations/ui-layout）----
   // 本文件所在的文档属于哪一个「面」，由宿主桥给出：window.__DSHANA__.role。
   // 名字是我们的（样例叫 __HANA_DSH__；我们写自己的 overlay，不沿用它的全局名）。
-  // 缺省 / 未知 → workspace。四个面的语义与样例一致（我们只用到前两个）：
-  //   workspace   主卡：中列 + 右列，**无 DSH 侧栏**（DSH 侧栏归 FP 面板承载）
-  //   navigation  FP 面板：**纯侧栏单列**，占满整个框
-  //   settings    设置面（预留，宿主面设置页用）
-  //   standalone  拆窗（预留）
+  // 缺省 / 未知 → workspace。四个面与样例（0.7.0 的 ui-layout 补丁）逐字一致：
+  //   workspace   主卡：中列 + 右列；侧栏槽位改挂为**主卡内设置浮层**（settingsShell）
+  //   navigation  FP 面板：**纯侧栏单列**，轨道整幅，占满整框
+  //   settings    设置面：侧栏槽位横跨全部轨道（settingsCol）
+  //   standalone  拆窗：侧栏 + 中列 + 右列，带拖柄
   // 宿主桥由壳页（src/ui/app-shell.js）在注入 DSH 前发布；未发布时按 workspace 退。
   const role = (window as { __DSHANA__?: { role?: string } }).__DSHANA__?.role
   const surface = role === 'navigation' || role === 'settings' || role === 'standalone' ? role : 'workspace'
-  // 一个事实源：哪些列要渲染 = 网格有哪几条轨道。
-  // 曾掉进的坑：只删 sidebarCol 元素、保留三轨模板 → 子元素按顺序错位（centerCol 落进 56px
-  // 侧栏轨、rightbarCol 抢中间大轨）。所以轨道由这两个布尔量拼出来，不允许再手写模板。
-  const showSidebar = surface === 'navigation' || surface === 'settings' || surface === 'standalone'
-  const showMain = surface === 'workspace' || surface === 'standalone'
 
   // Track the frame's own box (not the window): rAF-throttled ResizeObserver.
   useLayoutEffect(() => {
@@ -179,14 +174,15 @@ export function AppFrame({
   const sidebarPreference = sidebarCollapsed
     ? 0
     : layoutInfo.sidebar === 0 ? SIDEBAR_DEFAULT : layoutInfo.sidebar
-  // 侧栏作为**轨道**只在 standalone 存在；workspace 无侧栏、navigation 的侧栏是整张面。
+  // 侧栏作为**轨道**只在 standalone 存在；其余面没有可折叠的侧栏轨（见 columns.ts 的
+  // sidebarPresent）：workspace 的侧栏槽位是设置浮层，navigation 的侧栏就是整张面。
   const sidebarPresent = surface === 'standalone'
   const frameSidebarPreference = sidebarPresent ? sidebarPreference : 0
   const rightbarPreference = layoutInfo.rightbar ?? viewport * RIGHTBAR_DEFAULT_RATIO
   // Opening on a narrow frame collapses the left sidebar. Eligibility must
   // include that space before the occupant's first shown report arrives.
-  const normal = computeColumns(viewport, !layoutInfo.rightbarShown && narrow ? 0 : frameSidebarPreference, rightbarPreference)
-  const cols = computeColumns(viewport, frameSidebarPreference, layoutInfo.rightbarTrack ? rightbarPreference : 0)
+  const normal = computeColumns(viewport, !layoutInfo.rightbarShown && narrow ? 0 : frameSidebarPreference, rightbarPreference, sidebarPresent)
+  const cols = computeColumns(viewport, frameSidebarPreference, layoutInfo.rightbarTrack ? rightbarPreference : 0, sidebarPresent)
   const colsRef = useRef(cols)
   colsRef.current = cols
   const rightbarWidth = useRef(normal.rightbar)
@@ -210,11 +206,12 @@ export function AppFrame({
     actions.setRightbar(rightbarBase.current - dx)
   }, [actions])
   const productTitle = process.env.DSH_CLIENT_TITLE ?? t('brand.localBuild')
+  // 侧栏槽位拿到的宽度：拆窗面按轨道宽；其余面（FP 纯侧栏、设置面）是整幅框宽。
+  const renderedSidebarWidth = surface === 'standalone' ? cols.sidebar : viewport
   const sidebar = useMemo(() => renderSlot('sidebar', {
     collapsed: sidebarCollapsed,
-    // navigation（FP）里侧栏占满整框：令 occupant 拿到整幅宽度，不按轨道宽度算折叠
-    width: surface === 'standalone' ? cols.sidebar : viewport,
-  }), [renderSlot, sidebarCollapsed, cols.sidebar, surface, viewport])
+    width: renderedSidebarWidth,
+  }), [renderSlot, sidebarCollapsed, renderedSidebarWidth])
   const main = useMemo(() => (
     <MainPanel usePanelInfo={usePanelInfo} renderSlot={renderSlot} />
   ), [usePanelInfo, renderSlot])
@@ -225,17 +222,12 @@ export function AppFrame({
       ref={frameRef}
       className={css.frame}
       style={{
-        // 轨道 = 面 × 每列的宽度语义，不能只看两个布尔量：
-        //   纯侧栏面（navigation / settings）：侧栏**就是整张面** → 单轨铺满（宽由 cols.sidebar 计会把
-        //   它挤到 56px 甚至 0 → 看不见，2026-09-11 真机就是这样白的）。
-        //   其余面：sidebar（若显示）→ 中间列 → rightbar（若显示）。
-        gridTemplateColumns: showSidebar && !showMain
+        // 轨道与样例同款：模板固定三条，列各自认领 grid-column（AppFrame.module.css）；
+        // 只有 navigation 是单轨整幅。哪些列渲染由 surface 分支决定，不参与模板计算——
+        // 「按渲染集拼轨道」曾把 centerCol 落进 56px 侧栏轨。
+        gridTemplateColumns: surface === 'navigation'
           ? 'minmax(0, 1fr)'
-          : [
-            showSidebar ? `${cols.sidebar}px` : null,
-            'minmax(0, 1fr)',
-            showMain ? `${cols.rightbar}px` : null,
-          ].filter((track): track is string => track !== null).join(' '),
+          : `${cols.sidebar}px minmax(0, 1fr) ${cols.rightbar}px`,
       }}
       data-sidebar-collapsed={sidebarCollapsed || undefined}
       data-rightbar-collapsed={cols.rightbar === 0 || undefined}
@@ -248,12 +240,12 @@ export function AppFrame({
         useSessions={useSessions}
         usePanelInfo={usePanelInfo}
       />
-      {showSidebar && (
+      {(surface === 'navigation' || surface === 'standalone') && (
         <div className={css.sidebarCol}>
           {sidebar}
         </div>
       )}
-      {showMain && (
+      {(surface === 'workspace' || surface === 'standalone') && (
         <>
           <CenterColumn>{main}</CenterColumn>
           <RightbarColumn>
@@ -261,12 +253,23 @@ export function AppFrame({
           </RightbarColumn>
         </>
       )}
+      {/* 主卡内设置：workspace 面的侧栏槽位是绝对定位浮层（默认不吃指针事件，面板自己开）。 */}
+      {surface === 'workspace' && (
+        <div className={css.settingsShell}>
+          {sidebar}
+        </div>
+      )}
+      {surface === 'settings' && (
+        <div className={css.settingsCol}>
+          {sidebar}
+        </div>
+      )}
       <div className={css.overlayLayer} data-shell-overlay>
         {overlays}
       </div>
       {/* The collapsed rail is fixed-width: no resize handle while closed. */}
-      {sidebarPresent && !sidebarCollapsed && <DragHandle side="sidebar" left={cols.sidebar} onStart={onSidebarStart} onDrag={onSidebarDrag} onEnd={onDragEnd} />}
-      {surface !== 'navigation' && layoutInfo.rightbarShown && !layoutInfo.rightbarFullscreen && normal.rightbar > 0 && (
+      {surface === 'standalone' && !sidebarCollapsed && <DragHandle side="sidebar" left={cols.sidebar} onStart={onSidebarStart} onDrag={onSidebarDrag} onEnd={onDragEnd} />}
+      {(surface === 'workspace' || surface === 'standalone') && layoutInfo.rightbarShown && !layoutInfo.rightbarFullscreen && normal.rightbar > 0 && (
         <DragHandle side="rightbar" left={viewport - normal.rightbar} onStart={onRightbarStart} onDrag={onRightbarDrag} onEnd={onDragEnd} />
       )}
     </div>
