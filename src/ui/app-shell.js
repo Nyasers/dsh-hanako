@@ -622,9 +622,63 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
       else { clearInterval(themePushTimer); themePushTimer = null; }
     }, 2000);
   }
+  // 宿主主题（宿主的原生能力，取代我们自补的一切）：
+  //   宿主经 App surface iframe 的 URL 参数给 hana-theme / hana-css / hana-theme-appearance，
+  //   变更再经 hana.theme.changed 推同一组值（SDK hana.theme.subscribe 已有快照）。
+  //   契约：**App 自己把宿主主题贴进自己的文档**（官方样例 SDK 的 followHostTheme：
+  //   fetch cssUrl → <style data-hana-theme-style>），宿主不代劳。
+  //   此前我们只读 getComputedStyle(documentElement) 却从没加载过主题样式表——读到的永远是
+  //   空值，页面一路吃 HTML 里的纸张 fallback（var(--bg, #F5EFE4)），所以连 loading 壳页也
+  //   不跟随（真机反馈 2026-09-12）。修完这条，壳页、注入的 DSH UI、以及主题桥读到的变量
+  //   才会是真实的 Hana 配色。
+  var THEME_STYLE_ATTR = "data-hana-theme-style";
+  var themeCssUrl = null;
+  function applyThemeCss(cssUrl) {
+    if (typeof cssUrl !== "string" || !cssUrl) return;
+    themeCssUrl = cssUrl;
+    fetch(cssUrl, { credentials: "same-origin", cache: "no-store" }).then(function (res) {
+      if (!res.ok) throw new Error("theme.css HTTP " + res.status);
+      return res.text();
+    }).then(function (css) {
+      if (themeCssUrl !== cssUrl) return; // 期间主题又变了，等新的那次落地
+      var el = document.querySelector("style[" + THEME_STYLE_ATTR + "]");
+      if (!el) {
+        el = document.createElement("style");
+        el.setAttribute(THEME_STYLE_ATTR, "");
+        (document.head || document.documentElement).appendChild(el);
+      }
+      if (el.textContent !== css) el.textContent = css;
+    }).catch(function (err) {
+      // 主题拿不到不致命：页面仍用 HTML 里写好的纸张 fallback 色。
+      try { console.warn("[dshana] 宿主主题样式表加载失败", err && err.message ? err.message : err); } catch (e) { /* 忽略 */ }
+    });
+  }
+  function applyHostTheme(snap) {
+    if (!snap || typeof snap !== "object") return;
+    var themeId = typeof snap.theme === "string" && snap.theme ? snap.theme : null;
+    var appearance = snap.appearance === "light" || snap.appearance === "dark" ? snap.appearance : null;
+    try {
+      var root = document.documentElement;
+      if (themeId) root.setAttribute("data-theme", themeId);
+      if (appearance) root.setAttribute("data-appearance", appearance);
+      else root.removeAttribute("data-appearance");
+    } catch (e) { /* 忽略 */ }
+    applyThemeCss(snap.cssUrl);
+  }
+  // 首屏兜底：SDK 主题面不可用时，直接读 URL 参数（参数名由宿主白名单固定）。
   try {
-    if (hana && typeof hana.theme.subscribe === "function") {
-      hana.theme.subscribe(function () { startThemePush(); });
+    var themeParams = new URLSearchParams(location.search);
+    if (themeParams.get("hana-css") || themeParams.get("hana-theme")) {
+      applyHostTheme({
+        theme: themeParams.get("hana-theme"),
+        cssUrl: themeParams.get("hana-css"),
+        appearance: themeParams.get("hana-theme-appearance"),
+      });
+    }
+  } catch (e) { /* 忽略 */ }
+  try {
+    if (hana && hana.theme && typeof hana.theme.subscribe === "function") {
+      hana.theme.subscribe(function (snap) { applyHostTheme(snap); startThemePush(); });
     }
   } catch (e) { /* SDK 主题订阅不可用则只走定时推送 */ }
 
