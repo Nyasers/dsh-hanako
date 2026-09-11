@@ -31,10 +31,15 @@
     surfaceContext: true
     trustedHosts: !!js ctx.webStartup.trustedHosts
 
-# 官方 ui-layout 的「root 装配者」角色由 @dsh-hanako/view（client 半）接管——layout 服务与
+# 官方 ui-layout 的「root 装配者」角色原本由 @dsh-hanako/view（client 半）接管——layout 服务与
 # root 槽注册都在 view；官方行 disable，避免出现两个装配者。
-- id: ui-layout
-  disabled: true
+#
+# 2026-09-11 实验（黑屏定位）：dsh 0.1.5 下官方槽（如 sidebar.workspaces）读 `usePanelInfo` 时崩
+# （`TypeError: usePanelInfo is not a function`），root 没挂载 → 整页黑。怀疑就是这层「接管」跟
+# 0.1.5 的装配者契约对不上，故先把两个装配者成对换回官方：官方 ui-layout 放开、view 不插。
+# 验证结论出来后再定长期形状（收敛回官方 + 集成，或补齐自接管契约）。
+# - id: ui-layout
+#   disabled: true
 
 # ── 2) @dsh-hanako/* 定制插件 ──────────────────────────────────────────────
 - insert:
@@ -66,5 +71,6 @@
     # 前端服务交回官方。
 
     # fpFullPanel 视图装配插件：替代官方 ui-layout 的 root 装配者角色。
-    - id: '@dsh-hanako/view'
-      name: '@dsh-hanako/view'
+    # 2026-09-11 实验期暂不插入（见上条：成对换回官方 ui-layout）。
+    # - id: '@dsh-hanako/view'
+    #   name: '@dsh-hanako/view'
