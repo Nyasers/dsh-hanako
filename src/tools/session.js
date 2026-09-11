@@ -3,7 +3,7 @@
 //
 // src/tools/session.js — dshana_session 会话工具（App v2 迁移步骤 3 形态）
 //
-// 状态（迁移指南 §13 步骤 1-4a）：list/get 离线只读（query subtool）；create/send 已接线
+// 状态（迁移指南 §13 步骤 1-4a）：list/get 走官方查询面（query subtool，需 runtime 就绪）；create/send 已接线
 // （lib/session-run.js submitDshTask：ctx.tasks.create + ensureManagedRuntime + loopback
 // HTTP RPC + task-map 映射 + 同会话串行化；终态由受管 runtime task-bridge 回投）；
 // cancel/approve 步骤 4a 已接线（取消链 = cancel-chain.js：映射 cancel 标记 + DSH
@@ -27,7 +27,8 @@
 //     但 create/send/cancel/approve 依赖 DSH 受管运行时（ctx.runtime.start +
 //     connectAppRuntime + Hana task 映射），那是迁移步骤 2+ 的接线内容：步骤 1 这些
 //     action 一律返回明确「未接线」错误（先于字段校验，让 Agent 第一时间知道真正阻塞），
-//     list/get 正常离线工作。v1 的 run/cancel/approve subtool 实现保留在源码树
+//     list/get 步骤 1 时离线工作（W4 起改为经官方查询面取数，见 subtool/query.js 头注释，
+//     从此需要受管 runtime 就绪）。v1 的 run/cancel/approve subtool 实现保留在源码树
 //     （tools/subtool/）供后续步骤复用改造，不再被本模块静态 import。
 import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -140,8 +141,8 @@ async function doExecute(input, ctx) {
   const action = String(input.action ?? "").trim();
 
   if (action === "list" || action === "get") {
-    // 只读查询（list/get）由 query subtool 处理（纯本地：projcache + jsonl zstd 解压，
-    // 不依赖 DSH host，离线可读；数据目录 = App ctx.dataDir）
+    // 只读查询（list/get）由 query subtool 处理：经控制面走官方查询面（session/list、session/follow
+    // 开场快照），**需要受管 runtime 就绪**（不再有离线直读文件的路径；数据目录 = App ctx.dataDir）
     return queryExecute(input, ctx);
   }
 
