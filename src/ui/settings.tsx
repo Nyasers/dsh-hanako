@@ -23,7 +23,6 @@ import { createRoot } from "react-dom/client";
 import { hana } from "@hana/plugin-sdk";
 import {
   Button,
-  DropdownMenu,
   SaveButton,
   Select,
   SettingRow,
@@ -31,7 +30,7 @@ import {
   SettingsSection,
   TextInput,
 } from "@hana/plugin-components/settings";
-import type { ContextMenuItem, SelectOption } from "@hana/plugin-components/settings";
+import type { SelectOption } from "@hana/plugin-components/settings";
 import "@hana/plugin-components/settings.css";
 
 // ---- 主题跟随（与壳页同一姿势）----
@@ -70,7 +69,6 @@ function applyTheme(snap: ThemeSnap | null | undefined) {
 }
 
 // ---- 小工具 ----
-const MODEL_KEY_SEP = "\u0000"; // provider 与 model id 之间：避免不同 provider 的同名模型撞车
 const START_TIMEOUT_MS = 120000;
 
 function errText(e: unknown) {
@@ -91,48 +89,31 @@ const FIELDS: { key: string; label: string; hint: string }[] = [
 type CatalogModel = { id?: string; name?: string; efforts?: { id?: string; name?: string }[] };
 type CatalogGroup = { id?: string; name?: string; models?: CatalogModel[] };
 
-/** 候选拍成菜单项：provider 当分组标题，模型项带上自己的选中态（宿主 DropdownMenu 的形状）。 */
-function menuItemsOf(model: any, picked: string, onPick: (value: string) => void): ContextMenuItem[] {
+/** 第一段：provider 列表。 */
+function providerOptions(model: any): SelectOption[] {
   const groups: CatalogGroup[] = (model && model.catalog && model.catalog.groups) || [];
-  const items: ContextMenuItem[] = [];
-  for (const g of groups) {
-    const models = (g.models || []).filter((m) => m.id);
-    if (!g.id || models.length === 0) continue;
-    items.push({ heading: true, label: g.name || g.id });
-    for (const m of models) {
-      const value = g.id + MODEL_KEY_SEP + m.id;
-      items.push({ id: value, label: m.name || m.id, checked: value === picked, action: () => onPick(value) });
-    }
-  }
-  return items;
+  return groups.filter((g) => g.id).map((g) => ({ value: String(g.id), label: String(g.name || g.id) }));
 }
 
-/** 选中项的显示名（触发件上那一行字）。 */
-function labelOf(model: any, picked: string): string {
-  const at = picked.indexOf(MODEL_KEY_SEP);
-  if (at <= 0) return "";
-  const provider = picked.slice(0, at);
-  const id = picked.slice(at + MODEL_KEY_SEP.length);
+/**
+ * 第二段：该 provider 下的模型。用宿主 Select：它是 Base UI 的 select widget，弹层定位器会算
+ * --available-height 并 overflowY:auto，模型再多也能滚。
+ */
+function modelOptionsFor(model: any, provider: string): SelectOption[] {
   const groups: CatalogGroup[] = (model && model.catalog && model.catalog.groups) || [];
   for (const g of groups) {
-    if (g.id !== provider) continue;
-    for (const m of g.models || []) {
-      if (m.id === id) return (g.name || g.id) + " / " + (m.name || m.id);
-    }
+    if (String(g.id) !== provider) continue;
+    return (g.models || []).filter((m) => m.id).map((m) => ({ value: String(m.id), label: String(m.name || m.id) }));
   }
-  return provider + " / " + id;
+  return [];
 }
 
-/** 选中项对应的推理档位（没有就返回空数组，那一行不渲染）。 */
-function effortsOf(model: any, picked: string): { id?: string; name?: string }[] {
-  const at = picked.indexOf(MODEL_KEY_SEP);
-  if (at <= 0) return [];
-  const provider = picked.slice(0, at);
-  const id = picked.slice(at + MODEL_KEY_SEP.length);
+/** 第三段：选中模型支持的推理档位（没有就返回空数组，那一行不渲染）。 */
+function effortsOf(model: any, provider: string, modelId: string): { id?: string; name?: string }[] {
   const groups: CatalogGroup[] = (model && model.catalog && model.catalog.groups) || [];
   for (const g of groups) {
-    if (g.id !== provider) continue;
-    for (const m of g.models || []) if (m.id === id) return m.efforts || [];
+    if (String(g.id) !== provider) continue;
+    for (const m of g.models || []) if (String(m.id) === modelId) return m.efforts || [];
   }
   return [];
 }
@@ -166,7 +147,8 @@ function App() {
   const [model, setModel] = useState<any>(null); // 最近一次读回的整份状态（ready/current/revision/catalog）
   const [modelHint, setModelHint] = useState("");
   const [modelWarn, setModelWarn] = useState(false);
-  const [picked, setPicked] = useState("");
+  const [providerSel, setProviderSel] = useState("");
+  const [modelSel, setModelSel] = useState("");
   const [effort, setEffort] = useState("");
   const [modelSaving, setModelSaving] = useState(false);
   const [modelSaved, setModelSaved] = useState(false);
@@ -220,11 +202,12 @@ function App() {
     }
   }, []);
 
-  // 每次读回整份状态后，把选中项与档位对齐到权威当前值。
+  // 每次读回整份状态后，把三段选择对齐到权威当前值。
   useEffect(() => {
     const cur = model && model.current;
-    if (!cur) return;
-    setPicked(cur.provider && cur.model ? cur.provider + MODEL_KEY_SEP + cur.model : "");
+    if (!cur || !cur.provider) return;
+    setProviderSel(String(cur.provider));
+    setModelSel(typeof cur.model === "string" ? cur.model : "");
     setEffort(typeof cur.reasoningEffort === "string" ? cur.reasoningEffort : "");
   }, [model]);
 
@@ -265,16 +248,12 @@ function App() {
   };
 
   const saveModel = async () => {
-    const at = picked.indexOf(MODEL_KEY_SEP);
-    if (at <= 0) {
+    if (!providerSel || !modelSel) {
       setModelWarn(true);
-      setModelHint("请先选一个模型。");
+      setModelHint("请先选一个 provider 与模型。");
       return;
     }
-    const body: Record<string, unknown> = {
-      provider: picked.slice(0, at),
-      model: picked.slice(at + MODEL_KEY_SEP.length),
-    };
+    const body: Record<string, unknown> = { provider: providerSel, model: modelSel };
     if (effort) body.reasoningEffort = effort;
     if (model && typeof model.revision === "number") body.expectedRevision = model.revision;
     setModelSaving(true);
@@ -351,14 +330,21 @@ function App() {
     setModelHint("启动超时：DSH 还没就绪，稍后刷新本页重试。");
   };
 
-  const menuItems = menuItemsOf(model, picked, setPicked);
-  const pickedLabel = labelOf(model, picked);
-  const effortOptions: SelectOption[] = effortsOf(model, picked).map((e) => ({
+  const providerOpts = providerOptions(model);
+  const modelOpts = modelOptionsFor(model, providerSel);
+  const effortOptions: SelectOption[] = effortsOf(model, providerSel, modelSel).map((e) => ({
     value: String(e.id || ""),
     label: String(e.name || e.id || ""),
   }));
   const dshReady = !!(model && model.ready !== false);
-  const modelEmpty = model && model.catalog && menuItems.length === 0;
+  const modelEmpty = model && model.catalog && providerOpts.length === 0;
+
+  /** 换 provider：跟着把它下面的第一个模型选上（两段联动，不留空选）。 */
+  const pickProvider = (value: string) => {
+    setProviderSel(value);
+    const opts = modelOptionsFor(model, value);
+    setModelSel(opts.length > 0 ? opts[0].value : "");
+  };
   const fails = (model && model.catalog && model.catalog.failures) || [];
   const catalogHint = modelEmpty
     ? "DSH 目前没有可选的模型。"
@@ -423,14 +409,31 @@ function App() {
         ) : (
           <>
             <SettingRow
+              label="Provider"
+              layout="stacked"
+              control={
+                <Select
+                  ariaLabel="Provider"
+                  value={providerSel}
+                  options={providerOpts}
+                  disabled={providerOpts.length === 0}
+                  onChange={pickProvider}
+                />
+              }
+            />
+            <SettingRow
               label="模型"
               hint={modelHint || catalogHint || undefined}
               hintVariant={modelWarn ? "warn" : "default"}
               layout="stacked"
               control={
-                <DropdownMenu items={menuItems} disabled={menuItems.length === 0}>
-                  <Button variant="secondary">{pickedLabel || "选择模型"}</Button>
-                </DropdownMenu>
+                <Select
+                  ariaLabel="默认模型"
+                  value={modelSel}
+                  options={modelOpts}
+                  disabled={modelOpts.length === 0}
+                  onChange={setModelSel}
+                />
               }
             />
             {effortOptions.length > 0 && (
