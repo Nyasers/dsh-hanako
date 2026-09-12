@@ -33,8 +33,8 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { managedRuntimeDetails, ensureManagedRuntime, stopManagedRuntime, bridgeAccess } from "../lib/managed-runtime.ts";
 import { buildBootSnapshot, APP_ID } from "../lib/boot-state.ts";
-import { dataSources, defaultDshHome, sourceOf } from "../lib/data-source.ts";
-import { sourceSwitcher } from "../lib/source-switch.ts";
+import { dataSources, sourceOf } from "../lib/data-source.ts";
+// 数据源切换（lib/source-switch.ts）的入口暂时撤下：链未在真机验证过，见 POST /dshana/settings/restart。
 import { readDefaultModel, writeDefaultModel } from "../lib/model-settings.ts";
 import { readTaskMap, isValidSessionId } from "../lib/task-map.ts";
 export const DASHANA_ROUTE_PREFIX = "/dshana";
@@ -185,8 +185,6 @@ export function defaultDshanaRouteDeps(ctx) {
         lastShared: st.lastShared || null,
       };
     },
-    switchSource: (settings, expectedRevision) => sourceSwitcher().start(settings, expectedRevision),
-    switchOperation: () => sourceSwitcher().state(),
     getSnapshot: () => {
       const access = bridgeAccess();
       return buildBootSnapshot(managedRuntimeDetails(), { bridgeKey: access ? access.key : null });
@@ -212,11 +210,6 @@ export function registerDshanaRoutes(app, deps) {
       ? d.readCardState
       : () => ({ state: "unknown", label: "未接线", detail: "deps.readCardState 未注入" });
   const writeSettings = typeof d.writeSettings === "function" ? d.writeSettings : (patch) => patch;
-  const switchSource =
-    typeof d.switchSource === "function"
-      ? d.switchSource
-      : async () => ({ ok: false, error: "未接线：deps.switchSource" });
-  const switchOperation = typeof d.switchOperation === "function" ? d.switchOperation : () => null;
   const readModel = typeof d.readModel === "function" ? d.readModel : async () => {
     throw new Error("默认模型读写不可用：deps.readModel 未注入");
   };
@@ -268,14 +261,7 @@ export function registerDshanaRoutes(app, deps) {
     app.get(DASHANA_ROUTE_PREFIX + "/settings", async (c) => {
       try {
         const view = await readSettings();
-        // 页面认不出 ~：DSH 默认目录由后端算好给它，“共享（默认）”那一档直接用
-        return json(c, 200, {
-          ok: true,
-          ready: true,
-          operation: switchOperation(),
-          defaults: { sharedHome: defaultDshHome() },
-          ...view,
-        });
+        return json(c, 200, { ok: true, ready: true, ...view });
       } catch (e) {
         log("warn", "/dshana/settings 读取失败：" + ((e && e.message) || e));
         return json(c, 500, { ok: false, error: (e && e.message) || String(e) });
@@ -412,34 +398,17 @@ export function registerDshanaRoutes(app, deps) {
         return json(c, 200, { ok: false, ready: true, error: (e && e.message) || String(e) });
       }
     });
-    // ---- POST /dshana/settings/restart：切换数据来源（D-m 六步链）----
-    // 形状：{ settings: {mode,path,profile}, expectedRevision }。本端点不直接写设置：
-    // 起新源成功之后才落盘，失败按旧源回滚（见 source-switch.ts）。
-    // 202 = 已接受，页面用 GET /settings 里的 operation 轮询进度与结局。
-    app.post(DASHANA_ROUTE_PREFIX + "/settings/restart", async (c) => {
-      try {
-        const body = c && c.req && typeof c.req.json === "function" ? await c.req.json() : null;
-        const src = body && typeof body.settings === "object" && body.settings ? body.settings : null;
-        if (!src) return json(c, 400, { ok: false, error: "需要 { settings, expectedRevision } 形状" });
-        const expectedRevision = typeof body.expectedRevision === "number" ? body.expectedRevision : undefined;
-        const r = await switchSource(src, expectedRevision);
-        if (r.conflict) {
-          return json(c, 409, { ok: false, code: "SETTINGS_CONFLICT", error: "设置已被别处改过，请刷新后重试", revision: r.revision });
-        }
-        if (r.busy) {
-          return json(c, 409, { ok: false, code: "SWITCH_BUSY", error: "已有数据源切换在进行中", operation: r.operation });
-        }
-        if (r.noop) {
-          return json(c, 200, { ok: true, noop: true, revision: r.revision, operation: r.operation });
-        }
-        return json(c, 202, { ok: true, accepted: true, operation: r.operation });
-      } catch (e) {
-        const msg = (e && e.message) || String(e);
-        if (/未知键|必须|只能是|绝对路径|NUL|不存在|不是目录/.test(msg)) return json(c, 400, { ok: false, error: msg });
-        log("warn", "/dshana/settings/restart 失败：" + msg);
-        return json(c, 500, { ok: false, error: msg });
-      }
-    });
+    // ---- POST /dshana/settings/restart：数据源切换（入口暂撤）----
+    // 切换链（lib/source-switch.ts）还没跑通：停旧、起新、失败回滚这条链没有在真机上验证过，
+    // 而它第一步就会停掉正在跑的 runtime。为避免半成品被误触发，这里先只回一句明确的
+    // 「未启用」，不碰任何状态。实现原地保留，等切换做完把这层闸去掉即可恢复原状。
+    app.post(DASHANA_ROUTE_PREFIX + "/settings/restart", (c) =>
+      json(c, 503, {
+        ok: false,
+        code: "SWITCH_DISABLED",
+        error: "数据源切换尚未启用（功能未完成，入口暂时撤下）",
+      }),
+    );
   }
 
   return app;

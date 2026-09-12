@@ -383,57 +383,30 @@ test("POST /dshana/model: 非冲突失败 → 200/ok=false + error（不是 409�
   assert.match(ctx.body.error, /HTTP 500/);
 });
 
-// ---- 数据源切换（路由只做形状与状态码，链的语义在 source-switch 的单测里）----
+// ---- 数据源切换：入口暂时撤下（实现留在 lib/source-switch.ts 与其单测里）----
 
-test("POST /dshana/settings/restart: 接受 → 202 + operation（不阻塞请求）", async () => {
-  const { app, routes } = makeFakeApp();
-  const operation = { id: "switch-1", state: "running", step: "preflight", error: null };
-  registerDshanaRoutes(app, makeFakeDeps({
-    switchSource: async (settings, expectedRevision) => {
-      assert.equal(settings.mode, "shared");
-      assert.equal(expectedRevision, 3);
-      return { ok: true, operation };
-    },
-  }));
-  const [,, handler] = routes.find(([m, p]) => m === "POST" && p === "/dshana/settings/restart");
-  const ctx = makeFakeCtx();
-  ctx.req = { json: async () => ({ settings: { mode: "shared", path: "D:/dsh" }, expectedRevision: 3 }) };
-  await handler(ctx);
-  assert.equal(ctx.status, 202);
-  assert.equal(ctx.body.accepted, true);
-  assert.equal(ctx.body.operation.id, "switch-1");
-});
-
-test("POST /dshana/settings/restart: 进行中 → 409 SWITCH_BUSY；revision 落后 → 409 SETTINGS_CONFLICT", async () => {
-  const cases = [
-    [{ ok: false, busy: true, operation: { id: "x" } }, "SWITCH_BUSY"],
-    [{ ok: false, conflict: true, revision: 9 }, "SETTINGS_CONFLICT"],
-  ];
-  for (const [reply, code] of cases) {
-    const { app, routes } = makeFakeApp();
-    registerDshanaRoutes(app, makeFakeDeps({ switchSource: async () => reply }));
-    const [,, handler] = routes.find(([m, p]) => m === "POST" && p === "/dshana/settings/restart");
-    const ctx = makeFakeCtx();
-    ctx.req = { json: async () => ({ settings: { mode: "shared", path: "D:/dsh" }, expectedRevision: 3 }) };
-    await handler(ctx);
-    assert.equal(ctx.status, 409);
-    assert.equal(ctx.body.code, code);
-  }
-});
-
-test("POST /dshana/settings/restart: 形状不对 → 400（不触发切换）", async () => {
+test("POST /dshana/settings/restart: 入口暂撤 → 一律 503 SWITCH_DISABLED，不碰切换链", async () => {
   const { app, routes } = makeFakeApp();
   let called = 0;
-  registerDshanaRoutes(app, makeFakeDeps({ switchSource: async () => { called += 1; return { ok: true }; } }));
+  registerDshanaRoutes(app, makeFakeDeps({
+    switchSource: async () => { called += 1; return { ok: true, operation: { id: "switch-1" } }; },
+  }));
   const [,, handler] = routes.find(([m, p]) => m === "POST" && p === "/dshana/settings/restart");
-  const ctx = makeFakeCtx();
-  ctx.req = { json: async () => ({ mode: "shared" }) };
-  await handler(ctx);
-  assert.equal(ctx.status, 400);
-  assert.equal(called, 0);
+  for (const body of [
+    { settings: { mode: "shared", path: "D:/dsh" }, expectedRevision: 3 },
+    { mode: "shared" },
+    null,
+  ]) {
+    const ctx = makeFakeCtx();
+    ctx.req = { json: async () => body };
+    await handler(ctx);
+    assert.equal(ctx.status, 503, "形状对不对都只回 503：入口撤下，不做形状判定");
+    assert.equal(ctx.body.code, "SWITCH_DISABLED");
+  }
+  assert.equal(called, 0, "撤下的入口不得触发切换链（它会停掉正在跑的 runtime）");
 });
 
-test("GET /dshana/settings: 带当前切换 operation（供轮询）", async () => {
+test("GET /dshana/settings: 不再带切换面字段（operation / defaults 已撤）", async () => {
   const { app, routes } = makeFakeApp();
   registerDshanaRoutes(app, makeFakeDeps({
     readSettings: async () => ({
@@ -447,7 +420,9 @@ test("GET /dshana/settings: 带当前切换 operation（供轮询）", async () 
   const [,, handler] = routes.find(([m, p]) => m === "GET" && p === "/dshana/settings");
   const ctx = makeFakeCtx();
   await handler(ctx);
-  assert.equal(ctx.body.operation.state, "failed");
+  assert.equal(ctx.body.operation, undefined);
+  assert.equal(ctx.body.defaults, undefined);
+  assert.equal(ctx.body.source.sourceId, "private", "只读的当前源回显留着（诊断用）");
 });
 
 // ---- 会话流卡的状态面（ui/card.html 加载后的一次性取数，不是轮询面）----

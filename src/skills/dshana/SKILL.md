@@ -1,6 +1,6 @@
 ---
 name: dshana
-description: "dshana App（把 DeepSeek Harness 接进 Hana 的受管子代理执行器）的使用与排错指南。触发场景：DSHana 卡显示未启动/启动中/需要处理（三态自举页）、DSH 起不来或启动超时、DSH 任务失败排查、审批怎么应答（dshana_session action=approve）、默认模型怎么配、DSH 数据源（private/shared）怎么切、DSH Web UI 打不开、主题跟随宿主、DeepSeek Harness 相关。遇到 dshana 相关需求优先读本技能再动手。"
+description: "dshana App（把 DeepSeek Harness 接进 Hana 的受管子代理执行器）的使用与排错指南。触发场景：DSHana 卡显示未启动/启动中/需要处理（三态自举页）、DSH 起不来或启动超时、DSH 任务失败排查、审批怎么应答（dshana_session action=approve）、默认模型怎么配、DSH Web UI 打不开、主题跟随宿主、DeepSeek Harness 相关。遇到 dshana 相关需求优先读本技能再动手。"
 ---
 
 # dshana 使用与排错指南
@@ -16,7 +16,7 @@ DSHana 把 DeepSeek Harness（DSH）作为**受管子代理执行器**接进 Han
 - **无需装依赖、无需配 Node**：DSH 及其依赖树随包分发在安装目录 `node_modules`，启动只做 profile 种子化 + 服务监听。
 - **无需配 API Key / 模型**：推理经受管 runtime 内 `hana.models` 发起，provider 凭据留在宿主。
 - **默认模型**：读 DSH 自身配置（`DSH_HOME/settings.yaml` 的 `agent-default-model`）。
-- **数据源**：private（App 独立目录）或 shared（DSH 默认目录 / 自定义目录）；切换走 preflight → 停旧 → 起新 → 失败回滚。
+- **数据目录**：固定用 App 内置独立目录（App 数据目录下的 `.dsh`），开箱即用；共享已有目录 / 切换数据源暂不提供。
 - `dshana_session(action="create")` 每次调用**必须显式传 `cwd`**。
 
 ## DSHana 卡三态
@@ -53,7 +53,6 @@ DSHana 把 DeepSeek Harness（DSH）作为**受管子代理执行器**接进 Han
 | 提示端口被占用 | 端口竞争 | 会自动换随机端口重试；持续失败看日志 |
 | DSH Web UI 打不开但状态就绪 | 注入失败 / surface 票据缺失 | 重开卡；反复出现查中继前缀与 surface 授权 |
 | `dshana_session` 报 runtime 未就绪 | DSH 还没起来 | 等就绪或点「启动 DSH」；持续失败看 boot 状态 |
-| 切换数据源后仍读旧会话 | 切换未成功（已回滚） | 看设置页 operation 状态与日志；确认 shared 路径存在 |
 | 默认模型改了不生效 | DSH 内存态与文件不一致 | 重启 DSH（停止后重新启动）再确认 |
 | 主题没跟随宿主 | DSH 主题偏好是 light/dark 而非 system | 在 DSH 设置里改回 system |
 | bash 报 `E_ACCESSDENIED` | DSH bash 沙箱 Windows 限制 | 改用文件系统工具（write/read/edit） |
