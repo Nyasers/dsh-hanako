@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/ui/app-shell.js — dshana App v2 壳页逻辑（main/sidebar 共用；浏览器 ESM）
+// src/ui/app-shell.ts — dshana App v2 壳页逻辑（main/sidebar 共用；浏览器 ESM）
 //
 // 相对资源纪律：经 <script type="module" src="./app-shell.js"> 相对引入，
 // 页面内不出现根路径绝对 URL。浏览器 SDK = 官方 @hana/plugin-sdk（devDependencies，
@@ -567,7 +567,7 @@ import { injectDshIndex, installTransport } from "./dsh-inject.ts";
   });
   // 剪贴板：走宿主能力门（app/ui.clipboard-write）。本窗口（嵌入场景）里
   // navigator.clipboard 被宿主的 Permissions-Policy 拒（'denied'），所以壳级全局 shadow
-  // （src/ui/clipboard-shadow.js，桥优先）改调 __DSHANA__.clipboardWrite，最终落到这里：
+  // （src/ui/clipboard-shadow.ts，桥优先）改调 __DSHANA__.clipboardWrite，最终落到这里：
   // 宿主执行 hana.clipboard.writeText，不受插件 iframe 权限链限制。
   //
   // 契约：@hana/plugin-sdk 的 HanaClipboardWriteTextResult 是

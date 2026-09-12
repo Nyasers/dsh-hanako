@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src-cordis/plugins/provider/lib/ndjson.js — NDJSON 逐行读取器（纯函数/零依赖）
+// src-cordis/plugins/provider/lib/ndjson.ts — NDJSON 逐行读取器（纯函数/零依赖）
 //
 // hana.models.stream 的响应是 NDJSON（application/x-ndjson，每行一个 JSON 事件；详见
 // SDK models.d.ts）。一个网络 chunk 可能包含多行或半行，解析必须保留

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/routes/dshana-routes.js — dshana App v2 ctx.routes.register 单 registrar
+// src/routes/dshana-routes.ts — dshana App v2 ctx.routes.register 单 registrar
 // 
 //
 // 宿主契约（ctx.routes，实证于 server 0.930.1 bundle / @hana/app-sdk）：
@@ -14,7 +14,7 @@
 //     /api/apps/<appId>/routes/_runtime/<runtimeId>/（自动代理 + 重定向重写 +
 //     hana_app_runtime HttpOnly cookie）。本 registrar 只提供壳页/诊断面（boot 状态、
 //     启动/停止触发），壳页把 DSH Web UI 指向正确的前缀即可（实证记录见
-//     src/lib/boot-state.js 头注释）。
+//     src/lib/boot-state.ts 头注释）。
 //
 // 端点（本 App 私有，路径段前缀 dshana）：
 //   GET  /dshana/boot-state  归一化 boot 快照（idle/starting/ready/error + 文案）——壳页轮询
@@ -26,7 +26,7 @@
 //   POST /dshana/model       改默认模型（整段替换；带 expectedRevision，落后就 409）
 //
 // 依赖注入（可测性）：deps = { appId, version, getSnapshot(), start(), stop(), log() }。
-// 默认实现经 src/lib/managed-runtime.js 读取真实单例；测试注入 fake。
+// 默认实现经 src/lib/managed-runtime.ts 读取真实单例；测试注入 fake。
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { managedRuntimeDetails, ensureManagedRuntime, stopManagedRuntime, bridgeAccess } from "../lib/managed-runtime.ts";
@@ -37,7 +37,7 @@ export const DASHANA_ROUTE_PREFIX = "/dshana";
 
 // ---- 应用设置（GET/POST /dshana/settings）----
 // 只认两项（原 manifest contributes.settings.schema 的那两个键），值落在 dataDir/config.json
-// 的 global.*——和宿主设置界面当初写的是同一处，也正是 src/lib/config.js 里
+// 的 global.*——和宿主设置界面当初写的是同一处，也正是 src/lib/config.ts 里
 // resolveApprovalTimeoutSec / resolveDefaultTimeoutSec 优先直读的那份值：改完即时生效，
 // 不需要重启。
 // 为什么不用 schema 门：设置标签页直接渲染本 App 自己的页

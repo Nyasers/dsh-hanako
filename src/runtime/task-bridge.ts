@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/runtime/task-bridge.js — 受管 runtime 内 DSH 事件 → Hana task 回投
+// src/runtime/task-bridge.ts — 受管 runtime 内 DSH 事件 → Hana task 回投
 //
 // 位置与角色：本模块随 dist/runtime/dsh-host.mjs 打进受管 runtime（与 DSH 同进程），
 // main.js 在 DSH boot 就绪后挂载。它订阅 DSH cordis ctx 的会话事件（进程内 ctx.on——
 // `$events` 广播层只带 api-session/*，turn 生命周期在 ctx 事件源直订才可见），按
 // <dataDir>/dshana/taskmaps/<sessionId>.json 映射（App 主进程写入，
-// 见 src/lib/task-map.js——本 bundle 直接复用同一实现）把事件回投宿主：
+// 见 src/lib/task-map.ts——本 bundle 直接复用同一实现）把事件回投宿主：
 //   running 进度 → hana.tasks.update(taskId, { status:"running", progress })
 //   终态（成功）  → hana.tasks.complete(taskId, minimal 定位结果)
 //   终态（失败）  → hana.tasks.fail(taskId, message)

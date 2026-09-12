@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src-cordis/plugins/provider/lib/catalog.js — hana.models.list 目录 → DSH llm 目录（纯函数）
+// src-cordis/plugins/provider/lib/catalog.ts — hana.models.list 目录 → DSH llm 目录（纯函数）
 //
 // 宿主 models.list 返回的每条 AppModelInfoV2 投影字段（迁移核对记录）：
 //   id, name, provider, input[], reasoning, thinkingLevels, [customThinkingLevels],

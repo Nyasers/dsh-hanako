@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/runtime/options.js — 受管 runtime 子进程的私有配置读取（dsh-host 专用）
+// src/runtime/options.ts — 受管 runtime 子进程的私有配置读取（dsh-host 专用）
 //
 // 形态（对齐官方样例 hana-dsh）：**不再用命令行明文传参**，改为单个私有配置文件路径
 // （argv[1]）——配置由 App 主进程（lib/managed-runtime.js）以 0600 写入 dataDir/integration/，

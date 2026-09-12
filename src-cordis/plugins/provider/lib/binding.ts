@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src-cordis/plugins/provider/lib/binding.js — 会话↔任务绑定的宿主槽位（会话投影）
+// src-cordis/plugins/provider/lib/binding.ts — 会话↔任务绑定的宿主槽位（会话投影）
 //
 // 绑定的落点是**会话自己的事件日志**：某条 DSH 会话当前被哪个 Hana task 占着，是这条会话的
 // 事实，随会话一起持久化、一起回放。宿主为此提供的接缝是 `sessionProjections`——我们注册一个

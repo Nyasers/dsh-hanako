@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/lib/service-base.js — 受管 runtime 服务访问面（叶子模块，供 App 侧多模块共用）
+// src/lib/service-base.ts — 受管 runtime 服务访问面（叶子模块，供 App 侧多模块共用）
 //
 // 从 session-run.js 拆出（cancel-chain 与 session-run 都要用、互为消费者时避免环依赖）。
 //

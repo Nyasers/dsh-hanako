@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/lib/boot-state.js — dshana App v2 壳页/诊断面的 boot 状态快照与提示文案（纯函数）
+// src/lib/boot-state.ts — dshana App v2 壳页/诊断面的 boot 状态快照与提示文案（纯函数）
 //
-// 消费方：ctx.routes.register 的壳页诊断面（src/routes/dshana-routes.js）与 ui/ 壳页
+// 消费方：ctx.routes.register 的壳页诊断面（src/routes/dshana-routes.ts）与 ui/ 壳页
 // （GET /api/apps/<appId>/routes/dshana/boot-state）。本模块只做「状态归一化 + 文案」，
 // 不直接触达受管 runtime（由调用方注入 managedRuntimeDetails() 快照），便于单测。
 //
@@ -16,7 +16,7 @@
 //     代理前缀为「路径」形态（相对同源），
 //     壳页在同源下拼 `origin + proxyPrefix` 使用。
 //
-// 阶段（phase，来自 src/lib/managed-runtime.js 单例）：
+// 阶段（phase，来自 src/lib/managed-runtime.ts 单例）：
 //   idle（未启动）/ starting（启动中：runtime 拉起 + profile 种子化 + 服务监听）/ ready（就绪）/
 //   error（上次启动失败，含 code+userText 供重试指引）/ stopped（已停止）
 export const APP_ID = "dshana";

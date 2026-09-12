@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/runtime/main.js — dshana 受管 Node runtime 入口主体
+// src/runtime/main.ts — dshana 受管 Node runtime 入口主体
 //
 // 打包产物：dist/runtime/dsh-host.mjs（rspack ESM bundle）。宿主以 ctx.runtime.start({ runtime:
 // "node", entry: "runtime/dsh-host.mjs", ... }) 拉起，本进程自持生命周期，不回宿主进程。
@@ -295,7 +295,7 @@ export async function main(argv) {
   state.hana = hana;
   // 受管子进程内子插件经该句柄调用宿主
   // tasks/models/network（connectAppRuntime 的 client 对象；与插件同进程，globalThis
-  // 共享——provider adapter 重建见 src-cordis/plugins/provider/index.js v2）。关闭顺序：
+  // 共享——provider adapter 重建见 src-cordis/plugins/provider/index.ts v2）。关闭顺序：
   // 先停 task-bridge/流，再 ctx dispose，最后 hana.close()（流纪律）。
   try {
     globalThis.__dshanaHana = hana;

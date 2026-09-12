@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src-cordis/plugins/provider/lib/messages.js — DSH llm Message[] → hana.models 消息（纯函数）
+// src-cordis/plugins/provider/lib/messages.ts — DSH llm Message[] → hana.models 消息（纯函数）
 //
 // 目标消息形状（迁移核对记录，host models.stream 逐消息校验）：
 //   user      content: string | [{ type:"text", text } | { type:"image", data(base64),

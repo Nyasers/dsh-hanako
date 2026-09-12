@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/index.js — dshana App v2 入口（模块导出 apply(ctx)）
+// src/index.ts — dshana App v2 入口（模块导出 apply(ctx)）
 //
 // 形态：宿主在隔离 App 进程内加载本文件并调用 apply(ctx)（入口契约兼容具名 apply /
 // default.apply / 默认函数，两种都导出）。apply 完成注册后立即返回，不等任何长活服务结束。
@@ -19,7 +19,7 @@
 // 依赖部署：DSH 依赖（@deepseek-ai/dsh + cordis + 官方插件树 + 多平台原生产物）由
 // scripts/pack.mjs 在构建时物化进安装目录 node_modules（hoisted 布局，安装即用、无运行时
 // 安装，版本随 App 声明）；cordis 产物（@dshana/*）在安装目录 cordis/，profile 经 junction
-// 暴露（src/runtime/seed.js）；受管子进程入口 = runtime/dsh-host.mjs（dist 构建产物）。
+// 暴露（src/runtime/seed.ts）；受管子进程入口 = runtime/dsh-host.mjs（dist 构建产物）。
 //
 // 日志：只走宿主 ctx.logger；ctx.logger 缺失或抛错时回落 stderr（宁可吵，不静默丢日志）。
 import { initAppRuntime } from "./lib/app-runtime.ts";

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src-cordis/plugins/theme/token-map.js — DSH token → 宿主主题变量映射表（纯数据，零依赖）。
+// src-cordis/plugins/theme/token-map.ts — DSH token → 宿主主题变量映射表（纯数据，零依赖）。
 // 单独成文件的理由：index.js 顶部 import 了 assets/theme-bridge.js（默认导出由打包器注入的
 // 构建期资源），普通 node 无法 import 那个模块，映射表也就没法被单测覆盖。拆出来两边共用。
 //

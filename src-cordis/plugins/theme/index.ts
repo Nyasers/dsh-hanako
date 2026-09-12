@@ -11,7 +11,7 @@
 //     回传新值；宿主新增/修改主题无需插件更新（无静态主题表）。
 // 边界：dsh preference 有**两段来源**，都在 DSH 侧语义之内——
 //   ① 启动段：壳页从 DSH index 的 boot-theme 行取 `const preference = "..."`（见
-//      src/ui/app-shell.js readIndexThemePreference），随主题载荷 postMessage 给桥，桥拿它
+//      src/ui/app-shell.ts readIndexThemePreference），随主题载荷 postMessage 给桥，桥拿它
 //      当自举值。官方注释把这行定位成 "the browser's pre-plugin interval"（每个 index 渲染
 //      都嵌入当前持久偏好，插件树激活后 ThemePresenter 接管同一批 DOM 字段）——不借它，
 //      注入完成到插件就位之间 DSH 会一直穿内置配色（空窗）。

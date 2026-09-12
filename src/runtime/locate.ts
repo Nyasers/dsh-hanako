@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/runtime/locate.js — DSH 依赖定位（受管 runtime 子进程侧，dsh-host 专用）
+// src/runtime/locate.ts — DSH 依赖定位（受管 runtime 子进程侧，dsh-host 专用）
 //
-// 自 v1 src/lib/lifecycle.js loadInprocDsh 的思路迁移：depsRoot（默认 App dataDir
+// depsRoot（默认 App dataDir
 // runtime/node_modules）下定位
 //   @deepseek-ai/dsh/lib/profile-boot-*.js（带构建 hash 产物名，枚举试 runProfile 导出）
 //   @deepseek-ai/dsh-app-boot（createRequire 沿 dsh 包解析；回退 .pnpm 枚举）

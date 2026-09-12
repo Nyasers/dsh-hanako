@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/lib/task-ownership.js — 归属校验通则（纯函数，无宿主依赖）
+// src/lib/task-ownership.ts — 归属校验通则（纯函数，无宿主依赖）
 //
 // 归属校验规则，与“句柄默认、凭证显式”配套：
 //

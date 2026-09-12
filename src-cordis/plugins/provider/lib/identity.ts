@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src-cordis/plugins/provider/lib/identity.js — 模型请求身份判定
+// src-cordis/plugins/provider/lib/identity.ts — 模型请求身份判定
 //
 // 身份参数二选一，且不能同时传；本 adapter 只可能给出两种形态：
 //   · 会话绑定**仍活动**（dshana_session 创建/续写）→ { taskId }：保留任务绑定，结果沿

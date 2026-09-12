@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/lib/app-runtime.js — dshana App v2 运行包持有者
+// src/lib/app-runtime.ts — dshana App v2 运行包持有者
 //
 // 为什么存在（替代 v1 的 globalThis.__dshHanako 宿主单例）：
 // v1 时代工具代码通过 globalThis.__dshHanako 存取「宿主进程内」共享状态（dataDir、
@@ -9,7 +9,7 @@
 // 各独立加载单元（index.js / routes / tools bundle）之间跨单元共享的产物。App v2 里
 // apply(ctx) 与工具 execute 同处一个隔离 App 进程、同一个 ESM 模块图（rspack 单 bundle），
 // 不再需要 globalThis 跨单元通信；ctx 成员（dataDir/config/logger/……）由 apply 捕获进
-// 模块级运行包，工具执行时经本模块读取即可。生命周期纪律见 src/index.js 头注释。
+// 模块级运行包，工具执行时经本模块读取即可。生命周期纪律见 src/index.ts 头注释。
 //
 // 本模块是叶子：只做「存/取运行包」+ 少量无状态取值助手，不 import 任何业务模块。
 // 运行包字段（initAppRuntime 由 apply 写入）：

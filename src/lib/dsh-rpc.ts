@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/lib/dsh-rpc.js — 经注入 fetch 的 DSH /api 网关 RPC 调用
+// src/lib/dsh-rpc.ts — 经注入 fetch 的 DSH /api 网关 RPC 调用
 //
 // 背景：「App 主进程 → 受管 runtime DSH web /api」的 loopback Unary RPC 封装起初只在
-// lib/session-run.js 内部（ctx.network.fetch 门）。同一条 RPC 面还出现在
+// src/lib/session-run.ts 内部（ctx.network.fetch 门）。同一条 RPC 面还出现在
 // 更多地方（cancel 工具、执行超时看门狗、受管 runtime 内 task-bridge 的宿主取消反向
 // 触发），把「信封构造 + POST + 响应解析」抽成本模块共用，fetch 由调用方注入：
 //   · App 主进程：ctx.network.fetch（manifest network 白名单 127.0.0.1 门，宿主代执行）

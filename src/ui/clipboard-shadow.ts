@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/ui/clipboard-shadow.js — 壳级全局剪贴板影子（浏览器面）
+// src/ui/clipboard-shadow.ts — 壳级全局剪贴板影子（浏览器面）
 //
 // 为什么必须在**壳级**、且必须在**注入 DSH 之前**装：
 //   · 嵌入场景里 navigator.clipboard 被宿主的 Permissions-Policy 关死（真机实测：
