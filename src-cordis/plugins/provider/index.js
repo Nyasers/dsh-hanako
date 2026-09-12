@@ -8,9 +8,12 @@
 // runtime 内经 connectAppRuntime().models 发起**（受管子进程与 DSH 同进程，hana client
 // 由 dsh-host.mjs 挂 globalThis.__dshanaHana，见 src/runtime/main.js 步骤 1 注释）：
 //   · 目录：hana.models.list() → 显式 provider/model 选择（id 原样透传，不二次映射）；
-//   · 推理：hana.models.stream({ requestId, taskId, provider, model, messages, systemPrompt,
-//     tools, reasoningEffort?, maxTokens?, temperature? })——requestId 由本 adapter 自管
-//     （cancel 按 requestId 定向）；taskId 从 task-map（会话→任务）解析（宿主 scope 校验）；
+//   · 推理：hana.models.stream({ requestId, provider, model, messages, systemPrompt, tools,
+//     reasoningEffort?, maxTokens?, temperature?, taskId? })——requestId 由本 adapter 自管
+//     （cancel 按 requestId 定向）。**身份二选一且不能同传**：有会话→任务映射（dshana_session
+//     委派、任务仍活动）传 taskId，保留任务绑定与结果回投；没有映射（DSH Web UI 自建会话）
+//     则 callToken/taskId 都不传 = 归属 App 自己（《DSHana 调用 Hana 模型接口指南》§3/§5，
+//     见 lib/identity.js）。不传 scope——那是 models.utility 的参数，stream 不接受；
 //   · NDJSON 逐行解析（lib/ndjson.js），done.assistant 完整保存回放（含 text/reasoning/
 //     toolCall 续接签名，lib/stream.js buildDoneChunks + 回放信封）；error 事件=失败不算成功；
 //   · 图片：DSH 消息含 ImageBlock 时经 attachment store 读字节 → base64+MIME（不传路径），
@@ -28,7 +31,7 @@ import { readNdjsonEvents } from "./lib/ndjson.js";
 import { providerRoutes, listModelsForProvider, resolveModelInfo, supportedEfforts } from "./lib/catalog.js";
 import { toHanaMessages } from "./lib/messages.js";
 import { buildDoneChunks } from "./lib/stream.js";
-import { readTaskMap, taskMapDir } from "./lib/taskmap.js";
+import { resolveModelIdentity } from "./lib/identity.js";
 
 export const name = "@dsh-hanako/provider";
 export const inject = ["llm"];
@@ -57,15 +60,20 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-// ---- 任务映射（stream scope）----
+// ---- 运行环境 ----
 function dataDirOf() {
   const v = process.env.DSHANA_HOME;
   return typeof v === "string" && v ? v : null;
 }
-function taskIdForSession(dataDir, sessionId) {
-  if (!dataDir || !sessionId) return null;
-  const m = readTaskMap(dataDir, sessionId);
-  return m ? m.taskId : null;
+
+// 独立会话（无任务映射 = DSH Web UI 自建）按 App 身份推理：每会话只提示一次——
+// 日志要能回答"这次请求为什么没有 task 绑定"，这是诊断信息而非错误。
+const APP_IDENTITY_LOGGED = new Set();
+function noteAppIdentity(ctx, sessionId) {
+  const key = String(sessionId || "?");
+  if (APP_IDENTITY_LOGGED.has(key) || APP_IDENTITY_LOGGED.size >= 64) return;
+  APP_IDENTITY_LOGGED.add(key);
+  log(ctx, "会话 " + key + " 无任务映射 → 按 App 身份推理（DSH Web UI 独立会话，不传 callToken/taskId）");
 }
 
 function log(ctx, msg) {
@@ -215,15 +223,11 @@ function buildHanaAdapter(LlmAdapter, LlmError, deps) {
     async *stream(options) {
       const dataDir = dataDirOf();
       const sessionId = options && options.sessionId;
-      const taskId = taskIdForSession(dataDir, sessionId);
-      if (!taskId) {
-        throw new LlmError(
-          "DSH 会话 " + String((options && options.sessionId) || "?") +
-            " 没有 Hana task 绑定（task-map 缺失）：模型推理需要宿主 task scope（app/models.infer）；" +
-            "非 dshana_session 发起的会话（如 Web UI 直开）暂不可推理。",
-          "NO_TASK_SCOPE",
-        );
-      }
+      // 身份判定（指南 §5）：有任务映射（dshana_session 委派、任务仍活动）→ taskId；
+      // 没有（DSH Web UI 自建会话，或委派任务已终结后用户继续在 Web UI 里跑）→ 两者都不传。
+      // 失效/归属不正确的 taskId 由宿主报错并原样上抛——不做"删掉身份参数重试"的兜底（指南 §5）。
+      const { identity, source } = resolveModelIdentity(dataDir, sessionId);
+      if (source === "app") noteAppIdentity(ctx, sessionId);
       const requestId = randomUUID();
       const ac = new AbortController();
       const onAbort = () => {
@@ -265,7 +269,7 @@ function buildHanaAdapter(LlmAdapter, LlmError, deps) {
       }
       const request = {
         requestId,
-        taskId,
+        ...identity, // taskId（Hana 委派）或 无身份字段（App 身份，DSH Web UI 独立会话）
         provider: options.provider,
         model: options.model,
         messages: hanaMessages,
