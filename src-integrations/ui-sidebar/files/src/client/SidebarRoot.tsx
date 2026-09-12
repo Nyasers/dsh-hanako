@@ -163,10 +163,7 @@ export function SidebarRoot({
 
   const buildVersion = localBuildVersion()
 
-  // ---- hana 集成（integrations/ui-sidebar）----
-  // 本文件所在文档的「面」（window.__DSHANA__.role，样例叫 __HANA_DSH__）决定侧栏槽位渲染
-  // 什么，与样例（0.7.0 的 ui-sidebar 补丁）逐字一致：
-  //   settings / workspace → 只渲染 sidebar.settings 宽版（主卡内设置；外层 settingsShell 是
+    //   settings / workspace → 只渲染 sidebar.settings 宽版（主卡内设置；外层 settingsShell 是
   //     绝对定位浮层、不吃指针事件）；面板未打开时槽位为空，所以主卡上不会多出一条 DSH 侧栏。
   //   navigation（FP） → 正常 DSH 侧栏，且**不渲染折叠钮**（FP 里的侧栏不可折叠，见下）。
   // 认面必须在所有 hook 之后（React 规则），正好落在 buildVersion 处。
@@ -189,9 +186,6 @@ export function SidebarRoot({
       }}
       onPointerLeave={() => { armLinger() }}
     >
-      {/* 品牌行（logoRow）：FP（navigation 面）不渲染——宿主 FP 自己就写着 DSHana，
-          再叠一行品牌 + 字标是重复（她 2026-09-12 要求去掉，更简洁）。
-          拆分面 / 工作区面保留：那里它担着品牌与新会话快捷（展开态整行就是 New Session）。 */}
       {surfaceRole !== 'navigation' && (
       <div className={css.logoRow}>
         {/* Expanded, the brand doubles as a New Session shortcut; the
@@ -223,10 +217,7 @@ export function SidebarRoot({
           </button>
         )}
         {/* Rail resting state is the whale mark; hovering swaps in the panel
-            icon (the expand affordance, figma sidebar-hover flow). FP（navigation）面
-            不渲染折叠钮：拆窗的面才可折叠，FP 里的侧栏始终整幅。
-            2026-09-12：standalone（拆窗）面也不渲染——见 AppFrame.tsx 里拆窗不再套用
-            「收起」机制那条：独立窗口的侧栏始终在，留一个按不动的钮会误导。 */}
+            icon (the expand affordance, figma sidebar-hover flow). */}
         {surfaceRole !== 'navigation' && surfaceRole !== 'standalone' && (
           <Tooltip label={collapsed ? t('toggle.open') : t('toggle.collapse')} delayMs={500}>
             <button

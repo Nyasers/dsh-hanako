@@ -130,24 +130,6 @@ export function AppFrame({
   const frameRef = useRef<HTMLDivElement | null>(null)
   const viewport = layoutInfo.viewportWidth
 
-  // ---- hana 集成（integrations/ui-layout）----
-  // 本文件所在的文档属于哪一个「面」，由宿主桥给出：window.__DSHANA__.role。
-  // 名字是我们的（样例叫 __HANA_DSH__；我们写自己的 overlay，不沿用它的全局名）。
-  // 缺省 / 未知 → workspace。四个面与样例（0.7.0 的 ui-layout 补丁）逐字一致：
-  //   workspace   主卡：中列 + 右列；侧栏槽位改挂为**主卡内设置浮层**（settingsShell）
-  //   navigation  FP 面板：**纯侧栏单列**，轨道整幅，占满整框
-  //   settings    设置面：侧栏槽位横跨全部轨道（settingsCol）
-  //   standalone  拆窗：侧栏 + 中列 + 右列，带拖柄
-  // 宿主桥由壳页（src/ui/app-shell.js）在注入 DSH 前发布；未发布时按 workspace 退。
-  const role = (window as { __DSHANA__?: { role?: string } }).__DSHANA__?.role
-  // 面（三态）：default = 整幅 DSH UI（full 与拆窗共用）；main = 主卡（workspace，无 DSH 侧栏）；
-  // sidebar = FP（navigation，只有侧栏）；另有 settings。
-  // 关键：上游这四个角色词里 **workspace 是“其余”那一支，不是“未知”**——它和
-  // navigation / settings / standalone 并列。只有**真的认不出**（role 缺失或不是角色词）时才按
-  // 上游默认的整幅 UI（standalone）画。
-  // 2026-09-12 教训：我一度把 fallback 写成 standalone 而漏了 workspace 这一支，于是主卡被判成
-  // 拆窗面 → 多出一条 sidebarCol（拖动把手也出来了）；当时还不可见，因为拆窗面的侧栏会被持久化
-  // 的 0 宽当“收起”吞掉——直到拆窗面改成“侧栏始终在”，空白列才露出来。
   const ROLE_SURFACES: Record<string, string> = {
     navigation: 'navigation',
     settings: 'settings',
@@ -184,17 +166,8 @@ export function AppFrame({
   }, [actions])
 
   const narrow = surface === 'standalone' && viewport < SIDEBAR_AUTO_COLLAPSE
-  // 实装反馈（2026-09-12）：拆窗面不再套用「收起」机制——独立窗口的侧栏始终在。
-  // 依据：上游 stores.ts 的初值是 SIDEBAR_DEFAULT（280），所以「sidebar === 0」只可能是
-  // 持久化的收起状态（主卡与 FP 都不渲染可折叠的侧栏轨，那个 0 往往来自别处的旧状态 /
-  // 宿主快捷键）；原逻辑（source === 'standalone' && (narrow ? !narrowExpanded : sidebar === 0)）
-  // 会把它当成收起 → frameSidebarPreference = 0 → 侧栏被零宽吞掉 = 她说的 omit。
-  // 现在：宽度取持久值（> 0 尊重用户拖过的宽度），≤ 0 视为没设过 → 用默认宽度；
-  // narrow 自动收起也一并去掉（拆窗是用户主动开的窗口，不该替他藏侧栏）。
   const sidebarCollapsed = false
   const sidebarPreference = layoutInfo.sidebar > 0 ? layoutInfo.sidebar : SIDEBAR_DEFAULT
-  // 侧栏作为**轨道**只在 standalone 存在；其余面没有可折叠的侧栏轨（见 columns.ts 的
-  // sidebarPresent）：workspace 的侧栏槽位是设置浮层，navigation 的侧栏就是整张面。
   const sidebarPresent = surface === 'standalone'
   const frameSidebarPreference = sidebarPresent ? sidebarPreference : 0
   const rightbarPreference = layoutInfo.rightbar ?? viewport * RIGHTBAR_DEFAULT_RATIO
@@ -225,7 +198,6 @@ export function AppFrame({
     actions.setRightbar(rightbarBase.current - dx)
   }, [actions])
   const productTitle = process.env.DSH_CLIENT_TITLE ?? t('brand.localBuild')
-  // 侧栏槽位拿到的宽度：拆窗面按轨道宽；其余面（FP 纯侧栏、设置面）是整幅框宽。
   const renderedSidebarWidth = surface === 'standalone' ? cols.sidebar : viewport
   const sidebar = useMemo(() => renderSlot('sidebar', {
     collapsed: sidebarCollapsed,
@@ -241,9 +213,6 @@ export function AppFrame({
       ref={frameRef}
       className={css.frame}
       style={{
-        // 轨道与样例同款：模板固定三条，列各自认领 grid-column（AppFrame.module.css）；
-        // 只有 navigation 是单轨整幅。哪些列渲染由 surface 分支决定，不参与模板计算——
-        // 「按渲染集拼轨道」曾把 centerCol 落进 56px 侧栏轨。
         gridTemplateColumns: surface === 'navigation'
           ? 'minmax(0, 1fr)'
           : `${cols.sidebar}px minmax(0, 1fr) ${cols.rightbar}px`,
@@ -253,9 +222,6 @@ export function AppFrame({
       data-rightbar-fullscreen={layoutInfo.rightbarFullscreen || undefined}
       data-rightbar-instant={layoutInfo.rightbarInstant || undefined}
       data-dragging={dragging || undefined}
-      /* 自己的面标记（与 data-dshana-view / hana-dshana-role 同一命名习惯）：
-         给 CSS 一个按面收紧的钩子——FP（navigation）只有一整幅侧栏，
-         侧栏那条 border-right 没有分隔对象（AppFrame.module.css）。 */
       data-dshana-surface={surface}
     >
       <DocumentTitle
@@ -276,12 +242,6 @@ export function AppFrame({
           </RightbarColumn>
         </>
       )}
-      {/* 主卡内设置（settingsShell）：样例在 workspace 面把侧栏槽位挂成绝对定位全框浮层，
-          承载的是 SettingsRoot 的**面板态**——port 了 integrations/ui-settings-general 之后，
-          SettingsRoot 对 workspace 只渲染 panel（不再画触发器），所以这里装的就是"FP 点设置、
-          主卡打开"的落点；它自己按共享状态决定开不开。
-          （未 port 之前这里只能关掉：上游 SettingsRoot 对任何 role 都画齿轮，挂进全框浮层会
-          漂在主卡顶部。现在 role 分叉到位，可以按样例形态打开。） */}
       {surface === 'workspace' && (
         <div className={css.settingsShell}>
           {sidebar}

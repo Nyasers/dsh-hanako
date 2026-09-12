@@ -1,13 +1,3 @@
-/*
- * hana 集成（integrations/ui-layout）：上游同名文件整文件 overlay。与上游的差只有两处，
- * 都照样例（0.7.0）落地：
- *   1) 三列各自认领自己的 grid 轨道（grid-column）—— 上游靠 DOM 顺序落列，只有「每面渲染
- *      的列正好等于模板里的轨数且顺序一致」时才成立；定了 grid-column 之后，模板固定三条、
- *      渲染集随面变化也不会错位（主卡少侧栏、FP 只有侧栏都不再需要重算模板）。
- *   2) .settingsShell / .settingsCol 两条新规则：主卡内设置浮层（绝对定位、不吃指针事件）
- *      与设置面的整幅列（span 全轨）。
- */
-
 .frame {
   position: relative; /* anchors the drag handles, which straddle column borders */
   display: grid;
@@ -40,8 +30,8 @@
   border-right: 0.5px solid var(--dsw-alias-border-l3);
 }
 
-/* FP（navigation）只有一整幅侧栏，右边没有列要分隔，那条 border-right 就只剩边缘一道毛边
-   （她 2026-09-12 提出）。主卡（workspace / standalone）保留：那里它分的是侧栏与中列。 */
+/*
+    */
 .frame[data-dshana-surface="navigation"] .sidebarCol {
   border-right: 0;
 }

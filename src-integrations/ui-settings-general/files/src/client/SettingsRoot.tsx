@@ -37,14 +37,11 @@ type PanelProps = {
   activeId: string | undefined
   onSelect: (id: string) => void
   onClose: () => void
-  /** hana 集成：true = 占满宿主（settings 面的整列），不再是全视口模态。 */
-  embedded?: boolean
+    embedded?: boolean
 }
 
-/** hana 集成（integrations/ui-settings-general）：跨面共享的设置视图状态。 */
 export type SettingsView = { open: boolean; section: string | null }
 
-/** 宿主桥（我们的全局名是 __DSHANA__，样例叫 __HANA_DSH__）。 */
 type HanaSettingsBridge = {
   role?: string
   readSettingsView?: () => Promise<SettingsView>
@@ -52,12 +49,6 @@ type HanaSettingsBridge = {
   onSettingsViewChanged?: (listener: () => void) => () => void
 }
 
-/**
- * 读宿主桥。为什么需要它（见样例同款设计）：
- *   · role —— workspace 面不画触发器、只画面板；navigation（FP）面画触发器；settings 面直接 embedded
- *   · read/write/onChanged —— 「FP 点设置、主卡打开」靠的是一份共享的视图状态（键按卡片实例配对）
- * 桥缺席时全部退化为上游行为（本地状态、本地面板），不会崩。
- */
 function hanaBridge(): HanaSettingsBridge | undefined {
   return (globalThis as { __DSHANA__?: HanaSettingsBridge }).__DSHANA__
 }
@@ -133,8 +124,7 @@ export function SettingsRoot(props: SettingsRootComponentProps) {
   const {
     wide, reconnect, useConnectionState, useSections, useOnboardingSteps, useSessions, renderSlot, t,
   } = props
-  // hana 集成：角色与共享的设置视图状态都来自宿主桥（见 hanaBridge 注释）。
-  const bridge = hanaBridge()
+    const bridge = hanaBridge()
   const role = bridge?.role ?? 'navigation'
   const readView = bridge?.readSettingsView
   const writeView = bridge?.writeSettingsView
@@ -150,7 +140,7 @@ export function SettingsRoot(props: SettingsRootComponentProps) {
   const pendingWrite = useRef<{ next: SettingsView; revision: number } | null>(null)
   const refreshSettingsView = useRef<(() => void) | undefined>(undefined)
 
-  // 把视图状态写出去（revision 守卫：晚到的写不覆盖新状态；失败保留可重试信息）——同样例。
+  // 把视图状态写出去（revision 守卫：晚到的写不覆盖新状态；失败保留可重试信息）
   const publish = useCallback((next: SettingsView) => {
     const revision = ++viewRevision.current
     pendingWrite.current = { next, revision }
@@ -227,7 +217,7 @@ export function SettingsRoot(props: SettingsRootComponentProps) {
   const onboardingActive = useSessions(state =>
     state.phase === 'ready'
     && (state.current === undefined || state.byId[state.current]?.blank === true))
-  // 引导态只有主卡 / 拆窗面持有（同样例）：FP 与设置面不抢 onboarding。
+  // 引导态只有主卡 / 拆窗面持有：FP 与设置面不抢 onboarding。
   const ownsOnboarding = role === 'workspace' || role === 'standalone'
   const onboardingStep = ownsOnboarding && onboardingActive
     ? onboardingSteps.find(step => !completedOnboarding.has(step.id))
@@ -291,8 +281,7 @@ export function SettingsRoot(props: SettingsRootComponentProps) {
     />
   )
   // FP（navigation）**只发射状态、自己不渲染面板**：
-  // 样例两面都画，但 FP 只有 160px 宽，面板在那边又窄又挤（真机反馈）。
-  // 这里让步：面板归 workspace 面，FP 只留齿轮入口（点击照常 publish，主卡就会开）。
+    // 这里让步：面板归 workspace 面，FP 只留齿轮入口（点击照常 publish，主卡就会开）。
   const localPanel = role === 'navigation' ? null : panel
   const onboarding = onboardingStep !== undefined && renderSlot('settings.onboarding', {
     stepId: onboardingStep.id,

@@ -163,11 +163,9 @@ export function apply(ctx: Context): void {
   }
 
   ctx.effect(() => {
-    // hana 集成（integrations/client-hmr）——样例的同一处改法：
-    // EventSource 无法被 fetch 型 transport 包装，所以只能把**地址**换到 App 的私有运行时基址
+        // EventSource 无法被 fetch 型 transport 包装，所以只能把**地址**换到 App 的私有运行时基址
     // （桥的 runtimeUrl）。裸路径会打到宿主源，被凭据闸 403（missing_credential）。
-    // 找不到桥（非 App 文档）则回落裸路径，与上游行为一致。
-    const bridge = (globalThis as { __DSHANA__?: { runtimeUrl?: (path: string) => string } }).__DSHANA__
+        const bridge = (globalThis as { __DSHANA__?: { runtimeUrl?: (path: string) => string } }).__DSHANA__
     const source = new EventSource(bridge?.runtimeUrl?.(EVENTS_ENDPOINT) ?? EVENTS_ENDPOINT)
     source.addEventListener('message', (event: MessageEvent<string>) => {
       let value: unknown
