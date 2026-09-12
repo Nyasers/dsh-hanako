@@ -14,7 +14,8 @@
       "inject": [
         "@deepseek-ai/dsh-client-ui-theme"
       ],
-      "platform": "web"
+      "platform": "web",
+      "immediately": true
     }
   },
   "cordis": {

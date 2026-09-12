@@ -562,17 +562,46 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
     if (data.dshHanaThemeRequest) { try { sendThemeTo(e.source); } catch (err) { /* 忽略 */ } }
   });
   // 剪贴板：走宿主能力门（app/ui.clipboard-write）。本窗口（嵌入场景）里
-  // navigator.clipboard 被宿主的 Permissions-Policy 拒（'denied'），所以 DSH 侧那个
-  // shadow 在原生失败时改调 __DSHANA__.clipboardWrite，最终落到这里：
-  // 由宿主主窗口执行 hana.clipboard.writeText，不受插件 iframe 权限链限制。
-  // （旧路径是 DSH 内脚本 postMessage 一条 __dshCopy 过来；同文档注入后协议整套删除。）
+  // navigator.clipboard 被宿主的 Permissions-Policy 拒（'denied'），所以壳级全局 shadow
+  // （src/ui/clipboard-shadow.js，桥优先）改调 __DSHANA__.clipboardWrite，最终落到这里：
+  // 宿主执行 hana.clipboard.writeText，不受插件 iframe 权限链限制。
+  //
+  // 契约（2026-09-12 真机修）：@hana/plugin-sdk 的 HanaClipboardWriteTextResult 是
+  // **{ written: boolean }**。旧代码判的是 `payload.ok === false`——字段名不对，于是
+  // 宿主明确回 written:false 时这里照样返回 true，表现为「界面显示复制成功、系统剪贴板里
+  // 什么都没有」（DSH 那个 helper 只要不抛就报成功）。现在：显式 written:false 与异常都
+  // **reject 并打印原因**，让失败可见（调用方据此报失败，不再静默假装成功）。
+  //
+  // 2026-09-12 现场结论（方向已按她的决定暂停）：**两条路都在宿主手里**——
+  //   宿主：Plugin UI capability "clipboard.writeText" is not allowed in card slots
+  //         （App 卡面不被允许用这个能力通道，SDK 直接拒）
+  //   原生：NotAllowedError（Permissions-Policy 把 Clipboard API 在本文档里关死）
+  // 所以转发逻辑保留（宿主哪天放开，不用改代码就能活），但日志收敛为“每个环节只说一次”，
+  // 不再每次复制刷三行。唯一未试过的候选是 document.execCommand('copy')（DSH 只在
+  // writeText 不存在时才走它），它大概被同一道策略管着，不做。
+  var clipboardWarned = {};
+  function clipboardWarn(key, message, detail) {
+    if (clipboardWarned[key]) return;
+    clipboardWarned[key] = true;
+    try { console.warn("[dshana/clipboard] " + message, detail === undefined ? "" : detail); } catch (err) { /* 忽略 */ }
+  }
   function writeClipboard(text) {
     if (!hana || !hana.clipboard || typeof hana.clipboard.writeText !== "function") {
-      return Promise.resolve(false);
+      clipboardWarn("no-api", "宿主 SDK 无 hana.clipboard.writeText（能力 app/ui.clipboard-write 在这个面未开放）");
+      return Promise.reject(new Error("host clipboard API unavailable"));
     }
     return Promise.resolve(hana.clipboard.writeText(text)).then(
-      function (payload) { return !(payload && payload.ok === false); },
-      function () { return false; }
+      function (payload) {
+        if (payload && payload.written === false) {
+          clipboardWarn("refused", "宿主返回 written:false（复制未发生）：", payload);
+          throw new Error("host clipboard write refused");
+        }
+        return true;
+      },
+      function (error) {
+        clipboardWarn("capability", "宿主能力调用失败（本次复制不会完成）：", (error && error.message) || error);
+        throw error instanceof Error ? error : new Error(String(error));
+      }
     );
   }
   // 主题跟随（**事件驱动，不轮询**）：宿主主题变化由 SDK 通知（事件名 hana.theme.changed，
