@@ -32,7 +32,7 @@
 // 会话，如 DSH Web UI 直开）的事件直接忽略。
 import { readTaskMap, markTaskMapEnded } from "../lib/task-map.ts";
 import { bindingStateOf } from "../lib/binding-slot.ts";
-import { BINDING_END_EVENT, appendSessionEvent } from "../lib/binding-slot.ts";
+import { BINDING_CANCEL_EVENT, BINDING_END_EVENT, appendSessionEvent, cancelPayload } from "../lib/binding-slot.ts";
 import { runWatchReconcile } from "../lib/watch-sse.ts";
 import { rpcSessionCancel } from "../lib/dsh-rpc.ts";
 import { cancelSessionModelRequests } from "../lib/model-requests.ts";
@@ -242,6 +242,18 @@ class SessionBridge {
       "宿主任务 " + (rec && rec.status) + "（task=" + this.taskId + "）——反向触发 DSH cancel（session=" +
       (this.sessionId || "").slice(0, 12) + "）",
     );
+    // ① 取消标记落进会话日志（投影 dshanaTaskBinding 的 cancel 格），**先于** DSH cancel。
+    //     这个动作只能在 runtime 里做：App 进程没有 sessions 句柄（宿主 ctx 也不提供 get），
+    //     而子进程/重启后的终态判定读的是投影——不落就等于“没取消过”。
+    const cancelLanded = appendSessionEvent(
+      this.sessions,
+      this.sessionId,
+      BINDING_CANCEL_EVENT,
+      cancelPayload("user"),
+    );
+    if (!cancelLanded && this.sessionId) {
+      this.note("取消标记事件未落地（session=" + String(this.sessionId).slice(0, 12) + "）——会话不在场");
+    }
     // ② 通知 DSH session.cancel（本机回环 RPC）；失败记录（DSH 可能已自行中止）
     try {
       const fetchImpl = (url, init) => fetch(url, {
@@ -280,7 +292,9 @@ class SessionBridge {
     this.settled = true;
     this.stopHostWatch();
     const { ok, message } = decision || {};
-    const cancel = this.mapCancelRequested() || decision && decision.cancelOverride === true;
+    // 本进程亲手请求过取消（hostCancelDone）也算：那是我们发出的动作，不依赖投影/映射的回读是否及时。
+    const cancel =
+      this.mapCancelRequested() || this.hostCancelDone || (decision && decision.cancelOverride === true);
     try {
       if (this.hana && this.hana.tasks) {
         if (cancel && typeof this.hana.tasks.cancel === "function") {
