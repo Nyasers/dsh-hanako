@@ -262,7 +262,7 @@ let autoRetryAttempt = 0;
 let autoRetryFrozen = false;
 
 /** 取消并冻结自动重试（手动停止时调用）；下一次显式 ensure 会重新武装。 */
-export function cancelRuntimeAutoRetry() {
+function cancelRuntimeAutoRetry() {
   if (autoRetryTimer) {
     try { clearTimeout(autoRetryTimer); } catch { /* 忽略 */ }
     autoRetryTimer = null;
