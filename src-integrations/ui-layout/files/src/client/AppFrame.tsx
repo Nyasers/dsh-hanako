@@ -130,6 +130,9 @@ export function AppFrame({
   const frameRef = useRef<HTMLDivElement | null>(null)
   const viewport = layoutInfo.viewportWidth
 
+  // 本页属于哪一个「面」，由壳页（src/ui/app-shell.js）在注入 DSH 前发布的宿主桥给出；
+  // 桥未发布时认不出面，按上游本来的整幅 UI 退。
+  const role = (window as { __DSHANA__?: { role?: string } }).__DSHANA__?.role
   const ROLE_SURFACES: Record<string, string> = {
     navigation: 'navigation',
     settings: 'settings',
