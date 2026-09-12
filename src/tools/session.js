@@ -24,6 +24,10 @@
 //     （W4 裁决：会话格式演进交回官方）。旧插件数据 → App dataDir 的迁移接缝见
 //     lib/app-runtime.js appDataDir() 注释，本次只留口、不做迁移脚本。
 //  3. action 参数契约与返回语义不变（list/get/create/send/cancel/approve + 同 schema）。
+//     2026-09-12 补：**句柄默认、凭证显式**——cancel/approve/get 可传 taskId/approvalId，
+//     工具自己反查私有映射到 DSH 会话，并以宿主记录的 parentSessionPath 校验归属（通则见
+//     lib/task-ownership.js）；显式传 sessionId 则视为“我要跨对话”，跳过归属校验。agent 面
+//     因此不再需要裸传 DSH 会话 id。
 //     但 create/send/cancel/approve 依赖 DSH 受管运行时（ctx.runtime.start +
 //     connectAppRuntime + Hana task 映射），那是迁移步骤 2+ 的接线内容：步骤 1 这些
 //     action 一律返回明确「未接线」错误（先于字段校验，让 Agent 第一时间知道真正阻塞），
@@ -34,20 +38,63 @@ import { execute as queryExecute } from "./subtool/query.js"; // list/get 只读
 import { submitDshTask } from "../lib/session-run.js"; // create/send 提交链（步骤 3 接线）
 import { cancelSessionWork } from "../lib/cancel-chain.js"; // cancel 编排（步骤 4a）
 import { respondApprovalAction } from "../lib/approve-respond.js"; // approve 应答编排（步骤 4a）
+import { findTaskMapByTaskId, findTaskMapByApprovalId, isValidSessionId } from "../lib/task-map.js"; // 句柄反查（只在 App 侧）
+import { taskOwnership, ownershipRefusalText } from "../lib/task-ownership.js"; // 归属校验通则（宿主 parentSessionPath）
 
 // 注：list/get 改走官方查询面后，本模块不再自己定位 App 根/数据目录——旧 APP_ROOT 上溯与
 // dataDirOf()（含 v1 单例兜底）随文件直读路径一并退场（数据目录由 query subtool 经 ctx 取）。
+
+/**
+ * 目标解析（句柄优先、凭证显式）：
+ *   · 显式 sessionId ⇒ 凭证路径：直接用，跳过归属校验（故意跨对话的能力保留）；
+ *   · taskId / approvalId ⇒ 句柄路径：App 侧反查私有映射（DSH 会话坐标不进 agent 面），
+ *     再以宿主任务记录的 parentSessionPath 校验归属；
+ * 解析不出来一律显式失败：不猜、不降级。
+ */
+async function resolveTarget(input, ctx) {
+  const explicit = String((input && input.sessionId) || "").trim();
+  const dataDir = ctx && typeof ctx.dataDir === "string" ? ctx.dataDir : null;
+  if (explicit) {
+    if (!isValidSessionId(explicit)) {
+      throw new Error("sessionId 形态不对（应为 session-<uuid>）：" + explicit);
+    }
+    return { sessionId: explicit, explicit: true, taskId: null, ownership: "explicit-session-id" };
+  }
+  const taskIdIn = String((input && input.taskId) || "").trim();
+  const approvalIdIn = String((input && input.approvalId) || "").trim();
+  let entry = null;
+  if (taskIdIn) entry = dataDir ? findTaskMapByTaskId(dataDir, taskIdIn) : null;
+  else if (approvalIdIn) entry = dataDir ? findTaskMapByApprovalId(dataDir, approvalIdIn) : null;
+  if (!entry) {
+    throw new Error(
+      taskIdIn || approvalIdIn
+        ? "找不到该句柄对应的 DSH 会话（任务可能已被回收或映射已清理）：" + (taskIdIn || approvalIdIn) + "。要跨对话操作请显式传 sessionId。"
+        : "需要目标：传 taskId（默认，句柄路径）或 sessionId（显式凭证路径）",
+    );
+  }
+  const taskId = String(entry.taskId || "");
+  const sessionPath = input && input.context ? input.context.sessionPath : null;
+  let record = null;
+  try {
+    record = taskId && ctx && ctx.tasks && typeof ctx.tasks.get === "function" ? await ctx.tasks.get(taskId) : null;
+  } catch (e) {
+    throw new Error("宿主任务记录读取失败（归属无法校验，按 fail-closed 处理）：" + ((e && e.message) || e));
+  }
+  const verdict = taskOwnership({ taskRecord: record, sessionPath, explicitSessionId: false });
+  if (!verdict.ok) throw new Error(ownershipRefusalText(verdict.reason));
+  return { sessionId: String(entry.dshSessionId || ""), explicit: false, taskId, ownership: verdict.reason };
+}
 
 export const name = "dshana_session";
 
 export const description =
   "DSH 会话全生命周期工具（合并原 dsh_run / dsh_cancel）：list=会话清单（官方 session/list，需 DSH 运行时在线，limit 默认 10）；" +
-  "get=凭 sessionId 直取会话元数据 + 最终结论 summary；" +
+  "get=读取会话元数据 + 最终结论 summary（sessionId 或 taskId）；" +
   "create=新建会话 + 提交任务（task/cwd 必填，cwd 每次调用显式指定）；" +
   "send=续已有会话发消息（sessionId + task 必填，resume 语义）；" +
-  "cancel=取消任务（sessionId 必填）；" +
-  "approve=应答会话挂起的审批（allowed-once/rejected）。" +
-  "权限模型：sessionId 即访问凭证。完整调用手册见 SKILL: skills/dsh-session/SKILL.md";
+  "cancel=取消任务（taskId 优先，sessionId 可显式跨对话）；" +
+  "approve=应答会话挂起的审批（approvalId 即可，工具自己解析会话）。" +
+  "调用模型：句柄默认（taskId/approvalId，按宿主记录的来源会话校验归属）、凭证显式（sessionId = 我要跨对话）。完整调用手册见 SKILL: skills/dsh-session/SKILL.md";
 
 export const parameters = {
   type: "object",
@@ -56,7 +103,7 @@ export const parameters = {
       type: "string",
       enum: ["list", "get", "create", "send", "cancel", "approve"],
       description:
-        "list=会话清单；get=凭 sessionId 取内容；create=新建会话+提交；send=续会话发消息；cancel=取消任务；approve=应答会话挂起的审批（allowed-once/rejected）",
+        "list=会话清单；get=读取会话（sessionId 或 taskId）；create=新建会话+提交；send=续会话发消息；cancel=取消任务（taskId 优先）；approve=应答挂起审批（approvalId 即可）",
     },
     limit: {
       type: "integer",
@@ -64,7 +111,13 @@ export const parameters = {
     },
     sessionId: {
       type: "string",
-      description: "get/send/cancel/approve 必传（形如 session-<uuid>，取自回调/卡片/list 结果）：get=读取、send=续会话、cancel=取消、approve=应答该会话的审批",
+      description:
+        "显式凭证路径（形如 session-<uuid>）：send 必传；get/cancel/approve 可用。显式传入即视为“我要跨对话操作”，跳过归属校验",
+    },
+    taskId: {
+      type: "string",
+      description:
+        "句柄路径（宿主 task id：dshana_session 返回/任务通知里带）：get/cancel/approve 可传，工具自己解析会话并校验归属（与 sessionId 至少给一个）",
     },
     approvalId: {
       type: "string",
@@ -120,10 +173,16 @@ export const parameters = {
 async function doExecute(input, ctx) {
   const action = String(input.action ?? "").trim();
 
-  if (action === "list" || action === "get") {
-    // 只读查询（list/get）由 query subtool 处理：经控制面走官方查询面（session/list + session/page），
-    // **需要受管 runtime 就绪**（不再有离线直读文件的路径；数据目录 = App ctx.dataDir）
+  if (action === "list") {
+    // 会话清单：不需要目标（官方 session/list，需受管 runtime 就绪）
     return queryExecute(input, ctx);
+  }
+
+  if (action === "get") {
+    // 读取会话内容：句柄优先（taskId）→ 解析出 DSH 会话并校验归属；sessionId 为显式凭证路径
+    // （只读查询经控制面走官方查询面 session/list + session/page）
+    const target = await resolveTarget(input, ctx);
+    return queryExecute({ ...input, sessionId: target.sessionId }, ctx);
   }
 
   if (action === "create" || action === "send") {
@@ -162,14 +221,13 @@ async function doExecute(input, ctx) {
   }
 
   if (action === "cancel") {
-    // 步骤 4a 取消链（cancel-chain.js）：sessionId 必填；映射写 cancel 标记 → DSH
-    // session.cancel（loopback RPC）→ 确认窗口内等宿主任务 canceled（= DSH 真中止后，
+    // 步骤 4a 取消链（cancel-chain.js）：**句柄优先**——taskId/approvalId 由本工具解析会话并
+    // 校验归属；显式 sessionId 走凭证路径（跳过归属校验，故意跨对话用）。映射写 cancel 标记 →
+    // DSH session.cancel（loopback RPC）→ 确认窗口内等宿主任务 canceled（= DSH 真中止后，
     // task-bridge 结算）→ 未确认则升级宿主 ctx.tasks.cancel 并如实告知。会话无活动任务
     // 时发幂等 cancel（防「宿主清映射、DSH 仍在跑」），返回无副作用说明。
-    const sessionId = String((input && input.sessionId) || "").trim();
-    if (!sessionId) {
-      throw new Error("cancel 需要 sessionId（dshana_session 提交返回/回调/卡片 URL 里带；取消一律显式传 sessionId）");
-    }
+    const target = await resolveTarget(input, ctx);
+    const sessionId = target.sessionId;
     const out = await cancelSessionWork({ sessionId, reason: "user", log: ctx && ctx.log });
     const sid = String(out.sessionId || sessionId);
     let text;
@@ -197,11 +255,19 @@ async function doExecute(input, ctx) {
   }
 
   if (action === "approve") {
-    // 步骤 4a 审批应答（approve-respond.js）：sessionId/approvalId 必填；校验审批归属
-    // （task-map approvals 表：属于该会话且 pending）→ ctx.tasks.respondApproval 结算宿主
-    // 审批 → 受管 runtime approval-bridge watch 把 outcome 只投给该 approvalId 对应的
-    // DSH 等待者（allowed-once/rejected 原样，绝不自动放行）。
-    const res = await respondApprovalAction({ input, log: ctx && ctx.log });
+    // 步骤 4a 审批应答（approve-respond.js）：approvalId 是唯一句柄——会话由本工具解析（句柄
+    // 路径校验归属），sessionId 仅作显式凭证路径。校验审批归属（task-map approvals 表：属于
+    // 该会话且 pending）→ ctx.tasks.respondApproval 结算宿主审批 → 受管 runtime approval-bridge
+    // watch 把 outcome 只投给该 approvalId 对应的 DSH 等待者（allowed-once/rejected 原样）。
+    const aid = String((input && input.approvalId) || "").trim();
+    if (!aid) {
+      throw new Error("approve 需要 approvalId（审批通知里带；同一任务可挂起多个审批，逐个应答）");
+    }
+    const target = await resolveTarget(input, ctx);
+    const res = await respondApprovalAction({
+      input: { ...input, sessionId: target.sessionId },
+      log: ctx && ctx.log,
+    });
     return res;
   }
 

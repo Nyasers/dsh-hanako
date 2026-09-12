@@ -1,6 +1,6 @@
 ---
 name: dsh-session
-description: "dshana_session 工具手册（DSH 会话全生命周期：create/send/list/get/cancel/approve 六 action 均已接线）。触发场景：提交 DSH 任务（action=create 新建会话+提交 / send 续已有会话，task/cwd 必填，预设/推理强度/provider/model 可选，sessionId 即访问凭证）、查会话清单（action=list）、凭 sessionId 取会话内容与最终结论（action=get）、取消任务（action=cancel）、应答审批（action=approve）。需要提交/查询/取消 DSH 任务或应答审批前先读本技能。"
+description: "dshana_session 工具手册（DSH 会话全生命周期：create/send/list/get/cancel/approve 六 action 均已接线）。触发场景：提交 DSH 任务（action=create 新建会话+提交 / send 续已有会话，task/cwd 必填，预设/推理强度/provider/model 可选）、查会话清单（action=list）、取会话内容与最终结论（action=get，taskId 或 sessionId）、取消任务（action=cancel，taskId 优先）、应答审批（action=approve，approvalId 即可）。调用模型：句柄默认（taskId/approvalId，按宿主记录的来源会话校验归属）、凭证显式（sessionId = 我要跨对话）。需要提交/查询/取消 DSH 任务或应答审批前先读本技能。"
 ---
 
 # dshana_session 工具手册
@@ -17,7 +17,8 @@ required: ["action"]
 |---|---|---|
 | action | string | list / get / create / send / cancel / approve |
 | limit | integer | 仅 list：返回条数（默认 10，有效 1~100） |
-| sessionId | string | get/send/cancel/approve 必传（形如 session-<uuid>；取自返回或清单） |
+| sessionId | string | **显式凭证路径**：send 必传；get/cancel/approve 可用。显式传入 = “我要跨对话操作”，跳过归属校验 |
+| taskId | string | **句柄路径**（宿主 task id：create/send 返回或任务通知里带）：get/cancel/approve 可传，工具自己解析会话并按宿主记录的来源会话校验归属（与 sessionId 至少给一个） |
 | approvalId | string | 仅 approve：审批 id（同一任务可能挂起多个审批，逐个应答） |
 | outcome | enum | 仅 approve：allowed-once（放行单次，安全默认）/ rejected（拒绝） |
 | task | string | create/send 必传：任务描述/消息文本 |
@@ -41,15 +42,16 @@ required: ["action"]
 
 ## action=cancel：取消任务
 
-- **sessionId 必填**
+- **目标二选一**：`taskId`（句柄路径，默认；工具自己解析会话并按宿主记录的来源会话校验归属）或 `sessionId`（显式凭证路径，跨对话用）
 - 链路：通知 DSH `session.cancel`（中止模型流 / 工具 / 终端）→ 收敛为明确取消终态；只停本工作，不影响共享 runtime 上的其他会话
+- 句柄反查不到（任务已被回收 / 映射已清理）会**明确报错**，不会拿猜出来的会话继续操作
 
 ## action=approve：应答挂起审批
 
-- **sessionId + approvalId 必填**（同一任务可能挂起多个审批，逐个应答）
+- **approvalId 必填**（审批通知里带；同一任务可挂起多个审批，逐个应答）——它是唯一句柄，会话由工具解析（句柄路径会校验归属）；`sessionId` 仅在“我要跨对话”时显式传
 - **outcome**：`allowed-once`（默认，放行本次）/ `rejected`（拒绝）
 - **决策看 args（具体要执行什么），不听 reason（模型自述不可尽信）**：合理放行，危险拒绝
-- 审批超时未应答按 `approvalTimeoutSec` 自动拒绝（缺省 30 秒；显式设 0 则禁用自动拒绝）
+- 审批超时未应答按 `approvalTimeoutSec` 自动拒绝（本 App 缺省 30 秒；显式设 0 则禁用自动拒绝）。注意宿主自身的 `timeoutMs` 默认是 0（不禁用即不超时）—— 30 秒是 App 侧策略
 
 ## action=list：会话清单
 
@@ -58,7 +60,7 @@ required: ["action"]
 - `title` 来自会话投影 `projections.values.title`（自动生成或用户改名；未命名的会话为空）
 - DSH 侧摘要**没有 `createdAt`**，所以这里给的是 `updatedAt`（与原口径的差异）
 
-## action=get：凭 sessionId 取会话内容
+## action=get：取会话内容（taskId 或 sessionId）
 
 | | |
 |---|---|

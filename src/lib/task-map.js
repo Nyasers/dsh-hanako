@@ -153,6 +153,28 @@ export function listTaskMaps(dataDir) {
   return out;
 }
 
+/** 按 taskId 反查映射（句柄路径）。同名多条时活动（未 ended）优先，否则最新一条。
+ *
+ *  没命中返回 null：recycle / prune 过的旧任务就是这种情况，调用方必须显式失败，
+ *  不能拿一个猜出来的会话继续操作。
+ */
+export function findTaskMapByTaskId(dataDir, taskId) {
+  const want = String(taskId || "").trim();
+  if (!want) return null;
+  const all = listTaskMaps(dataDir); // 已按 at 降序
+  return all.find((m) => m && m.taskId === want && !m.ended) || all.find((m) => m && m.taskId === want) || null;
+}
+
+/** 按 approvalId 反查映射（审批句柄路径）：返回该审批所在的会话记录（不管 pending 与否）。 */
+export function findTaskMapByApprovalId(dataDir, approvalId) {
+  const want = String(approvalId || "").trim();
+  if (!want) return null;
+  const all = listTaskMaps(dataDir);
+  return (
+    all.find((m) => Array.isArray(m.approvals) && m.approvals.some((a) => a && a.approvalId === want)) || null
+  );
+}
+
 /** 清理过期残留（默认 7 天 TTL；损坏条目一并清；返回清除条数）。 */
 export function pruneTaskMaps(dataDir, olderThanMs = TASK_MAP_TTL_MS) {
   let removed = 0;
