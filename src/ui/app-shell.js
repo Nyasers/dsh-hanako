@@ -127,8 +127,11 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
 
   // ---- main 视图渲染（#boot-panel innerHTML）----
   // 只有两件东西值得占版面：启动按钮，和报错时那块 <pre>。时间线与折叠详情都撤了。
+  // 免交互（2026-09-12 她的决定）：DSH 的拉起由 App 的自动链负责（apply 即 ensureManagedRuntime +
+  // 崩溃重起 + 端口占用自动换端口），页面不提供「启动 / 重启」按钮——那是让用户替系统干活。
+  // 页面只负责说清当前状态（状态行 + 出错时的 <pre>）。
   function idleViewHtml() {
-    return '<div class="actions"><button class="primary" data-dsh-start>启动 DSH</button></div>';
+    return "";
   }
   function bootingViewHtml() {
     return ""; // 启动中台面只有 loader + 状态行
@@ -141,8 +144,8 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
     if (s && s.runtimeId) raw.push("runtimeId: " + s.runtimeId);
     if (s && s.service && s.service.port) raw.push("port: " + s.service.port);
     if (s && s.logTail && s.logTail.length) raw.push("最近日志:\n" + s.logTail.slice(-14).join("\n"));
-    return (raw.length ? '<pre class="diag-progress" data-log-scroll>' + esc(raw.join("\n")) + "</pre>" : "")
-      + '<div class="actions"><button class="primary" data-dsh-start>重新启动 DSH</button></div>';
+    // 只报错、不给按钮：自动链会自己重试（换端口 / 崩溃重起），用户插手反而是多余路径。
+    return raw.length ? '<pre class="diag-progress" data-log-scroll>' + esc(raw.join("\n")) + "</pre>" : "";
   }
 
   // ---- 渲染 ----
@@ -349,16 +352,7 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
   function bindMainActions(s) {
     var main = $("[data-dshana-shell]");
     if (!main) return;
-    var btnStart = $("[data-dsh-start]", main);
     var btnStop = $("[data-dsh-stop]", main);
-    if (btnStart && !btnStart.dataset.bound) {
-      btnStart.dataset.bound = "1";
-      btnStart.addEventListener("click", function () {
-        postAction("start").then(function () { poll(true); }).catch(function (e) {
-          setStateView("error", "启动请求失败：" + ((e && e.message) || e));
-        });
-      });
-    }
     if (btnStop && !btnStop.dataset.bound) {
       btnStop.dataset.bound = "1";
       btnStop.addEventListener("click", function () {
@@ -378,7 +372,6 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
     var detail = $("[data-dsh-detail]", main);
     var meta = $("[data-dsh-meta]", main);
     var logEl = $("[data-dsh-log]", main);
-    var btnStart = $("[data-dsh-start]", main);
     var btnStop = $("[data-dsh-stop]", main);
 
     // FP = DSH Web UI 的 sidebar 本体：就绪后整块让给侧栏——本页自带的标题/状态/按钮 chrome
@@ -400,7 +393,6 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
       }
       if (meta) meta.textContent = "runtime " + (s.runtimeId || "–") + (s.service && s.service.port ? " · port " + s.service.port : "");
       if (logEl) logEl.hidden = true;
-      if (btnStart) btnStart.hidden = true;
       if (btnStop) btnStop.hidden = true;
       startInjection(s.proxyPrefix);
       schedulePoll(POLL_SLOW_MS);
@@ -411,13 +403,10 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
     var errTxt = s && s.error && s.error.userText;
     if (view === "action") {
       if (detail) { detail.textContent = (errTxt || note); detail.classList.add("err"); }
-      if (btnStart) btnStart.hidden = false;
     } else if (view === "booting") {
       if (detail) { detail.textContent = note; detail.classList.remove("err"); }
-      if (btnStart) btnStart.hidden = true;
     } else {
       if (detail) { detail.textContent = note; detail.classList.remove("err"); }
-      if (btnStart) btnStart.hidden = false;
     }
     if (meta) {
       var bits = [];
@@ -438,16 +427,7 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
   function bindSidebarActions() {
     var main = $("[data-dshana-shell]");
     if (!main) return;
-    var btnStart = $("[data-dsh-start]", main);
     var btnStop = $("[data-dsh-stop]", main);
-    if (btnStart && !btnStart.dataset.bound) {
-      btnStart.dataset.bound = "1";
-      btnStart.addEventListener("click", function () {
-        postAction("start").then(function () { poll(true); }).catch(function (e) {
-          setStateView("error", "启动请求失败：" + ((e && e.message) || e));
-        });
-      });
-    }
     if (btnStop && !btnStop.dataset.bound) {
       btnStop.dataset.bound = "1";
       btnStop.addEventListener("click", function () {
