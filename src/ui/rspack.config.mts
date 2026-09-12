@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/ui/rspack.config.mjs — 壳页脚本 bundle 构建配置（ui 域）
+// src/ui/rspack.config.mts — 壳页脚本 bundle 构建配置（ui 域）
 // 产物：dist/ui/app-shell.js（壳页，ESM，`<script type="module" src="./app-shell.js">`）
 // 与 dist/ui/settings.js（App 自己的设置页脚本，同理），以及被 import 的样式
 // dist/ui/<name>.css（页面用 <link> 引入）。
@@ -36,7 +36,7 @@ export default {
     filename: "[name].js",
     cssFilename: "[name].css",
     module: true,
-    clean: false, // 主 bundle 已 clean 整树；这里只写 ui/*（静态页由 build.js copy）
+    clean: false, // 主 bundle 已 clean 整树；这里只写 ui/*（静态页由 build.ts copy）
   },
   module: {
     rules: [

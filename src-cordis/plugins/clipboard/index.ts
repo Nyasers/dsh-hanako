@@ -13,7 +13,7 @@
 // 前端与壳页共用一个 window，__DSHANA__ 直接可调，原来那套 postMessage + MessageChannel +
 // 超时 + 回执校验的握手协议整套不再需要；注入点、index 改写、独立桥脚本一并删除。
 //
-// 本半（service 半）**无运行时行为**：构建按包扫 index.js（src-cordis/build.js 的逐包
+// 本半（service 半）**无运行时行为**：构建按包扫 index.js（src-cordis/build.ts 的逐包
 // rspack），故显式留一个空实现并在注释里记明，不做多余的事（不注册路由、不注入 index）。
 // 依赖数组为空——本包不消费任何 cordis 服务。
 

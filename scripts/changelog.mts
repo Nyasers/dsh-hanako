@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// scripts/changelog.mjs — CHANGELOG 生成（conventional-changelog v8 + conventionalcommits preset）
+// scripts/changelog.mts — CHANGELOG 生成（conventional-changelog v8 + conventionalcommits preset）
 // 职责：version 钩子阶段生成 upcoming release 段并合并进 CHANGELOG.md；也支持全量重生成。
 //
 // 用法：
-//   node scripts/changelog.mjs            # 增量：生成当前未发版段（最近 tag → HEAD），
+//   node scripts/changelog.mts            # 增量：生成当前未发版段（最近 tag → HEAD），
 //                                         #   插入 CHANGELOG.md 头部（幂等：已存在同版本段则替换）
-//   node scripts/changelog.mjs --full     # 全量：releaseCount 0 从最早 tag 起重生成，覆盖文件
+//   node scripts/changelog.mts --full     # 全量：releaseCount 0 从最早 tag 起重生成，覆盖文件
 //                                         #   （首迁 / 事故重建用；--full 顶部可能出现空壳段，
 //                                         #    生成逻辑自动丢弃无内容的版本段）
 //

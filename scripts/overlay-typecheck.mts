@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// scripts/overlay-typecheck.mjs — 覆盖层类型检查（只查我们自己写进上游包里的那些文件）
+// scripts/overlay-typecheck.mts — 覆盖层类型检查（只查我们自己写进上游包里的那些文件）
 //
 // 为什么需要：我们的构建是**转译**（bundle 不做类型检查），所以覆盖层里的自由变量、
 // 拼错的成员这类错能一路过构建、过单测，直到真机才炸——`role is not defined` 就是这么
 // 漏出去的（清注释时连带删了一行代码，TS 只转译，构建和测试都没看见）。
 //
 // 为什么在**暂存树**里查：覆盖层是"盖进别人包里"才成立的（相对 import 指向上游文件），
-// 在仓库树上单独查会一片解析失败。integrations.mjs 摊好上游源、盖好覆盖之后调本模块，
+// 在仓库树上单独查会一片解析失败。integrations.mts 摊好上游源、盖好覆盖之后调本模块，
 // 用一份临时 tsconfig 在整个 src/ 上查，**只报我们自己那几个文件的诊断**：上游代码在
 // 另一套 tsconfig 下不保证干净，混进来就是噪音；我们自己的文件必须干净。
 //
@@ -18,7 +18,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { TS_FILE, classifyDiagnostics, formatDiagnostics, parseTsDiagnostics } from "./ts-diagnostics.mjs";
+import { TS_FILE, classifyDiagnostics, formatDiagnostics, parseTsDiagnostics } from "./ts-diagnostics.mts";
 
 const TSC_REL = ["node_modules", "typescript", "bin", "tsc"];
 
@@ -118,7 +118,7 @@ export function overlayTsconfig(repoRoot, mirrorDir) {
 }
 
 /**
- * 把 tsc 输出按文件归成四份（纯函数；分类口径在 scripts/ts-diagnostics.mjs，与逐域检查共用）：
+ * 把 tsc 输出按文件归成四份（纯函数；分类口径在 scripts/ts-diagnostics.mts，与逐域检查共用）：
  * mine=我们的文件+失败码 / other=我们的文件+其它码 / upstream=其它源码 / config=非源码（检查器没跑）。
  */
 export function parseOverlayDiagnostics(stdout, ours) {
@@ -130,7 +130,7 @@ export function parseOverlayDiagnostics(stdout, ours) {
  * 跑一次覆盖层类型检查。有我们的诊断就抛（fail-closed：宁可不产出补丁包，也不出一个
  * 自己都讲不通的覆盖层）。返回 { checked, upstream } 供日志用。
  */
-export function typecheckOverlay({ short, stage, files, repoRoot, mirrorDir, log = () => {} }) {
+export function typecheckOverlay({ short, stage, files, repoRoot, mirrorDir, log = (_msg) => {} }) {
   const ours = overlayTsFiles(files);
   if (ours.length === 0) return { checked: 0, upstream: 0 };
   const cfgPath = join(stage, "tsconfig.overlay.json");

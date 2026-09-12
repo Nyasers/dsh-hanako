@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// tests/overlay-typecheck.test.mjs — 覆盖层类型检查的解析与选文件（scripts/overlay-typecheck.mjs）
+// tests/overlay-typecheck.test.mjs — 覆盖层类型检查的解析与选文件（scripts/overlay-typecheck.mts）
 // 重点：诊断必须按"是不是我们的文件"分流——上游诊断只计数，我们的诊断必须拦。
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -9,7 +9,7 @@ import {
   overlayTsconfig,
   overlayTsFiles,
   parseOverlayDiagnostics,
-} from "../scripts/overlay-typecheck.mjs";
+} from "../scripts/overlay-typecheck.mts";
 
 test("overlayTsFiles：只挑 ts/tsx/mts/cts，容忍字符串与 {path} 两种形态", () => {
   assert.deepEqual(

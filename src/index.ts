@@ -17,7 +17,7 @@
 // 失败返回 undefined）。
 //
 // 依赖部署：DSH 依赖（@deepseek-ai/dsh + cordis + 官方插件树 + 多平台原生产物）由
-// scripts/pack.mjs 在构建时物化进安装目录 node_modules（hoisted 布局，安装即用、无运行时
+// scripts/pack.mts 在构建时物化进安装目录 node_modules（hoisted 布局，安装即用、无运行时
 // 安装，版本随 App 声明）；cordis 产物（@dshana/*）在安装目录 cordis/，profile 经 junction
 // 暴露（src/runtime/seed.ts）；受管子进程入口 = runtime/dsh-host.mjs（dist 构建产物）。
 //

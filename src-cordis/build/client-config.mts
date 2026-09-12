@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src-cordis/build/client-config.mjs — cordis 子插件 client 半共享 preset（tsdown）
+// src-cordis/build/client-config.mts — cordis 子插件 client 半共享 preset（tsdown）
 // 学官方 dsh（packages/client/tsdown.client.ts clientBundle 预设）：每包自持构建描述
 // （plugins/<pkg>/cordis.config.mjs 的 client 字段），本 preset 生成并执行
 // tsdown 打包。输出 closure-factory 自注册 client bundle：
@@ -26,7 +26,7 @@
 // NODE_ENV=production（store 引擎 devFreeze 等按 production 走），官方
 // tsdown.client.ts 同款 define 姿势；产物无源码内嵌内容字符串（全部走正常构建）。
 //
-// 消费方：src-cordis/build.js（package.json build:cordis）编排。
+// 消费方：src-cordis/build.ts（package.json build:cordis）编排。
 // tsdown 为 devDep（构建工具不进运行时依赖）。
 import { build } from "tsdown";
 import { dirname, join, resolve } from "node:path";
@@ -153,7 +153,7 @@ export async function buildClientBundle({ id, pkgDir, outDir, externals = ["reac
     define: { ...envDefines, ...defines }, // 包级 defines 覆盖环境默认（如 DSH_CLIENT_TITLE）
     // 待内联库的解析别名（specifier → 绝对文件路径）。为什么需要：pnpm 在 Windows 长路径
     // 下把实体放进带哈希的 .pnpm 目录，而根级链接指向一个不存在的名字（dangling）——
-    // 从 stages 目录向上走到的 <repo>/node_modules/<pkg> 因此解不开。调用侧（integrations.mjs）
+    // 从 stages 目录向上走到的 <repo>/node_modules/<pkg> 因此解不开。调用侧（integrations.mts）
     // 对**待内联**的 specifier 用 .pnpm/node_modules/<name> 解析后传进来。
     alias,
     deps: {

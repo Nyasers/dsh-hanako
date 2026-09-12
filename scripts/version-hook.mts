@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// scripts/version-hook.mjs — pnpm version 的 version 生命周期钩子（git 收口，完整版号一次成型）
+// scripts/version-hook.mts — pnpm version 的 version 生命周期钩子（git 收口，完整版号一次成型）
 //
 // 编排链：
 //   pnpm version <patch|minor|major|prerelease|<semver>> --no-git-tag-version
@@ -18,7 +18,7 @@
 //   `+dsh-<dependencies.@deepseek-ai/dsh>`（本脚本自动重算，不接受自定义——版本号一眼可见
 //   跑在哪个 dsh 上，防手误漂移）；pnpm version 算号剥 build，此处拼回完整版再同步派生。
 //   bump 子命令映射：beta/hotfix 末段递增 = prerelease（裸跑，保留 preid 递增末段）；毕业 =
-//   patch/minor/major（node-semver 语义，实测与旧 bump.mjs 一致）；从正式版开 pre 线 =
+//   patch/minor/major（node-semver 语义）；从正式版开 pre 线 =
 //   prerelease --preid=beta / prepatch --preid=hotfix；beta 中途插 hotfix 混合段（beta.2 →
 //   beta.2-hotfix.1）与 dsh 刷新（只动 build 段）走显式 semver（后者配 --allow-same-version）。
 //
@@ -32,14 +32,14 @@
 //      由主上下文经 github-hanako 插件 git_commit / git_exec 完成（协作署名 + 隔离签名环境），
 //      本钩子只保证版本落地与门禁，不在钩子内部 commit/tag。
 //
-// 门禁沿袭 scripts/tagver.mjs（已并入本脚本）：HEAD 版本门禁 + tag preflight（本地 ref
+// 门禁：HEAD 版本门禁 + tag preflight（本地 ref
 //  + 远程 origin ls-remote，防克隆未 fetch 远程 tag 导致孤儿 bump commit）；push 手动
 // （--atomic 分支与 tag 同成败，tag 触发 CI 发布）。
 import fs from "node:fs";
 import path from "node:path";
 import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { versionCommitFiles, readPkg, writePkg } from "./version-common.mjs";
+import { versionCommitFiles, readPkg, writePkg } from "./version-common.mts";
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const run = (cmd, desc) => {
@@ -66,9 +66,9 @@ function main() {
   writePkg("package.json", pkg);
   console.log("[version-hook] 主版本拼回完整版: " + bare + " -> " + full);
   // 2) 派生同步（manifest + cordis 包）
-  run("node scripts/syncver.mjs", "syncver 派生同步");
+  run("node scripts/syncver.mts", "syncver 派生同步");
   // 3) changelog 增量生成（读主 version = 完整版）
-  run("node scripts/changelog.mjs", "changelog 增量生成");
+  run("node scripts/changelog.mts", "changelog 增量生成");
   // 4) HEAD 门禁：完整版相对 HEAD 未变化（未真实 bump / 同版本重跑）→ 拒绝提交
   let headVersion = null;
   try {

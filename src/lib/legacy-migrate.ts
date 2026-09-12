@@ -31,7 +31,7 @@
 //     仍在跑时可能出现——同"停机指引"。
 //
 // 本模块 = 纯逻辑/只读验证（plan/verify/suggestion/marker），可单测；真实拷贝只发生在
-// CLI（scripts/migrate-legacy.mjs --apply）——本刀不真跑（旧插件数据是活的）。
+// CLI（scripts/migrate-legacy.mts --apply）——本刀不真跑（旧插件数据是活的）。
 import { readFileSync, writeFileSync, renameSync, existsSync, statSync, mkdirSync, readdirSync } from "node:fs";
 import path from "node:path";
 // 目标私有源目录名与运行时实际读取处同源（data-source.js）；本模块不再自带一份字面值

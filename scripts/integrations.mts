@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// scripts/integrations.mjs — 集成层的漂移闸（见 src-integrations/README.md 与 specs/current/hana-integrations）
+// scripts/integrations.mts — 集成层的漂移闸（见 src-integrations/README.md 与 specs/current/hana-integrations）
 //
 // 用法：
-//   node scripts/integrations.mjs verify          # 镜像版本一致 + 每个 overlay 记录的上游哈希仍成立
-//   node scripts/integrations.mjs stage           # verify 后把 overlay 落进 _tmp/integrations/<短名>/
-//   node scripts/integrations.mjs hash <仓库相对路径>   # 打印上游该文件的 sha256（写清单时用）
-//   node scripts/integrations.mjs list
+//   node scripts/integrations.mts verify          # 镜像版本一致 + 每个 overlay 记录的上游哈希仍成立
+//   node scripts/integrations.mts stage           # verify 后把 overlay 落进 _tmp/integrations/<短名>/
+//   node scripts/integrations.mts hash <仓库相对路径>   # 打印上游该文件的 sha256（写清单时用）
+//   node scripts/integrations.mts list
 //
 // 闸的意义：overlay 是「上游某版文件 + 我们的 delta」的整文件拷贝，清单记下当时上游文件的 sha256。
 // 构建时用**当前镜像**重算比对；不一致 = 上游动过 → 构建失败并指名要 rebase 的文件。
@@ -272,9 +272,9 @@ export function resolveInlineAliases(specifiers, repoRoot = REPO_ROOT) {
  * 用我们的 client preset 编译出 lib/client.js，再以原版包为模板组装成
  * _tmp/integrations-built/<短名>/（版本戳 <上游>+dshana-<干净版本>）。
  */
-export async function buildIntegrations(integrations, { tag, mirrorDir = MIRROR, repoRoot = REPO_ROOT, log = () => {} } = {}) {
-  const { buildClientBundle } = await import("../src-cordis/build/client-config.mjs");
-  const { patchVersion } = await import("./version-common.mjs");
+export async function buildIntegrations(integrations, { tag, mirrorDir = MIRROR, repoRoot = REPO_ROOT, log = (_msg) => {} } = {}) {
+  const { buildClientBundle } = await import("../src-cordis/build/client-config.mts");
+  const { patchVersion } = await import("./version-common.mts");
   const built = [];
   for (const it of integrations) {
     const short = it.dir;
@@ -310,7 +310,7 @@ export async function buildIntegrations(integrations, { tag, mirrorDir = MIRROR,
     if (process.env.DSHANA_SKIP_TYPECHECK === "1") {
       log(`[integrations] ${short}: **跳过覆盖层类型检查**（DSHANA_SKIP_TYPECHECK=1）`);
     } else {
-      const { typecheckOverlay } = await import("./overlay-typecheck.mjs");
+      const { typecheckOverlay } = await import("./overlay-typecheck.mts");
       typecheckOverlay({ short, stage, files: it.files, repoRoot, mirrorDir, log: (m) => log(m) });
     }
 
@@ -365,7 +365,7 @@ export async function buildIntegrations(integrations, { tag, mirrorDir = MIRROR,
     cpSync(join(template, "lib"), join(out, "lib"), { recursive: true });
     cpSync(join(stage, "lib", "client.js"), join(out, "lib", "client.js"));
     const manifest = JSON.parse(readFileSync(join(template, "package.json"), "utf8"));
-    // 版本戳：<上游版本>+dshana-<我们的干净版本>（合成在 scripts/version-common.mjs，与 syncver 同一份）。
+    // 版本戳：<上游版本>+dshana-<我们的干净版本>（合成在 scripts/version-common.mts，与 syncver 同一份）。
     // 上游段原样保留：一眼看出改的是哪个上游包。
     manifest.version = patchVersion(manifest.version);
     writeFileSync(join(out, "package.json"), JSON.stringify(manifest, null, 2));
@@ -392,7 +392,7 @@ async function main() {
   if (cmd === "hash") {
     const rel = process.argv[3];
     if (!rel) {
-      console.error("[integrations] 用法：node scripts/integrations.mjs hash <仓库相对路径>");
+      console.error("[integrations] 用法：node scripts/integrations.mts hash <仓库相对路径>");
       process.exit(1);
     }
     const buf = readUpstreamFromMirror(rel, tag);
