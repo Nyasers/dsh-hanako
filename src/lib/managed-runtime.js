@@ -249,9 +249,54 @@ async function reapFailedRuntime(ctx) {
  * 启动 + 等到就绪（single-flight 单例）。opts: { taskId?, cordisSrc?, depsRoot? }。
  * 成功返回 { runtimeId, info }（state=ready）；失败抛 Error（message 含归类与用户指引），
  * 单例清空以便下次调用重试。首次调用 = profile 种子化 + DSH boot（日志可见）。
+// ---- 失败后的自动重试（2026-09-12 她定）----
+// 首次安装时“能力/权限尚未授予”是常态：apply 自动链的第一次 ensure 必然失败。既然页面不再提供
+// 手动「启动 / 重启」按钮（无交互设计），这条链就得自己回来——失败即按退避重试，直到成功、
+// 被手动停止（stopManagedRuntime 冻结）或 App 卸载（dispose 走 stop）。任何显式启动请求
+// （apply 自动链 / dshana_session 首调 / /dshana/start）都会重新武装。
+const AUTO_RETRY_SCHEDULE_MS = [5000, 15000, 30000, 60000, 120000, 300000]; // 5s → 5min，之后停在 5min
+let autoRetryTimer = null;
+let autoRetryAttempt = 0;
+let autoRetryFrozen = false;
+
+/** 取消并冻结自动重试（手动停止时调用）；下一次显式 ensure 会重新武装。 */
+export function cancelRuntimeAutoRetry() {
+  if (autoRetryTimer) {
+    try { clearTimeout(autoRetryTimer); } catch { /* 忽略 */ }
+    autoRetryTimer = null;
+  }
+  autoRetryFrozen = true;
+  autoRetryAttempt = 0;
+}
+
+function scheduleRuntimeAutoRetry(reason) {
+  if (autoRetryFrozen || autoRetryTimer) return;
+  const delay = AUTO_RETRY_SCHEDULE_MS[Math.min(autoRetryAttempt, AUTO_RETRY_SCHEDULE_MS.length - 1)];
+  autoRetryAttempt += 1;
+  const nth = autoRetryAttempt;
+  const timer = setTimeout(() => {
+    autoRetryTimer = null;
+    if (autoRetryFrozen) return;
+    ensureManagedRuntime({}).then(
+      () => { autoRetryAttempt = 0; logApp("info", "[managed-runtime] 自动重试成功，DSH 已就绪"); },
+      () => { scheduleRuntimeAutoRetry(reason); },
+    );
+  }, delay);
+  if (timer && typeof timer.unref === "function") timer.unref();
+  autoRetryTimer = timer;
+  logApp(
+    "warn",
+    "[managed-runtime] DSH 启动失败（第 " + nth + " 次）：" + String(reason).slice(0, 160) +
+      " —— " + Math.round(delay / 1000) + "s 后自动重试（无需手动操作）",
+  );
+}
+
+/**
  * 每次命中 ready 缓存都先探活（runtime.get）；子进程崩溃/被回收则清单例并重起。
  */
 export async function ensureManagedRuntime(opts = {}) {
+  // 显式启动请求 = 重新武装自动重试（用户手动停止过、随后又有会话或 /dshana/start 触发）
+  autoRetryFrozen = false;
   if (managed.phase === "ready" && managed.runtimeId) {
     const live = await probeLiveRuntime();
     if (live) return { runtimeId: managed.runtimeId, info: live };
@@ -277,6 +322,8 @@ export async function ensureManagedRuntime(opts = {}) {
     managed.phase = "error";
     managed.lastError = e;
     clearRuntimeIdentity(); // 失败不留死端口/死 key（bridgeAccess 不得再发出去）
+    // 失败不等于等人来救：按退避自动重试（首次安装「权限尚未授予」这类必失败就靠它自愈）
+    scheduleRuntimeAutoRetry((e && e.message) || String(e));
     throw e;
   } finally {
     managed.promise = null;
@@ -404,6 +451,8 @@ async function doStartManaged(opts, attempt = 1) {
 
 /** 停止当前受管 runtime（App 卸载/重载/更新前调用；Windows 依赖重装前同样先停）。 */
 export async function stopManagedRuntime() {
+  // 手动停止同时冻结自动重试（否则刚停就被重试拉回来）；下一次显式 ensure 会重新武装
+  cancelRuntimeAutoRetry();
   const app = getAppRuntime();
   const runtimeId = managed.runtimeId;
   managed.phase = "stopped";
