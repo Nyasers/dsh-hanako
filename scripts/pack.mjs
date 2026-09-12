@@ -221,7 +221,117 @@ function materializeProdDeps(spec) {
     throw new Error(`${spec.name} 缺少平台资产（该平台的包会跑不起来）：\n  - ${missing.join("\n  - ")}`);
   }
   console.log(`[pack] ${spec.name} 物化完成（平台资产 ${spec.assets.length} 项齐备）`);
+  const pruned = pruneNodeModules(modules, spec);
+  if (pruned.files > 0) {
+    console.log(
+      `[pack] ${spec.name} 源码层精简：删 ${pruned.files} 个文件（释放未压缩 ${(pruned.bytes / 1e6).toFixed(1)} MB）`,
+    );
+  }
   return modules;
+}
+
+/**
+ * 源码层精简：删掉运行时不会读的文件。压缩已拉满（zip level 9），这些属于“压不动又不必发”的。
+ * 只删四种有把握的：调试符号（.pdb）、源码映射（.map）、类型声明（.d.ts 系列）、非本平台的预编译
+ * 产物，再加依赖树里的测试/文档目录。任何一项都不是运行时加载路径（JS 不会 require 它们）。
+ * 返回 { files, bytes }；失败一律不阻断打包（删不掉就留着，宁可大一点也不能缺文件）。
+ */
+function pruneNodeModules(modules, spec) {
+  const plat = new Set();
+  for (const os of spec.os) for (const cpu of spec.cpu) plat.add(`${os}-${cpu}`);
+  const out = { files: 0, bytes: 0 };
+  const walk = (dir) => {
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      const p = join(dir, e.name);
+      const rel = p.slice(modules.length + 1).replace(/\\/g, "/");
+      if (e.isDirectory()) {
+        // 非本平台目录（win32-x64 / win10-arm64 / darwin-arm64 …）：带了平台名的目录直接删
+        if (/^(win32|win10|darwin|linux)-[a-z0-9]+$/i.test(e.name) && !plat.has(e.name.replace(/^win10-/, "win32-"))) {
+          const size = dirSize(p);
+          try {
+            fs.removeSync(p);
+            out.files += 1;
+            out.bytes += size;
+            continue;
+          } catch {
+            /* 删不掉就留着 */
+          }
+        }
+        if (/^(__tests__|tests?|fixtures?|docs?|examples?)$/i.test(e.name)) {
+          const size = dirSize(p);
+          try {
+            fs.removeSync(p);
+            out.files += 1;
+            out.bytes += size;
+            continue;
+          } catch {
+            /* 删不掉就留着 */
+          }
+        }
+        if (/^(prebuilds|bin|third_party)$/.test(e.name)) {
+          // 预编译产物：只保留本目标平台目录
+          for (const sub of (() => { try { return fs.readdirSync(p, { withFileTypes: true }); } catch { return []; } })()) {
+            if (!sub.isDirectory()) continue;
+            const looksPlatform = /^(win32|win10|darwin|linux)-/.test(sub.name);
+            if (looksPlatform && !plat.has(sub.name.replace(/^win10-/, "win32-"))) {
+              const sp = join(p, sub.name);
+              const size = dirSize(sp);
+              try {
+                fs.removeSync(sp);
+                out.files += 1;
+                out.bytes += size;
+              } catch {
+                /* 带走 */
+              }
+            }
+          }
+        }
+        walk(p);
+        continue;
+      }
+      if (/(\.pdb|\.map|\.d\.ts|\.d\.mts|\.d\.cts)$/i.test(e.name)) {
+        try {
+          const st = fs.statSync(p);
+          fs.removeSync(p);
+          out.files += 1;
+          out.bytes += st.size;
+        } catch {
+          /* 删不掉就留着 */
+        }
+      }
+    }
+  };
+  walk(modules);
+  return out;
+}
+
+/** 目录内所有文件的字节合计（用于统计被删目录的体量）。 */
+function dirSize(dir) {
+  let total = 0;
+  let entries;
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+  for (const e of entries) {
+    const p = join(dir, e.name);
+    if (e.isDirectory()) total += dirSize(p);
+    else {
+      try {
+        total += fs.statSync(p).size;
+      } catch {
+        /* 忽略 */
+      }
+    }
+  }
+  return total;
 }
 
 // 目标选择：`--target <名字>` / `--target=<名字>`（必须显式给，无默认）。
