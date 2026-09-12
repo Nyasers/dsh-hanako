@@ -35,7 +35,7 @@
   // （ui-theme/src/boot-theme.ts）。官方把这行定位成 "the browser's pre-plugin interval"——
   // 插件树激活前浏览器手里只有它。为什么需要它：权威来源是我们 client 半投影的属性，而
   // client 半是**插件**，插件就位前属性不存在、门关着，于是注入完成到插件就位之间 DSH 一直
-  // 穿自己的内置配色（2026-09-12 指出的那段空窗）。借这行字面量把门提前打开。
+  // 穿自己的内置配色（注入完成到插件就位之间的空窗）：借这行字面量把门提前打开。
   // 权威归属不变：属性一旦出现，readPreference() 优先取属性，本值退场。
   var bootPref = null;
   /** 读偏好：① client 半投影的属性（权威）→ ② 壳页载荷里的 boot-theme 字面量（自举）。 */
@@ -64,8 +64,8 @@
       st.remove();
     }
   }
-  // 同文档注入形态（当前主路径，2026-09-12 修）：桥与壳页在同一**文档**里，主题变量直接
-  // 从文档根算就行，不再经 parent/壳页往返。旧的 iframe 套 iframe 拓扑已退役，而本桥仍
+  // 同文档注入形态（当前主路径）：桥与壳页在同一**文档**里，主题变量直接
+  // 从文档根算就行，不再经 parent/壳页往返；本桥仍
   // 按旧拓扑校验来源（`e.source !== window.parent` 就丢）——壳页现在只能自投
   // （e.source === window），消息全被丢弃 → 内层 dsh WebUI 永远拿不到主题（真机反馈
   // “壳页跟随了，DSHWebUI 没有”）。
@@ -85,8 +85,7 @@
   }
   function followHost() {
     // 仅在**已知且明确**偏好为 system 时跟随宿主；已知为 light/dark 时完全原生；
-    // 尚未得知偏好时不动手（等壳页首次推送）。2026-09-12：我一度写成“装了
-    // __DSH_TRANSPORT__ 就无条件跟随”，把这条特性抬掉了，真机反馈纠正后收回。
+    // 尚未得知偏好时不动手（等壳页首次推送）。
     return prefKnown && pref === "system";
   }
   // 从文档根读取并应用；读到有效变量返 true。
@@ -101,8 +100,8 @@
     return true;
   }
   // 已无静态 fallback 可撤：拿不到宿主主题时就保持 dsh 内置 token（官方明暗）——
-  // 不从宿主搬固定值充数（2026-09-12 她定）。旧实现会在这里摘掉静态 <style>，
-  // 随 STATIC 一起退役。
+  // 不从宿主搬固定值充数。
+  // 
   function ask() {
     // 旧拓扑（iframe 套 iframe）里壳页是本页的 parent；同文档注入后本页的 parent 是**宿主**，
     // 投过去没人答。两个目标都投一份：自身（现壳页的 message 监听就在同文档里）与 parent（兼容）。
@@ -131,9 +130,9 @@
   });
   // 偏好来源两段（都不打 RPC、都不轮询）：启动段 = 壳页载荷里的 boot-theme 字面量（本文件
   // bootPref）；稳态段 = 我们 client 半投影的 html 属性（权威）。旧实现的 settings/describe
-  // 信封在 0.1.5 未验、读不到就永远停在 system 把 UI 钉住（2026-09-12 真机），已退役。
+  // 该 RPC 信封在 0.1.5 未验：读不到就永远停在 system 把 UI 钉住，所以不走它。
   // 不轮询：载荷由壳页在注入完成时推一次、此后每次主题变化再推一次（hana.theme.changed），
-  // 加上首次 ask() 的应答与下面的 MutationObserver——三条都是事件，旧 1s 重试那套已删。
+  // 加上首次 ask() 的应答与下面的 MutationObserver——三条都是事件，不轮询。
   // 主题切换（壳页写 documentElement 的 data-theme / data-appearance）即时感知，不等 1s 轮询。
   try {
     var mo = new MutationObserver(function () { pull(); });
