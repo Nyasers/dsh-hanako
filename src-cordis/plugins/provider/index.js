@@ -28,7 +28,7 @@ import { join, dirname } from "node:path";
 import { pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
 import { readNdjsonEvents } from "./lib/ndjson.js";
-import { providerRoutes, listModelsForProvider, resolveModelInfo, supportedEfforts } from "./lib/catalog.js";
+import { providerRoutes, listModelsForProvider, resolveModelInfo, supportedEfforts, modelPublishedMaxTokens, HOST_MAX_OUTPUT_TOKENS } from "./lib/catalog.js";
 import { toHanaMessages } from "./lib/messages.js";
 import { buildDoneChunks } from "./lib/stream.js";
 import { resolveModelIdentity } from "./lib/identity.js";
@@ -74,6 +74,15 @@ function noteAppIdentity(logLine, sessionId) {
   if (APP_IDENTITY_LOGGED.has(key) || APP_IDENTITY_LOGGED.size >= 64) return;
   APP_IDENTITY_LOGGED.add(key);
   logLine("会话 " + key + " 无任务映射 → 按 App 身份推理（DSH Web UI 独立会话，不传 callToken/taskId）");
+}
+
+// 参数收敛提示（按 provider/model 去重，不逐次刷屏）。宿主对模型请求的字段有硬校验，
+// 我们能忠实收敛的就收敛（上限就是宿主的上级），不做“多发几次报错再回头改”。
+const CLAMP_NOTICED = new Set();
+function noteClamp(warnLine, key, msg) {
+  if (CLAMP_NOTICED.has(key) || CLAMP_NOTICED.size >= 64) return;
+  CLAMP_NOTICED.add(key);
+  warnLine(msg);
 }
 
 function log(ctx, msg) {
@@ -199,6 +208,7 @@ export function buildHanaAdapter(LlmAdapter, LlmError, deps) {
   const models = Array.isArray(deps.models) ? deps.models : [];
   // adapter 方法在插件作用域之外（apply 的 ctx 在这里不可见），日志只能走 deps 注入。
   const logLine = typeof deps.log === "function" ? deps.log : () => {};
+  const warnLine = typeof deps.warn === "function" ? deps.warn : () => {};
   const adapter = new (class HanaAdapter extends LlmAdapter {
     providerInfo(provider) {
       return { id: provider, name: provider };
@@ -230,6 +240,7 @@ export function buildHanaAdapter(LlmAdapter, LlmError, deps) {
       // 失效/归属不正确的 taskId 由宿主报错并原样上抛——不做"删掉身份参数重试"的兜底（指南 §5）。
       const { identity, source } = resolveModelIdentity(dataDir, sessionId);
       if (source === "app") noteAppIdentity(logLine, sessionId);
+      const item = models.find((m) => m && m.provider === options.provider && m.id === options.model) || null;
       const requestId = randomUUID();
       const ac = new AbortController();
       const onAbort = () => {
@@ -279,9 +290,44 @@ export function buildHanaAdapter(LlmAdapter, LlmError, deps) {
       if (systemPrompt) request.systemPrompt = systemPrompt;
       if (Array.isArray(options.tools) && options.tools.length) request.tools = options.tools;
       if (options.reasoningEffort) request.reasoningEffort = String(options.reasoningEffort);
-      if (Number.isInteger(options.maxTokens) && options.maxTokens > 0) request.maxTokens = options.maxTokens;
+      // maxTokens 三层（宿主校验器全文见 DESIGN）：
+      //  ① 未给/非正整数 → 不发字段；
+      //  ② 超过宿主请求闸 HOST_MAX_OUTPUT_TOKENS(65536) → **不发字段**（不是压到 65536！
+      //     收敛到 65536 等于把输出悄悄砍到 64k，而模型 published 上限可能是 384k；不传则
+      //     上限交回模型/供应商默认）。想显式带 >64k 需宿主侧放宽 limits.maxTokens，那是宿主的闸；
+      //  ③ 未超宿主闸、但超过该模型 published 上限 → 按模型上限收敛（模型自身硬限，无法绕过）。
+      if (Number.isInteger(options.maxTokens) && options.maxTokens > 0) {
+        const published = modelPublishedMaxTokens(item);
+        const keyBase = options.provider + "/" + options.model;
+        if (options.maxTokens > HOST_MAX_OUTPUT_TOKENS) {
+          noteClamp(
+            warnLine,
+            "maxTokens-drop:" + keyBase,
+            "DSH 请求 maxTokens=" + options.maxTokens + " 超出宿主请求上限 " + HOST_MAX_OUTPUT_TOKENS +
+              "，改为不传该字段（上限交回模型/供应商默认；如需显式声明 > " + HOST_MAX_OUTPUT_TOKENS +
+              " 需放宽宿主 limits.maxTokens）",
+          );
+        } else if (published !== null && options.maxTokens > published) {
+          request.maxTokens = published;
+          noteClamp(
+            warnLine,
+            "maxTokens-model:" + keyBase,
+            "DSH 请求 maxTokens=" + options.maxTokens + " 超过该模型 published 上限 " + published + "，已收敛到 " + published,
+          );
+        } else {
+          request.maxTokens = options.maxTokens;
+        }
+      }
       if (typeof options.temperature === "number" && Number.isFinite(options.temperature)) {
-        request.temperature = options.temperature;
+        const temp = Math.min(2, Math.max(0, options.temperature));
+        request.temperature = temp;
+        if (temp !== options.temperature) {
+          noteClamp(
+            warnLine,
+            "temperature:" + options.provider + "/" + options.model,
+            "温度 " + options.temperature + " 超出宿主允许区间 [0,2]，已收敛到 " + temp,
+          );
+        }
       }
       // 步骤 4a：活动模型流注册（task-bridge 宿主取消/审批链按会话定向 models.cancel，
       // 只停本工作不误停他人会话；键契约见 src/lib/model-requests.js MODEL_REQUEST_GLOBAL_KEY）
@@ -403,6 +449,7 @@ export async function apply(ctx, config) {
       hana,
       getImages: () => attachmentStore,
       log: (msg) => log(ctx, msg),
+      warn: (msg) => warn(ctx, msg),
     });
     // 5. 注册（空 routes 不注册——llm 注册表要求非空；目录空已在上方 return）。
     // 宿主目录是启动快照：受管进程存活期不变化（改宿主模型配置需 runtime 重启生效——
