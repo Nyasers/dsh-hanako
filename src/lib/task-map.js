@@ -12,7 +12,10 @@
 //         并发会话，不存在共享「全局当前任务」——决策 D）
 //   内容：{ taskId, dshSessionId, action: "create"|"send", rpcId, task?, at }
 //   生命周期：create/send 在 session.prompt 提交**前**写入（事件/模型流只会在 prompt 后
-//         发生，先写后跑无竞态）；task-bridge 终态（complete/fail）后删除。
+//         发生，先写后跑无竞态）；终态（complete/fail/canceled）后**只标记 ended，不删除**。
+//         删除会把“用户自建会话（无映射）”与“我们建的会话但状态丢了”压成同一个信号，
+//         而这两者在模型请求身份上是两种判定（见 src-cordis/…/identity.js 三态）。
+//         删除只由 prune 按 TTL 做。
 //   清理：App 启动/写前对过期残留做 prune（崩溃残留不阻塞，旧条目按 TTL 清）。
 //
 // 取舍（决策 C，详见 DESIGN「步骤 3 架构决策」）：ctx.storage.agent 有 512KB 软限/16MB
@@ -83,7 +86,12 @@ export function writeTaskMap(dataDir, entry) {
   return rec;
 }
 
-/** 读取会话→任务映射；不存在/损坏返回 null（不抛）。 */
+/** 读取会话→任务映射；不存在/损坏返回 null（不抛）。
+ *
+ *  与 cordis 侧（provider/lib/taskmap.js）的差别是有意的：那边**损坏即抛**
+ *  （模型请求身份不能把“状态丢了”当成“用户自建会话”）；这边容忍，因为调用方
+ *  （prune / 诊断 / 终态标记 / 审批归属校验）对 null 一律 fail-closed。
+ */
 export function readTaskMap(dataDir, dshSessionId) {
   if (!isValidSessionId(dshSessionId)) return null;
   try {
@@ -98,7 +106,11 @@ export function readTaskMap(dataDir, dshSessionId) {
   }
 }
 
-/** 删除会话→任务映射（task-bridge 终态后调用；幂等）。 */
+/** 删除会话→任务映射（只由 prune 调用；幂等）。
+ *
+ *  注意：终态**不**走这里——终态用 markTaskMapEnded 留痕。删了文件就分不清
+ *  “用户自建的会话”和“我们建的会话但状态丢了”（见 identity.js 三态判定）。
+ */
 export function removeTaskMap(dataDir, dshSessionId) {
   if (!isValidSessionId(dshSessionId)) return;
   try {
@@ -106,6 +118,20 @@ export function removeTaskMap(dataDir, dshSessionId) {
   } catch {
     /* 删除失败忽略（残留由 prune 清理） */
   }
+}
+
+/** 终态标记（task-bridge / 提交失败路径调用）：映射留着，只写 ended。
+ *
+ *  语义：ended 存在 ⇒ “这是我们建的会话，但那条任务已经终结”（用户在 WebUI 接着跑
+ *  就是这种情形）；映射整个不存在 ⇒ “这不是我们建的会话”。
+ *  映射缺失时不创建（不抛）。
+ */
+export function markTaskMapEnded(dataDir, dshSessionId, status) {
+  const st = String(status || "terminal").slice(0, 40);
+  return updateTaskMap(dataDir, dshSessionId, (cur) => ({
+    ...cur,
+    ended: { at: Date.now(), status: st },
+  }));
 }
 
 /** 列出全部映射（诊断/恢复用；按 at 降序）。 */

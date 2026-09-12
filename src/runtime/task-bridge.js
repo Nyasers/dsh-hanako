@@ -30,7 +30,7 @@
 //
 // 容错纪律：订阅/回投失败只记日志不阻断 runtime；映射不存在（非 dshana_session 发起的
 // 会话，如 DSH Web UI 直开）的事件直接忽略。
-import { readTaskMap, removeTaskMap } from "../lib/task-map.js";
+import { readTaskMap, markTaskMapEnded } from "../lib/task-map.js";
 import { runWatchReconcile } from "../lib/watch-sse.js";
 import { rpcSessionCancel } from "../lib/dsh-rpc.js";
 import { cancelSessionModelRequests } from "../lib/model-requests.js";
@@ -299,7 +299,9 @@ class SessionBridge {
       this.note("任务终态回投失败（task=" + this.taskId + "）：" + ((e && e.message) || e));
     } finally {
       try {
-        removeTaskMap(this.dataDir, this.sessionId);
+        // 终态只标记 ended，**不删文件**：删了就分不出“用户自建会话”与“我们建的但状态丢了”，
+        // 而这两者在模型请求身份上是两种判定（见 provider/lib/identity.js 三态）。
+        markTaskMapEnded(this.dataDir, this.sessionId, "task-terminal");
       } catch {
         /* 忽略 */
       }

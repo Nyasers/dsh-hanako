@@ -15,6 +15,7 @@ import {
   writeTaskMap,
   readTaskMap,
   removeTaskMap,
+  markTaskMapEnded,
   listTaskMaps,
   pruneTaskMaps,
 } from "../src/lib/task-map.js";
@@ -73,6 +74,27 @@ test("损坏/半写文件：read 返回 null、list 跳过、prune 清除", () =
   assert.equal(listTaskMaps(dir).length, 1);
   assert.ok(pruneTaskMaps(dir, 0) >= 1);
   assert.equal(readTaskMap(dir, SID), null); // 0 TTL：全部过期清除
+});
+
+test("终态标记：ended 写入且**不删文件**（与删除语义区分开）", () => {
+  writeTaskMap(dir, { taskId: "t1", dshSessionId: SID });
+  const before = existsSync(taskMapPath(dir, SID));
+  assert.equal(before, true);
+  const after = markTaskMapEnded(dir, SID, "task-terminal");
+  assert.equal(after.ended.status, "task-terminal");
+  assert.ok(typeof after.ended.at === "number");
+  assert.equal(existsSync(taskMapPath(dir, SID)), true, "终态不删文件（删了就分不出用户会话与状态丢失）");
+  const got = readTaskMap(dir, SID);
+  assert.equal(got.taskId, "t1");
+  assert.equal(got.ended.status, "task-terminal");
+  // 终态后重新 send（重建记录）⇒ ended 消失（先写后跑，无克态）
+  const fresh = writeTaskMap(dir, { taskId: "t2", dshSessionId: SID, action: "send" });
+  assert.equal("ended" in fresh, false);
+  assert.equal("ended" in readTaskMap(dir, SID), false);
+  // 映射缺失时不创建（幂等且不报错）
+  assert.equal(markTaskMapEnded(dir, "session-99999999-8888-7777-6666-555555555555"), null);
+  // prune 仍能按 TTL 收走（终态不等于永久滞留）
+  assert.ok(pruneTaskMaps(dir, 0) >= 1);
 });
 
 test("prune：TTL 保留新鲜、清过期", () => {
