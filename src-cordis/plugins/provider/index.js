@@ -30,7 +30,7 @@ import { randomUUID } from "node:crypto";
 import { readNdjsonEvents } from "./lib/ndjson.js";
 import { providerRoutes, listModelsForProvider, resolveModelInfo, supportedEfforts, modelPublishedMaxTokens, HOST_MAX_OUTPUT_TOKENS } from "./lib/catalog.js";
 import { toHanaMessages } from "./lib/messages.js";
-import { buildDoneChunks } from "./lib/stream.js";
+import { buildDoneChunks, createHanaStreamState } from "./lib/stream.js";
 import { resolveModelIdentity } from "./lib/identity.js";
 
 export const name = "@dsh-hanako/provider";
@@ -335,11 +335,21 @@ export function buildHanaAdapter(LlmAdapter, LlmError, deps) {
       try {
         const response = await deps.hana.models.stream(request);
         let done = false;
+        // 增量状态机（2026-09-12 真机反馈：改成真流式）：text-delta/reasoning-delta 立刻转成
+        // block-start + delta 产出，Web UI 才能逐字长出来；done 时仍由 buildDoneChunks 产出
+        // 权威 block-end（签名只在 done.assistant 里）+ usage + finish。
+        const streamState = createHanaStreamState();
         try {
           for await (const ev of readNdjsonEvents(response)) {
             if (!ev || typeof ev.type !== "string") continue;
             if (ev.type === "done") {
-              const chunks = buildDoneChunks({ doneEvent: ev, provider: options.provider, model: options.model, requestId });
+              const chunks = buildDoneChunks({
+                doneEvent: ev,
+                provider: options.provider,
+                model: options.model,
+                requestId,
+                startedIndexes: streamState.startedIndexes,
+              });
               for (const c of chunks) yield c;
               done = true;
               break;
@@ -351,7 +361,10 @@ export function buildHanaAdapter(LlmAdapter, LlmError, deps) {
                 { requestId },
               );
             }
-            // start/text-delta/reasoning-delta/tool-call：done.assistant 为权威内容（见 lib/stream.js 头注释）
+            // start 忽略；text-delta/reasoning-delta 实时产出；tool-call 只从 done 取
+            // （指南 §4：同一个 tool call 不能重复执行）。
+            const live = streamState.push(ev);
+            for (const c of live) yield c;
           }
         } finally {
           if (signal) signal.removeEventListener("abort", onAbort);
