@@ -7,7 +7,7 @@
 // 运行期只保留最近 64 条终态记录，watch() 可取实时行）。本模块统一行式输出：
 //   stdout = 运行里程碑（info）
 //   stderr = 错误/诊断（warn/err）
-// readyMarker 必须独占一行打印且不带任何前缀（宿主按整行精确匹配，见迁移指南 §6/§10）——
+// readyMarker 必须独占一行打印且不带任何前缀（宿主按整行精确匹配）——
 // 因此 marker 打印不经过本模块的 info()，由 main.js 直接 process.stdout.write(marker+"\n")，
 // 且日志行统一加 "[dsh-host]" 前缀，杜绝日志内容误触 readyMarker。
 // 本模块零依赖 node 内置（只 process），可安全被 rspack 打进 dist/runtime/dsh-host.mjs。

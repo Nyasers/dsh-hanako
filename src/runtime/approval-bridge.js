@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/runtime/approval-bridge.js — 受管 runtime 内 DSH 审批 → Hana 审批桥（App v2 步骤 4a）
+// src/runtime/approval-bridge.js — 受管 runtime 内 DSH 审批 → Hana 审批桥
 //
 // 位置与角色：本模块随 dist/runtime/dsh-host.mjs 打进受管 runtime（与 DSH 同进程），
 // main.js 在 DSH boot 就绪后挂载（先于 readyMarker）。它把 DSH 的审批等待者接到 Hana：

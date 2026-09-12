@@ -13,7 +13,7 @@
 //   ─ 宿主在服务 readyMarker 出现后自动把受管服务暴露到该前缀（HTTP/SSE/WS 全代理 +
 //     重定向 Location 重写 + hana_app_runtime HttpOnly cookie），App 的 ctx.routes 不需要
 //     转发受管服务——浏览器只需把页面/API/WS 指向该前缀。见
-//     DESIGN「步骤 4b/5 收口」的宿主实证记录。代理前缀为「路径」形态（相对同源），
+//     代理前缀为「路径」形态（相对同源），
 //     壳页在同源下拼 `origin + proxyPrefix` 使用。
 //
 // 阶段（phase，来自 src/lib/managed-runtime.js 单例）：
@@ -22,7 +22,7 @@
 export const APP_ID = "dshana";
 
 /** 宿主受管服务代理前缀（u1e 同形；appId/runtimeId 空值返回 null）。
- * 2026-09-11 起支持 bridgeKey：中继作为唯一服务面后，路径需带 `_hana/<key>/` 段（浏览器
+ * 支持 bridgeKey：中继作为唯一服务面后，路径需带 `_hana/<key>/` 段（浏览器
  * iframe 无法自定 header，只能走路径票据）——中继据此注入 DSH cookie。 */
 export function runtimeProxyPrefix({ appId = APP_ID, runtimeId, bridgeKey } = {}) {
   if (!appId || !runtimeId) return null;
@@ -75,7 +75,7 @@ export function phaseCopy(phase, { ready = false, errText = null } = {}) {
  *   phase, ready, runtimeId, proxyPrefix, service, error:{code,userText}|null,
  *   note, updatedAt
  * }
- * 注（spec §8 j）：App 侧文件日志已退役，快照不再携带 logPath/logTail（诊断看宿主日志 +
+ * 注：快照不携带 logPath/logTail（诊断看宿主日志 +
  * 受管 runtime 状态：phase/error/userText）。
  */
 export function buildBootSnapshot(details, { bridgeKey = null } = {}) {

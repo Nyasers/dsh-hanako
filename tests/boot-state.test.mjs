@@ -63,7 +63,7 @@ test("phaseCopy/文案覆盖五态", () => {
   }
 });
 
-test("buildBootSnapshot: 不含日志字段（App 侧文件日志已退役，spec §8 j）", () => {
+test("buildBootSnapshot: 不含日志字段（App 侧无文件日志）", () => {
   const s = buildBootSnapshot({ phase: "starting" });
   assert.ok(!("logPath" in s));
   assert.ok(!("logTail" in s));

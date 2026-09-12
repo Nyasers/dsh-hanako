@@ -4,7 +4,7 @@
 // src/runtime/locate.js — DSH 依赖定位（受管 runtime 子进程侧，dsh-host 专用）
 //
 // 自 v1 src/lib/lifecycle.js loadInprocDsh 的思路迁移：depsRoot（默认 App dataDir
-// runtime/node_modules，随包方案见 DESIGN「依赖部署（v2）」节）下定位
+// runtime/node_modules）下定位
 //   @deepseek-ai/dsh/lib/profile-boot-*.js（带构建 hash 产物名，枚举试 runProfile 导出）
 //   @deepseek-ai/dsh-app-boot（createRequire 沿 dsh 包解析；回退 .pnpm 枚举）
 // 与 v1 的差异只在「dsh 包根」从插件根 node_modules 换成受管 runtime 的 depsRoot；
@@ -38,7 +38,7 @@ export async function locateDsh({ depsRoot, log = () => {} }) {
   if (!existsSync(join(dshPkg, "package.json"))) {
     throw new Error(
       `DSH 包未就绪：${join(depsRoot, "@deepseek-ai", "dsh")} 不存在（depsRoot=${depsRoot}）。
-依赖部署方案见 DESIGN「依赖部署（v2）」：默认由 dsh-host 首启 ensure 装入 <data-dir>/runtime；
+依赖部署方案：默认由 dsh-host 首启 ensure 装入 <data-dir>/runtime；
 当前可用 --deps-root <dir> 覆盖（预置/调试场景）。`,
     );
   }

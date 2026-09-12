@@ -3,9 +3,9 @@
 //
 // tools/subtool/query.js — dshana_session 的 query 操作（list/get 只读会话查询）
 //
-// 取数走官方查询面（升级 dsh 0.1.5 的一环，取代早期"自读文件"的实现）：不再读
-// <DSH_HOME>/storages/session_projcache.json，也不再解 <DSH_HOME>/sessions/**/session.jsonl.zstd。
-// 会话日志已到 V3，projcache 行结构与 zstd 多帧容器都是自家猜测的实现细节，读取交回官方：
+// 取数走官方查询面：不读 <DSH_HOME>/storages/session_projcache.json，也不解
+// <DSH_HOME>/sessions/**/session.jsonl.zstd（日志已到 V3，projcache 行结构与 zstd 多帧容器
+// 都是自家猜测的实现细节，读取交回官方）：
 //   · list → session/list（一元）。items[].projections.values 带 title / sessionStats /
 //            tokenUsage（投影缓存折叠的结果），items[].projections.asOfSeq 是折叠到的 seq。
 //   · get  → session/list 取该会话的 asOfSeq（= 当前日志 tip；真机实测：写一条事件后
@@ -15,7 +15,7 @@
 //     gateway/signature-invalid "stream Remote methods must be opened through the stream carrier"
 //     ——载体是 WS mux（dsh-api-gateway 的 /api/remote.mux）。不为一次读去接 mux，故不依赖它。
 //
-// get 取数规则（姐姐口径）：一次 create/send = 一次 prompt = 一轮。以**最后一次 user/message**
+// get 取数规则：一次 create/send = 一次 prompt = 一轮。以**最后一次 user/message**
 // 为轮次边界，取该轮**最后一次 assistant/message 输出**即最终结论；本轮还没产出输出就明确报状态，
 // 不悄悄把上一轮的旧结论当本轮结果（真取了更早的也会在正文里标出来，见 lastRoundOutput 的 scope）。
 // 已知窄窗口：list 拿到 asOfSeq 与 page 取数之间若有新写入，读到的是 asOfSeq 那一刻的尾部——

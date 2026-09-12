@@ -44,8 +44,8 @@ export const TOKEN_MAP = [
   ["--dsw-alias-label-primary-bluish", "--accent"],
   ["--dsw-alias-label-primary-dimmed", "--text-light"],
   ["--dsw-alias-label-secondary", "--text-light"],
-  // 反白主文字：wordmark 的 badge 文字、Toast、附件条等都在用它（旧表漏了这一格，
-  // 于是那几个地方只跟着 dsh 自己的明暗走——2026-09-12 真机：sidebar 品牌名处就它变色）。
+  // 反白主文字：wordmark 的 badge 文字、Toast、附件条等都在用它（漏了这一格的话，
+  // 那几个地方只跟着 dsh 自己的明暗走，sidebar 品牌名处就会变色）。
   // 它读作“坐在主文字色块上的反白字”，对应 Hana 的页面底色。
   ["--dsw-alias-label-primary-inverted", "--bg"],
   ["--dsw-alias-label-tertiary", "--text-muted"],
@@ -78,10 +78,10 @@ export const TOKEN_MAP = [
   ["--dsw-alias-state-error-secondary", "--danger"],
   ["--dsw-alias-state-success-primary", "--green"],
   ["--dsw-alias-state-success-secondary", "--green"],
-  // state 语义色（2026-09-12 补全）：原来只映了 business/error/success 的 primary/secondary，
-  // 结果 DSH 自带的**连接状态指示灯**（ui-primitives 的 ConnectionIndicator，落在侧栏 footer 的
-  // settings 区）不跟随主题——它用的是 warn-* 系列。而宿主主题没有 amber 语义色（只有 --green /
-  // --danger），所以按“只用宿主变量、不搬固定值”的纪律取最近的语义位：
+  // state 语义色：business/error/success 的 primary/secondary 之外还要覆盖 warn-* 系列——
+  // DSH 自带的**连接状态指示灯**（ui-primitives 的 ConnectionIndicator，落在侧栏 footer 的
+  // settings 区）用的就是它。宿主主题没有 amber 语义色（只有 --green / --danger），所以按
+  // “只用宿主变量、不搬固定值”的纪律取最近的语义位：
   //   warn/success 的 tint 用中性遮罩 --overlay-medium 与强调浅色 --accent-light；
   //   标签色用 --danger / --green 保住“这是告警 / 这是成功”的读法。
   ["--dsw-alias-state-warn-primary", "--danger"],
@@ -94,7 +94,7 @@ export const TOKEN_MAP = [
   ["--dsw-alias-state-business-label", "--accent"],
   ["--dsw-alias-state-business-secondary", "--accent-light"],
   // scrollbar：复刻 Hana 原生语言（中性灰，不主题化）
-  // ---- alias 层补漏（2026-09-12 她指出“有些地方没主题色覆盖”）----
+  // ---- alias 层补漏 ----
   // 办法：从引擎自带的 DSH 前端 CSS/JS 反推全部 --dsw-* 用量，与 TOKEN_MAP 做差集。
   // 结论：--dsw-* 共 368 个，其中 alias 语义层 86 个（原覆盖 66）；font*、static-*、
   // elevation-/shadow-/mask、corner-shape 与 linear-* 梯度属于字体/调色板/阴影/几何，

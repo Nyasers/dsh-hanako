@@ -480,7 +480,7 @@ export async function apply(ctx, config) {
     });
     // 5. 注册（空 routes 不注册——llm 注册表要求非空；目录空已在上方 return）。
     // 宿主目录是启动快照：受管进程存活期不变化（改宿主模型配置需 runtime 重启生效——
-    // 与受管 runtime 生命周期一致的取舍，见 DESIGN「已测/未测边界」）。
+    // 与受管 runtime 生命周期一致的取舍）。
     ctx.llm.registerAdapter(routes, adapter);
     log(ctx, "已注册 " + routes.length + " 个 provider 路由（" + models.length + " 个模型，源=hana.models.list）");
   } catch (e) {

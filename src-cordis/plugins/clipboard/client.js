@@ -3,9 +3,8 @@
 //
 // @dshana/clipboard 前端 client 半。
 //
-// 2026-09-12 定案（她的指令）：「在壳级全局 shadow 就行」。影子本体与安装逻辑搬到
-// src/ui/clipboard-shadow.js，由**壳页**在注入 DSH 之前装（全局 + 最早）——那里才是真正
-// 能保证生效的位置。本 client 半只保留一次幂等的补装：
+// 影子本体与安装逻辑在 src/ui/clipboard-shadow.js，由**壳页**在注入 DSH 之前装
+// （全局 + 最早）——那里才是能保证生效的位置。本 client 半只保留一次幂等的补装：
 //   · DSH 的 client 插件按 boot manifest 的 immediately 决定是否启动时激活，装得晚；
 //   · 壳页那次安装已经就位时，这里的调用是空操作（installClipboardShadow 幂等）。
 // 保留它的价值：壳页那条路万一没走成（例如未来换了注入形态），这里还有一次机会。

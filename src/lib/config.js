@@ -4,7 +4,7 @@
 // tools/lib/config.js — dshana 配置解析共用模块（lib 提取）
 // 从 tools/dsh-run.js 剥离的纯解析/零状态函数：默认模型/预设（settings.yaml 行级）、
 // reasoningEffort、审批超时。全部零宿主状态（不碰 globalThis 单例，只读文件/参数），
-// dsh-run.js 静态 import。cwd 无配置回退（defaultCwd 已删除）：create 必传显式指定。
+// dsh-run.js 静态 import。cwd 无配置回退：create 必传显式指定。
 //
 // 归类说明：新建独立 config.js 而非并入 lib/state.js——state.js 已承载"单例 + 环境
 // 常量"一条职责，本模块是"运行期配置文件解析"另一条职责（全只读、无状态）；若并进
@@ -79,7 +79,7 @@ export function resolveReasoningEffort(explicit) {
 
 // 毫秒 → 秒 换算（旧键兜底共用）：0=禁用语义保留（0 → 0）；正数取整到秒
 // （Math.round；极端 <500ms 的正数钳到 1s，保留「正数 = 启用」语义，避免 0 被误判禁用）。
-// 应用设置的缺省值（单位：秒）：2026-09-12 起由代码持有。
+// 应用设置的缺省值（单位：秒）：由代码持有。
 // 背景：设置页改成 App 自己的页（contributes.settings.ui.route），manifest 不再声明 schema，
 // 于是运行时缺省的来源从“配置快照”变成这里——值沿用原 schema 里的 default（30 / 1800），
 // 行为不变；设置页读写经 App 后端路由直接落 dataDir/config.json 的 global.*。
@@ -95,8 +95,8 @@ function msToSec(ms) {
 // global.approvalTimeoutSec（设置界面改动即时生效）：数字 > 0 采用；0 或负数 = 用户显式禁用
 // 超时拒绝（返回 0，调用方判断不挂计时器）；非数字/缺失回退配置快照 cfg.approvalTimeoutSec
 // （manifest 默认 30），同样 0/负数 = 禁用。旧键兼容：新键缺失且旧毫秒键
-// global.approvalTimeoutMs / cfg.approvalTimeoutMs 存在时按毫秒换算（迁移尚未跑时的兜底，
-// 保证升级不丢用户配置、不产生单位误解；迁移跑完后旧键已删除，此分支不再命中）。
+// global.approvalTimeoutMs / cfg.approvalTimeoutMs 存在时按毫秒换算（旧键兜底：保住老
+// 配置里已经设好的值，不把单位读错）。
 export function resolveApprovalTimeoutSec(cfg) {
   try {
     const cf = join(cfg.dataDir, "config.json");

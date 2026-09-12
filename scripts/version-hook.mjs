@@ -3,7 +3,7 @@
 //
 // scripts/version-hook.mjs — pnpm version 的 version 生命周期钩子（git 收口，完整版号一次成型）
 //
-// 编排链（替代原自定义 bump 管线 prebump/bump/postbump，2026-09-04 定稿）：
+// 编排链：
 //   pnpm version <patch|minor|major|prerelease|<semver>> --no-git-tag-version
 //     preversion（pnpm run build 构建验证）→ pnpm 算号写主（裸号）→ version（本脚本）→ postversion（未定义）
 //
@@ -14,7 +14,7 @@
 //   CI 资产名（带 +dsh-<依赖> 段）对不上，版本单一事实源断裂。故关闭自动 git 操作，收口在
 //   version 钩子内做（此时版本号已落盘、git 未动，是唯一能表达完整版的时机）。
 //
-// 版本规则（2026-09-03 定稿，自 bump.mjs 迁移）：build metadata 保留且恒为 dsh 依赖段
+// 版本规则：build metadata 保留且恒为 dsh 依赖段
 //   `+dsh-<dependencies.@deepseek-ai/dsh>`（本脚本自动重算，不接受自定义——版本号一眼可见
 //   跑在哪个 dsh 上，防手误漂移）；pnpm version 算号剥 build，此处拼回完整版再同步派生。
 //   bump 子命令映射：beta/hotfix 末段递增 = prerelease（裸跑，保留 preid 递增末段）；毕业 =
@@ -30,7 +30,7 @@
 //   5. tag preflight（v<完整版> 已存在 → 拒绝重复发版）
 //   6. git add 版本文件全集 + CHANGELOG → 暂存就绪后退出。git 收口（commit/tag）移出钩子：
 //      由主上下文经 github-hanako 插件 git_commit / git_exec 完成（协作署名 + 隔离签名环境），
-//      本钩子只保证版本落地与门禁，不再内部裸 commit/tag（2026-09-07 改造）。
+//      本钩子只保证版本落地与门禁，不在钩子内部 commit/tag。
 //
 // 门禁沿袭 scripts/tagver.mjs（已并入本脚本）：HEAD 版本门禁 + tag preflight（本地 ref
 //  + 远程 origin ls-remote，防克隆未 fetch 远程 tag 导致孤儿 bump commit）；push 手动

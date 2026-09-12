@@ -13,7 +13,7 @@
 // App dataDir = <hanakoHome>/app-data/dshana（ctx.dataDir；由主上下文在真机提供）。
 //
 // 本脚本不真跑于本刀（旧插件数据是活的）——只交付代码与 --check 只读验证路径；--apply 的
-// 停机指引：迁移窗口内旧插件应先停止写入（主上下文与姐姐协调），脚本对源只读、不删除。
+// 停机指引：迁移窗口内旧插件应先停止写入，脚本对源只读、不删除。
 import { fileURLToPath } from "node:url";
 import { dirname, join, basename } from "node:path";
 import {
@@ -111,7 +111,7 @@ function main() {
   }
 
   if (opts.mode !== "apply") {
-    console.log("[migrate-legacy] --check 完成（未执行任何复制/写）。真机执行 --apply 前请先停旧插件写入（主上下文与姐姐协调）；对源只读。");
+    console.log("[migrate-legacy] --check 完成（未执行任何复制/写）。真机执行 --apply 前请先停旧插件写入；对源只读。");
     return;
   }
 

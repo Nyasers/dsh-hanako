@@ -50,8 +50,8 @@ const staticItems = [
   "package.json",
   // manifest.json 与 skills 已随 src 域（src/manifest.json、src/skills/，build:src 产出
   // dist 副本），不再经根级静态复制
-  // 注（自包含打包后）：pnpm-workspace.yaml / pnpm-lock.yaml 不再随包——安装侧不再执行任何
-  // pnpm install（依赖已物化进包），两份文件的唯一消费方（旧 ensure 链）已退役
+  // 注：pnpm-workspace.yaml / pnpm-lock.yaml 不随包——安装侧不执行任何 pnpm install
+  // （依赖已物化进包），两份文件在本流程里没有消费方
 ];
 const distDir = join(ROOT, "dist");
 for (const item of staticItems) {
@@ -85,9 +85,8 @@ function assertCordisDistVersions(outDir) {
   }
   // 完整性：必需 7 包（roster bundle dshana + 6 子插件）全部存在且
   // package.json 版本一致——缺失/部分产物（含 count=0）一律拒包，防 build 失败后残留部分
-  // dist 被误打包。（bridge 已退役：官方 dsh-web-app bundle 提供 connection；app 已退役：
-  // 官方 frontend-static 拥有 index 处理；settings 已退役：预定由宿主面设置页替代，见
-  // cordis.patch.yml 该条注释与 specs/current/sample-align T8。）
+  // dist 被误打包。（roster 就是 bundle dshana + 6 子插件：connection 由官方 dsh-web-app
+  // bundle 提供，index 处理归官方 frontend-static，设置页由宿主面承担。）
   const required = [
     "dshana",
     "clipboard", "provider", "theme",
@@ -112,7 +111,7 @@ function assertCordisDistVersions(outDir) {
 }
 assertCordisDistVersions(distDir);
 
-// 1.6) App ui/ 静态树断言（v2 cards route 资源面；迁移指南 §10 相对资源契约）：缺失 = 卡片
+// 1.6) App ui/ 静态树断言（cards route 资源面；相对资源契约）：缺失 = 卡片
 //   404 + 宿主 manifest 校验失败，fail-closed 拒包。
 function assertUiTree(outDir) {
   const uiDir = join(outDir, "ui");
@@ -438,7 +437,7 @@ function isEsm(code) {
 
 // 3+4) 组装 → zip → SHA256（单目标；发布产物归档 releases/）
 //    archiver 纯 Node 跨平台 zip（对齐 hana-remote-dev）：不用 tar -a -cf——
-//    GNU tar（Linux）不认 .zip 后缀会静默产出 tar 伪 zip（CI ubuntu 踩坑 2026-08-14）
+//    GNU tar（Linux）不认 .zip 后缀会静默产出 tar 伪 zip
 const relDir = join(ROOT, "releases");
 fs.ensureDirSync(relDir);
 // 临时目录纪律（曾因多目标连跑堆积 2.2 GB 把宿主压崩）：
@@ -454,10 +453,9 @@ fs.ensureDirSync(relDir);
  */
 function applyIntegrations(nodeModulesDir) {
   const integrationsDir = join(ROOT, "src-integrations");
-  // fail-closed（2026-09-12 教训）：目录缺失曾是静默 return，而 integrations/ 迁到
-  // src-integrations/ 后这里未同步——于是整包官方包回退成上游原版（role 对、主题好，
-  // 但 ui-layout / ui-sidebar / ui-settings-general 的补丁全丢），日志里那几行“集成覆盖”
-  // 静默消失而打包照旧成功。任何“声明的补丁没盖上”都必须让打包失败。
+  // fail-closed：目录缺失会让整包官方包回退成上游原版（role 对、主题对，但 ui-layout /
+  // ui-sidebar / ui-settings-general 的补丁全丢），而打包照旧成功。任何“声明的补丁没盖上”
+  // 都必须让打包失败。
   if (!fs.pathExistsSync(integrationsDir)) {
     throw new Error(`集成目录不存在：${integrationsDir}（预期 src-integrations/；拒绝产出未打补丁的包）`);
   }

@@ -3,7 +3,7 @@
 //
 // tests/provider-identity.test.mjs — src-cordis/plugins/provider/lib/identity.js 单测
 //
-// 锁死的是**三态判定**（2026-09-12 她定调：App 身份仅限“用户直接在 WebUI 使用”）：
+// 锁死的是**三态判定**（App 身份仅限“用户直接在 WebUI 使用”）：
 //   ① 无映射          ⇒ App 身份（用户自建会话）
 //   ② 映射在 + ended  ⇒ App 身份（任务已终结，用户接着在 WebUI 里跑——事实，不是降级）
 //   ③ 映射在 + 活动   ⇒ { taskId }（必须，绑定不能丢）

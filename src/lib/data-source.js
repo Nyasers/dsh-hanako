@@ -1,22 +1,22 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/lib/data-source.js — DSH 数据来源（private / shared）解析与自持设置存储（W3）
+// src/lib/data-source.js — DSH 数据来源（private / shared）解析与自持设置存储
 //
 // 为什么自持一份设置文件而不是用宿主 contributes.settings / ctx.storage：
 //   · 切换数据源是**生命周期动作**（要停旧 runtime、起新 runtime），不是"一组值"；
 //   · DSH_HOME 必须在子进程启动**之前**定下，而子进程读不到 App ctx.storage（跨进程），
-//     故两进程共享可读处只有 dataDir 下的文件（与 task-map 决策 C 同源）；
+//     故两进程共享可读处只有 dataDir 下的文件；
 //   · DSH 未运行时（设置页仍可达）也要能读写这份设置。
-//   形态（对齐官方样例 hana-dsh runtime/data-source.mjs）：{version, revision, settings} +
+//   形态（对齐官方样例 runtime/data-source.mjs）：{version, revision, settings} +
 //   lastShared；0600 + 原子写（.pending → rename）；revision 供乐观并发（T4 的 409 回路）。
 //
 // 源身份：private 恒为内置独立目录 <dataDir>/.dsh（命名与 DSH 自身默认 ~/.dsh 统一）；
 // shared 指向外部 DSH 目录（DSH 默认 ~/.dsh，或用户经 picker 选定的目录）。
-// 注：早期 v2 用的 <dataDir>/dsh-home 不再读取，**不做迁移**（裁决见 spec D-h）。
+// 注：只读 <dataDir>/.dsh，不读 <dataDir>/dsh-home，**不做迁移**。
 // sourceId 由 home+profile 决定：private 用常量便于人读，shared 用哈希区分同路径不同 profile。
 //
-// 本模块是叶子（只依赖 app-runtime 取值助手），不做 runtime 启停；切换编排见 W3 后续切片。
+// 本模块是叶子（只依赖 app-runtime 取值助手），不做 runtime 启停；切换编排在别的模块。
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";

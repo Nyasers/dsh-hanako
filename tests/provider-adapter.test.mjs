@@ -4,8 +4,8 @@
 // tests/provider-adapter.test.mjs — provider adapter（buildHanaAdapter）stream() 接线单测。
 //
 // 为什么要有这一层：adapter 的方法只在 DSH 运行期被调用，先前单测只覆盖 lib/* 纯函数，
-// 于是"在 adapter 里引用了不存在的 ctx"这类错，构建与单测都看不见，真机第一次推理才炸
-// （2026-09-12 两次同型故障）。这里用假 LlmAdapter/LlmError + 假 hana client + 真 Response
+// 于是"在 adapter 里引用了不存在的 ctx"这类错，构建与单测都看不见，只有真机第一次推理才炸。
+// 这里用假 LlmAdapter/LlmError + 假 hana client + 真 Response
 // 走完整条路径：身份判定（App / taskId）、NDJSON → DSH 块、宿主参数校验适配（maxTokens /
 // temperature）、非 2xx 与空消息报错。
 import { test, beforeEach, afterEach } from "node:test";

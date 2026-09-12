@@ -97,7 +97,7 @@ export function apply(ctx) {
   // readyMarker 后成立，自动代理 HTTP/SSE/WS + 重定向重写 + HttpOnly cookie）——本 registrar
   // 不需要转发受管服务，只提供壳页消费的 boot 状态与启动/停止面。
   // ui/ 壳页（dist/ui/*.html）以相对同源 fetch 本组端点轮询（页面经 App surface
-  // 授权加载；真机对账点：surface cookie/hana.api 形态见 DESIGN 已测/未测清单）。
+  // 授权加载）。
   let unregisterRoutes = null;
   if (ctx.routes && typeof ctx.routes.register === "function") {
     try {
@@ -144,7 +144,7 @@ export function apply(ctx) {
     try { if (typeof unregisterTool === "function") unregisterTool(); } catch { /* 忽略 */ }
     try { if (typeof unregisterRoutes === "function") unregisterRoutes(); } catch { /* 忽略 */ }
     // 受管 runtime 收尾：停 runtime + 清单例（Windows 依赖更新/App 卸载前须先停，见
-    // managed-runtime.js 与 DESIGN「依赖部署（v2）」锁纪律）。disposer 可异步不等待宿主。
+    // managed-runtime.js 与依赖部署纪律）。disposer 可异步不等待宿主。
     try {
       disposeManagedRuntime().catch((e) => {
         log("warn", "disposer 停止 DSH runtime 失败：" + ((e && e.message) || e));

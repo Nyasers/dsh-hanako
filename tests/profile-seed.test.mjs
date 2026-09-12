@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// tests/profile-seed.test.mjs — ensureProfileSeeded 形态/迁移/幂等断言（spec:
-// dshana-profile-bundle D1/D2/D4/D5；tasks.md T2）。零依赖：node:test + node:assert。
-// 2026-09-04 修订：profile 文件改由官方 @deepseek-ai/dsh-app-boot initProfile 生成
+// tests/profile-seed.test.mjs — ensureProfileSeeded 形态/迁移/幂等断言。
+// 零依赖：node:test + node:assert。
+// profile 文件由官方 @deepseek-ai/dsh-app-boot initProfile 生成
 // （本模块不再自维护种子模板）——测试注入 stub initProfile（模拟官方语义：缺失才写，
 // 记录调用参数），断言生成/幂等/不覆盖与 scope 链接。
 // 覆盖：clean 初始化 / 老整树 junction 迁移 / 老整树实体拷贝迁移 / 用户内容拒绝 /

@@ -64,7 +64,7 @@ test("TOKEN_MAP：RHS 是宿主主题变量或 ~ 字面量，且变量名在允�
   ]);
 });
 
-test("TOKEN_MAP：alias 语义层的补漏条目在位（2026-09-12 差集结论）", () => {
+test("TOKEN_MAP：alias 语义层的补漏条目在位", () => {
   const map = new Map(TOKEN_MAP);
   const expect = {
     "--dsw-alias-link": "--accent",
