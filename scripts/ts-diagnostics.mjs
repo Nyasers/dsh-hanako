@@ -24,6 +24,8 @@ export const FAIL_CODES = new Set([
   "TS2305", // Module has no exported member —— 导入写错名
   "TS2551", // Property does not exist（带拼写建议）
   "TS2554", // Expected N arguments, but got M
+  "TS2451", // Cannot redeclare block-scoped variable —— 同名声明两次
+  "TS2393", // Duplicate function implementation —— 函数定义两份
   "TS1005", // 语法错：期望某种记号
   "TS1109", // 语法错：表达式缺失
   "TS1128", // 语法错：声明或语句缺失
