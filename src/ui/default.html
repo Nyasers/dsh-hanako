@@ -13,10 +13,9 @@
      钉回时恢复原 route 与 FP；卡 ID / App 后台 / 持久状态不变。所以这一面渲染完整的 DSH
      Web UI（侧栏 + 中列 + 右列）——与主卡（无 DSH 侧栏）不同。
 
-     顶上让出 44px：本面沿用宿主那条半透明 chrome，页面顶部会被它盖住。这个常量取自官方
-     样例（bootstrap.css 为设置面留的同一块区域，注释 "Settings sits below Hana's translucent
-     card chrome."），并同样把留白放在**固定高度的 #root 内部**——这样 DSH 自己的滚动容器
-     仍占满剩余视口，而不是延伸到 chrome 底下。（自举台不下移：台上内容本来就整体居中。） -->
+     顶上不再让开 44px：卡片 titlebar 改成 solid 之后，不透明标题栏是**占位**而非浮层，
+     页面可以直接从顶部开始。当初那段留白是给半透明 chrome 的（官方样例为设置面留的
+     也是同一块区域），现随 titlebar 一起收回。 -->
 <style>
   html, body { height: 100%; margin: 0; }
   html { color-scheme: light dark; }
@@ -26,11 +25,12 @@
     color: var(--text, #2A2622);
     background: var(--bg, #F5EFE4);
   }
-  /* 注入进来的 DSH 前端容器：留白在内部，滚动容器占满余下视口。 */
+  /* 注入进来的 DSH 前端容器：整幅给 DSH，不留顶部留白。
+     2026-09-12 改：manifest 的 titlebar 改成 solid——不透明标题栏占位而不是浮在页面上，
+     所以不用再为半透明 chrome 预留 44px。 */
   #root {
     height: 100%;
     box-sizing: border-box;
-    padding-top: 44px;
   }
   /* 自举台：与主卡同一副台面（DSHANA 字标 + 细圆环 + 一行状态小字）。台上内容本来就整体居中，
      不必为顶上那条 chrome 下移（她 2026-09-12）。 */

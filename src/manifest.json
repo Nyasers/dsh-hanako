@@ -44,14 +44,14 @@
           "label": "DSHana",
           "route": "/sidebar.html"
         },
-        "siteNavEntry": true,
+        "siteNavEntry": false,
         "fpFullPanel": true,
         "closable": false,
         "detached": {
           "route": "/default.html"
         },
         "cardForm": "flush",
-        "titlebar": "translucent"
+        "titlebar": "solid"
       }
     ],
     "settings": {
