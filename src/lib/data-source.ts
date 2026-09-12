@@ -22,6 +22,7 @@ import { homedir } from "node:os";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { isAbsolute, join, normalize } from "node:path";
 import { appDataDir, getAppRuntime } from "./app-runtime.ts";
+import { APP_SETTING_DEFAULTS, resolveApprovalTimeoutSec, resolveDefaultTimeoutSec } from "./config.ts";
 
 export const SETTINGS_VERSION = 1;
 export const SOURCE_MODES = Object.freeze(["private", "shared"]);
@@ -29,8 +30,14 @@ export const SOURCE_MODES = Object.freeze(["private", "shared"]);
 export const PRIVATE_HOME_NAME = ".dsh";
 /** 内置独立目录固定 profile：runtime 只 seed/启动这一个 profile。 */
 export const PRIVATE_PROFILE = "dshana";
-export const SETTINGS_KEYS = Object.freeze(["mode", "path", "profile"]);
-export const DEFAULT_SETTINGS = Object.freeze({ mode: "private", path: null, profile: PRIVATE_PROFILE });
+export const SETTINGS_KEYS = Object.freeze(["mode", "path", "profile", "approvalTimeoutSec", "defaultTimeoutSec"]);
+export const DEFAULT_SETTINGS = Object.freeze({
+  mode: "private",
+  path: null,
+  profile: PRIVATE_PROFILE,
+  approvalTimeoutSec: APP_SETTING_DEFAULTS.approvalTimeoutSec,
+  defaultTimeoutSec: APP_SETTING_DEFAULTS.defaultTimeoutSec,
+});
 
 /** DSH 自己的默认数据目录（shared 的「DSH 默认目录」候选）。 */
 export const defaultDshHome = () => join(homedir(), ".dsh");
@@ -49,7 +56,29 @@ export function normalizeHomeForId(home, platform = process.platform) {
 const PROFILE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 /**
- * 设置校验（纯函数）：未知键拒绝、mode 限定、shared 必须是绝对路径、profile 简单名。
+ * 两个超时（秒）：整数 ≥ 0（0 = 显式禁用自动拒绝 / 交给调用方默认）；缺省填默认值。
+ * 与数据模式同栈：一份设置、一个 revision（想改就带 expectedRevision，冲突就得 409）。
+ */
+function normalizeTimeouts(input) {
+  const out = {};
+  for (const key of ["approvalTimeoutSec", "defaultTimeoutSec"]) {
+    const raw = input[key];
+    if (raw === undefined || raw === null) {
+      out[key] = APP_SETTING_DEFAULTS[key];
+      continue;
+    }
+    // 只接受 number 类型：不当成字符串解析（Number([]) 是 0、Number("") 是 0，宽松转换会让脏值混进来）
+    if (typeof raw !== "number" || !Number.isSafeInteger(raw) || raw < 0) {
+      throw new Error(key + " 必须是不小于 0 的整数秒（收到 " + JSON.stringify(raw) + "）");
+    }
+    out[key] = raw;
+  }
+  return out;
+}
+
+/**
+ * 设置校验（纯函数）：未知键拒绝、mode 限定、shared 必须是绝对路径、profile 简单名、
+ * 两个超时必须是非负整数秒。
  * private 的 profile 被强制为 PRIVATE_PROFILE（内置目录只跑这一个 profile）。
  */
 export function validateSettings(input) {
@@ -70,9 +99,9 @@ export function validateSettings(input) {
       throw new Error("shared 模式必须给出 DSH 数据目录（非空字符串，不含 NUL）");
     }
     if (!isAbsolute(input.path)) throw new Error("shared 目录必须是绝对路径（收到 " + input.path + "）");
-    return { mode: "shared", path: normalize(input.path), profile };
+    return { mode: "shared", path: normalize(input.path), profile, ...normalizeTimeouts(input) };
   }
-  return { mode: "private", path: null, profile };
+  return { mode: "private", path: null, profile, ...normalizeTimeouts(input) };
 }
 
 /**
@@ -91,7 +120,23 @@ export function sourceOf(settings, dataDir) {
   return { sourceId, home, profileName: s.profile, shared: s.mode === "shared", mode: s.mode };
 }
 
-const clone = (v) => structuredClone(v);
+/**
+ * 存量兼容：两个超时原先写在 <dataDir>/config.json 的 global.*（自持存储之前的栈）。
+ * settings.json 里没有这两个键时，从旧位置读一次当初始值（只在读路径生效，不当场落盘）；
+ * 下次经 POST /settings 写设置时，它们就自然迁进自持存储，旧位置不再被写入。
+ */
+function withLegacyTimeouts(raw, dataDir) {
+  const out = raw && typeof raw === "object" && !Array.isArray(raw) ? { ...raw } : {};
+  if (!("approvalTimeoutSec" in out)) out.approvalTimeoutSec = resolveApprovalTimeoutSec({ dataDir });
+  if (!("defaultTimeoutSec" in out)) out.defaultTimeoutSec = resolveDefaultTimeoutSec({ dataDir });
+  // 其余键（mode/path/profile）缺省落位；顺序要紧：先补旧位置的超时，缺哪个补哪个，
+  // 然后才铺默认，否则默认会先把键占住、旧位置的值就永远读不到了。
+  return { ...DEFAULT_SETTINGS, ...out };
+}
+
+function clone(v) {
+  return structuredClone(v);
+}
 
 /** lastShared 只留 {path, profile}（切回 shared 时预填，不自动生效）。 */
 function readLastShared(raw) {
@@ -125,7 +170,11 @@ export function createDataSourceStore(ctx) {
         stored = JSON.parse(await readFile(filename, "utf8"));
       } catch (e) {
         if (e && e.code === "ENOENT") {
-          cached = { version: SETTINGS_VERSION, revision: 0, settings: { ...DEFAULT_SETTINGS } };
+          cached = {
+            version: SETTINGS_VERSION,
+            revision: 0,
+            settings: validateSettings(withLegacyTimeouts({}, ctx.dataDir)),
+          };
           return clone(cached);
         }
         if (e instanceof SyntaxError) throw new Error("DSH 数据来源设置文件不是合法 JSON：" + e.message);
@@ -141,7 +190,7 @@ export function createDataSourceStore(ctx) {
       cached = {
         version: SETTINGS_VERSION,
         revision: stored.revision,
-        settings: validateSettings(stored.settings),
+        settings: validateSettings(withLegacyTimeouts(stored.settings, ctx.dataDir)),
         ...(lastShared ? { lastShared } : {}),
       };
       return clone(cached);

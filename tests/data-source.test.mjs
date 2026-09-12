@@ -34,15 +34,23 @@ const withTempDir = async (fn) => {
 };
 
 const P = (p) => normalize(p);
+// 两个超时的默认值（钉住数字：与 config.ts 的 APP_SETTING_DEFAULTS 一致，也是存储的缺省）
+const TIMEOUT_DEFAULTS = { approvalTimeoutSec: 30, defaultTimeoutSec: 1800 };
 
 test("validateSettings: private 默认落位，profile 被强制为内置名", () => {
   assert.deepEqual(validateSettings({ mode: "private", path: null, profile: "whatever" }), {
     mode: "private",
     path: null,
     profile: PRIVATE_PROFILE,
+    ...TIMEOUT_DEFAULTS,
   });
-  assert.deepEqual(validateSettings({ mode: "private" }), { mode: "private", path: null, profile: PRIVATE_PROFILE });
-  assert.deepEqual(DEFAULT_SETTINGS, { mode: "private", path: null, profile: PRIVATE_PROFILE });
+  assert.deepEqual(validateSettings({ mode: "private" }), {
+    mode: "private",
+    path: null,
+    profile: PRIVATE_PROFILE,
+    ...TIMEOUT_DEFAULTS,
+  });
+  assert.deepEqual(DEFAULT_SETTINGS, { mode: "private", path: null, profile: PRIVATE_PROFILE, ...TIMEOUT_DEFAULTS });
 });
 
 test("validateSettings: 拒绝未知键 / 非法模式 / 非绝对 shared 路径 / NUL / 畸形 profile", () => {
@@ -131,7 +139,12 @@ test("store.write: 原子落盘 + revision 递增 + lastShared 记录（不留 .
 
     const reread = await createDataSourceStore({ dataDir: dir }).read();
     assert.equal(reread.revision, 2);
-    assert.deepEqual(reread.settings, { mode: "private", path: null, profile: PRIVATE_PROFILE });
+    assert.deepEqual(reread.settings, {
+      mode: "private",
+      path: null,
+      profile: PRIVATE_PROFILE,
+      ...TIMEOUT_DEFAULTS,
+    });
   });
 });
 
