@@ -140,7 +140,10 @@ export function AppFrame({
   //   standalone  拆窗：侧栏 + 中列 + 右列，带拖柄
   // 宿主桥由壳页（src/ui/app-shell.js）在注入 DSH 前发布；未发布时按 workspace 退。
   const role = (window as { __DSHANA__?: { role?: string } }).__DSHANA__?.role
-  const surface = role === 'navigation' || role === 'settings' || role === 'standalone' ? role : 'workspace'
+  // 面（三态）：default = 整幅 DSH UI（full 与拆窗共用）；main = 主卡（无 DSH 侧栏）；
+  // sidebar = FP（只有侧栏）。认不出/未声明时也按 **default** 画：这是上游本来的行为
+  // （整幅 UI），而不是把它当成主卡少一列。
+  const surface = role === 'navigation' || role === 'settings' || role === 'standalone' ? role : 'standalone'
 
   // Track the frame's own box (not the window): rAF-throttled ResizeObserver.
   useLayoutEffect(() => {

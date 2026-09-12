@@ -3,16 +3,17 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<!-- 本页的面（role）的事实源：静态声明，和样例 hana-dsh 的 <meta name="hana-dsh-role"> 同一姿势。
-     宿主把它当作本卡的 detached.route 打开时，不带任何我们的参数——"我是拆窗那面"只能写在这里。 -->
-<meta name="hana-dshana-role" content="standalone">
-<title>DSHana · 独立窗口</title>
-<!-- src/ui/standalone.html — dsh-hanako App v2 的拆窗页（contributes.cards[].detached.route）。
+<!-- 本页的面（role）的事实源：静态声明。三态模型里它就是 **default**——
+     full（整幅 DSH UI：侧栏 + 中列 + 右列）与 detached（拆窗）共用这一页，内容完全一样；
+     另两态是 main（主卡，无 DSH 侧栏）与 sidebar（FP，只有侧栏）。 -->
+<meta name="hana-dshana-role" content="default">
+<title>DSHana</title>
+<!-- src/ui/default.html — dsh-hanako App v2 的 **default 面**（full / detached 共用）。
      detached 的语义（APPS.md）：同一张卡的独立窗口加载本页、**不再额外挂载 functionPanel**，
-     钉回时恢复原 route 与 FP；卡 ID / App 后台 / 持久状态不变。所以这张面渲染的是完整的 DSH
-     Web UI（侧栏 + 中列 + 右列——AppFrame 的 standalone 分支），与主卡（无 DSH 侧栏）不同。
+     钉回时恢复原 route 与 FP；卡 ID / App 后台 / 持久状态不变。所以这一面渲染完整的 DSH
+     Web UI（侧栏 + 中列 + 右列）——与主卡（无 DSH 侧栏）不同。
 
-     顶上让出 44px：独立窗口沿用宿主那条半透明 chrome，页面顶部会被它盖住。这个常量取自官方
+     顶上让出 44px：本面沿用宿主那条半透明 chrome，页面顶部会被它盖住。这个常量取自官方
      样例（bootstrap.css 为设置面留的同一块区域，注释 "Settings sits below Hana's translucent
      card chrome."），并同样把留白放在**固定高度的 #root 内部**——这样 DSH 自己的滚动容器
      仍占满剩余视口，而不是延伸到 chrome 底下。（自举台不下移：台上内容本来就整体居中。） -->
@@ -85,7 +86,7 @@
   #dsh-stage button:hover { filter: brightness(0.97); }
 </style>
 </head>
-<body data-view="idle" data-dshana-shell data-dshana-view="standalone">
+<body data-view="idle" data-dshana-shell data-dshana-view="default">
   <div id="dsh-stage">
     <div class="loader">
       <span class="wordmark">DSHANA</span>
