@@ -2,6 +2,16 @@
 
 插件 id：`dshana`。把 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）接进 Hana。
 
+## 文档与注释约定
+
+**注释写现状与原因，不写演变史。** 代码注释回答“现在是什么、为什么这样”；“以前是什么、怎么变成
+今天这样”属于 commit 与 CHANGELOG（仓库用 conventional-changelog：`pnpm run changelog` +
+`scripts/version-hook.mjs`，历史自动成文）。
+
+- 不写日期栈记（“2026-xx-xx 定调”）、不写迁移步骤编号（“步骤 3 接线”）、不写“已退役/已删除”的注记。
+- 保留现状事实（依赖怎样装、路径在哪、失败向哪侧回落）、保留设计取舍的**理由**。
+- 指向本地未入库文档（`specs/`）的引用不入注释，避免注释指向外部找不到的东西。
+
 ## 架构总览（受管 runtime）
 
 ```text
