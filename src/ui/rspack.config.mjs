@@ -60,10 +60,20 @@ export default {
   experiments: { outputModule: true },
   optimization: {
     minimize: true,
+    // 按导出裁剪对 ui 域没有意义：组件库是单模块、预打包产物（40 个具名导出在一个
+    // 模块里），实测开关前后只差 0.6KB。而它会把组件自己的类名映射一并削掉，
+    // 所以关着。
     usedExports: false,
     // 关掉按 package.json sideEffects 做的裁剪：样式 import 是副作用，
     // 不因为包没声明 sideEffects 就被整棵摇掉。
     sideEffects: false,
+  },
+  // 体积预算：宿主组件库（React + react-dom + settings 组件）与宿主自己的设置样式表
+  // 就是这一页的体积构成，两者之和就是合理上限。默认的 300KiB/500KiB 是给走网络的
+  // 页面定的，对本地 WebView 页没有指导意义；写明上限后，"真的超了"仍然是信号。
+  performance: {
+    maxAssetSize: 900 * 1024,
+    maxEntrypointSize: 1600 * 1024,
   },
   devtool: false,
   stats: "errors-warnings",
