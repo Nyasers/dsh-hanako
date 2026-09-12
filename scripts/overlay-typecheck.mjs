@@ -18,8 +18,9 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { TS_FILE, classifyDiagnostics, formatDiagnostics, parseTsDiagnostics } from "./ts-diagnostics.mjs";
+
 const TSC_REL = ["node_modules", "typescript", "bin", "tsc"];
-const TS_FILE = /\.(ts|tsx|mts|cts)$/i;
 
 /**
  * 从源码镜像生出「DSH 包名 → 源入口」表：**只补本仓 .pnpm 里没装的那些包**。
@@ -117,63 +118,12 @@ export function overlayTsconfig(repoRoot, mirrorDir) {
 }
 
 /**
- * 失败清单：只有这些码才算“我们自己的文件自相矛盾”，判失败。
- *
- * 为何用白名单而不是黑名单：跨包契约（插槽 props、JSX 属性类型）依赖类型来源，而本仓里
- * “已装的 lib/types”与“镜像源”对同一个版本号也不完全对齐（如 usePanelInfo / root 插槽
- * 各在一侧有），这类差异会把我们的文件误伤。它们不是咬过我们的那一类：我们真错过的是
- * “未定义的名字”（清注释连带删了一行代码），那类典型码如下——都是不依赖外部类型就能判定的。
- * 其余码（TS2339/TS2344/TS2322…）照常计数打进日志，将来全量 TS 化后再纳入失败。
- */
-const FAIL_CODES = new Set([
-  "TS2304", // Cannot find name —— 自由变量（role 那次就是它）
-  "TS2552", // Cannot find name（带拼写建议）
-  "TS2305", // Module has no exported member —— 导入写错名
-  "TS2551", // Property does not exist（带拼写建议）
-  "TS2554", // Expected N arguments, but got M
-  "TS1005", // ';' expected 之类的语法错
-  "TS1109", // Expression expected
-  "TS1128", // Declaration or statement expected
-  "TS1160", // Unterminated template literal
-]);
-
-/**
- * 把 tsc 输出分成四份（纯函数）：
- *   · `mine`     = 落在我们覆盖层文件上、且属于 FAIL_CODES 的诊断 → 判失败；
- *   · `other`    = 我们文件上的其它诊断（类型契约/环境）→ 只计数，但码与条数进日志；
- *   · `upstream` = 其它源码文件上的诊断（暂存树的上游源、镜像里被解析到的包源）→ 只计数；
- *   · `config`   = 不是源码文件的诊断（tsconfig 出错、选项被移除）→ 判失败：检查器没真跑。
- * tsc 打印的是相对 cwd（= 暂存树根）的路径。
+ * 把 tsc 输出按文件归成四份（纯函数；分类口径在 scripts/ts-diagnostics.mjs，与逐域检查共用）：
+ * mine=我们的文件+失败码 / other=我们的文件+其它码 / upstream=其它源码 / config=非源码（检查器没跑）。
  */
 export function parseOverlayDiagnostics(stdout, ours) {
   const wanted = new Set((Array.isArray(ours) ? ours : []).map((p) => String(p).replace(/\\/g, "/")));
-  const mine = [];
-  const other = [];
-  const upstream = [];
-  const config = [];
-  for (const raw of String(stdout || "").split(/\r?\n/)) {
-    const line = raw.trim();
-    if (!line) continue;
-    const m = line.match(/^(.*?)\((\d+),(\d+)\):\s*(error|warning)\s+(TS\d+):\s*(.*)$/);
-    if (!m) continue;
-    const rel = m[1].replace(/\\/g, "/").replace(/^\.\//, "");
-    const entry = {
-      file: rel,
-      line: Number(m[2]),
-      col: Number(m[3]),
-      severity: m[4],
-      code: m[5],
-      message: m[6],
-    };
-    if (wanted.has(rel)) {
-      (FAIL_CODES.has(entry.code) ? mine : other).push(entry);
-    } else if (TS_FILE.test(rel)) {
-      upstream.push(entry);
-    } else {
-      config.push(entry);
-    }
-  }
-  return { mine, other, upstream, config };
+  return classifyDiagnostics(parseTsDiagnostics(stdout), (file) => wanted.has(file));
 }
 
 /**
@@ -201,7 +151,7 @@ export function typecheckOverlay({ short, stage, files, repoRoot, mirrorDir, log
   if (config.length) {
     throw new Error(
       `覆盖层类型检查未能运行（${short}）：tsconfig/编译器报错 ${config.length} 条\n`
-        + config.map((d) => `  - ${d.file}:${d.line}:${d.col} ${d.code} ${d.message}`).join("\n"),
+        + formatDiagnostics(config),
     );
   }
   // 非零退出但一条诊断都没解析出来：同样说明检查没真跑（输出格式变了之类），不静默通过。
@@ -217,7 +167,7 @@ export function typecheckOverlay({ short, stage, files, repoRoot, mirrorDir, log
   if (mine.length) {
     throw new Error(
       `覆盖层类型检查未通过（${short}，${mine.length} 条）：\n`
-        + mine.map((d) => `  - ${d.file}:${d.line}:${d.col} ${d.code} ${d.message}`).join("\n")
+        + formatDiagnostics(mine)
         + "\n（这些文件是我们写进上游包里的；构建只转译不检查，所以在这一步拦。）",
     );
   }
