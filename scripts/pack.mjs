@@ -223,7 +223,8 @@ function materializeProdDeps(spec) {
   const pruned = pruneNodeModules(modules, spec);
   if (pruned.files > 0) {
     console.log(
-      `[pack] ${spec.name} 源码层精简：删 ${pruned.files} 个文件（释放未压缩 ${(pruned.bytes / 1e6).toFixed(1)} MB）`,
+      `[pack] ${spec.name} 源码层精简：删 ${pruned.files} 个文件（释放未压缩 ${(pruned.bytes / 1e6).toFixed(1)} MB）`
+      + (pruned.keptReferenced > 0 ? `；另有 ${pruned.keptReferenced} 个候选被同包代码引用，已保留` : ""),
     );
   }
   return modules;
@@ -231,82 +232,166 @@ function materializeProdDeps(spec) {
 
 /**
  * 源码层精简：删掉运行时不会读的文件。压缩已拉满（zip level 9），这些属于“压不动又不必发”的。
- * 只删四种有把握的：调试符号（.pdb）、源码映射（.map）、类型声明（.d.ts 系列）、非本平台的预编译
- * 产物，再加依赖树里的测试/文档目录。任何一项都不是运行时加载路径（JS 不会 require 它们）。
- * 返回 { files, bytes }；失败一律不阻断打包（删不掉就留着，宁可大一点也不能缺文件）。
+ * 四类候选：调试符号（.pdb）、源码映射（.map）、类型声明（.d.ts 系列）、依赖树里的测试/文档/
+ * 示例目录；平台目录另按目标平台筛（非本平台的预编译产物不发）。
+ *
+ * 目录名只认那些**没有第二义**的（`docs` 是文档，`doc` 不是——它是别人装运行期代码的目录名），
+ * 另有一道闸门：**按“名字/位置”判为非代码的东西，若被同包保留代码/清单提到就留下**（例如
+ * `yaml/dist/compose/composer.js` 里 `require('../doc/directives.js')` 这类真依赖）。逐文件判、
+ * 不整目录一刀：误判的代价（留住几个文件）远小于删错（运行期 Cannot find module）。
+ *
+ * 闸门盖的是 `.md`（文档）与目录里的其它内容；**不**盖调试/类型/映射那三类——`.map` 会被自身
+ * 文件里的 `sourceMappingURL` 提到（那是给人看的链接，不是 require），`.pdb` 是调试符号、
+ * `.d.ts` 是类型声明，都没有运行期入口，一律删。
+ *
+ * `LICENSE*` 一律不碰：第三方许可证得随分发走。
+ *
+ * 返回 { files, bytes, keptReferenced }；失败一律不阻断打包（删不掉就留着，宁可大一点也不能缺文件）。
  */
 function pruneNodeModules(modules, spec) {
   const plat = new Set();
   for (const os of spec.os) for (const cpu of spec.cpu) plat.add(`${os}-${cpu}`);
-  const out = { files: 0, bytes: 0 };
-  const walk = (dir) => {
-    let entries;
+  const normalizePlat = (name) => name.replace(/^win10-/, "win32-");
+  const out = { files: 0, bytes: 0, keptReferenced: 0 };
+  const DEBUG_FILE = /(\.pdb|\.map|\.d\.ts|\.d\.mts|\.d\.cts)$/i;
+  const DOC_FILE = /\.(md|markdown)$/i;
+  const JUNK_DIR = /^(__tests__|tests?|fixtures?|docs|examples?)$/i;
+  const PLATFORM_DIR = /^(win32|win10|darwin|linux)-[a-z0-9]+$/i;
+  const TEXT_FILE = /\.(js|cjs|mjs|json|yml|yaml)$/i;
+  const PRECOMPILED_DIR = /^(prebuilds|bin|third_party)$/;
+  const blobs = new Map();
+
+  const listDir = (dir) => {
     try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
+      return fs.readdirSync(dir, { withFileTypes: true });
     } catch {
-      return;
-    }
-    for (const e of entries) {
-      const p = join(dir, e.name);
-      const rel = p.slice(modules.length + 1).replace(/\\/g, "/");
-      if (e.isDirectory()) {
-        // 非本平台目录（win32-x64 / win10-arm64 / darwin-arm64 …）：带了平台名的目录直接删
-        if (/^(win32|win10|darwin|linux)-[a-z0-9]+$/i.test(e.name) && !plat.has(e.name.replace(/^win10-/, "win32-"))) {
-          const size = dirSize(p);
-          try {
-            fs.removeSync(p);
-            out.files += 1;
-            out.bytes += size;
-            continue;
-          } catch {
-            /* 删不掉就留着 */
-          }
-        }
-        if (/^(__tests__|tests?|fixtures?|docs?|examples?)$/i.test(e.name)) {
-          const size = dirSize(p);
-          try {
-            fs.removeSync(p);
-            out.files += 1;
-            out.bytes += size;
-            continue;
-          } catch {
-            /* 删不掉就留着 */
-          }
-        }
-        if (/^(prebuilds|bin|third_party)$/.test(e.name)) {
-          // 预编译产物：只保留本目标平台目录
-          for (const sub of (() => { try { return fs.readdirSync(p, { withFileTypes: true }); } catch { return []; } })()) {
-            if (!sub.isDirectory()) continue;
-            const looksPlatform = /^(win32|win10|darwin|linux)-/.test(sub.name);
-            if (looksPlatform && !plat.has(sub.name.replace(/^win10-/, "win32-"))) {
-              const sp = join(p, sub.name);
-              const size = dirSize(sp);
-              try {
-                fs.removeSync(sp);
-                out.files += 1;
-                out.bytes += size;
-              } catch {
-                /* 带走 */
-              }
-            }
-          }
-        }
-        walk(p);
-        continue;
-      }
-      if (/(\.pdb|\.map|\.d\.ts|\.d\.mts|\.d\.cts)$/i.test(e.name)) {
-        try {
-          const st = fs.statSync(p);
-          fs.removeSync(p);
-          out.files += 1;
-          out.bytes += st.size;
-        } catch {
-          /* 删不掉就留着 */
-        }
-      }
+      return [];
     }
   };
-  walk(modules);
+
+  /** 候选路径所属的包根（向上找 package.json；找不到就不做闸门）。 */
+  const packageRootOf = (p) => {
+    let dir = dirname(p);
+    while (dir.length > modules.length) {
+      try {
+        if (fs.pathExistsSync(join(dir, "package.json"))) return dir;
+      } catch {
+        return null;
+      }
+      dir = dirname(dir);
+    }
+    return null;
+  };
+
+  /** 同包保留文本的拼接（懒建 + 缓存）：闸门只在这里面找引用。 */
+  const blobOf = (root) => {
+    const cached = blobs.get(root);
+    if (cached !== undefined) return cached;
+    let text = "";
+    const collect = (dir) => {
+      for (const e of listDir(dir)) {
+        const p = join(dir, e.name);
+        if (e.isDirectory()) {
+          if (e.name === "node_modules") continue;
+          collect(p);
+          continue;
+        }
+        if (!TEXT_FILE.test(e.name)) continue;
+        try {
+          if (fs.statSync(p).size > 4 * 1024 * 1024) continue;
+          text += fs.readFileSync(p, "utf8");
+        } catch {
+          /* 读不到就不算引用 */
+        }
+      }
+    };
+    collect(root);
+    blobs.set(root, text);
+    return text;
+  };
+
+  /** 候选被同包代码/清单提到 ⇒ 必须保留。 */
+  const referenced = (p) => {
+    const base = p.split(/[\\/]/).pop();
+    if (typeof base !== "string" || base.length < 6) return false; // 太短的名字（index.js 类）噪音太大
+    const root = packageRootOf(p);
+    if (root === null) return false;
+    return blobOf(root).includes(base);
+  };
+
+  const dropFile = (p) => {
+    try {
+      const st = fs.statSync(p);
+      fs.removeSync(p);
+      out.files += 1;
+      out.bytes += st.size;
+    } catch {
+      /* 删不掉就留着 */
+    }
+  };
+
+  const dropTree = (p) => {
+    const size = dirSize(p);
+    try {
+      fs.removeSync(p);
+      out.files += 1;
+      out.bytes += size;
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const dropIfEmpty = (dir) => {
+    try {
+      if (fs.readdirSync(dir).length === 0) fs.rmdirSync(dir);
+    } catch {
+      /* 忽略 */
+    }
+  };
+
+  /**
+   * @param {string} dir 当前目录
+   * @param {boolean} junk 在“测试/文档/示例”目录内：所有文件都是候选（不止四类扩展名）
+   */
+  const walk = (dir, junk) => {
+    for (const e of listDir(dir)) {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) {
+        // 非本平台目录（win32-x64 / win10-arm64 / darwin-arm64 …）：带了平台名的目录直接删
+        if (!junk && PLATFORM_DIR.test(e.name) && !plat.has(normalizePlat(e.name))) {
+          if (dropTree(p)) continue;
+        }
+        if (!junk && PRECOMPILED_DIR.test(e.name)) {
+          // 预编译产物：只保留本目标平台目录
+          for (const sub of listDir(p)) {
+            if (sub.isDirectory() && PLATFORM_DIR.test(sub.name) && !plat.has(normalizePlat(sub.name))) {
+              dropTree(join(p, sub.name));
+            }
+          }
+          walk(p, junk);
+          continue;
+        }
+        if (junk || JUNK_DIR.test(e.name)) {
+          walk(p, true);
+          dropIfEmpty(p);
+          continue;
+        }
+        walk(p, junk);
+        continue;
+      }
+      const debug = DEBUG_FILE.test(e.name);
+      const doc = DOC_FILE.test(e.name);
+      if (!(junk || debug || doc)) continue;
+      // 闸门只盖“真内容”（文档、目录里的其它文件）：调试/类型/映射那三类没有运行期入口。
+      if ((junk || doc) && !debug && referenced(p)) {
+        out.keptReferenced += 1;
+        continue;
+      }
+      dropFile(p);
+    }
+  };
+  walk(modules, false);
   return out;
 }
 
