@@ -51,7 +51,10 @@
           "route": "/default.html"
         },
         "cardForm": "flush",
-        "titlebar": "solid"
+        "titlebar": "solid",
+        "face": {
+          "image": "assets/cover.png"
+        }
       }
     ],
     "settings": {

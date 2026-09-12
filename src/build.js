@@ -92,14 +92,6 @@ const iconSrc = join(ROOT, "src", "assets", "icon.png");
 if (!fs.pathExistsSync(iconSrc))
   throw new Error("App 图标缺失（src/assets/icon.png）：manifest.icon 指向 assets/icon.png，需真实可解码图片");
 fs.copySync(iconSrc, join(DIST_DIR, "assets", "icon.png"));
-// 卡片封面（可选）：src/assets/cover.png 存在就随包分发（她 2026-09-12 放的 2.5MB 图）。
-// 注意：v2 manifest 没有 cover 字段，未知键会让整个 App 被拒（APPS.md 卡片字段清单里没有它），
-// 所以封面只能靠文件约定/宿主挂钩；这一步至少保证文件真的进包（之前 pack 只拷了 icon.png）。
-const coverSrc = join(ROOT, "src", "assets", "cover.png");
-if (fs.pathExistsSync(coverSrc)) {
-  fs.copySync(coverSrc, join(DIST_DIR, "assets", "cover.png"));
-  console.log("assets/cover.png -> dist/（卡片封面，可选）");
-}
 console.log("manifest.json + skills/ + assets/icon.png -> dist/（App v2 安装目录形态）");
 
 // App ui/ 静态树（cards contributes 的 route 指向 ui 内相对文件；缺失 = 卡片 404 + manifest
