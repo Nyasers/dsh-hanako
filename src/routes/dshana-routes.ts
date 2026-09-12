@@ -111,8 +111,12 @@ export function defaultDshanaRouteDeps(ctx) {
       /* 忽略 */
     }
   };
-  // 设置面用 App 自己的私有数据目录（ctx.config.dataDir，宿主提供）
-  const dataDir = ctx && ctx.config && typeof ctx.config.dataDir === "string" ? ctx.config.dataDir : "";
+  // 设置面用 App 自己的私有数据目录。宿主契约（@hana/app-sdk HanaPluginContextV2）：
+  // dataDir 在 ctx **顶层**（ctx.dataDir，与 apply 期 index.js、lib/data-source 的
+  // createDataSourceStore 同一来源）；ctx.config 是设置读写面（get/getAll/set…），其上没有
+  // dataDir。真机曾按 ctx.config.dataDir 取 → 恒为空串 → POST /dshana/settings 必 500
+  // （读路径只静默降级，所以先前没暴露）。
+  const dataDir = ctx && typeof ctx.dataDir === "string" ? ctx.dataDir : "";
   // 默认模型不经我们存储：经中继打 DSH 自己的 settings 服务（与 session/cancel 同一条通道）。
   const appFetch = ctx && ctx.network && typeof ctx.network.fetch === "function" ? ctx.network.fetch : null;
   return {
@@ -152,7 +156,7 @@ export function defaultDshanaRouteDeps(ctx) {
       return writeDefaultModel(appFetch, patch);
     },
     writeSettings: async (patch, expectedRevision) => {
-      if (!dataDir) throw new Error("ctx.config.dataDir 不可用，无法写应用设置");
+      if (!dataDir) throw new Error("ctx.dataDir 不可用（宿主未提供 App 数据目录），无法写应用设置");
       const store = dataSources(ctx);
       const cur = await store.read();
       if (typeof expectedRevision === "number" && expectedRevision !== cur.revision) {
