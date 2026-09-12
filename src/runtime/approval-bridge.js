@@ -31,7 +31,10 @@
 import { readTaskMap, addApproval, settleApproval, isValidSessionId } from "../lib/task-map.js";
 import { approvalOutcomeOf, runWatchReconcile } from "../lib/watch-sse.js";
 
-export const DEFAULT_APPROVAL_TIMEOUT_MS = 30000; // 宿主 approval 自动拒绝兜底（manifest approvalTimeoutSec 默认 30s）
+// 审批超时：**30s 是我们自己的策略，不是宿主默认**。APPS.md（0.951.4，后台任务与审批节）明写
+// `requestApproval({…, timeoutMs})` 的 `timeoutMs: 0` 禁用超时，**默认也是 0**；父任务结束会拒绝剩余
+// 审批；**同一审批的竞争应答只有一次结算**（所以本 App 的去重是友好报错，不是正确性保障）。
+export const DEFAULT_APPROVAL_TIMEOUT_MS = 30000; // 显式下传的 App 侧策略（manifest approvalTimeoutSec 默认 30s）
 export const TOOL_ARGS_PREVIEW_MAX = 4000; // args 预览上限（审批决策证据，防超大载荷）
 const CACHE_SESSION_CAP = 32; // tool-call 缓存会话数上限（有界，防无界内存增长）
 const CACHE_CALL_CAP = 64; // 每会话 callId 上限
