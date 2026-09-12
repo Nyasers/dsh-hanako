@@ -1,0 +1,155 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Nyasers
+//
+// tests/provider-adapter.test.mjs — provider adapter（buildHanaAdapter）stream() 接线单测。
+//
+// 为什么要有这一层：adapter 的方法只在 DSH 运行期被调用，先前单测只覆盖 lib/* 纯函数，
+// 于是"在 adapter 里引用了不存在的 ctx"这类错，构建与单测都看不见，真机第一次推理才炸
+// （2026-09-12 两次同型故障）。这里用假 LlmAdapter/LlmError + 假 hana client + 真 Response
+// 走完整条路径：身份判定（App / taskId）、NDJSON → DSH 块、非 2xx 报错、空消息报错。
+import { test, beforeEach, afterEach } from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { buildHanaAdapter } from "../src-cordis/plugins/provider/index.js";
+
+const SID = "session-11111111-2222-3333-4444-555555555555";
+const ENV_KEY = "DSHANA_HOME";
+const MODELS = [{ provider: "hana", id: "m1", name: "m1" }];
+
+class FakeLlmError extends Error {
+  constructor(message, code, opts) {
+    super(message);
+    this.name = "LlmError";
+    this.code = code;
+    if (opts && opts.requestId) this.requestId = opts.requestId;
+  }
+}
+class FakeLlmAdapter {}
+
+let dir;
+let savedEnv;
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), "dshana-adapter-"));
+  savedEnv = process.env[ENV_KEY];
+  process.env[ENV_KEY] = dir;
+});
+afterEach(() => {
+  if (savedEnv === undefined) delete process.env[ENV_KEY];
+  else process.env[ENV_KEY] = savedEnv;
+  try { rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
+});
+
+function seedTaskMap(taskId) {
+  const d = join(dir, "dshana", "taskmaps");
+  mkdirSync(d, { recursive: true });
+  const body = { taskId, dshSessionId: SID, action: "create", rpcId: "r_1" };
+  writeFileSync(join(d, SID + ".json"), JSON.stringify(body), "utf8");
+}
+
+function ndjsonResponse(events) {
+  const text = events.map((e) => JSON.stringify(e)).join("\n") + "\n";
+  return new Response(text, { status: 200, headers: { "content-type": "application/x-ndjson" } });
+}
+
+function makeHana(events) {
+  const seen = [];
+  return {
+    seen,
+    models: {
+      list: async () => ({ models: MODELS }),
+      stream: async (request) => {
+        seen.push(request);
+        return ndjsonResponse(events);
+      },
+      cancel: async () => { /* 无操作 */ },
+    },
+  };
+}
+
+function makeAdapter(hana, log) {
+  return buildHanaAdapter(FakeLlmAdapter, FakeLlmError, { models: MODELS, hana, log });
+}
+
+async function collect(adapter, options) {
+  const out = [];
+  for await (const chunk of adapter.stream(options)) out.push(chunk);
+  return out;
+}
+
+const userMessages = [{ role: "user", content: [{ type: "text", text: "你好" }] }];
+const okEvents = [
+  { type: "start", requestId: "r1" },
+  { type: "text-delta", requestId: "r1", delta: "你好" },
+  {
+    type: "done",
+    requestId: "r1",
+    stopReason: "stop",
+    assistant: { role: "assistant", content: [{ type: "text", text: "你好", textSignature: "sig-1" }] },
+  },
+];
+
+test("App 身份（无任务映射）：两个身份参数都不传，且日志说明原因", async () => {
+  const hana = makeHana(okEvents);
+  const lines = [];
+  const adapter = makeAdapter(hana, (m) => lines.push(m));
+  const out = await collect(adapter, { provider: "hana", model: "m1", sessionId: SID, messages: userMessages });
+
+  const req = hana.seen[0];
+  assert.equal(req.taskId, undefined);
+  assert.equal(req.callToken, undefined);
+  assert.equal("scope" in req, false);
+  assert.equal(typeof req.requestId, "string");
+  assert.equal(req.requestId.length > 0, true);
+  assert.equal(lines.length, 1);
+  assert.match(lines[0], /无任务映射/);
+  assert.equal(out.length > 0, true);
+  assert.match(JSON.stringify(out), /你好/);
+});
+
+test("委派身份（有任务映射）：带 taskId、不带 callToken、不写身份日志", async () => {
+  seedTaskMap("task-1");
+  const hana = makeHana(okEvents);
+  const lines = [];
+  const adapter = makeAdapter(hana, (m) => lines.push(m));
+  await collect(adapter, { provider: "hana", model: "m1", sessionId: SID, messages: userMessages });
+
+  assert.equal(hana.seen[0].taskId, "task-1");
+  assert.equal(hana.seen[0].callToken, undefined);
+  assert.equal("scope" in hana.seen[0], false);
+  assert.deepEqual(lines, []);
+});
+
+test("HTTP 非 2xx：以 MODEL_HTTP_ERROR 上抛（带状态与响应体）", async () => {
+  const hana = {
+    seen: [],
+    models: {
+      list: async () => ({ models: MODELS }),
+      stream: async () => new Response('{"error":"forbidden"}', { status: 403 }),
+      cancel: async () => { /* 无操作 */ },
+    },
+  };
+  const adapter = makeAdapter(hana, () => {});
+  await assert.rejects(
+    () => collect(adapter, { provider: "hana", model: "m1", sessionId: SID, messages: userMessages }),
+    (e) => e instanceof FakeLlmError && e.code === "MODEL_HTTP_ERROR" && /HTTP 403/.test(e.message),
+  );
+});
+
+test("空消息：EMPTY_MESSAGES，且不发起模型请求", async () => {
+  const hana = makeHana(okEvents);
+  const adapter = makeAdapter(hana, () => {});
+  await assert.rejects(
+    () => collect(adapter, { provider: "hana", model: "m1", sessionId: SID, messages: [] }),
+    (e) => e.code === "EMPTY_MESSAGES",
+  );
+  assert.equal(hana.seen.length, 0);
+});
+
+test("log 缺失也不崩（deps.log 缺省为空函数）", async () => {
+  const hana = makeHana(okEvents);
+  const adapter = makeAdapter(hana, undefined);
+  const out = await collect(adapter, { provider: "hana", model: "m1", sessionId: SID, messages: userMessages });
+  assert.equal(out.length > 0, true);
+});

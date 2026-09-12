@@ -69,11 +69,11 @@ function dataDirOf() {
 // 独立会话（无任务映射 = DSH Web UI 自建）按 App 身份推理：每会话只提示一次——
 // 日志要能回答"这次请求为什么没有 task 绑定"，这是诊断信息而非错误。
 const APP_IDENTITY_LOGGED = new Set();
-function noteAppIdentity(ctx, sessionId) {
+function noteAppIdentity(logLine, sessionId) {
   const key = String(sessionId || "?");
   if (APP_IDENTITY_LOGGED.has(key) || APP_IDENTITY_LOGGED.size >= 64) return;
   APP_IDENTITY_LOGGED.add(key);
-  log(ctx, "会话 " + key + " 无任务映射 → 按 App 身份推理（DSH Web UI 独立会话，不传 callToken/taskId）");
+  logLine("会话 " + key + " 无任务映射 → 按 App 身份推理（DSH Web UI 独立会话，不传 callToken/taskId）");
 }
 
 function log(ctx, msg) {
@@ -195,8 +195,10 @@ async function prepareImages(store, messages, signal) {
  * @param {Function} LlmError LlmError（dsh-llm）
  * @param {object} deps { models: 目录投影数组, hana: AppRuntimeClient, getImages: () => store|null }
  */
-function buildHanaAdapter(LlmAdapter, LlmError, deps) {
+export function buildHanaAdapter(LlmAdapter, LlmError, deps) {
   const models = Array.isArray(deps.models) ? deps.models : [];
+  // adapter 方法在插件作用域之外（apply 的 ctx 在这里不可见），日志只能走 deps 注入。
+  const logLine = typeof deps.log === "function" ? deps.log : () => {};
   const adapter = new (class HanaAdapter extends LlmAdapter {
     providerInfo(provider) {
       return { id: provider, name: provider };
@@ -227,7 +229,7 @@ function buildHanaAdapter(LlmAdapter, LlmError, deps) {
       // 没有（DSH Web UI 自建会话，或委派任务已终结后用户继续在 Web UI 里跑）→ 两者都不传。
       // 失效/归属不正确的 taskId 由宿主报错并原样上抛——不做"删掉身份参数重试"的兜底（指南 §5）。
       const { identity, source } = resolveModelIdentity(dataDir, sessionId);
-      if (source === "app") noteAppIdentity(ctx, sessionId);
+      if (source === "app") noteAppIdentity(logLine, sessionId);
       const requestId = randomUUID();
       const ac = new AbortController();
       const onAbort = () => {
@@ -400,6 +402,7 @@ export async function apply(ctx, config) {
       models,
       hana,
       getImages: () => attachmentStore,
+      log: (msg) => log(ctx, msg),
     });
     // 5. 注册（空 routes 不注册——llm 注册表要求非空；目录空已在上方 return）。
     // 宿主目录是启动快照：受管进程存活期不变化（改宿主模型配置需 runtime 重启生效——
