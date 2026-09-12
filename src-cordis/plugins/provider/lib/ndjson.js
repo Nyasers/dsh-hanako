@@ -5,7 +5,7 @@
 //
 // hana.models.stream 的响应是 NDJSON（application/x-ndjson，每行一个 JSON 事件；详见
 // SDK models.d.ts 与迁移指南 §8）。一个网络 chunk 可能包含多行或半行，解析必须保留
-// 跨 chunk 的半行余量（指南 §8 readNdjson 同款）。本模块导出：
+// 跨 chunk 的半行余量。本模块导出：
 //   createNdjsonLineReader()  —— 行级 async iterable（喂 byte/text chunk）
 //   parseNdjsonEvent(line)    —— 单行 JSON.parse（容错抛错带行号上下文）
 //   splitLines 助手          —— 同步文本切行（纯函数，单测覆盖半行余量逻辑）

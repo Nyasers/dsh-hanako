@@ -3,7 +3,7 @@
 //
 // src/lib/rpc-envelope.js — DSH /api 网关 Unary RPC 信封构造/解析（纯函数，App v2 步骤 3）
 //
-// v2 指令通道（迁移指南 §13 步骤 3 + 决策 A，见 DESIGN「步骤 3 架构决策」）：
+// v2 指令通道：
 // App 主进程 → 受管 runtime 内 DSH web 服务的指令 = loopback HTTP Unary RPC，
 // **信封/翻译器协议复用 v1 已验证格式**（v1 lib/protocol.js callUnary/callUnaryBus 的
 // HTTP 兑底路径 + 总线翻译器自环同款，见 src-cordis/plugins/bus/index.js）：

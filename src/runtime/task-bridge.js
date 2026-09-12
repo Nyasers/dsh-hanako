@@ -14,7 +14,7 @@
 // 终态判定语义与 v1 run.js consume 对齐（api-session/status false / session/event
 // turn/end + reason.kind=error；api-session/error 记 pendingFailure 不即终态）——但注意
 // v2 同会话已由 App 侧串行化（一个会话同时只跑一个任务，见 lib/session-serialize.js），
-// 事件按 sessionId 路由到唯一当前任务，无跨任务串扰（决策 D）。
+// 事件按 sessionId 路由到唯一当前任务，无跨任务串扰。
 //
 // 步骤 4a 扩展（取消链，指南 §9 / 决策 E）：
 //   · 取消确认 = DSH 真中止后：App 侧 cancel/执行超时先在映射写 cancel 标记（先于

@@ -3,7 +3,7 @@
 //
 // src/lib/cancel-chain.js — dshana_session cancel / 执行超时取消编排（App 主进程侧，步骤 4a）
 //
-// 职责（迁移指南 §9 取消链 4 步在 v2 的落点，决策 E 见 DESIGN「步骤 4a 架构决策」）：
+// 职责：
 //   ① 触发：dshana_session(action=cancel)（本模块 cancelDshTask）或执行超时看门狗
 //      （session-run 定时器，同一函数）；
 //   ② DSH 侧中止：经 loopback HTTP RPC session/cancel（DSH 中止 agent 回合 → provider

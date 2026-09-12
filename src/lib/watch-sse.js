@@ -3,11 +3,11 @@
 //
 // src/lib/watch-sse.js — Hana tasks/approval watch SSE 消费（App v2 步骤 4a，迁移指南 §9）
 //
-// 背景与分侧（决策 F，见 DESIGN「步骤 4a 架构决策」）：watch(taskId/approvalId) 返回 SSE，
+// 背景与分侧：watch(taskId/approvalId) 返回 SSE，
 // 首条 snapshot（完整当前记录），后续 app-task（增量/终态记录）；缓冲溢出由服务端发 reset
 // 事件（应重读快照对账）；断线重连应先 get() 对账再续 watch。**SSE 与 NDJSON 不是同一种
 // 编码**：NDJSON（models.stream）是每行一个 JSON 对象；SSE 是 `event:/data:` 多行事件块，
-// 不能复用 readNdjsonEvents（指南 §9 明示分开解析）。
+// 不能复用 readNdjsonEvents。
 //
 // 消费侧判断（本刀结论 = 受管 runtime 子进程侧消费）：
 //   · 需要「宿主审批 outcome → DSH approval/request 等待者」投递的，是受管 runtime 内的

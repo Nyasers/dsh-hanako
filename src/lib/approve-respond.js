@@ -3,7 +3,7 @@
 //
 // src/lib/approve-respond.js — dshana_session approve 应答编排（App 主进程侧，步骤 4a）
 //
-// 职责（迁移指南 §9 审批链在 App 侧的半边，决策 G 见 DESIGN「步骤 4a 架构决策」）：
+// 职责：
 //   用户/Agent 经 dshana_session(action=approve, sessionId, approvalId, outcome) 应答 →
 //   本模块校验审批归属（task-map approvals 表：approvalId 属于该会话且仍 pending——
 //   防串会话/重复应答）→ ctx.tasks.respondApproval({ approvalId, outcome }) 结算宿主
@@ -13,7 +13,7 @@
 //
 //   超时/父任务结束/撤销：宿主侧把审批结算成 rejected（timeoutMs 自动拒绝 / 父任务终态
 //   拒绝剩余审批），approval-bridge watch 同样把 rejected 投给 DSH 等待者——DSH 得到
-//   确定终态，绝不隐式放行（指南 §9）。本模块不设本地定时器（不重复宿主语义）。
+//   确定终态，绝不隐式放行。本模块不设本地定时器（不重复宿主语义）。
 import { appCtx, appDataDir } from "./app-runtime.js";
 import { readTaskMap, findPendingApproval, settleApproval } from "./task-map.js";
 

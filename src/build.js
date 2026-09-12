@@ -95,7 +95,7 @@ fs.copySync(iconSrc, join(DIST_DIR, "assets", "icon.png"));
 console.log("manifest.json + skills/ + assets/icon.png -> dist/（App v2 安装目录形态）");
 
 // App ui/ 静态树（cards contributes 的 route 指向 ui 内相对文件；缺失 = 卡片 404 + manifest
-// 校验失败——fail-fast）。相对资源纪律（迁移指南 §10）：壳页内资源一律相对路径，无根绝对 URL。
+// 校验失败——fail-fast）。相对资源纪律：壳页内资源一律相对路径，无根绝对 URL。
 const uiSrc = join(ROOT, "src", "ui");
 if (!fs.pathExistsSync(uiSrc)) {
   throw new Error("App ui/ 静态树缺失（src/ui）：contributes.cards 的 route 指向 ui 内页面（见 manifest.json）");

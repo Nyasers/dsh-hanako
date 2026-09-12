@@ -7,11 +7,11 @@
 // 的排队到当前 turn 之后；但任务回投/终态判定按「每 send = 一个新 Hana task」工作单元
 // 推进，两个同时运行的同一 session 提交会互相消费对方的事件与终态。因此对同一 DSH
 // session 的 create/send 做 App 进程内串行化：后到任务等前一个任务提交链路完全退出后
-// 再执行，保留「同一会话顺序续跑」语义（迁移指南 §5：同一 session 的并发 send 必须串行）。
+// 再执行，保留「同一会话顺序续跑」语义。
 //
 // 语义与 v1 withSessionTurn/enterSessionTurn 等价；模块级 Map 键 = dshSessionId
 // （create 在 session.create 返回前按新 sessionId 同步占位，防 create 返回后立即 send
-// 重叠）。不同 session 互不共享队列（决策 D：不共享「当前任务」）。
+// 重叠）。不同 session 互不共享队列。
 const sessionTurnQueues = new Map();
 
 export async function withSessionTurn(sessionKey, run) {

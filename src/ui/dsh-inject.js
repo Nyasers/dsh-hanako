@@ -62,7 +62,7 @@ export function loadRuntimeBundle(privateBase, pageOrigin = window.location.orig
   });
 }
 
-// ---- 请求接管（2026-09-12）----
+// ---- 请求接管----
 //
 // 为什么需要它：`__DSH_TRANSPORT__` 是**内核 connection 客户端**的 opt-in 钩子，只兜住内核
 // 自己的请求。DSH 侧其它代码（新插件、新调用点、非 fetch 载体）照旧打原生接口，而带前导斜杠

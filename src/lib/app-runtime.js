@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/lib/app-runtime.js — dshana App v2 运行包持有者（迁移指南 §13 步骤 1）
+// src/lib/app-runtime.js — dshana App v2 运行包持有者
 //
 // 为什么存在（替代 v1 的 globalThis.__dshHanako 宿主单例）：
 // v1 时代工具代码通过 globalThis.__dshHanako 存取「宿主进程内」共享状态（dataDir、
@@ -37,7 +37,7 @@ export function getAppRuntime() {
  *  ① App v2：ctx.dataDir（权威，宿主 app-data/<id>/）；
  *  ② 兜底（无宿主 apply 的离线/dev 场景，如单测或直接跑 dist 代码）：调用方
  *     再回落 PLUGIN_ROOT/data（v1 布局，与 state.js 语义一致）。
- * 旧插件数据迁移接缝（步骤 1 只留口不实现）：未来迁移脚本/只读兜底可在 ① 缺失
+ * 旧插件数据迁移接缝：未来迁移脚本/只读兜底可在 ① 缺失
  * 所需 DSH_HOME 且 legacy 数据存在时，经此处返回 legacy dataDir 或做导入，勿在各
  * 调用点重复拼路径。
  */

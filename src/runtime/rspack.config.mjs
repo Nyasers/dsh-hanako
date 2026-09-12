@@ -5,7 +5,7 @@
 // 产物：dist/runtime/dsh-host.mjs（ESM，宿主 ctx.runtime.start({ runtime:"node", entry:
 // "runtime/dsh-host.mjs" }) 直接以 node 执行；entry 相对 App 安装根）。
 //
-// 打包纪律（迁移指南 §7 + 交付物 4）：
+// 打包纪律：
 //   - @deepseek-ai/*（dsh/cordis/dsh-* 官方插件树）**不静态打进**：它们随包物化在安装目录
 //     node_modules（自包含打包，见 scripts/pack.mjs），运行时直接解析，不再安装、不额外下载，
 //     但仍不能静态打进本 bundle——dsh 定位/动态 import 一律 /* webpackIgnore: true */ 保留原生
