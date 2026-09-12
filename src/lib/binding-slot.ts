@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/lib/binding-slot.js — 会话↔任务绑定的运行期侧（控制面写入 + 终态收尾）
+// src/lib/binding-slot.ts — 会话↔任务绑定的运行期侧（控制面写入 + 终态收尾）
 //
 // 绑定的唯一落点是**会话自己的事件日志**：`dshana/task-binding` 认领、
 // `dshana/task-binding-ended` 收尾，由受管 runtime 内 @dshana/provider 注册的会话投影单元
@@ -14,7 +14,7 @@
 //
 // 邮箱是**传递点**，不是第二份事实源：值与最终事件同源，落地后即清；跨 bundle 经 globalThis
 // 共享（与 __dshanaHana、活动模型注册表同款约定）。事件名与 key 必须与
-// src-cordis/plugins/provider/lib/binding.js 逐字一致（两套构建树不能互相 import）。
+// src-cordis/plugins/provider/lib/binding.ts 逐字一致（两套构建树不能互相 import）。
 
 /** 投影 key（与 provider 侧同字）。 */
 export const BINDING_KEY = "dshanaTaskBinding";

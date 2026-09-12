@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/lib/task-map.js — Hana taskId ↔ DSH session 运行映射
+// src/lib/task-map.ts — Hana taskId ↔ DSH session 运行映射
 //
 // 映射必须落在「App 主进程与受管 runtime 子进程都能读」的位置：子进程（task-bridge、
 // approval-bridge、provider）只经 connectAppRuntime 拿到 tasks/models/network.fetch，

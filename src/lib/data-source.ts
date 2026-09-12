@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/lib/data-source.js — DSH 数据来源（private / shared）解析与自持设置存储
+// src/lib/data-source.ts — DSH 数据来源（private / shared）解析与自持设置存储
 //
 // 为什么自持一份设置文件而不是用宿主 contributes.settings / ctx.storage：
 //   · 切换数据源是**生命周期动作**（要停旧 runtime、起新 runtime），不是"一组值"；

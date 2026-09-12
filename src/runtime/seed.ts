@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/runtime/seed.js — dshana profile 种子化（受管 runtime 子进程侧）
+// src/runtime/seed.ts — dshana profile 种子化（受管 runtime 子进程侧）
 //
-// 复用 v1 lib/profile-seed.js（纯路径逻辑零宿主依赖）在子进程内完成：
+// 复用 src/lib/profile-seed.ts（纯路径逻辑零宿主依赖）在子进程内完成：
 //   profiles/<name> 由官方 initProfile 初始化（manifest/cordis.patch.yml 用户层/
 //   pnpm-workspace.yaml，幂等只补缺失）；
 //   node_modules/@dshana scope 链接 → cordisSrc（默认 <installDir>/cordis，@dshana
 //   产物 10 包平铺 scope 根），junction/symlink 失败回退整体拷贝。
 // 链接源在 installDir（只读）：junction 指向只读目录可正常读取；App 升级换目录后链接
 // 漂移由 ensureProfileSeeded 自愈重建（指向新 installDir），重建失败回退拷贝保证可用。
-// initProfile（dsh-app-boot）由调用方（main.js 经 locateDsh 取 appBoot.initProfile）注入，
-// 与 v1 lifecycle.js ensureDshanaProfile 同构——profile 名门控（dshana）在调用方完成。
+// initProfile（dsh-app-boot）由调用方（main.ts 经 locateDsh 取 appBoot.initProfile）注入；
+// profile 名门控（dshana）在调用方完成。
 import { join } from "node:path";
 import { ensureProfileSeeded, PROFILE_BUNDLES, PROFILE_PATCH_RELOAD } from "../lib/profile-seed.ts";
 

@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/lib/rpc-envelope.js — DSH /api 网关 Unary RPC 信封构造/解析（纯函数）
+// src/lib/rpc-envelope.ts — DSH /api 网关 Unary RPC 信封构造/解析（纯函数）
 //
 // 指令通道：
 // App 主进程 → 受管 runtime 内 DSH web 服务的指令 = loopback HTTP Unary RPC，
-// **信封格式**（与总线的 HTTP 兑底路径、翻译器自环同款，见 src-cordis/plugins/bus/index.js）：
+// **信封格式**：
 //   POST http://127.0.0.1:<中继端口>/api/<method 点号→斜杠> ，
 //   body = { type:"client-request", rpcId, method, payload:{ args: <inner> } }
 //   · session.* 方法 payload 须包成 gateway 信封（request/_request + 注入 requestId，

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/lib/session-run.js — dshana_session create/send 提交链
+// src/lib/session-run.ts — dshana_session create/send 提交链
 //
 // 职责：execute（工具执行，App 主进程）内完成：
 //   ① ctx.tasks.create({ callToken, label, metadata }) —— callToken 只在这里消费，
@@ -10,7 +10,7 @@
 //   ③ 经 loopback HTTP Unary RPC（同一信封协议，见 lib/rpc-envelope.js）把
 //      session.create / selectModel / prompt 提交给受管 runtime 内的 DSH web 服务；
 //   ④ 写 <dataDir>/dshana/taskmaps/<sessionId>.json 映射（见 lib/task-map.js）——受管
-//      runtime 的 task-bridge（src/runtime/task-bridge.js）凭它把 DSH 事件回投
+//      runtime 的 task-bridge（src/runtime/task-bridge.ts）凭它把 DSH 事件回投
 //      ctx.tasks.update/complete/fail；
 //   ⑤ 同 DSH session 串行化（lib/session-serialize.js）：锁持有到任务终态，不同 session
 //      互不干扰——否则同一 session 的两个任务会互相消费对方的终态事件。

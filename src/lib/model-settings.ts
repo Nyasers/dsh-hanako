@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/lib/model-settings.js — 默认模型：经 DSH 自己的 settings 服务读写（App 侧薄封装）
+// src/lib/model-settings.ts — 默认模型：经 DSH 自己的 settings 服务读写（App 侧薄封装）
 //
 // 这份值的正主是 DSH：settings 段 `agent-default-model`（持有者 @deepseek-ai/dsh-agent-default-model）。
 // 我们只过手——**不在 config.json 存副本**，也**不碰 DSH_HOME/settings.yaml**（两个写者会互打）；

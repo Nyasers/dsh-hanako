@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src-cordis/plugins/provider/lib/stream.js — hana NDJSON 终态事件 → DSH llm StreamChunk
+// src-cordis/plugins/provider/lib/stream.ts — hana NDJSON 终态事件 → DSH llm StreamChunk
 // （纯函数/状态机）
 //
 // DSH LlmAdapter.stream 契约（@deepseek-ai/dsh-llm types）：产出 StreamChunk 序列

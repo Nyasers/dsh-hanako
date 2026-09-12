@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// tools/subtool/query.js — dshana_session 的 query 操作（list/get 只读会话查询）
+// src/tools/subtool/query.ts — dshana_session 的 query 操作（list/get 只读会话查询）
 //
 // 取数走官方查询面：不读 <DSH_HOME>/storages/session_projcache.json，也不解
 // <DSH_HOME>/sessions/**/session.jsonl.zstd（日志已到 V3，projcache 行结构与 zstd 多帧容器

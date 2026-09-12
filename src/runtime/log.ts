@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/runtime/log.js — 受管 runtime 子进程行式日志（dsh-host 专用）
+// src/runtime/log.ts — 受管 runtime 子进程行式日志（dsh-host 专用）
 //
 // 宿主受管 runtime 捕获 stdout/stderr 作为有界运行日志（runtime.logBytes/logTruncated，
 // 运行期只保留最近 64 条终态记录，watch() 可取实时行）。本模块统一行式输出：

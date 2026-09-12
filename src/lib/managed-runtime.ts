@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/lib/managed-runtime.js — dshana 受管 DSH runtime 启动封装
+// src/lib/managed-runtime.ts — dshana 受管 DSH runtime 启动封装
 //
 // 职责：
 //   managedStart/ensureManagedRuntime：父进程随机选取「中继端口（注册给宿主的 service.port）
@@ -20,7 +20,7 @@
 //     stdout/stderr 归宿主 runtime 日志（有界，可经 ctx.runtime.watch/info 取），不由
 //     App 自己落盘。
 //
-// 参数契约（与 src/runtime/options.js 对偶；增删需两处同步 + tests/）：
+// 参数契约（与 src/runtime/options.ts 对偶；增删需两处同步 + tests/）：
 //   唯一的子进程入参是私有运行时配置文件路径（argv[1]），由 writeRuntimeConfigFile 落盘、
 //   buildRuntimeConfig 生产 schema；不再有命令行明文参数（凭据/端口不进 argv）。
 import { join } from "node:path";
@@ -159,7 +159,7 @@ export function classifyRuntimeFailure(info) {
   if (!info || typeof info !== "object") return { kind: "unknown", userText: START_ERROR_HINTS.unknown };
   const code = typeof info.exitCode === "number" ? info.exitCode : null;
   const state = info.state || "";
-  // 子进程退出码由 src/runtime/main.js EXIT 约定：7=port/boot/ready 失败、4=deps、5=seed…
+  // 子进程退出码由 src/runtime/main.ts EXIT 约定：7=port/boot/ready 失败、4=deps、5=seed…
   if (code === 7 || /port/i.test(String(info.signal || ""))) {
     return { kind: "port-busy", userText: START_ERROR_HINTS["port-busy"] };
   }

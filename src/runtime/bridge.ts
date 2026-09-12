@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/runtime/bridge.js — DSH 访问中继（受管 runtime 子进程内）
+// src/runtime/bridge.ts — DSH 访问中继（受管 runtime 子进程内）
 //
 // 为什么存在：向官方样例 hana-dsh 看齐后，DSH 的鉴权面交回官方 @deepseek-ai/dsh-client-connection
 // （BrowserAuth：进程 token → 303 Set-Cookie → authority 绑定签名 cookie）。宿主 runtime 代理

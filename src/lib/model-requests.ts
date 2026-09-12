@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/lib/model-requests.js — 受管 runtime 内活动模型 requestId 注册表
+// src/lib/model-requests.ts — 受管 runtime 内活动模型 requestId 注册表
 //
 // 角色：DSH session.cancel 中止回合时，provider adapter 已随流 signal abort 调
 // hana.models.cancel(requestId)；但取消链要求显式
@@ -13,7 +13,7 @@
 //
 //   globalThis.__dshanaActiveModelRequests = Map<dshSessionId, Set<requestId>>
 //
-// provider（src-cordis/plugins/provider/index.js）流开始 add、流收尾 delete；本模块是
+// provider（src-cordis/plugins/provider/index.ts）流开始 add、流收尾 delete；本模块是
 // 消费侧读取/定向取消助手（task-bridge 用）。键名在两侧字面一致（见 provider 注释；
 // 若未来双 bundle 共用源码再抽共享模块）。
 export const MODEL_REQUEST_GLOBAL_KEY = "__dshanaActiveModelRequests";

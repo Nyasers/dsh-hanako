@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/lib/legacy-migrate.js — dsh-hanako 旧插件（v1）数据迁移逻辑（纯 node 内置依赖）
+// src/lib/legacy-migrate.ts — dsh-hanako 旧插件（v1）数据迁移逻辑（纯 node 内置依赖）
 //
 // 目标：旧插件数据布局
 //   <hanakoHome>/plugin-data/dsh-hanako/{dsh-home, logs, config.json, node_modules, pnpm-dist}
 // 迁入 App v2 数据区 ctx.dataDir = <hanakoHome>/app-data/dshana/，使：
 //   · dsh-home/{sessions, storages, settings.yaml, .anonymous-user-id} → <私有源目录>/…
-//     （DSH_HOME 指向当前数据源的 home，见 src/runtime/main.js env 设置）
+//     （DSH_HOME 指向当前数据源的 home，见 src/runtime/main.ts env 设置）
 //     ⚠ 源目录名 dsh-home 是 v1 的历史布局（不可改）；目标用 PRIVATE_HOME_NAME（.dsh）
 //   · logs/* **不迁移**：App 侧日志走宿主 ctx.logger，旧日志无落点
 //   · config.json（v1 全局设置）→ 参考拷贝 dataDir/legacy-config.json + 映射建议输出

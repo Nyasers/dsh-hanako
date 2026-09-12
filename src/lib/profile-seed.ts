@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// lib/profile-seed.js — dshana profile 运行时种子化/迁移/scope 链接（lib 提取）
-// 从 src/lifecycle.js ensureDshanaProfile 剥离的纯路径逻辑（设计 specs/current/
-// dshana-profile-bundle/spec.md D1/D2/D4/D5）：profile 目录（$DSH_HOME/profiles/dshana）
+// src/lib/profile-seed.ts — dshana profile 运行时种子化/迁移/scope 链接（纯路径逻辑，零宿主状态）
+// 设计依据 specs/current/dshana-profile-bundle/spec.md 的 D1/D2/D4/D5：profile 目录（$DSH_HOME/profiles/dshana）
 // 由插件运行时初始化为用户自有真实目录（不再整树 junction 挂插件产物），9 个
 // @dshana/* 子插件 + bundle @dshana/dshana 经单条 scope 目录链接暴露（scopeSrc =
 // PLUGIN_ROOT/cordis——10 包平铺于 cordis 资产根，链接名 @dshana 供 cordis 解析）。
@@ -11,7 +10,7 @@
 // 官方生成工具：profile 文件（manifest package.json / 用户层
 // cordis.patch.yml / pnpm-workspace.yaml）由 @deepseek-ai/dsh-app-boot 的 initProfile
 // 生成（官方库函数，幂等只补缺失；CLI `dsh plugin --profile` 同源）——本模块不维护
-// 任何种子模板，opts.initProfile 由消费方（lifecycle.js 经
+// 任何种子模板，opts.initProfile 由调用方（src/runtime/seed.ts 经
 // loadInprocDsh 拿 appBoot.initProfile）注入。cordis.yml 是 loader include 锚点的空
 // entry 根，dsh 每次 boot 的 prepareProfile 无条件写回维护，两处均不碰。
 //
@@ -201,8 +200,8 @@ function ensureScopeLink(profileDir, scopeSrc, createLink, log) {
   }
 }
 
-// 主入口：dshana profile 初始化/迁移/scope 链接（幂等；消费方 = lifecycle.js
-// ensureDshanaProfile，profile 名门控与路径定位在调用方完成）。
+// 主入口：dshana profile 初始化/迁移/scope 链接（幂等；消费方 = src/runtime/seed.ts，
+// profile 名门控与路径定位在调用方完成）。
 // opts: { profileDir, scopeSrc, initProfile, log?, createLink? }——profileDir =
 // $DSH_HOME/profiles/dshana；scopeSrc = PLUGIN_ROOT/cordis（产物平铺 scope 根）；
 // initProfile = 官方 @deepseek-ai/dsh-app-boot 的 initProfile(dir, bundles, patchReload)

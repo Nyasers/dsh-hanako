@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/lib/session-serialize.js — 同 DSH session 提交串行化
+// src/lib/session-serialize.ts — 同 DSH session 提交串行化
 //
 // 背景：DSH 的 queue 模式接受并发 prompt 并把后到
 // 的排队到当前 turn 之后；但任务回投/终态判定按「每 send = 一个新 Hana task」工作单元

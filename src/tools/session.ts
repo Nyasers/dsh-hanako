@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/tools/session.js — dshana_session 会话工具
+// src/tools/session.ts — dshana_session 会话工具
 //
 // 六个 action：list / get / create / send / cancel / approve。
 //   · list/get 走官方查询面（subtool/query.js：session/list + session/page）；
@@ -147,7 +147,7 @@ export const parameters = {
 // 迁移说明：v1 本模块导出的 sessionPermission（external_side_effect + describeSideEffect）
 // 权限面 = 能力授予（manifest capabilities，如 app/tools.expose-to-model）+ 宿主
 // 权限 ledger + tasks 审批链（requestApproval/respondApproval 按宿主 0.930.1 契约声明）。
-// 见 src/index.js apply 注释。
+// 见 src/index.ts apply 注释。
 
 // cancel/approve 已接线。
 // 真机边界（宿主取消 UI 反向触发 / DSH 超窗未确认的取消升级 / 审批通知形态）装包后
