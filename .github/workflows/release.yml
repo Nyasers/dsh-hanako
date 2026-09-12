@@ -21,7 +21,7 @@
 #     不进矩阵，需要时本地点名 `pnpm run pack --target=<名字>`（见 package.json 的 pack:* 别名）。
 #
 # 产物命名与单一事实源：`dsh-hanako-v<version>[-<target>].zip`；version 取自 package.json，
-# pack.mjs 会断言 manifest 与 cordis 包版本一致，不一致直接拒包（fail-closed）。
+# pack.mts 会断言 manifest 与 cordis 包版本一致，不一致直接拒包（fail-closed）。
 name: Release
 
 on:

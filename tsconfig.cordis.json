@@ -1,6 +1,6 @@
 {
   // src-cordis 域（cordis 子插件）的类型检查配置。
-  // 为什么在这里：本仓构建只转译不检查；这份配置让 scripts/typecheck.mjs 能把
+  // 为什么在这里：本仓构建只转译不检查；这份配置让 scripts/typecheck.mts 能把
   // "自相矛盾"那一类拦在构建期（未定义的名字、不存在的成员、语法错）。
   // 路径相对本文件（仓库根）解析，所以不写绝对路径。
   "compilerOptions": {
