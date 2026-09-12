@@ -60,6 +60,154 @@ export function loadRuntimeBundle(privateBase, pageOrigin = window.location.orig
   });
 }
 
+// ---- 请求接管（2026-09-12）----
+//
+// 为什么需要它：`__DSH_TRANSPORT__` 是**内核 connection 客户端**的 opt-in 钩子，只兜住内核
+// 自己的请求。DSH 侧其它代码（新插件、新调用点、非 fetch 载体）照旧打原生接口，而带前导斜杠
+// 的裸路径连 `<base>` 都绕开（`/` 开头按 origin 解析，不走 base 的路径）——于是
+// `/api/<命名空间>.<方法>`（DSH 的 Typert 文法是 `api/remote.mux`、`api/events.host` 这样）
+// 落到**宿主源**上被凭据闸挡（403 missing_credential / 404）。真机又冒出来的
+// `/api/present.host` 就是这个漏：每升一版 DSH，多一个调用点就多一个洞。
+//
+// 样例 hana-dsh 的做法是逐个包打补丁（它打了 client-hmr 与 ui-open-in-app）；我们一开始照做，
+// 但成本随版本线性涨。这里改成**一处接管**：直接包住本页的请求原语，规则只有一条。
+//
+// 判定规则（必须可判定，所以只用两个条件）：
+//   仅当 URL 的 origin 是当前文档（或 dsh.internal）**且** pathname 不在宿主前缀白名单下时，
+//   才把 pathname + search 挂到中继前缀（privateBase）下；其它一律原样放行。
+//   白名单只有一条 `/api/apps/`：App surface 对宿主的一切访问都绑在 `/api/apps/<appId>/...`
+//   （SDK 的 hana.api.fetch 也走它），而中继自己就住在
+//   `/api/apps/<id>/routes/_runtime/<rid>/_surface/<票>/` 下，天然放行（也顺便防了二次重写）。
+//   外部 origin 既不重写也不报错——原生语义照旧；只有 opt-in 的 transport 才该抛。
+
+/** 宿主侧路径前缀：这些前缀下的请求归宿主，不重写。 */
+export const HOST_PATH_PREFIXES = ["/api/apps/"];
+
+/**
+ * 判定 + 重写：返回应发出的 URL；返回 null 表示按原生放行。
+ * @param {string|URL} input
+ * @param {URL} privateBase 中继前缀绝对 URL（尾带 /）
+ * @param {{pageOrigin?: string, hostPrefixes?: string[]}} [opts]
+ * @returns {URL|null}
+ */
+export function resolveRelayUrl(input, privateBase, opts = {}) {
+  const pageOrigin = opts.pageOrigin || window.location.origin;
+  const hostPrefixes = opts.hostPrefixes || HOST_PATH_PREFIXES;
+  let url;
+  try { url = new URL(String(input), pageOrigin); } catch { return null; }
+  // ws:/wss: 的 origin 与页面的 http:/https: 不等值，按协议族归一后再比（WebSocket 载体
+  // 自己带 http(s) URL 的情况真实存在，不能因为 scheme 写法把人拒了）。
+  const samePage = url.origin.replace(/^ws/, "http") === pageOrigin.replace(/^ws/, "http");
+  if (!samePage && url.origin !== DSH_INTERNAL_ORIGIN) return null;
+  if (hostPrefixes.some((prefix) => url.pathname.startsWith(prefix))) return null;
+  return new URL(url.pathname.replace(/^\//, "") + url.search + url.hash, privateBase);
+}
+
+/** WebSocket 专用映射：http(s) → ws(s)，判定同 resolveRelayUrl。 */
+export function resolveRelaySocketUrl(input, privateBase, opts = {}) {
+  const mapped = resolveRelayUrl(input, privateBase, opts);
+  if (!mapped) return null;
+  mapped.protocol = mapped.protocol === "https:" ? "wss:" : "ws:";
+  return mapped;
+}
+
+/** 把原生构造器上的静态常量（CONNECTING/OPEN/CLOSING/CLOSED）搬到包装类上。 */
+function inheritStatics(Wrapped, Native) {
+  for (const key of Object.keys(Native)) {
+    try { Wrapped[key] = Native[key]; } catch { /* 只读则跳过 */ }
+  }
+  return Wrapped;
+}
+
+/**
+ * 接管本页的请求原语：fetch / XMLHttpRequest / EventSource / WebSocket / sendBeacon。
+ * 只做一件事——把「发给本页 origin、且不属于宿主前缀」的 URL 改指中继前缀。
+ * 覆盖不到的载体（Blob Worker 内部的 fetch、CSS url()、动态 import 之外的 DOM 资源）由
+ * `<base>` 与各自钩子负责：见下面 installTransport 的覆盖边界说明。
+ * @param {URL} privateBase
+ * @param {{target?: any, navigator?: any, pageOrigin?: string, hostPrefixes?: string[]}} [opts]
+ * @returns {() => void} disposer（逐个还原原生接口）
+ */
+export function installRequestTakeover(privateBase, opts = {}) {
+  const target = opts.target || window;
+  const pageOrigin = opts.pageOrigin || (target.location && target.location.origin) || window.location.origin;
+  const nav = opts.navigator || target.navigator || (typeof navigator === "undefined" ? null : navigator);
+  const conf = { pageOrigin, hostPrefixes: opts.hostPrefixes || HOST_PATH_PREFIXES };
+  const relay = (input) => resolveRelayUrl(input, privateBase, conf);
+  const undo = [];
+
+  const originalFetch = target.fetch;
+  const nativeFetch = typeof originalFetch === "function" ? originalFetch.bind(target) : null;
+  const NativeXHR = target.XMLHttpRequest;
+  const NativeEventSource = target.EventSource;
+  const NativeWebSocket = target.WebSocket;
+  const originalBeacon = nav ? nav.sendBeacon : null;
+  const nativeBeacon = typeof originalBeacon === "function" ? originalBeacon.bind(nav) : null;
+
+  if (nativeFetch) {
+    target.fetch = (input, init) => {
+      if (input instanceof Request) {
+        const mapped = relay(input.url);
+        if (!mapped) return nativeFetch(input, init);
+        return nativeFetch(new Request(mapped, input), { ...init, credentials: "same-origin" });
+      }
+      const mapped = relay(input);
+      if (!mapped) return nativeFetch(input, init);
+      return nativeFetch(mapped, { ...init, credentials: "same-origin" });
+    };
+    undo.push(() => { target.fetch = originalFetch; });
+  }
+
+  if (NativeXHR && NativeXHR.prototype && typeof NativeXHR.prototype.open === "function") {
+    const nativeOpen = NativeXHR.prototype.open;
+    NativeXHR.prototype.open = function open(method, url, ...rest) {
+      const mapped = relay(url);
+      return nativeOpen.call(this, method, mapped ? mapped.toString() : url, ...rest);
+    };
+    undo.push(() => { NativeXHR.prototype.open = nativeOpen; });
+  }
+
+  if (NativeEventSource) {
+    class RelayedEventSource extends NativeEventSource {
+      constructor(url, config) {
+        const mapped = relay(url);
+        super(mapped ? mapped.toString() : url, config);
+      }
+    }
+    target.EventSource = inheritStatics(RelayedEventSource, NativeEventSource);
+    undo.push(() => { target.EventSource = NativeEventSource; });
+  }
+
+  if (NativeWebSocket) {
+    class RelayedWebSocket extends NativeWebSocket {
+      constructor(url, protocols) {
+        const mapped = resolveRelaySocketUrl(url, privateBase, conf);
+        const next = mapped ? mapped.toString() : url;
+        if (protocols === undefined) super(next);
+        else super(next, protocols);
+      }
+    }
+    target.WebSocket = inheritStatics(RelayedWebSocket, NativeWebSocket);
+    undo.push(() => { target.WebSocket = NativeWebSocket; });
+  }
+
+  if (nativeBeacon) {
+    try {
+      nav.sendBeacon = (url, data) => {
+        const mapped = relay(url);
+        return nativeBeacon(mapped ? mapped.toString() : url, data);
+      };
+      undo.push(() => { nav.sendBeacon = originalBeacon; });
+    } catch { /* 宿主对象不可改则跳过 */ }
+  }
+
+  return () => {
+    for (const restore of undo.reverse()) {
+      try { restore(); } catch { /* 忽略 */ }
+    }
+  };
+}
+
 // ---- 远程流载体（api/remote.mux WS 上的多路复用）----
 const MAX_STREAMS = 128;
 
@@ -269,8 +417,16 @@ export async function injectDshIndex(indexHtml, privateBase, opts) {
  *     /open-in-app/apps（裸 fetch）没有官方钩子可接，会落到宿主源被 403；样例的做法是**逐个打补丁**
  *     （它打了 client-hmr 与 ui-open-in-app）：EventSource 换 URL（桥的 runtimeUrl）、fetch 换
  *     __DSH_TRANSPORT__.fetch。我们同法（src-integrations/client-hmr、src-integrations/ui-open-in-app）。
+ *
+ * 2026-09-12 更新（真机上又冒出一个裸请求 /api/present.host）：逐点打补丁的成本随 DSH 版本线性涨，
+ * 改成**一处接管**——installRequestTakeover 直接包住本页的 fetch / XMLHttpRequest / EventSource /
+ * WebSocket / sendBeacon，凡「发给本页 origin、且不在宿主前缀 /api/apps/ 下」的 URL 一律改指中继前缀。
+ * 上面两处逐包补丁保留（同一目标、互为兼容，不再新增第三处）；__DSH_TRANSPORT__ 仍是内核 connection
+ * 客户端的 opt-in 通道，语义不变（它对外部 origin 抛错，接管层则原样放行）。
  */
 export function installTransport(privateBase, { role, bridge } = {}) {
+  // 请求接管先装：它必须早于任何 DSH 侧代码执行（注入 index 前调用本函数）。
+  const restoreTakeover = installRequestTakeover(privateBase);
   const mux = createStreamMux(privateBase);
   const runtimeFetch = createRuntimeFetch(privateBase);
   window.__DSH_TRANSPORT__ = {
@@ -292,6 +448,7 @@ export function installTransport(privateBase, { role, bridge } = {}) {
     ...(bridge && typeof bridge === "object" ? bridge : {}),
   };
   return () => {
+    try { restoreTakeover(); } catch { /* 忽略 */ }
     try { delete window.__DSH_TRANSPORT__; } catch { /* 忽略 */ }
     try { delete window.__DSH_FILE_UPLOAD__; } catch { /* 忽略 */ }
     try { delete window.__DSHANA__; } catch { /* 忽略 */ }
