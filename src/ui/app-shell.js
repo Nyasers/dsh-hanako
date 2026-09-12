@@ -291,9 +291,10 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
     var privatePrefix = withSurfaceTicket(prefix, surfaceSession());
     var base = new URL(privatePrefix, location.origin);
     injected.dispose = installTransport(base, {
-      // 面 → role：sidebar（FP）= navigation（只有侧栏）；standalone（拆窗）= standalone
-      // （完整 DSH UI，可折叠）；其余（主卡 / 设置）= workspace（中列 + 右列，无 DSH 侧栏）。
-      role: view === "sidebar" ? "navigation" : view === "standalone" ? "standalone" : "workspace",
+      // 面 → DSH 侧上游角色词：sidebar（FP）= navigation（只有侧栏）；
+      // default（full / 拆窗）= standalone（整幅 DSH UI，可折叠）；main 与 settings = workspace
+      // （中列 + 右列，无 DSH 侧栏）。
+      role: view === "sidebar" ? "navigation" : view === "default" ? "standalone" : "workspace",
       bridge: SURFACE_API,
     });
     // 取 index：privatePrefix 已是完整代理路径（含 _surface 票据，宿主路由直认），用原生同源
@@ -658,12 +659,16 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
   // ---- 认面：页面自己声明为准，宿主 slot 只作兜底 ----
   // 与样例 hana-dsh 同一姿势："我是哪个面"写在**页面自己身上**（样例用 <meta name="hana-dsh-role">，
   // 我们用 <meta name="hana-dshana-role"> + 壳属性 data-dshana-view）。
-  // 四个面：main（主卡，无 DSH 侧栏）/ sidebar（FP，只有侧栏）/ settings（设置面）/ standalone（拆窗，
-  // 完整 DSH UI）——与 AppFrame 的四分支一一对应。
-  // 为什么不反过来靠宿主：宿主把本页挂进 FP 用的是 functionPanel.routeUrl，不带我们的任何参数；
+  // 三态模型（她 2026-09-12 定的词汇）：
+  //   default —— full（整幅 DSH UI）与 detached（拆窗）共用一页，内容一样；
+  //   main    —— 主卡，无 DSH 侧栏（侧栏归 FP）；
+  //   sidebar —— FP，只有侧栏。
+  // 另有 settings（App 自己的设置页，不注入 DSH），它是宿主设置标签页的面，不属于上面三态。
+  // 映射到 DSH 侧上游的角色词：default→standalone、sidebar→navigation、main/settings→workspace。
+  // 为何不反过来靠宿主：宿主把本页挂进 FP 用的是 functionPanel.routeUrl，不带我们的任何参数；
   // 而 hostSlot() 可能报 page / widget 这类广义值，比静态声明更不确定。
   var SLOT_VIEW = { "card": "main", "function-panel": "sidebar", "settings": "settings" };
-  var VIEWS = ["main", "sidebar", "settings", "standalone"];
+  var VIEWS = ["default", "main", "sidebar", "settings"];
   function hostSlot() {
     try {
       if (!hana || !hana.surface || typeof hana.surface.getContext !== "function") return null;
@@ -681,7 +686,9 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
     return a && VIEWS.indexOf(a) >= 0 ? a : null;
   }
   function resolveView(root) {
-    return declaredView(root) || SLOT_VIEW[hostSlot() || ""] || "main";
+    // 兜底到 default（full）而不是 main：认不出面时按上游本来的行为画整幅 DSH UI，
+    // 而不是默认为主卡（那会把侧栏当成去掉的、少一列）。
+    return declaredView(root) || SLOT_VIEW[hostSlot() || ""] || "default";
   }
 
   // ---- 标题栏内的交互区域（Hana 0.950.0+；“APPS.md・标题栏内的交互区域”）----
@@ -725,7 +732,7 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
   function reportInteractiveRegions() {
     irFrame = 0;
     var v = resolveView(shell);
-    if (v !== "main" && v !== "standalone") return; // 只有黑板主卡与拆窗卡能调
+    if (v !== "main" && v !== "default") return; // 只有黑板主卡与拆窗卡能调
     if (!hana || !hana.surface || typeof hana.surface.setInteractiveRegions !== "function") return;
     var regions = interactiveRegionRects();
     var sig = regions.map(function (r) { return r.x + "," + r.y + "," + r.width + "," + r.height; }).join(";");
@@ -745,7 +752,7 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
   function startInteractiveRegions() {
     if (irStarted) return;
     var v = resolveView(shell);
-    if (v !== "main" && v !== "standalone") return;
+    if (v !== "main" && v !== "default") return;
     irStarted = true;
     try {
       if (typeof ResizeObserver === "function") {

@@ -48,7 +48,7 @@
         "fpFullPanel": true,
         "closable": false,
         "detached": {
-          "route": "/standalone.html"
+          "route": "/default.html"
         },
         "cardForm": "flush",
         "titlebar": "translucent"

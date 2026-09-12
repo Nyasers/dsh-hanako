@@ -45,7 +45,7 @@ Hana 宿主进程（App 隔离进程内加载 dist/index.js）
 DSHana 以**单卡 + 自带功能面板**注册（manifest `contributes.cards[0]`：卡 id `dshana`、route `/main.html`、`functionPanel.route` = `/sidebar.html`；`siteNavEntry` 为本项目有意保留的形态差异）：
 
 - **自举台**：DSHANA 字标 + 细圆环 + 一行状态小字；报错时下方直接一块 `<pre>`（时间线/折叠详情已撤）。boot-state 由**主卡单独轮询**，FP 只读跨面共享快照（订阅，不重复取）；owner 不在场（快照不存在/下线/过旧）时 FP 才自取。
-- **四个面**：main（主卡，无 DSH 侧栏）/ sidebar（FP，只有侧栏）/ settings（App 自己的设置页，`ui.route`）/ standalone（detached 拆窗，完整 DSH UI + 顶部 44px 让位宿主 chrome）。面由**页面静态声明**（`<meta name="hana-dshana-role">` + `data-dshana-view`）；装配走官方 ui-layout + src-integrations 覆盖，`?dshana-view=` 与 `@dsh-hanako/view` 均已退役。
+- **三态 + 设置页**：default（full / detached 共用一页 = 整幅 DSH UI，顶部 44px 让位宿主 chrome）/ main（主卡，无 DSH 侧栏——侧栏归 FP）/ sidebar（FP，只有侧栏）；settings 是 App 自己的设置页（`ui.route`，不注入 DSH）。面由**页面静态声明**（`<meta name="hana-dshana-role">` + `data-dshana-view`）；映射到 DSH 侧上游角色词：default→standalone / sidebar→navigation / main→workspace。`?dshana-view=` 与 `@dsh-hanako/view` 均已退役。
 - **注入鉴权**：壳页以 `appSurfaceSession` 作为 `_surface` 路径段取得运行时代理凭据（同源预请求种 `hana_app_runtime` cookie 兜住子请求）；未取得票据时不下挂内容，面板上说明原因。
 
 ### 设置面
