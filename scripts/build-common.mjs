@@ -21,7 +21,9 @@ export function collectSource(urlRoot) {
     for (const name of readdirSync(dir)) {
       const p = join(dir, name);
       if (statSync(p).isDirectory()) walk(p);
-      else if (p.endsWith(".js")) map.set(pathToFileURL(p).href, p);
+      // 收会被打包的源码：.js 与 .ts/.tsx（改造中的两态共存）。构建描述与脚本是 .mjs，
+      // 不进 bundle、也不参与 URL 回写与静态 URL 断言，故不收。
+      else if (/\.(js|ts|tsx)$/.test(p)) map.set(pathToFileURL(p).href, p);
     }
   };
   walk(urlRoot);

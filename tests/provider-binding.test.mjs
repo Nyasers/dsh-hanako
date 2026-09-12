@@ -22,7 +22,7 @@ import {
   pendingBindingClaim,
   clearBindingClaim,
   bindingMailbox,
-} from "../src-cordis/plugins/provider/lib/binding.js";
+} from "../src-cordis/plugins/provider/lib/binding.ts";
 import {
   BINDING_CLAIM_EVENT as RUNTIME_CLAIM_EVENT,
   BINDING_END_EVENT as RUNTIME_END_EVENT,

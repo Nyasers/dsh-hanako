@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// tests/provider-identity.test.mjs — src-cordis/plugins/provider/lib/identity.js 单测
+// tests/provider-identity.test.mjs — src-cordis/plugins/provider/lib/identity.ts 单测
 //
 // 锁死的是**三态判定**（App 身份仅限“用户直接在 WebUI 使用”）：
 //   ① 无绑定            ⇒ App 身份（用户自建会话）
@@ -11,7 +11,7 @@
 // 身份字段只有 taskId（callToken 是工具调用期推理的事，本 adapter 从不传）。
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resolveModelIdentity } from "../src-cordis/plugins/provider/lib/identity.js";
+import { resolveModelIdentity } from "../src-cordis/plugins/provider/lib/identity.ts";
 
 const ACTIVE = { taskId: "task-1", timeoutSec: 60, approvalTimeoutMs: 30000, ended: null, at: 7 };
 

@@ -13,7 +13,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildHanaAdapter } from "../src-cordis/plugins/provider/index.js";
+import { buildHanaAdapter } from "../src-cordis/plugins/provider/index.ts";
 
 const SID = "session-11111111-2222-3333-4444-555555555555";
 const ENV_KEY = "DSHANA_HOME";

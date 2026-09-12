@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// tests/theme-tokens.test.mjs — DSH token 映射表（src-cordis/plugins/theme/token-map.js）形状单测。
+// tests/theme-tokens.test.mjs — DSH token 映射表（src-cordis/plugins/theme/token-map.ts）形状单测。
 //
 // 这张表是主题跟随的唯一数据面（服务端序列化进 assets/theme-bridge.js，浏览器侧逐条写成
 // body{--dsw-*: <宿主 var>!important}）。改错一个 token 名或写错宿主变量名，在真机上只会
@@ -11,7 +11,7 @@
 //   · LHS 不重复（重复会让后一条静默覆盖前一条）。
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { TOKEN_MAP } from "../src-cordis/plugins/theme/token-map.js";
+import { TOKEN_MAP } from "../src-cordis/plugins/theme/token-map.ts";
 
 // 宿主主题变量的允许清单（壳页从 hana.theme 拿到的 --* 变量；未选中的颜色绝不发明）
 const HOST_VARS = new Set([

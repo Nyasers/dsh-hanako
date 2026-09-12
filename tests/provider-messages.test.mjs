@@ -4,7 +4,7 @@
 // tests/provider-messages.test.mjs — DSH Message → hana messages 转换纯函数单测
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { toHanaMessages, collectToolNames, isToolResultMessage } from "../src-cordis/plugins/provider/lib/messages.js";
+import { toHanaMessages, collectToolNames, isToolResultMessage } from "../src-cordis/plugins/provider/lib/messages.ts";
 
 const HANA_ENVELOPE = {
   kind: "hana",
