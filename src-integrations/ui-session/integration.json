@@ -2,7 +2,6 @@
   "package": "@deepseek-ai/dsh-client-ui-session",
   "upstreamVersion": "0.1.5-rc.2",
   "upstreamDir": "packages/client/ui-session",
-  "hana": 1,
   "files": [
     {
       "path": "src/client/index.ts",

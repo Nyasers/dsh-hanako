@@ -26,7 +26,6 @@ integrations/<短名>/
   "package": "@deepseek-ai/dsh-client-ui-layout",
   "upstreamVersion": "0.1.5-rc.2",
   "upstreamDir": "packages/client/ui-layout",
-  "hana": 1,
   "files": [
     { "path": "src/client/index.ts", "upstreamSha256": "<写入时上游同名文件的 sha256>" }
   ]
@@ -55,5 +54,8 @@ integrations/<短名>/
 
 - **只写 delta**：overlay 文件里除必要改动外不留私货，便于上游升级时人工比对。
 - **不改上游未涉及的包**。
-- 产物版本号带 `+hana.N`（`hana` 字段），安装树里一眼可见"这包被改过"。
+- 产物版本号带 `<上游版本>+dshana-<我们的干净版本>`（例 `0.1.5-rc.2+dshana-1.0.0-beta.5`）：
+  安装树里一眼可见“这包被改过”、被哪个 dshana 版本改的。版本段只有一个来源——主
+  `package.json`（合成在 `scripts/version-common.mjs`，与 syncver/version-hook 同一份）；
+  清单里不写任何手写版本字段。
 - 不做运行时 shim：与"贴上游 + 构建期有闸"的路线相悖。

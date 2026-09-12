@@ -40,3 +40,17 @@ export const readPkg = (p) => JSON.parse(fs.readFileSync(path.join(ROOT, p), "ut
 export const writePkg = (p, data) => {
   fs.writeFileSync(path.join(ROOT, p), JSON.stringify(data, null, 2) + "\n", "utf8");
 };
+
+// 干净号（去 build metadata）：1.0.0-beta.5+dsh-0.1.5-rc.2 → 1.0.0-beta.5。
+// 补丁包版本戳要用它（版本串里不能再嵌一个 "+"），所以与 syncver/version-hook 同处一份实现。
+export function cleanVersion(version) {
+  return String(version).split("+")[0];
+}
+
+// 补丁包（集成覆盖产物）版本戳：<上游版本>+dshana-<主干净版本>。
+// 形状与主版本互镜：主版本带上游 DSH 版本，补丁包带我们的版本，两侧互相点名。
+// 版本段只有一个来源——主 package.json（与 syncver/version-hook 同一份实现）；
+// 不另设修订号：同一版本里改两次覆盖层应当由发版流程 bump 版本，而不是在这里编计数。
+export function patchVersion(upstreamVersion) {
+  return `${cleanVersion(upstreamVersion)}+dshana-${cleanVersion(readPkg("package.json").version)}`;
+}

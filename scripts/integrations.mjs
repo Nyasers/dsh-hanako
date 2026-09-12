@@ -119,6 +119,12 @@ export function loadIntegrations(rootDir = REPO_ROOT) {
     const manifest = join(dir, ent.name, "integration.json");
     if (!existsSync(manifest)) continue;
     const it = JSON.parse(readFileSync(manifest, "utf8"));
+    if (it.hana !== undefined || it.revision !== undefined) {
+      throw new Error(
+        `集成 ${ent.name}: integration.json 不得带 hana/revision 字段——`
+          + "修订号由 git 历史派生（revisionOf），手写就是第二事实源",
+      );
+    }
     out.push({ ...it, dir: ent.name, root: join(dir, ent.name) });
   }
   return out;
@@ -264,10 +270,11 @@ export function resolveInlineAliases(specifiers, repoRoot = REPO_ROOT) {
 /**
  * 编译一个集成：把上游 src 摊到 _tmp/integrations-src/<短名>/，覆盖 overlay，
  * 用我们的 client preset 编译出 lib/client.js，再以原版包为模板组装成
- * _tmp/integrations-built/<短名>/（版本戳 +hana.N）。
+ * _tmp/integrations-built/<短名>/（版本戳 <上游>+dshana-<干净版本>）。
  */
 export async function buildIntegrations(integrations, { tag, mirrorDir = MIRROR, repoRoot = REPO_ROOT, log = () => {} } = {}) {
   const { buildClientBundle } = await import("../src-cordis/build/client-config.mjs");
+  const { patchVersion } = await import("./version-common.mjs");
   const built = [];
   for (const it of integrations) {
     const short = it.dir;
@@ -349,8 +356,9 @@ export async function buildIntegrations(integrations, { tag, mirrorDir = MIRROR,
     cpSync(join(template, "lib"), join(out, "lib"), { recursive: true });
     cpSync(join(stage, "lib", "client.js"), join(out, "lib", "client.js"));
     const manifest = JSON.parse(readFileSync(join(template, "package.json"), "utf8"));
-    const hana = Number.isFinite(it.hana) ? it.hana : 1;
-    manifest.version = `${String(manifest.version).split("+")[0]}+hana.${hana}`;
+    // 版本戳：<上游版本>+dshana-<我们的干净版本>（合成在 scripts/version-common.mjs，与 syncver 同一份）。
+    // 上游段原样保留：一眼看出改的是哪个上游包。
+    manifest.version = patchVersion(manifest.version);
     writeFileSync(join(out, "package.json"), JSON.stringify(manifest, null, 2));
 
     const size = readFileSync(join(out, "lib", "client.js")).length;
@@ -390,7 +398,7 @@ async function main() {
   const integrations = loadIntegrations();
   if (cmd === "list") {
     for (const it of integrations) {
-      console.log(`${it.dir}  → ${it.package}  overlay=${(it.files || []).length}  hana=${it.hana}`);
+      console.log(`${it.dir}  → ${it.package}  overlay=${(it.files || []).length}`);
     }
     return;
   }
