@@ -1,26 +1,24 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/lib/managed-runtime.js — dshana App v2 受管 DSH runtime 启动封装（迁移指南 §13
-// 步骤 2；消费方 = 后续步骤 dshana_session 的 create/send/cancel/approve 接线，本步先落封装
-// 与单测，session 侧只留接线注释/桩）
+// src/lib/managed-runtime.js — dshana 受管 DSH runtime 启动封装
 //
 // 职责：
 //   managedStart/ensureManagedRuntime：父进程随机选取「中继端口（注册给宿主的 service.port）
 //     + DSH 内部端口」→ ctx.runtime.start({ runtime:"node", entry:"runtime/dsh-host.mjs",
 //     profile:"local-machine", network:"external", cwd:ctx.dataDir, service:{ port:中继端口,
 //     readyMarker:带随机 opaque }, ... }) → 状态轮询等到 ready / failed / exited。
-//     绝不把 runtimeId 当就绪（指南 §6）：starting 只是宿主已拉起进程，DSH 真就绪 = 子
+//     绝不把 runtimeId 当就绪：starting 只是宿主已拉起进程，DSH 真就绪 = 子
 //     进程真实监听后打印的 readyMarker → host 侧 service.state=ready。
-//     端口不再暴露给用户（裁决 4）：区间随机 + 占用自动换端口重试；就绪缓存每次经
+//     端口不再暴露给用户：区间随机 + 占用自动换端口重试；就绪缓存每次经
 //     runtime.get 探活，子进程崩溃可被父侧识别并重起（对齐样例 controller 边界）。
-//   单例语义（本步设计）：一个 App runtime 服务多个 DSH 会话（每会话的 taskId 经后续
-//     步骤的任务桥各自携带，不把单次启动任务绑成全局焦点——指南 §7）；首次 create 时
-//     启动（tools/session.js 接线点），ready 后所有 action 复用。runtime 终止后清除
-//     单例，下次调用重启。App 卸载/重载经 disposeManagedRuntime 收尾（apply disposer）。
-//   日志：一律走宿主 ctx.logger（`logApp`）。App 侧不再写文件日志（原 runtime watch 镜像
-//     进 dataDir/logs 的 [dsht] 行随之退役，见 spec §8 j）；受管子进程的 stdout/stderr 归宿主
-//     runtime 日志（有界，可经 ctx.runtime.watch/info 取），不再由 App 自己落盘。
+//   单例语义：一个 App runtime 服务多个 DSH 会话（每会话的 taskId 经任务桥各自携带，
+//     不把单次启动任务绑成全局焦点）；首次 create 时启动（tools/session.js 接线点），
+//     ready 后所有 action 复用。runtime 终止后清除单例，下次调用重启。App 卸载/重载经
+//     disposeManagedRuntime 收尾（apply disposer）。
+//   日志：一律走宿主 ctx.logger（`logApp`），App 侧不写文件日志；受管子进程的
+//     stdout/stderr 归宿主 runtime 日志（有界，可经 ctx.runtime.watch/info 取），不由
+//     App 自己落盘。
 //
 // 参数契约（与 src/runtime/options.js 对偶；增删需两处同步 + tests/）：
 //   唯一的子进程入参是私有运行时配置文件路径（argv[1]），由 writeRuntimeConfigFile 落盘、
@@ -30,9 +28,8 @@ import { mkdirSync, writeFileSync, chmodSync, rmSync } from "node:fs";
 import { randomInt, randomBytes } from "node:crypto";
 import { appDataDir, appLogger, getAppRuntime } from "./app-runtime.js";
 import { currentSource } from "./data-source.js";
-// 依赖就位（自包含打包，2026-09-10）：依赖随包物化在安装目录 <installRoot>/node_modules，
-// 运行时不再安装、不再 spawn（原 ensure-deps.js 与 lib/pnpm.js 已删除；app/process.spawn
-// 能力随之退役）。
+// 依赖随包物化在安装目录 <installRoot>/node_modules，
+// 无运行时安装与 spawn。
 
 export const READY_MARKER = "DSH_READY"; // 标记前缀；每次启动拼随机 opaque（宿主按整行匹配）
 export const RUNTIME_ENTRY = "runtime/dsh-host.mjs"; // 相对 App 安装目录（宿主校验在安装/数据目录内）
@@ -95,7 +92,7 @@ function clearRuntimeIdentity() {
 /**
  * 端口选取（纯函数，可注入 rng 便于单测）：[PORT_MIN, PORT_MAX) 内的确定整数。
  * 宿主 runtime service 端口契约要求显式整数（1024..65535，禁 0/随机哨兵），故只能由父进程
- * 自选后传入，不能交给宿主分配；区间随机使端口不再需要用户配置（裁决 4）。
+ * 自选后传入，不能交给宿主分配；区间随机使端口不再需要用户配置。
  */
 export function choosePort(rng = randomInt) {
   return rng(PORT_MIN, PORT_MAX);
@@ -117,7 +114,7 @@ export function makeReadyMarker() {
 /**
  * 私有运行时配置构造（与 src/runtime/options.js normalizeRuntimeConfig 对偶）。opts:
  * { dataDir, dshHome?, dshPort, bridgePort, bridgeKey, controlKey, cordisSrc?, depsRoot?, readyMarker? }
- * dshHome = 当前数据源（W3）的 DSH_HOME；缺省时子进程回落 dataDir/.dsh（旧行为）。
+ * dshHome = 当前数据源的 DSH_HOME；缺省时子进程回落 dataDir/.dsh。
  * 敏感项（bridgeKey）只进本对象→写 0600 文件→argv 只传路径，不出现在 argv/日志。
  */
 export function buildRuntimeConfig(opts) {
@@ -251,7 +248,7 @@ async function reapFailedRuntime(ctx) {
  * 单例清空以便下次调用重试。首次调用 = profile 种子化 + DSH boot（日志可见）。
  */
 
-// ---- 失败后的自动重试（2026-09-12 她定）----
+// ---- 失败后的自动重试 ----
 // 首次安装时“能力/权限尚未授予”是常态：apply 自动链的第一次 ensure 必然失败。既然页面不再提供
 // 手动「启动 / 重启」按钮（无交互设计），这条链就得自己回来——失败即按退避重试，直到成功、
 // 被手动停止（stopManagedRuntime 冻结）或 App 卸载（dispose 走 stop）。任何显式启动请求
@@ -356,7 +353,7 @@ async function doStartManaged(opts, attempt = 1) {
   const ctx = app.ctx;
   const dataDir = appDataDir();
   if (!dataDir) throw new Error("managed-runtime: ctx.dataDir 缺失");
-  // 数据源（W3）：DSH_HOME 由当前源决定（private = <dataDir>/.dsh；shared = 外部目录）。
+  // 数据源：DSH_HOME 由当前源决定（private = <dataDir>/.dsh；shared = 外部目录）。
   // 读设置失败即抛错（不得默认切错源）；设置文件不存在时回落 private 默认。
   const source = await currentSource();
   const { bridgePort, dshPort } = pickPorts();
@@ -376,7 +373,7 @@ async function doStartManaged(opts, attempt = 1) {
   });
   const configPath = writeRuntimeConfigFile(dataDir, config);
   logApp("info", "[managed-runtime] 启动 DSH 受管 runtime（attempt " + attempt + "/" + MAX_START_ATTEMPTS + " source=" + source.sourceId + " dshHome=" + source.home + " dshPort=" + dshPort + " bridgePort=" + bridgePort + "）");
-  // 权限档 = local-machine（定案 2026-09-10，见 specs/dshana-v2-定案与待议-2026-09-10.md §1）：
+  // 权限档 = local-machine：
   // 明确不是沙箱——受管程序自持工作区与命令策略，可读写当前用户可及的一切文件（含其他应用
   // 数据与磁盘凭据），仅保留 stop / 撤销 / 进程树回收的托管语义。宿主契约**禁止**传
   // readRoots / writeRoots / callToken / taskId，故本调用一律不带（文件边界归零，换来 DSH 能

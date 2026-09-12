@@ -3,7 +3,7 @@
 //
 // src/ui/app-shell.js — dshana App v2 壳页逻辑（main/sidebar 共用；浏览器 ESM）
 //
-// 相对资源纪律（迁移指南 §10）：经 <script type="module" src="./app-shell.js"> 相对引入，
+// 相对资源纪律：经 <script type="module" src="./app-shell.js"> 相对引入，
 // 页面内不出现根路径绝对 URL。浏览器 SDK = 官方 @hana/plugin-sdk（devDependencies，
 // file:vendor/hana-app-sdk/hana-plugin-sdk-0.0.0.tgz），构建期由 rspack 静态打进本文件（见
 // src/ui/rspack.config.mjs）——浏览器 ESM 不解析裸包名（宿主不注入 importmap），所以依赖
@@ -127,7 +127,7 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
 
   // ---- main 视图渲染（#boot-panel innerHTML）----
   // 只有两件东西值得占版面：启动按钮，和报错时那块 <pre>。时间线与折叠详情都撤了。
-  // ---- 页面打开时补一次启动（她 2026-09-12：光轮询不会重试，打开页面至少该重试一次）----
+  // ---- 页面打开时补一次启动：轮询不会重试，打开页面至少该重试一次 ----
   // 为何放在壳页：App 进程里的退避重试可能早已用尽/被冻结（装完时那次失败常常发生在 App 被
   // 批准之前——进程根本没在跑）。用户打开页面是最强的一次“我要用它”信号，此刻补一脚；服务端
   // single-flight，重复调用无害（未就绪才动手，ready/starting 时接口自己会答 already-ready）。
@@ -143,7 +143,7 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
     postAction("start").then(function () { poll(true); }).catch(function () { /* 忽略：状态面会显示 */ });
   }
 
-  // 免交互（2026-09-12 她的决定）：DSH 的拉起由 App 的自动链负责（apply 即 ensureManagedRuntime +
+  // 免交互：DSH 的拉起由 App 的自动链负责（apply 即 ensureManagedRuntime +
   // 崩溃重起 + 端口占用自动换端口），页面不提供「启动 / 重启」按钮——那是让用户替系统干活。
   // 页面只负责说清当前状态（状态行 + 出错时的 <pre>）。
   function idleViewHtml() {
@@ -342,16 +342,14 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
   // 一起交给桥——于是「插件加载之前」就能决定跟不跟随，不必等我们 DSH 侧的 client 半
   // （那是插件，加载晚）。权威归属不变：桥的 readPreference() 优先 client 半投影的属性，
   // 本值只在属性出现前充数。
-  // 注（收回一次退役）：这里一度删掉过这个读取，理由是“偏好不由壳页判断”。收回的只是**启动
-  // 那一段**，取的也是 DSH 自己写在 index 里的字面量，不是壳页的意见。
+  // 注：壳页读的只是**启动那一段**——DSH 自己写在 index 里的字面量，不是壳页的意见。
   var dshPreference = null;
   function readIndexThemePreference(html) {
     var m = /const\s+preference\s*=\s*"([^"]+)"/.exec(String(html || ""));
     return m && /^(system|light|dark)$/.test(m[1]) ? m[1] : null;
   }
-  // 旧的 ?dshana-view= 参数已退役（2026-09-12）：它唯一的消费者是 @dshana/view 客户端插件，
-  // 而该插件已不在册（官方 ui-layout 放开后就成对换回了）；正式路径读的是 __DSHANA__.role，
-  // 而 role 的事实源是页面自己的声明（meta / 壳属性）。故不再改写当前 URL。
+  // 不读旧 URL 参数：正式路径是 __DSHANA__.role，而 role 的事实源是页面自己的声明
+  // （meta / 壳属性）。
   function showInjectionError(err) {
     var msg = (err && err.message) ? err.message : String(err);
     // 不隐藏根：main 的 data-dshana-shell 就在 <body> 上（hidden 会把整页抹白），
@@ -480,7 +478,7 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
   }
   // ---- 轮询去重：一份状态只让一个 owner 去取 ----
   // 事实只有一个（App 侧 boot-state），但主卡与 FP 是两份文档、各有一个定时器——两路轮询同一份
-  // 状态是重复劳动（2026-09-12 她点出）。定为：**主卡是 owner**，取回快照后写进跨面共享存储；
+  // 状态是重复劳动。定为：**主卡是 owner**，取回快照后写进跨面共享存储；
   // FP 只订阅 + 读快照，不主动取；只有当快照不存在/被标记下线/老得离谱（owner 悄悄没了）时
   // FP 才自己取。通道复用设置视图与会话选中那条（hana.storage.global + onChanged），不新开协议。
   // 代价如实记：owner 非正常消失（没跑到 pagehide）时，FP 最多陈旧 STALE_MS。
@@ -566,13 +564,13 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
   // （src/ui/clipboard-shadow.js，桥优先）改调 __DSHANA__.clipboardWrite，最终落到这里：
   // 宿主执行 hana.clipboard.writeText，不受插件 iframe 权限链限制。
   //
-  // 契约（2026-09-12 真机修）：@hana/plugin-sdk 的 HanaClipboardWriteTextResult 是
+  // 契约：@hana/plugin-sdk 的 HanaClipboardWriteTextResult 是
   // **{ written: boolean }**。旧代码判的是 `payload.ok === false`——字段名不对，于是
   // 宿主明确回 written:false 时这里照样返回 true，表现为「界面显示复制成功、系统剪贴板里
   // 什么都没有」（DSH 那个 helper 只要不抛就报成功）。现在：显式 written:false 与异常都
   // **reject 并打印原因**，让失败可见（调用方据此报失败，不再静默假装成功）。
   //
-  // 2026-09-12 现场结论（方向已按她的决定暂停）：**两条路都在宿主手里**——
+  // 现场结论（方向已按决定暂停）：**两条路都在宿主手里**——
   //   宿主：Plugin UI capability "clipboard.writeText" is not allowed in card slots
   //         （App 卡面不被允许用这个能力通道，SDK 直接拒）
   //   原生：NotAllowedError（Permissions-Policy 把 Clipboard API 在本文档里关死）
@@ -613,7 +611,7 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
   //   fetch cssUrl → <style data-hana-theme-style>），宿主不代劳。
   //   此前我们只读 getComputedStyle(documentElement) 却从没加载过主题样式表——读到的永远是
   //   空值，页面一路吃 HTML 里的纸张 fallback（var(--bg, #F5EFE4)），所以连 loading 壳页也
-  //   不跟随（真机反馈 2026-09-12）。修完这条，壳页、注入的 DSH UI、以及主题桥读到的变量
+  //   不跟随。修完这条，壳页、注入的 DSH UI、以及主题桥读到的变量
   //   才会是真实的 Hana 配色。
   var THEME_STYLE_ATTR = "data-hana-theme-style";
   var themeCssUrl = null;
@@ -680,7 +678,7 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
   // ---- 认面：页面自己声明为准，宿主 slot 只作兜底 ----
   // 与样例 hana-dsh 同一姿势："我是哪个面"写在**页面自己身上**（样例用 <meta name="hana-dsh-role">，
   // 我们用 <meta name="hana-dshana-role"> + 壳属性 data-dshana-view）。
-  // 三态模型（她 2026-09-12 定的词汇）：
+  // 三态模型：
   //   default —— full（整幅 DSH UI）与 detached（拆窗）共用一页，内容一样；
   //   main    —— 主卡，无 DSH 侧栏（侧栏归 FP）；
   //   sidebar —— FP，只有侧栏。
