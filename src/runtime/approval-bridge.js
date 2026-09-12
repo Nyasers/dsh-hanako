@@ -233,7 +233,7 @@ export function startApprovalBridge({ ctx, hana, dataDir, log }) {
       return pending;
     }
     doRespond = (outcome) => hana.tasks.respondApproval({ approvalId, outcome });
-    // 宿主权威字段交叉校验（2026-09-12）：审批记录自带 parentTaskId。不一致或缺失说明我们的
+    // 宿主权威字段交叉校验：审批记录自带 parentTaskId。不一致或缺失说明我们的
     // 映射与宿主记录已经漂移——这种情况把审批结算成 rejected（fail-closed，绝不放行），
     // 不继续等一个可能属于别人的结果。放到 addApproval 之前：没通过校验的审批不进映射表。
     if (!approvalOwnsTask(approval, map.taskId)) {

@@ -12,7 +12,7 @@
 //   function u1e(t, e) { return `/api/apps/${encodeURIComponent(t)}/routes/_runtime/${encodeURIComponent(e)}/`; }
 //   ─ 宿主在服务 readyMarker 出现后自动把受管服务暴露到该前缀（HTTP/SSE/WS 全代理 +
 //     重定向 Location 重写 + hana_app_runtime HttpOnly cookie），App 的 ctx.routes 不需要
-//     转发受管服务——浏览器只需把页面/API/WS 指向该前缀（迁移指南 §10）。见
+//     转发受管服务——浏览器只需把页面/API/WS 指向该前缀。见
 //     DESIGN「步骤 4b/5 收口」的宿主实证记录。代理前缀为「路径」形态（相对同源），
 //     壳页在同源下拼 `origin + proxyPrefix` 使用。
 //

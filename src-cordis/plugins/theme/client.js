@@ -14,7 +14,7 @@
 // `p === 'system'` 时才把宿主配色压成 DSH token。桥与本 client 半在同一份 DSH 文档里，
 // 以属性为契约最省：不需要额外协议，也不跨进程；属性变化即事件（MutationObserver），无轮询。
 //
-// 两段来源（2026-09-12）：插件树激活**之前**本属性还不存在，桥无从判断门开不开——那一段
+// 两段来源：插件树激活**之前**本属性还不存在，桥无从判断门开不开——那一段
 // 由壳页把 DSH index 的 boot-theme 行字面量随主题载荷下发（app-shell.js
 // readIndexThemePreference），桥先据此开门。官方把这行定位成 "the browser's pre-plugin
 // interval"，插件树激活前浏览器手里只有它。本模块一旦加载即写下属性并接管权威（桥的
