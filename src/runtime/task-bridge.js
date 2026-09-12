@@ -31,6 +31,7 @@
 // 容错纪律：订阅/回投失败只记日志不阻断 runtime；映射不存在（非 dshana_session 发起的
 // 会话，如 DSH Web UI 直开）的事件直接忽略。
 import { readTaskMap, markTaskMapEnded } from "../lib/task-map.js";
+import { BINDING_END_EVENT, appendSessionEvent } from "../lib/binding-slot.js";
 import { runWatchReconcile } from "../lib/watch-sse.js";
 import { rpcSessionCancel } from "../lib/dsh-rpc.js";
 import { cancelSessionModelRequests } from "../lib/model-requests.js";
@@ -102,9 +103,10 @@ export function classifyDshEvent(event, args) {
  * sessionId 一个条目即可，不用 turn 级坐标（v1 的复杂终点源于跨任务共享会话）。
  */
 class SessionBridge {
-  constructor({ hana, dataDir, log, serviceBaseUrl, bridgeKey, cancelModelRequests }) {
+  constructor({ hana, dataDir, sessions, log, serviceBaseUrl, bridgeKey, cancelModelRequests }) {
     this.hana = hana;
     this.dataDir = dataDir;
+    this.sessions = sessions && typeof sessions.get === "function" ? sessions : null;
     this.log = log;
     this.serviceBaseUrl = typeof serviceBaseUrl === "string" && serviceBaseUrl ? serviceBaseUrl : null;
     this.bridgeKey = typeof bridgeKey === "string" && bridgeKey ? bridgeKey : null;
@@ -299,6 +301,22 @@ class SessionBridge {
       this.note("任务终态回投失败（task=" + this.taskId + "）：" + ((e && e.message) || e));
     } finally {
       try {
+        // 会话↔任务绑定收尾：ended 标记进会话自己的日志（provider 的投影单元折叠）。
+        // 只标记、不抹除认领——"读过但已收尾"与"从没认领过"在模型请求身份上是两种判定
+        // （见 provider/lib/identity.js 三态）。会话不在场（已卸载/未 attach）时落地不了，
+        // 记一句日志：那种情况下身份会退回 App，必须看得出原因。
+        const status = cancel ? "canceled" : (ok ? "completed" : "failed");
+        const landed = appendSessionEvent(this.sessions, this.sessionId, BINDING_END_EVENT, {
+          taskId: this.taskId,
+          status,
+        });
+        if (!landed && this.sessionId) {
+          this.note("绑定收尾未落地（session=" + String(this.sessionId).slice(0, 12) + "，status=" + status + "）——会话不在场");
+        }
+      } catch (e) {
+        this.note("绑定收尾失败（session=" + String(this.sessionId).slice(0, 12) + "）：" + ((e && e.message) || e));
+      }
+      try {
         // 终态只标记 ended，**不删文件**：删了就分不出“用户自建会话”与“我们建的但状态丢了”，
         // 而这两者在模型请求身份上是两种判定（见 provider/lib/identity.js 三态）。
         markTaskMapEnded(this.dataDir, this.sessionId, "task-terminal");
@@ -360,7 +378,15 @@ export function startTaskBridge({ ctx, hana, dataDir, log, serviceBaseUrl, bridg
         let b = bridges.get(frame.sessionId);
         if (!b) {
           pruneSettled();
-          b = new SessionBridge({ hana, dataDir, log, serviceBaseUrl, bridgeKey, cancelModelRequests: doCancelModels });
+          b = new SessionBridge({
+            hana,
+            dataDir,
+            sessions: typeof ctx.get === "function" ? ctx.get("sessions") : null,
+            log,
+            serviceBaseUrl,
+            bridgeKey,
+            cancelModelRequests: doCancelModels,
+          });
           b.sessionId = frame.sessionId;
           bridges.set(frame.sessionId, b);
         }
