@@ -2,15 +2,18 @@
 // Copyright (c) 2026 Nyasers
 //
 // src/ui/rspack.config.mjs — 壳页脚本 bundle 构建配置（ui 域）
-// 产物：dist/ui/app-shell.js（卡壳页，ESM，`<script type="module" src="./app-shell.js">`）
-// 与 dist/ui/settings.js（App 自己的设置页脚本，同理）。
+// 产物：dist/ui/app-shell.js（壳页，ESM，`<script type="module" src="./app-shell.js">`）
+// 与 dist/ui/settings.js（App 自己的设置页脚本，同理），以及被 import 的样式
+// dist/ui/<name>.css（页面用 <link> 引入）。
 //
 // 打包纪律：
-//   - 浏览器 SDK @hana/plugin-sdk 从 devDependencies 解析（file:vendor/hana-app-sdk/
-//     hana-plugin-sdk-0.0.0.tgz 的浏览器构建 dist/browser.js），由 rspack 静态打进产物。
-//     浏览器 ESM 不解析裸包名（宿主不注入 importmap），故**不由页面裸 import**、也不在
-//     dist/ui 另放一份 vendored 拷贝——依赖来源单一（包管理器），产物自包含。
+//   - 浏览器 SDK @hana/plugin-sdk 与组件库 @hana/plugin-components 从 devDependencies 解析
+//     （file:vendor/hana-app-sdk/*.tgz），由 rspack 静态打进产物。浏览器 ESM 不解析裸包名
+//     （宿主不注入 importmap），故不由页面裸 import、也不在 dist/ui 另放一份 vendored
+//     拷贝——依赖来源单一（包管理器），产物自包含。
 //   - target: "web"（无 node 内置、无 node polyfill）；源码是纯浏览器 ESM（无 node 依赖）。
+//   - .ts/.tsx 交给内置 swc 转译，JSX 走 automatic runtime（源码不需要 import React）。
+//   - 样式走 rspack 内置 css 支持，按入口产出同名 .css。
 //   - 入口无导出（自执行脚本）：不设 library，产物只做副作用执行。
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,16 +29,42 @@ export default {
   target: "web",
   entry: {
     "app-shell": ui("app-shell.ts"),
-    settings: ui("settings.ts"),
+    settings: ui("settings.tsx"),
   },
   output: {
     path: path.join(DIST_DIR, "ui"),
     filename: "[name].js",
+    cssFilename: "[name].css",
     module: true,
-    clean: false, // 主 bundle 已 clean 整树；这里只写 ui/*.js（静态页由 build.js copy）
+    clean: false, // 主 bundle 已 clean 整树；这里只写 ui/*（静态页由 build.js copy）
+  },
+  module: {
+    rules: [
+      {
+        test: /\.tsx?$/,
+        use: {
+          loader: "builtin:swc-loader",
+          options: {
+            jsc: {
+              parser: { syntax: "typescript", tsx: true },
+              transform: { react: { runtime: "automatic", development: false } },
+              target: "es2022",
+            },
+          },
+        },
+      },
+      // 样式按入口抽出同名 .css（outputModule 下不注入 style，必须抽文件）。
+      { test: /\.css$/, type: "css" },
+    ],
   },
   experiments: { outputModule: true },
-  optimization: { minimize: true, usedExports: false, sideEffects: false },
+  optimization: {
+    minimize: true,
+    usedExports: false,
+    // 关掉按 package.json sideEffects 做的裁剪：样式 import 是副作用，
+    // 不因为包没声明 sideEffects 就被整棵摇掉。
+    sideEffects: false,
+  },
   devtool: false,
   stats: "errors-warnings",
 };

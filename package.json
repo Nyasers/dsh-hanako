@@ -35,6 +35,8 @@
     "@hana/plugin-protocol": "file:vendor/hana-app-sdk/hana-plugin-protocol-0.0.0.tgz",
     "@hana/plugin-sdk": "file:vendor/hana-app-sdk/hana-plugin-sdk-0.0.0.tgz",
     "@rspack/core": "^2.2.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
     "archiver": "^8.0.0",
     "clean-css": "^5.3.3",
     "clsx": "^2.1.1",
@@ -42,6 +44,8 @@
     "conventional-changelog-conventionalcommits": "^10.4.0",
     "corepack": "0.36.0",
     "fs-extra": "^11.4.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
     "terser": "^5.51.2",
     "tsdown": "^0.23.0",
     "typescript": "^7.0.2"
