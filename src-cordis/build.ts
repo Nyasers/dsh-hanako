@@ -1,21 +1,21 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src-cordis/build.js — src-cordis 域构建入口（cordis 子插件包）
+// src-cordis/build.ts — src-cordis 域构建入口（cordis 子插件包）
 // 布局：领域专用随源码——cordis 域脚本/配置全在 src-cordis/（build/ preset + 每包
 // cordis.config.mjs 描述），共享工具（rspack 本体解析/URL 回写/terser/assert + 共享
 // minify-loader）在 scripts/ 根级。产物 dist/cordis/**：
 //   3 子插件（provider / theme / clipboard）：service 半 rspack（源 index.ts → 产物 index.js bundle），
 //   theme 与 clipboard 另出 client 半（源 client.ts → 产物 client.js，tsdown closure-factory）
 //   + dshana roster bundle（package.json + cordis.patch.yml）+ 静态 package.json
-// 用法：node src-cordis/build.js [RSPACK_ENV=<构建环境目录>]
+// 用法：node src-cordis/build.ts [RSPACK_ENV=<构建环境目录>]
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 
 import fs from "fs-extra";
-import { serviceBundle } from "./build/service-config.mjs"; // preset 层（src-cordis/build/）
-import { buildClientBundle } from "./build/client-config.mjs";
-import { collectSource, makeUrlRewriter, assertNoStaticFileUrl } from "../scripts/build-common.mjs"; // 根级共享
+import { serviceBundle } from "./build/service-config.mts"; // preset 层（src-cordis/build/）
+import { buildClientBundle } from "./build/client-config.mts";
+import { collectSource, makeUrlRewriter, assertNoStaticFileUrl } from "../scripts/build-common.mts"; // 根级共享
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), ".."); // src-cordis/ → 仓库根
 const SRC_ROOT = join(ROOT, "src-cordis");

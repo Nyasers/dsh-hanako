@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// scripts/version-common.mjs — 版本域共享模块（根级通用：version-hook/syncver/changelog 复用）
+// scripts/version-common.mts — 版本域共享模块（根级通用：version-hook/syncver/changelog 复用）
 // 布局原则：跨脚本共享/流程性构件放根级（scripts/），领域特有随源码（src-cordis/build）。
 // 提供 cordis 包清单（src-cordis 顶层 roster bundle + plugins/*）与派生同步目标
 // （manifest + cordis 包）——版本单一事实源 = 主 package.json（pnpm version 是改版本唯一入口，
-// 派生同步见 scripts/syncver.mjs，git 收口见 scripts/version-hook.mjs）。
+// 派生同步见 scripts/syncver.mts，git 收口见 scripts/version-hook.mts）。
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

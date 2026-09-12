@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// scripts/ts-diagnostics.mjs — 类型诊断的解析与分类（覆盖层检查与逐域检查共用一份）
+// scripts/ts-diagnostics.mts — 类型诊断的解析与分类（覆盖层检查与逐域检查共用一份）
 //
 // 为什么共用：两处检查（覆盖层在暂存树里、源码域在仓库树里）要的是同一个口径——
 // "什么算我们自己的错"必须只有一处定义，否则迟早分叉。

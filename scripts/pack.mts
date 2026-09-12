@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// scripts/pack.mjs — dshana 自包含打包（适配单 bundle 收敛架构；构建脚本不随源码编译）
+// scripts/pack.mts — dshana 自包含打包（适配单 bundle 收敛架构；构建脚本不随源码编译）
 // 交付物 = 代码 bundle（dist/）+ cordis 插件 + ui/ 静态树 + **物化后的生产依赖树**
 // （含 win32/darwin/linux × x64/arm64 预编译资产），安装即用、无需 npm install。
 // 依赖物化形态对齐样例 hana-dsh：hoisted 布局（顶层真实目录、无软链接——软链进 zip 跨机
 // 解压即断）。物化在 _tmp/pkg-root/ 隔离进行，不触碰仓库 node_modules。
 // 流程：复制交付清单（prepack 钩子已先行 build）→ 物化生产依赖 → 断言多平台资产 → zip → SHA256。
-// 用法：pnpm run pack --target <名字>（prepack 自动前置 build；单独 node scripts/pack.mjs 要求 dist/ 已构建）
+// 用法：pnpm run pack --target <名字>（prepack 自动前置 build；单独 node scripts/pack.mts 要求 dist/ 已构建）
 // 产出：releases/dshana-v<version>[-<target>].zip + .sha256。**zip 根 = 包根**：manifest.json、
 //   index.js、node_modules/、ui/ 等全部在 zip 根级，不得套一层目录（宿主安装时在包根读 manifest.json）。
 // 两个临时目录的分工（都在 _tmp/ 下，起手清残留、用完即清、收尾由 postpack 钩子清）：
@@ -29,7 +29,7 @@ import fs from "fs-extra";
 const require = createRequire(import.meta.url);
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 // 版本单一事实源：package.json（唯一来源，不支持命令行传版本——显式传版本容易与
-// manifest 不同步（历史教训）；版本同步走 pnpm version 发版流程，scripts/version-hook.mjs 收口）
+// manifest 不同步（历史教训）；版本同步走 pnpm version 发版流程，scripts/version-hook.mts 收口）
 const version = fs.readJsonSync(join(ROOT, "package.json")).version;
 if (!version) throw new Error("package.json version 缺失");
 
@@ -38,7 +38,7 @@ if (!version) throw new Error("package.json version 缺失");
 const manifestVersion = fs.readJsonSync(join(ROOT, "src", "manifest.json")).version;
 if (version !== manifestVersion)
   throw new Error(
-    `版本不一致：package.json ${version} ≠ manifest.json ${manifestVersion}（manifest 未同步，跑 node scripts/syncver.mjs 同步后再打包）`,
+    `版本不一致：package.json ${version} ≠ manifest.json ${manifestVersion}（manifest 未同步，跑 node scripts/syncver.mts 同步后再打包）`,
   );
 
 // 1. 静态项复制进 dist —— dist 即完整交付目录（bundle + manifest + skills + cordis 插件），
@@ -102,7 +102,7 @@ function assertCordisDistVersions(outDir) {
     const j = fs.readJsonSync(pj);
     if (j.version !== version) {
       throw new Error(
-        `版本不一致：cordis 包 ${join("cordis", name, "package.json")} version ${j.version} ≠ package.json ${version}（跑 node scripts/syncver.mjs 同步后再打包）`,
+        `版本不一致：cordis 包 ${join("cordis", name, "package.json")} version ${j.version} ≠ package.json ${version}（跑 node scripts/syncver.mts 同步后再打包）`,
       );
     }
     count += 1;
@@ -135,11 +135,11 @@ assertUiTree(distDir);
 //   Windows x64 / Linux x86_64（glibc），外加通用兜底包。
 //   · 为什么隔离目录：不触碰仓库 node_modules（dev+prod 混合树，且动它会触发 pnpm 重建——
 //     Windows 上曾遇清理被拒导致树损坏）。
-//   用法：node scripts/pack.mjs [--target universal|darwin-arm64|darwin-x64|linux-x64|win32-x64|
+//   用法：node scripts/pack.mts [--target universal|darwin-arm64|darwin-x64|linux-x64|win32-x64|
 //   linux-arm64|win32-arm64]；默认 universal（单一目标，不接 `all`）。多目标 = 多次调用
 //   （包别名 `pack:<target>`）或 CI 的并发矩阵。
 //   别名约定：所有 `pack:<target>` 都必须**委派给 pack**（`pnpm run pack --target=…`），
-//   不能直接写 `node scripts/pack.mjs --target=…`：pnpm 的 pre/post 钩子是按脚本名精确匹配的，
+//   不能直接写 `node scripts/pack.mts --target=…`：pnpm 的 pre/post 钩子是按脚本名精确匹配的，
 //   `pack:linux-x64` 只会去找 `prepack:linux-x64` / `postpack:linux-x64`（实测确认），直接调脚本
 //   会同时跳过 prepack（build）与 postpack（清临时目录）。
 const stagingRoot = join(ROOT, "_tmp", "pkg-root");
@@ -194,7 +194,7 @@ function stagingWorkspaceYaml(spec) {
     ? repoWs.slice(0, i + PT_START.length) + "\n" + block + repoWs.slice(j)
     : repoWs + "\n" + block;
   // nodeLinker 必须在工作区文件里（CLI 传参形式实测不生效）
-  return "# pack.mjs 生成（每次打包重建，勿手改）\nnodeLinker: hoisted\n\n" + body;
+  return "# pack.mts 生成（每次打包重建，勿手改）\nnodeLinker: hoisted\n\n" + body;
 }
 
 /** 集成覆盖的声明（每个 integration.json 的 package 字段与 overlay 数）。 */
@@ -398,7 +398,7 @@ function failUsage(detail) {
     const s = targetSpec(n);
     console.error(`  ${n.padEnd(14)} os=[${s.os.join(",")}] cpu=[${s.cpu.join(",")}]${s.libc ? " libc=[" + s.libc.join(",") + "]" : ""}`);
   }
-  console.error("[pack] 用法：node scripts/pack.mjs --target <名字>（或 pnpm run pack --target=<名字>）");
+  console.error("[pack] 用法：node scripts/pack.mts --target <名字>（或 pnpm run pack --target=<名字>）");
   process.exit(2);
 }
 const spec = (() => {
@@ -492,12 +492,12 @@ fs.ensureDirSync(relDir);
 // 临时目录纪律（曾因多目标连跑堆积 2.2 GB 把宿主压崩）：
 //   · 起手清残留（上次运行/中途崩溃留下的）；
 //   · 用完即清（暂存树 + 铺平目录）；
-//   · 收尾全清由 package.json 的 postpack 钩子承担（scripts/clean-tmp.mjs），CI 里也可单独调。
+//   · 收尾全清由 package.json 的 postpack 钩子承担（scripts/clean-tmp.mts），CI 里也可单独调。
 // 中间原料与暂存树都可再生，真正的产物只有 releases/ 下的 zip + sha256。
 /**
  * 集成层覆盖：把 src-integrations 编译出的补丁包盖回物化树（单副本；机制见 src-integrations/README.md）。
  * fail-closed：声明了 overlay 却没产物 = 构建没跑全——宁可不打包，也不出「没打补丁」的包。
- * 版本戳（<上游>+dshana-<干净版本>）由 integrations.mjs build 写在补丁包的 package.json 里，此处只原样覆盖。
+ * 版本戳（<上游>+dshana-<干净版本>）由 integrations.mts build 写在补丁包的 package.json 里，此处只原样覆盖。
  * @param {string} nodeModulesDir 组装台里的 node_modules（交付树，已是 no-link 铺平形态）
  */
 function applyIntegrations(nodeModulesDir) {
@@ -581,4 +581,4 @@ for (const stale of [pkgRoot, stagingRoot]) fs.removeSync(stale);
   // 铺平目录已入包，即用即清
   fs.removeSync(pkgDir);
 }
-// 收尾全清 → postpack 钩子（scripts/clean-tmp.mjs）
+// 收尾全清 → postpack 钩子（scripts/clean-tmp.mts）

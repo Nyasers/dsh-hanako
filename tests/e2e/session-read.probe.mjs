@@ -16,7 +16,7 @@
 // 本脚本要回答的开放问题：**投影缓存的 asOfSeq 会不会落后于真实 cursor**（落后就意味着 page 读
 // 不到最新一轮）。用 rename（会写一条持久事件并回传 seq）制造"日志前进"再量 asOfSeq，无需模型。
 //
-// 用法（仓库根，先 node src/build.js && node src-cordis/build.js）：
+// 用法（仓库根，先 node src/build.ts && node src-cordis/build.ts）：
 //   node tests/e2e/session-read.probe.mjs [--keep] [--prompt "说一句你好"]
 //   --prompt 会真的跑一轮模型（耗时/耗 token；需要该 DSH_HOME 已配好 provider），随后核对
 //   "page 到尾 + lastRoundOutput 取最后一轮输出"。

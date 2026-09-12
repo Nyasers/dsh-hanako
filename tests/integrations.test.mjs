@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// tests/integrations.test.mjs — 集成层漂移闸（scripts/integrations.mjs）单测
+// tests/integrations.test.mjs — 集成层漂移闸（scripts/integrations.mts）单测
 // 重点：闸必须在「上游变了」时响，且报错要指名该 rebase 哪个文件、哈希改成什么。
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -17,7 +17,7 @@ import {
   tagForVersion,
   verifyIntegrations,
   REPO_ROOT,
-} from "../scripts/integrations.mjs";
+} from "../scripts/integrations.mts";
 
 const upstreamFile = "packages/client/ui-layout/src/client/index.ts";
 
@@ -127,7 +127,7 @@ test("仓库真实清单：能解析、字段齐（当前为批次①两枚、�
 });
 
 test("patchVersion：补丁包版本戳只从主 package.json 派生（无手写修订号）", async () => {
-  const { patchVersion, readPkg } = await import("../scripts/version-common.mjs");
+  const { patchVersion, readPkg } = await import("../scripts/version-common.mts");
   const clean = String(readPkg("package.json").version).split("+")[0];
   assert.equal(patchVersion("0.1.5-rc.2"), `0.1.5-rc.2+dshana-${clean}`);
   assert.equal(patchVersion("0.1.5-rc.2+whatever"), `0.1.5-rc.2+dshana-${clean}`);

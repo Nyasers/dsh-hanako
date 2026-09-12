@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src-cordis/build/service-config.mjs — cordis 子插件服务端半共享 preset（rspack）
+// src-cordis/build/service-config.mts — cordis 子插件服务端半共享 preset（rspack）
 // 学官方 dsh 组织：每包自持构建描述（plugins/<pkg>/cordis.config.mjs），
 // 共享 preset 层消费描述生成实际打包配置。本模块 = 原 scripts/cordis.config.mjs
 // 单包逻辑的参数化提取（两源两产物：src → 插件本体；src-cordis → 子插件包）。
@@ -13,14 +13,14 @@
 // /* webpackIgnore */ 保留原生运行时导入。
 //
 // preset 签名：serviceBundle({ name, pkgDir, outDir, rules?, optimization? })，返回
-// rspack 单包配置对象（纯数据，不含 rspack import；rspack 本体由编排侧 src-cordis/build.js
+// rspack 单包配置对象（纯数据，不含 rspack import；rspack 本体由编排侧 src-cordis/build.ts
 // 统一解析，RSPACK_ENV / 本地 node_modules 两路）。opts 覆盖口供特殊包逃生。
 import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url)))); // src-cordis/build → repo 根
-const MINIFY_LOADER = path.join(ROOT, "scripts", "minify-loader.mjs");
+const MINIFY_LOADER = path.join(ROOT, "scripts", "minify-loader.mts");
 
 /** 服务半入口：优先 index.ts（TS 源），否则 index.js。产物名始终是 index.js。 */
 export function serviceEntry(pkgDir) {

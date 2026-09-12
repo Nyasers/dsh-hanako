@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// scripts/migrate-legacy.mjs — dsh-hanako v1 旧插件数据迁移 CLI（独立运行；零第三方依赖）
+// scripts/migrate-legacy.mts — dsh-hanako v1 旧插件数据迁移 CLI（独立运行；零第三方依赖）
 //
 // 用法：
-//   node scripts/migrate-legacy.mjs --check \
+//   node scripts/migrate-legacy.mts --check \
 //       --hanako-home <HANA_HOME> [--target <App dataDir>]
-//   node scripts/migrate-legacy.mjs --apply --source <legacy plugin-data/dsh-hanako> \
+//   node scripts/migrate-legacy.mts --apply --source <legacy plugin-data/dsh-hanako> \
 //       --target <App dataDir> [--force] [--backup-dir <dir>]
 //
 // 环境变量缺省：--source 缺省取 DSHANA_LEGACY_HOME；--target 缺省取 DSHANA_DATA_DIR。

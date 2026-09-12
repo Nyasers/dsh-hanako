@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// scripts/minify-assets.mjs — 资源压缩共享逻辑（单一事实源）
+// scripts/minify-assets.mts — 资源压缩共享逻辑（单一事实源）
 // 三个消费方，压缩参数只维护一份：
-//   minify-loader.mjs（rspack asset/source 内联前压缩 src/assets 前端资源）
-//   build-common.mjs 的 extraMinify（rspack 产物二次压缩：JS 与静态壳页 HTML）
+//   minify-loader.mts（rspack asset/source 内联前压缩 src/assets 前端资源）
+//   build-common.mts 的 extraMinify（rspack 产物二次压缩：JS 与静态壳页 HTML）
 //   （前两个之外还有测试直接调）
 import { minify } from "terser";
 import CleanCSS from "clean-css";

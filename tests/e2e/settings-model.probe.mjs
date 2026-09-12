@@ -10,7 +10,7 @@
 //      带过期 revision 被拒——拒绝的错误码/文案就是 App 侧映射 409 的依据。
 // 写入一律**原值原样写回**（no-op），并在结束时恢复原值；不碰别的段。
 //
-// 用法（仓库根，先 pnpm run build && node src-cordis/build.js）：
+// 用法（仓库根，先 pnpm run build && node src-cordis/build.ts）：
 //   node tests/e2e/settings-model.probe.mjs [--keep]
 // 环境：DSH_REPO_ROOT、DSH_DATA_DIR、DSH_DEPS_ROOT、DSH_CORDIS_SRC、DSH_PROBE_TIMEOUT_MS
 import { fork } from "node:child_process";

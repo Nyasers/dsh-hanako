@@ -32,7 +32,7 @@ import { startDshBridge } from "./bridge.ts";
 import { info, warn, err } from "./log.ts";
 // @hana/app-sdk 为 devDependencies（file:vendor/hana-app-sdk/hana-app-sdk.tgz，版本随宿主
 // 0.946.2 App 契约）；connectAppRuntime 运行时实现经 rspack 构建时静态内联进本 bundle（只
-// 依赖 node:crypto，无运行时包解析——见 rspack.config.mjs 打包纪律注释）。升级 = 换 vendor
+// 依赖 node:crypto，无运行时包解析——见 rspack.config.mts 打包纪律注释）。升级 = 换 vendor
 // 里的 sdk tgz + pnpm install + 重建。
 import { connectAppRuntime } from "@hana/app-sdk";
 import { startTaskBridge } from "./task-bridge.ts"; // DSH 事件 → Hana task 回投

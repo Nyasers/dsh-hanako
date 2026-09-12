@@ -1,21 +1,21 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// scripts/typecheck.mjs — 逐域类型检查（我们有源码的域）
+// scripts/typecheck.mts — 逐域类型检查（我们有源码的域）
 //
-// 与覆盖层检查（scripts/overlay-typecheck.mjs）共用同一份诊断分类（scripts/ts-diagnostics.mjs）：
+// 与覆盖层检查（scripts/overlay-typecheck.mts）共用同一份诊断分类（scripts/ts-diagnostics.mts）：
 // 只有"自相矛盾"码判失败，跨包契约/环境类只计数。区别在跑法与"谁算我们的文件"：
 //   · 覆盖层：在 _tmp 的暂存树里跑（覆盖层要盖进别人的包才成立），ours = 我们覆盖的那几个文件；
 //   · 源码域：在仓库根跑（tsconfig 就在根级，路径相对它解析），ours = 该域目录下的文件。
 //
-// 用法：node scripts/typecheck.mjs [域名…]   （不给域名 = 跑全部）
+// 用法：node scripts/typecheck.mts [域名…]   （不给域名 = 跑全部）
 // 退出码：0 全过；1 有失败项；2 跑不起来（缺 tsc / tsconfig）。
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { classifyDiagnostics, formatDiagnostics, parseTsDiagnostics } from "./ts-diagnostics.mjs";
+import { classifyDiagnostics, formatDiagnostics, parseTsDiagnostics } from "./ts-diagnostics.mts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -31,13 +31,18 @@ const DOMAINS = [
     config: "tsconfig.src.json",
     ours: (file) => file.startsWith("src/"),
   },
+  {
+    name: "scripts",
+    config: "tsconfig.scripts.json",
+    ours: (file) => file.startsWith("scripts/"),
+  },
 ];
 
 /**
  * 跑一个域的类型检查。有失败项抛错（fail-closed）。
  * @returns {{ checked: string, mine: number, other: number, upstream: number }}
  */
-export function typecheckDomain(domain, { repoRoot = ROOT, log = () => {} } = {}) {
+export function typecheckDomain(domain, { repoRoot = ROOT, log = (_msg) => {} } = {}) {
   const configPath = join(repoRoot, domain.config);
   if (!existsSync(configPath)) throw new Error(`缺 tsconfig：${configPath}`);
   const tscPath = join(repoRoot, "node_modules", "typescript", "bin", "tsc");
@@ -89,5 +94,5 @@ function main() {
   }
 }
 
-const invokedDirectly = process.argv[1] && process.argv[1].endsWith("typecheck.mjs");
+const invokedDirectly = process.argv[1] && process.argv[1].endsWith("typecheck.mts");
 if (invokedDirectly) main();
