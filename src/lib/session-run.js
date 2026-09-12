@@ -28,7 +28,7 @@ import { writeTaskMap, markTaskMapEnded, isValidSessionId, pruneTaskMaps } from 
 import { withSessionTurn, enterSessionTurn } from "./session-serialize.js";
 import { readDshDefaultModel } from "./config.js";
 import { serviceBase } from "./service-base.js";
-import { rpcViaControl } from "./controller.js";
+import { rpcViaControl, invokeControl } from "./controller.js";
 import { resolveTaskTimeoutSec, resolveApprovalTimeoutMs, cancelSessionWork } from "./cancel-chain.js";
 
 // ---- 归一/校验（纯函数面，便于单测）----
@@ -333,6 +333,17 @@ export function submitDshTask({ action, input, callToken, log }) {
         timeoutSec,
         approvalTimeoutMs,
       });
+      // ⑤a 会话↔任务认领（宿主持久槽位）：落点是会话自己的事件日志，由 provider 注册的投影
+      //     单元折叠——取代「provider 每次模型请求读一份私有映射文件」。会话已 attach 则当场
+      //     落地，还冷着（send：DSH 到 prompt 才 resume）则由 provider 在模型请求前落地。
+      //     认领没落地 = 这条推理拿不到任务身份、结果不回投，所以控制面报错就让提交失败。
+      const bind = await invokeControl(ctx, "bind-task", {
+        sessionId,
+        taskId,
+        timeoutSec,
+        approvalTimeoutMs,
+      });
+      logLine(log, "[dsh-session] 会话认领已投（session=" + sessionId + " task=" + taskId + " 落点=" + ((bind && bind.landed) || "?") + "）");
       // ⑤b 宿主任务元数据回写（task → DSH 会话的**持久记录**；我们那份映射是热路径 + 私有副本）。
       //     写完整 dsh 对象：update 的 metadata 是整体替换还是浅合并，文档没写，给全量在两种
       //     语义下都正确。失败不改任务结局（映射文件仍是配对事实源）但必须出声——静默的记账

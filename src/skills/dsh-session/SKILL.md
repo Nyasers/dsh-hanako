@@ -33,7 +33,7 @@ required: ["action"]
 
 - **不允许传 sessionId**（新建；续会话用 send）；**task + cwd 必填**
 - **固定异步**：立即返回 `{ content, details: { dsh: { action, sessionId, status: "running", cwd, ... } } }`；任务在后台执行，完成/失败作为后台结果投递回发起会话，Agent 结束回合即可收到；要看过程或最终结论用 `action=get`
-- 提交链路：`ctx.tasks.create` → 受管 runtime 就绪 → `session.create` →（显式传 provider/model/effort 时才 `selectModel`）→ 写会话↔任务映射 → `session.prompt`（queue）→ runtime task-bridge 按映射回投终态
+- 提交链路：`ctx.tasks.create` → 受管 runtime 就绪 → `session.create` →（显式传 provider/model/effort 时才 `selectModel`）→ 会话↔任务认领（控制面 `bind-task`，落会话日志投影）→ `session.prompt`（queue）→ runtime task-bridge 回投终态
 
 ## action=send：续已有会话发消息
 
