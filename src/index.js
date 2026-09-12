@@ -1,66 +1,42 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/index.js — dshana App v2 入口（迁移指南 §13 步骤 1）
+// src/index.js — dshana App v2 入口（模块导出 apply(ctx)）
 //
-// v2 形态：模块导出 apply(ctx)（宿主在隔离 App 进程内加载本文件并调用；入口契约兼容
-// 具名 apply / default.apply / 默认函数，这里两种都导出）。apply 完成注册后即返回，
-// 不等待任何长活服务结束（指南 §3）。旧的 class + onload() 形态与进程内宿主单例
-// （globalThis.__dshHanako）随之退役——v1 onload 的职责按 v2 生命周期平移如下：
+// 形态：宿主在隔离 App 进程内加载本文件并调用 apply(ctx)（入口契约兼容具名 apply /
+// default.apply / 默认函数，两种都导出）。apply 完成注册后立即返回，不等任何长活服务结束。
+// 宿主进程内单例不存在：运行包（dataDir / ctx）由 lib/app-runtime.js 在 apply 期注入。
 //
-//   v1 onload 职责                             v2 落点（本文件 / 关联模块）
-//   ─────────────────────────────────────────  ─────────────────────────────────
-//   统一日志（文件）                             → 退役（spec §8 j 裁决：全量走宿主 ctx.logger）
-//   globalThis 单例（bus/resources/network/      lib/app-runtime.js module-scope 运行包
-//     web host 启动器、自动链状态机）              （apply 注入；不再依赖宿主态 globalThis）
-//   ctx.registerTool（宿主自动加 pluginId_ 前缀）  ctx.tools.register（v2 无自动前缀，
-//                                                 工具名全局唯一，见 tools/session.js）
-//   task handler 注册（task:abort → session.cancel） 迁移步骤 4（Hana ctx.tasks 取消链）
-//   受管 DSH runtime 启动（迁移步骤 2：ctx.runtime.start
-//     受管 Node 进程 + connectAppRuntime；自动链状态机按受管进程语义重设计）
-//   路由注册（v1 routes/webui.js + card.js）       迁移步骤 4b/5（ctx.routes.register 单
-//     registrar：routes/dshana-routes.js 壳页诊断面；到受管 runtime 的浏览器通道由宿主
-//     /api/apps/<id>/routes/_runtime/<runtimeId>/ 自动代理，不转发；ui/ 卡片贡献步骤 5 已回）
+// 启动模型：apply **不**启动 DSH，只注册工具/路由并返回。受管 runtime 走「工具首调兜底 +
+// 需要时自启」（lib/managed-runtime.js 的 ensureManagedRuntime 单例，single-flight 幂等）；
+// apply 级自动链在注册完成后后台拉起，所以壳页打开时通常已是 ready/starting。list/get 经
+// 控制面读官方查询面，需要 runtime 就绪。
 //
-// 启动触发模型（v2 无 activationEvents/onStartup，指南 §3/§11）：
-// apply 不启动 DSH——只注册工具/设置并返回。DSH 受管运行时采用「工具首调兜底 + 需要时
-// 自启」模型：dshana_session 的 create/send/cancel/approve 首调时若 DSH runtime 未就绪则
-// 触发启动（ctx.runtime.start → 轮询 get 到 ready → 注册调用）；list/get 纯本地读永远
-// 可用，不依赖 DSH 启动。稳定后再启用 manifest activation 的 on-demand 模式。步骤 2
-// 已把启动封装落位（lib/managed-runtime.js ensureManagedRuntime 单例），步骤 3 在
-// tools/session.js 的接线桩处接入。
+// 设置读取纪律：contributes.settings 在 apply() 完成后才由宿主登记，apply 顶层不得依赖
+// ctx.config.get 已可读；工具执行期经运行包 readConfig 安全读取（schema 默认值回填，
+// 失败返回 undefined）。
 //
-// 设置读取纪律（指南 §4）：contributes.settings 在 apply() 完成后才由宿主登记，apply
-// 顶层不得依赖 ctx.config.get 已可读；工具执行期（apply 已返回）经运行包 readConfig
-// 安全读取（ctx.config.get + schema 默认值回填，失败返回 undefined）。
+// 依赖部署：DSH 依赖（@deepseek-ai/dsh + cordis + 官方插件树 + 多平台原生产物）由
+// scripts/pack.mjs 在构建时物化进安装目录 node_modules（hoisted 布局，安装即用、无运行时
+// 安装，版本随 App 声明）；cordis 产物（@dshana/*）在安装目录 cordis/，profile 经 junction
+// 暴露（src/runtime/seed.js）；受管子进程入口 = runtime/dsh-host.mjs（dist 构建产物）。
 //
-// 依赖部署策略（2026-09-10 改为自包含打包）：DSH 依赖（@deepseek-ai/dsh + cordis + dsh-*
-// 官方插件树 + 多平台原生产物）由 pack.mjs 在构建时物化进包（安装目录 node_modules，
-// hoisted 布局；见 scripts/pack.mjs 1.7），安装即用、无运行时安装。版本随 App 声明
-// （package.json dependencies 单一事实源，无独立升级通道）；cordis 产物（@dshana/*）
-// 随包在安装目录 cordis/，profile 经 junction 链接（见 src/runtime/seed.js）。受管子进程
-// 入口 = runtime/dsh-host.mjs（dist 构建产物，见 src/build.js 与 src/runtime/）。
+// 日志：只走宿主 ctx.logger；ctx.logger 缺失或抛错时回落 stderr（宁可吵，不静默丢日志）。
 import { initAppRuntime } from "./lib/app-runtime.js";
-// 受管 DSH runtime 启动封装（迁移步骤 2 落位；disposer 负责收尾。启动触发：工具首调
-// 兜底（tools/session.js 接线桩）+ **apply 级自动链**（注册完成即后台拉起受管 runtime，
-// 语义回归 v1「插件加载即自动 boot」——壳页打开时通常已 ready/starting，无需手动按钮；
-// single-flight 幂等，已就绪不重复启动）
+// 受管 DSH runtime：启动封装 + 释放（disposer 负责收尾）
 import { disposeManagedRuntime, ensureManagedRuntime } from "./lib/managed-runtime.js";
-// 工具模块（导出 name/description/parameters/execute；v2 无自动 pluginId_ 前缀——
-// 工具名即注册名，注册策略与命名决策见 tools/session.js 头注释）
+// 工具模块（导出 name/description/parameters/execute；v2 工具名即注册名，无自动前缀）
 import * as dshSession from "./tools/session.js";
-// 壳页/诊断面单 registrar（迁移步骤 4b/5；v1 routes/webui.js+card.js 两工厂合并语义：
-// ctx.routes.register 只挂本 App 后端面；到受管 runtime 服务由宿主代理自动暴露，不转发）
+// 壳页/诊断面单 registrar（ctx.routes.register 只挂本 App 后端面；到受管 runtime 的服务
+// 由宿主按 /api/apps/<id>/routes/_runtime/<runtimeId>/ 自动代理，本文件不转发）
 import { registerDshanaRoutes, defaultDshanaRouteDeps } from "./routes/dshana-routes.js";
 
-// ---- 统一日志：只走宿主 ctx.logger（spec §8 j 裁决）----
-// App 侧不再写自己的文件日志（原 <dataDir>/logs/<时间戳>.log、旧日志 zstd 归档、
-// logPath/appendLog 运行包字段一并退役）。ctx.logger 缺失（旧 host）或宿主抛错时回落
-// stderr（经宿主进程日志可见），宁可吵也不静默丢日志。
+// ---- 统一日志：只走宿主 ctx.logger ----
+// App 侧不写自己的文件日志；ctx.logger 缺失（旧 host）或宿主抛错时回落 stderr。
 
 /**
  * App v2 主入口：注册 dshana_session 工具 + 设置/路由就位后返回（不等待 DSH 服务）。
- * 返回 disposer：宿主卸载/重载本 App 时调用，用于收尾（步骤 2+ 在此关闭受管 DSH
+ * 返回 disposer：宿主卸载/重载本 App 时调用，用于收尾（关闭受管 DSH
  * runtime、任务与流）。
  */
 export function apply(ctx) {
@@ -90,10 +66,8 @@ export function apply(ctx) {
   initAppRuntime(app);
 
   // ---- 工具注册（v2 ctx.tools.register；execute 由宿主在 App 进程内经 RPC 回调执行）----
-  // 工具名 = dshSession.name（"dshana_session"，全局唯一，v2 不自动加前缀——决策与冲突面
-  // 讨论见 tools/session.js 头注释 1）。action 参数与返回语义保持不变；v1 的
-  // sessionPermission（external_side_effect + describeSideEffect 函数）为 v1 宿主形态，
-  // 无法跨 App 进程序列化，本步骤不注册（外效 action 真正接线时按宿主契约补声明）。
+  // 工具名 = dshSession.name（"dshana_session"，全局唯一；v2 不自动加前缀，重名会被宿主
+  // 当场拒掉）。action 参数与返回语义见 tools/session.js。
   // 每个 execute 收到一个工具上下文（v2 execute 上下文袋缺省兼容）：log 走宿主 ctx.logger；
   // dataDir/config 供工具业务读取。
   const makeToolCtx = () => ({
@@ -115,8 +89,8 @@ export function apply(ctx) {
   });
   log("info", `工具注册:${dshSession.name}（ctx.tools.register，v2 全局唯一名，无自动前缀）`);
 
-  // ---- ctx.routes.register：壳页/诊断面（迁移步骤 4b/5 收口）----
-  // 契约（@hana/app-sdk + server 0.930.1 实证）：单 bundle App 只能 register 一次，
+  // ---- ctx.routes.register：壳页/诊断面 ----
+  // 契约（@hana/app-sdk）：单 bundle App 只能 register 一次，
   // registrar 收到宿主创建的 Hono sub-app（public URL /api/apps/dshana/routes/dshana/*，
   // app_route 鉴权；registrar 可返回 Promise，宿主 await 后发布）。到受管 runtime 服务的
   // 浏览器通道由宿主自动暴露在 /api/apps/dshana/routes/_runtime/<runtimeId>/（服务
@@ -130,8 +104,8 @@ export function apply(ctx) {
       unregisterRoutes = ctx.routes.register((app) => registerDshanaRoutes(app, defaultDshanaRouteDeps(ctx)));
       log("info", "路由注册:ctx.routes.register（/dshana/boot-state|health|start|stop——ui/ 壳页消费面）");
     } catch (e) {
-      // registrar 抛错 = 路由发布失败 → 抬高让宿主拒绝本 App（路由是步骤 4b 交付面，
-      // 缺了壳页只剩纯工具；显式失败比静默残缺好诊断）
+      // registrar 抛错 = 路由发布失败 → 抬高让宿主拒绝本 App（路由是壳页/诊断面的
+      // 交付面，缺了只剩纯工具；显式失败比静默残缺好诊断）
       log("error", "ctx.routes.register 失败（App 加载中止）：" + ((e && e.message) || e));
       throw e;
     }
@@ -140,14 +114,11 @@ export function apply(ctx) {
   }
 
   // ---- apply 级自动链：注册完成即后台拉起受管 DSH runtime（不 await，不阻塞 apply 返回）----
-  // 语义回归 v1「插件加载即自动 boot」（v1 activationEvents onStartup → webui 自动链）。
-  // v2 无 activationEvents，apply 即宿主加载本 App 的时机：注册完工具/路由后触发一次
+  // apply 即宿主加载本 App 的时机：注册完工具/路由后触发一次
   // ensureManagedRuntime（single-flight 幂等：已 starting/ready 时 no-op 共享同一启动）。
   // 依赖随包物化（安装目录 node_modules），启动只做 runtime boot（秒级）——fire-and-forget，
   // 状态经 boot-state 由壳页轮询展示（starting 日志滚动）；失败不 crash apply，落在 runtime
   // 状态机（phase=error + userText），壳页展示重试指引，dshana_session 首调仍可再触发。
-  // 注（2026-09-10）：依赖随包物化，app/process.spawn 能力与 ensure 链已退役，不再需要
-  // --allow-child-process。
   {
     // 宿主 bootstrap 窗口实证（0.930.1 plugin-loader-v2）：App 加载对 apply 有 60s RPC
     // bootstrap 超时（beta.3 在 apply 同步栈内 fire ensure 两次均 60s 整被杀）。规避 =
@@ -165,7 +136,7 @@ export function apply(ctx) {
     }
   }
 
-  // 返回 disposer：卸载/重载清理（步骤 2 起：停止受管 DSH runtime——若已启动；幂等）
+  // 返回 disposer：卸载/重载清理（停止受管 DSH runtime——若已启动；幂等）
   let disposed = false;
   return () => {
     if (disposed) return;

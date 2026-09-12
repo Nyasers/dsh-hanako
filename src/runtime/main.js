@@ -1,27 +1,27 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/runtime/main.js — dshana App v2 受管 Node runtime 入口主体（迁移指南 §13 步骤 2）
+// src/runtime/main.js — dshana 受管 Node runtime 入口主体
 //
-// 打包产物：dist/runtime/dsh-host.mjs（rspack ESM bundle；宿主 ctx.runtime.start({ runtime:
-// "node", entry: "runtime/dsh-host.mjs", ... }) 加载后自持生命周期，不再回宿主进程）。
-// 职责（与 v1 进程内 boot 拆分对照）：
+// 打包产物：dist/runtime/dsh-host.mjs（rspack ESM bundle）。宿主以 ctx.runtime.start({ runtime:
+// "node", entry: "runtime/dsh-host.mjs", ... }) 拉起，本进程自持生命周期，不回宿主进程。
+//
+// 职责：
 //   1. 解析 App 自有配置（唯一 argv = 私有运行时配置文件路径，0600，启动即删；schema 见
-//      options.js）——字段与 App 主进程 src/lib/managed-runtime.js buildRuntimeConfig()
-//      对偶一致（凭据/端口不经 argv/环境变量/日志）；
-//   2. connectAppRuntime() 连宿主（tasks/models/network.fetch/close；无父 IPC fd 时给
-//      可操作报错 + 退出码 3，绝不假装能跑）；
-//   3. 设置本进程自有 env（DSH_HOME/DSHANA_*，不污染宿主进程环境——迁移指南 §4）；
+//      options.js）——字段与 App 主进程 lib/managed-runtime.js buildRuntimeConfig() 对偶一致
+//      （凭据/端口不经 argv、环境变量、日志）；
+//   2. connectAppRuntime() 连宿主（tasks/models/network.fetch/close）；无父 IPC fd 时给可
+//      操作报错 + 退出码 3，绝不假装能跑；
+//   3. 设本进程自有 env（DSH_HOME / DSHANA_*，不污染宿主进程环境）；
 //   4. 依赖就位（随包物化在 <installRoot>/node_modules，无运行时安装）；
-//   5. profile 种子化（profiles/dshana → installDir cordis scope 链接，seed.js）；
-//   6. 子进程内 boot DSH（locateDsh → appBoot.loadLayeredEnv → profileBoot.runProfile，
-//      复用 v1 loadInprocDsh 思路；webserver 监听配置中的 dshPort）；
-//   7. 真实监听成功（webServer 服务端口 === 期望端口 + HTTP 探测）才向 stdout 打印
-//      约定 readyMarker（独占一行、无前缀）——任何失败路径绝不打印 READY（指南 §10）；
-//   8. SIGTERM/SIGINT/父进程 disconnect → 优雅释放：关 DSH fiber（含 webserver）→ 再
-//      hana.close()。顺序纪律（指南 §7）：拿到流式 Response 后不能立刻 close()——本步
-//      尚未消费任何宿主流，hana.close() 只在退出前调用；步骤 3 接流后此处在关闭前须
-//      先结束/取消活动流。
+//   5. profile 种子化（profiles/dshana → 安装目录 cordis scope 链接，seed.js）；
+//   6. 子进程内 boot DSH（locateDsh → appBoot.loadLayeredEnv → profileBoot.runProfile），
+//      webserver 监听配置中的 dshPort；
+//   7. 真实监听成功（webServer 服务端口 === 期望端口 + HTTP 探测）才向 stdout 打印约定
+//      readyMarker（独占一行、无前缀）——任何失败路径绝不打印 READY；
+//   8. SIGTERM/SIGINT/父进程 disconnect → 优雅释放：先关 DSH fiber（含 webserver），再
+//      hana.close()。顺序纪律：拿到流式 Response 后不能立刻 close()——hana.close() 只在退出前
+//      调用；接活动流后需先结束/取消流再关闭。
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,10 +35,10 @@ import { info, warn, err } from "./log.js";
 // 依赖 node:crypto，无运行时包解析——见 rspack.config.mjs 打包纪律注释）。升级 = 换 vendor
 // 里的 sdk tgz + pnpm install + 重建。
 import { connectAppRuntime } from "@hana/app-sdk";
-import { startTaskBridge } from "./task-bridge.js"; // 步骤 3：DSH 事件 → Hana task 回投
-import { startApprovalBridge } from "./approval-bridge.js"; // 步骤 4a：DSH 审批 → Hana requestApproval/watch 对账
+import { startTaskBridge } from "./task-bridge.js"; // DSH 事件 → Hana task 回投
+import { startApprovalBridge } from "./approval-bridge.js"; // DSH 审批 → Hana requestApproval / watch 对账
 import { resolveInstallRoot, locateDsh } from "./locate.js";
-// 依赖 ensure 已退役（2026-09-10）：依赖随包物化在安装目录 node_modules。
+// 依赖随包物化在安装目录 node_modules（无运行时 ensure）。
 import { seedDshanaProfile } from "./seed.js";
 
 /** 退出码约定（App 主进程 managed-runtime.js classify 读 exitCode 归类；勿随意改）。 */
@@ -137,7 +137,7 @@ function makeShutdown(state, exitCodeLog) {
     info(`shutdown：${reason}（exit ${code}）`);
     const ctx = state.ctx;
     const hana = state.hana;
-    // 步骤 3/4a：先停任务桥与审批桥（退订 ctx 事件，防关闭中再触发回投/流消费）再 dispose
+    // 先停任务桥与审批桥（退订 ctx 事件，防关闭中再触发回投/流消费）再 dispose
     for (const key of ["stopBridge", "stopApproval"]) {
       const fn = state[key];
       if (typeof fn === "function") {
@@ -159,7 +159,7 @@ function makeShutdown(state, exitCodeLog) {
       state.bridge = null;
     }
     try {
-      // @dshana/provider 等子插件经该句柄取 hana client（见 main.js 步骤 1 注释）
+      // @dshana/provider 等子插件经该句柄取 hana client（见本文件上方子插件钩子说明）
       if (globalThis.__dshanaHana === hana) globalThis.__dshanaHana = null;
     } catch { /* 忽略 */ }
     try {
@@ -172,8 +172,8 @@ function makeShutdown(state, exitCodeLog) {
     } catch (e) {
       warn("ctx dispose 异常（继续退出）：" + ((e && e.message) || e));
     }
-    // 流纪律（指南 §7）：拿到流式 Response 后不能立刻 close。本步不消费宿主流；步骤 3
-    // 接入模型/任务流后，此处必须先结束/取消活动流再 close（TODO 步骤 3）。
+    // 流纪律：拿到流式 Response 后不能立刻 close。本步不消费宿主流；
+    // 接入模型/任务流后，此处必须先结束/取消活动流再 close。
     try {
       if (hana && typeof hana.close === "function") hana.close();
     } catch {
@@ -280,16 +280,16 @@ export async function main(argv) {
       "ipc",
       "connectAppRuntime() 失败：" + ((e && e.message) || e) +
       "。本入口只能由 Hana ctx.runtime.start({ runtime: \"node\" }) 启动——宿主在启动该" +
-      " Node 进程时经父进程 IPC fd 注入受管通道（迁移指南 §7）。直接 node 运行无父 IPC，无法" +
+      " Node 进程时经父进程 IPC fd 注入受管通道。直接 node 运行无父 IPC，无法" +
       " 连接宿主 tasks/models/network，退出。",
     );
     return EXIT.IPC_UNAVAILABLE;
   }
   state.hana = hana;
-  // 步骤 3 契约：@dshana/provider 等受管子进程内子插件经该句柄调用宿主
+  // 受管子进程内子插件经该句柄调用宿主
   // tasks/models/network（connectAppRuntime 的 client 对象；与插件同进程，globalThis
   // 共享——provider adapter 重建见 src-cordis/plugins/provider/index.js v2）。关闭顺序：
-  // 先停 task-bridge/流，再 ctx dispose，最后 hana.close()（指南 §7 流纪律）。
+  // 先停 task-bridge/流，再 ctx dispose，最后 hana.close()（流纪律）。
   try {
     globalThis.__dshanaHana = hana;
   } catch { /* 忽略 */ }
@@ -300,9 +300,9 @@ export async function main(argv) {
   // 信号（宿主 stop 语义）：SIGTERM 正常停（0）、SIGINT 用户中断（130）
   process.on("SIGTERM", () => void shutdown("SIGTERM", 0));
   process.on("SIGINT", () => void shutdown("SIGINT", 130));
-  info("宿主 IPC 已连接（connectAppRuntime；tasks/models/network 待步骤 3 消费）");
+  info("宿主 IPC 已连接（connectAppRuntime 已就绪）");
 
-  // ---- 2) 进程级 env（自有受管进程内设置，不改宿主进程环境——指南 §4）----
+  // ---- 2) 进程级 env（自有受管进程内设置，不改宿主进程环境）----
   // DSH_HOME 已在上方定下（当前数据源 / 旧行为回落）。
   mkdirSync(dshHome, { recursive: true });
   mkdirSync(runtimeDir, { recursive: true });
@@ -377,7 +377,7 @@ export async function main(argv) {
     return EXIT.PORT;
   }
   info(`webserver 已在 127.0.0.1:${opts.dshPort} 真实监听——准备凭据交换与中继`);
-  // ---- 7) 桥挂载（步骤 3 + 步骤 4a）：订阅 DSH 事件 → Hana task/审批。
+  // ---- 7) 桥挂载：订阅 DSH 事件 → Hana task/审批。
   // 先于 readyMarker（App 等到 ready 后才提交 session.create/prompt，事件在 prompt 之后
   // 才发生——先挂订阅无遗漏窗口）。失败不阻断就绪（桥不可用时任务将无终态/审批回投，
   // 由 App 侧日志与超时暴露——见 DESIGN「已测/未测边界」）。----
