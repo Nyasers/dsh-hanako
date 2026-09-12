@@ -8,10 +8,10 @@
 // @dshana/* 子插件 + bundle @dshana/dshana 经单条 scope 目录链接暴露（scopeSrc =
 // PLUGIN_ROOT/cordis——10 包平铺于 cordis 资产根，链接名 @dshana 供 cordis 解析）。
 //
-// 官方生成工具（2026-09-04 定案）：profile 文件（manifest package.json / 用户层
+// 官方生成工具：profile 文件（manifest package.json / 用户层
 // cordis.patch.yml / pnpm-workspace.yaml）由 @deepseek-ai/dsh-app-boot 的 initProfile
 // 生成（官方库函数，幂等只补缺失；CLI `dsh plugin --profile` 同源）——本模块不维护
-// 任何种子模板（seed 目录已退役），opts.initProfile 由消费方（lifecycle.js 经
+// 任何种子模板，opts.initProfile 由消费方（lifecycle.js 经
 // loadInprocDsh 拿 appBoot.initProfile）注入。cordis.yml 是 loader include 锚点的空
 // entry 根，dsh 每次 boot 的 prepareProfile 无条件写回维护，两处均不碰。
 //
@@ -53,7 +53,7 @@ const PROFILE_MANIFEST_NAME = "dsh-profile-dshana";
 // dshana profile 的官方 initProfile 参数（bundles 层序 = 官方服务层 + 官方 web 面 + 本插件
 // 定制 bundle；patchReload live 与官方自定义 profile 默认一致）。导出供消费方/测试断言。
 //
-// 层序语义（2026-09-11 定案，向官方样例 hana-dsh 看齐）：官方 `@deepseek-ai/dsh-web-app`
+// 层序语义：官方 `@deepseek-ai/dsh-web-app`
 // bundle 自带 connection（BrowserAuth token/cookie 鉴权面）、gateway、完整 browser roster
 // 与 agent-presets；`@dshana/dshana` 在其后只放「对官方行的覆盖 + @dshana/* 定制
 // 插件」，不再照抄官方行，也不手写实现 connection。层序后写胜出：dshana 可 disable/覆盖

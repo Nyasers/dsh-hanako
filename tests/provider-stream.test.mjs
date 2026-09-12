@@ -3,8 +3,8 @@
 //
 // tests/provider-stream.test.mjs — provider 的真流式（增量 emit）与终态收尾
 //
-// 2026-09-12 真机反馈：旧实现跳过 text-delta/reasoning-delta、只在 done 一次性产出，Web UI
-// 看不到逐字输出。改成：过程出 block-start + delta，终态出权威 block-end（签名只在
+// 真机反馈：跳过 text-delta/reasoning-delta、只在 done 一次性产出的话，Web UI
+// 看不到逐字输出。所以这里：过程出 block-start + delta，终态出权威 block-end（签名只在
 // done.assistant 里）+ usage + finish。这里锁三件事：
 //   ① 增量字段是契约里的 `delta`（不是 text），空增量不发；
 //   ② 同类型连续增量共用一块，类型切换开新块；

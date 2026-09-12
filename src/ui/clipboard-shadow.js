@@ -142,9 +142,9 @@ export function installClipboardShadow(options = {}) {
   if (clipboard === undefined || clipboard === null) return () => {};
 
   const report = options.report || ((stage, error) => {
-    // 默认报告：**每次都说**。宿主在 card slot 里明确不允许这个能力（真机 2026-09-12：
-    // Plugin UI capability "clipboard.writeText" is not allowed in card slots），原生又被
-    // Permissions-Policy 挡住——两条路都在宿主手里，方向已按她的决定暂停；转发逻辑保留，
+    // 默认报告：**每次都说**。宿主在 card slot 里明确不允许这个能力（真机：Plugin UI
+    // capability "clipboard.writeText" is not allowed in card slots），原生又被
+    // Permissions-Policy 挡住——两条路都在宿主手里，方向暂停；转发逻辑保留，
     // 宿主哪天放开，这套代码不用改就能活。报错要即时、可归因，不做“只说一次”的静音。
     try {
       console.warn(`[dshana/clipboard] ${stage} failed:`, error);

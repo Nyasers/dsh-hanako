@@ -16,7 +16,7 @@
 //   ctx        apply(ctx) 收到的 HanaPluginContextV2（宿主 0.930.1 契约，19 成员）
 //   dataDir    ctx.dataDir（App dataDir = 宿主 app-data/<id>/；App 安装目录只读）
 //   logger     宿主日志（ctx.logger，info/warn/error/debug）——App 侧唯一日志出口
-//              （文件日志与 logPath/appendLog 运行包字段已退役，见 spec §8 j）
+//              （运行里不带 logPath/logTail 字段）
 //   readConfig (key) => unknown     ctx.config.get 的安全包装（apply 完成后才可读，
 //              工具执行期调用；设置贡献未登记/读取失败返回 undefined，不抛）
 let runtime = null;

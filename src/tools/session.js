@@ -145,14 +145,13 @@ export const parameters = {
 };
 
 // 迁移说明：v1 本模块导出的 sessionPermission（external_side_effect + describeSideEffect）
-// 是 v1 宿主权限模型的声明形态（函数型 describeSideEffect 无法跨 v2 App 进程序列化）。
-// v2 的权限面 = 能力授予（manifest capabilities，如 app/tools.expose-to-model）+ 宿主
-// 权限 ledger + tasks 审批链（requestApproval/respondApproval
-// 时按宿主 0.930.1 契约声明）。见 src/index.js apply 注释。
+// 权限面 = 能力授予（manifest capabilities，如 app/tools.expose-to-model）+ 宿主
+// 权限 ledger + tasks 审批链（requestApproval/respondApproval 按宿主 0.930.1 契约声明）。
+// 见 src/index.js apply 注释。
 
 // cancel/approve 已接线。
-// 真机边界（宿主取消 UI 反向触发 / DSH 超窗未确认的取消升级 / 审批通知形态）写入
-// DESIGN「已测/未测边界」，装包后由主上下文验收。
+// 真机边界（宿主取消 UI 反向触发 / DSH 超窗未确认的取消升级 / 审批通知形态）装包后
+// 由主上下文验收。
 
 async function doExecute(input, ctx) {
   const action = String(input.action ?? "").trim();

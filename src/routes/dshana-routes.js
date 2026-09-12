@@ -14,7 +14,7 @@
 //     /api/apps/<appId>/routes/_runtime/<runtimeId>/（自动代理 + 重定向重写 +
 //     hana_app_runtime HttpOnly cookie）。本 registrar 只提供壳页/诊断面（boot 状态、
 //     启动/停止触发），壳页把 DSH Web UI 指向正确的前缀即可（实证记录见
-//     src/lib/boot-state.js 头注释与 DESIGN「步骤 4b/5 收口」）。
+//     src/lib/boot-state.js 头注释）。
 //
 // 端点（本 App 私有，路径段前缀 dshana）：
 //   GET  /dshana/boot-state  归一化 boot 快照（idle/starting/ready/error + 文案）——壳页轮询
@@ -37,7 +37,7 @@ export const DASHANA_ROUTE_PREFIX = "/dshana";
 // 的 global.*——和宿主设置界面当初写的是同一处，也正是 src/lib/config.js 里
 // resolveApprovalTimeoutSec / resolveDefaultTimeoutSec 优先直读的那份值：改完即时生效，
 // 不需要重启。
-// 为什么不再用 schema（她的决定）：设置标签页直接渲染本 App 自己的页
+// 为什么不用 schema 门：设置标签页直接渲染本 App 自己的页
 // （contributes.settings.ui.route），配置经 App 自己的后端读写，宿主不再代画表单；缺省值
 // 随之由 lib/config.js 的 APP_SETTING_DEFAULTS 持有（值不变：30 / 1800）。
 const APP_SETTING_KEYS = ["approvalTimeoutSec", "defaultTimeoutSec"];

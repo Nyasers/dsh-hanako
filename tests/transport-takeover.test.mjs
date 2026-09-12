@@ -3,7 +3,7 @@
 //
 // tests/transport-takeover.test.mjs — 请求接管的判定规则与接管面
 //
-// 背景：带前导斜杠的裸路径（`/api/<命名空间>.<方法>`，真机上又冒出来的 /api/present.host 就是）
+// 背景：带前导斜杠的裸路径（`/api/<命名空间>.<方法>`，/api/present.host 就是这样）
 // 既不经过 __DSH_TRANSPORT__，也不受 <base> 约束（`/` 开头按 origin 解析，不继承 base 的路径），
 // 于是落到宿主源上被凭据闸挡。接管规则必须同时满足两件事，所以两条都锁在这里：
 //   ① 只重写「本页 origin（或 dsh.internal）」；

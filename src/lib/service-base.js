@@ -5,10 +5,10 @@
 //
 // 从 session-run.js 拆出（cancel-chain 与 session-run 都要用、互为消费者时避免环依赖）。
 //
-// 形态（2026-09-11 向官方样例 hana-dsh 看齐后）：App 主进程不再直连 DSH 端口（DSH 鉴权面
+// 形态：App 主进程不直连 DSH 端口（DSH 鉴权面
 // 已交回官方 connection，宿主代理剥 cookie，直连必 401），而是访问 runtime 内的中继——
 // base = http://127.0.0.1:<bridgePort>（中继端口由父进程随机选取、随启动注册给宿主，
-// 裁决 4：不再有 servicePort 设置项），请求带 header `x-hana-dsh-bridge: <bridgeKey>`
+// 无 servicePort 设置项），请求带 header `x-hana-dsh-bridge: <bridgeKey>`
 // （中继转发时注入 DSH cookie）。
 import { bridgeAccess } from "./managed-runtime.js";
 

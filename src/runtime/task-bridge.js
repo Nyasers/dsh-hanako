@@ -1,25 +1,25 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/runtime/task-bridge.js — 受管 runtime 内 DSH 事件 → Hana task 回投（App v2 步骤 3/4a）
+// src/runtime/task-bridge.js — 受管 runtime 内 DSH 事件 → Hana task 回投
 //
 // 位置与角色：本模块随 dist/runtime/dsh-host.mjs 打进受管 runtime（与 DSH 同进程），
 // main.js 在 DSH boot 就绪后挂载。它订阅 DSH cordis ctx 的会话事件（进程内 ctx.on——
-// 与 v1 dsh-events.js 同源；$events 广播层只带 api-session/*，turn 生命周期在 ctx 事件
-// 源直订才可见），按 <dataDir>/dshana/taskmaps/<sessionId>.json 映射（App 主进程写入，
+// `$events` 广播层只带 api-session/*，turn 生命周期在 ctx 事件源直订才可见），按
+// <dataDir>/dshana/taskmaps/<sessionId>.json 映射（App 主进程写入，
 // 见 src/lib/task-map.js——本 bundle 直接复用同一实现）把事件回投宿主：
 //   running 进度 → hana.tasks.update(taskId, { status:"running", progress })
 //   终态（成功）  → hana.tasks.complete(taskId, minimal 定位结果)
 //   终态（失败）  → hana.tasks.fail(taskId, message)
-// 终态判定语义与 v1 run.js consume 对齐（api-session/status false / session/event
-// turn/end + reason.kind=error；api-session/error 记 pendingFailure 不即终态）——但注意
-// v2 同会话已由 App 侧串行化（一个会话同时只跑一个任务，见 lib/session-serialize.js），
+// 终态判定语义（api-session/status false / session/event turn/end + reason.kind=error；
+// api-session/error 记 pendingFailure 不即终态）——同会话已由 App 侧串行化（一个会话同时
+// 只跑一个任务，见 lib/session-serialize.js），
 // 事件按 sessionId 路由到唯一当前任务，无跨任务串扰。
 //
-// 步骤 4a 扩展（取消链，指南 §9 / 决策 E）：
+// 取消链：
 //   · 取消确认 = DSH 真中止后：App 侧 cancel/执行超时先在映射写 cancel 标记（先于
 //     session.cancel RPC）；本桥在 DSH turn/end(aborted) 或自然终态但已有 cancel 标记时
-//     把宿主任务结算成 hana.tasks.cancel（v1 cancelledRequested 同款语义）——绝不先标
+//     把宿主任务结算成 hana.tasks.cancel——绝不先标
 //     canceled 而 DSH 还在跑。
 //   · 宿主侧取消反向触发（Hana task canceled/aborted，来源会话停止按钮/App 生命周期）：
 //     本桥对已 running 的任务经 hana.tasks.watch(taskId) SSE（watch-sse.js：snapshot 首条

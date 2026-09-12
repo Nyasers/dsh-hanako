@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// tests/task-map-ext.test.mjs — src/lib/task-map.js 步骤 4a 扩展单测
+// tests/task-map-ext.test.mjs — src/lib/task-map.js 补丁/取消/审批字段单测
 // （补丁/取消标记/审批协调字段：addApproval/settleApproval/findPendingApproval/
 // markCancelRequested/patchTaskMap/updateTaskMap；映射缺失/畸形容错）
 import { test } from "node:test";

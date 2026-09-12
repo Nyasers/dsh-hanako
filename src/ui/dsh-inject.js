@@ -68,11 +68,11 @@ export function loadRuntimeBundle(privateBase, pageOrigin = window.location.orig
 // 自己的请求。DSH 侧其它代码（新插件、新调用点、非 fetch 载体）照旧打原生接口，而带前导斜杠
 // 的裸路径连 `<base>` 都绕开（`/` 开头按 origin 解析，不走 base 的路径）——于是
 // `/api/<命名空间>.<方法>`（DSH 的 Typert 文法是 `api/remote.mux`、`api/events.host` 这样）
-// 落到**宿主源**上被凭据闸挡（403 missing_credential / 404）。真机又冒出来的
-// `/api/present.host` 就是这个漏：每升一版 DSH，多一个调用点就多一个洞。
+// 落到**宿主源**上被凭据闸挡（403 missing_credential / 404）。`/api/present.host` 就是这
+// 样漏的：每升一版 DSH，多一个调用点就多一个洞。
 //
-// 样例 hana-dsh 的做法是逐个包打补丁（它打了 client-hmr 与 ui-open-in-app）；我们一开始照做，
-// 但成本随版本线性涨。这里改成**一处接管**：直接包住本页的请求原语，规则只有一条。
+// 逐个包打补丁（client-hmr 与 ui-open-in-app）的成本随 DSH 版本线性涨。这里改成**一处接管**：
+// 直接包住本页的请求原语，规则只有一条。
 //
 // 判定规则（必须可判定，所以只用两个条件）：
 //   仅当 URL 的 origin 是当前文档（或 dsh.internal）**且** pathname 不在宿主前缀白名单下时，
@@ -396,7 +396,7 @@ export async function injectDshIndex(indexHtml, privateBase, opts) {
   if (!moduleEntry) throw new Error("DSH index did not declare a module entry");
   // body 内联脚本（**必须早于 module entry**）：dsh 自己的 boot-theme 行就在 <body> 开头——
   // 它设 documentElement.style.colorScheme、body[data-ds-dark-theme]、--dsh-content-font-size。
-  // 旧实现只搬 head，这行就丢了：dsh 的明暗标记与内容字号从未初始化（真机 2026-09-12）。
+  // 旧实现只搬 head，这行就丢了：dsh 的明暗标记与内容字号就不会初始化。
   for (const source of parsed.body.querySelectorAll("script:not([src])")) {
     const script = document.createElement("script");
     script.textContent = source.textContent;
@@ -408,20 +408,19 @@ export async function injectDshIndex(indexHtml, privateBase, opts) {
 /**
  * 安装 __DSH_TRANSPORT__ 与 __DSH_FILE_UPLOAD__（注入 index 前调用）。返回 disposer。
  *
- * 覆盖边界（2026-09-11 真机 403 排查 + 全树核对）：`__DSH_TRANSPORT__` 在全树里**只有
+ * 覆盖边界（全树核对）：`__DSH_TRANSPORT__` 在全树里**只有
  * DSH 内核的 connection 客户端（dsh-client-connection）在读**，所以它只兜住内核自己的请求；
  * 浏览器侧其余 DSH 插件一律走原生 fetch/EventSource 或各自的钩子：
  *   · dsh-client-file-upload 读 `globalThis.__DSH_FILE_UPLOAD__`（官方为此设的钩子）。不设它
  *     → 回退到内联 Worker 载体（Blob Worker），而 Worker 里的 fetch 是**同源**（= 当前文档的
- *     宿主源，不是中继前缀）→ 宿主凭据闸 403 missing_credential。样例 hana-dsh 的
- *     ui/bootstrap.js 就是在这里一并设的（__DSH_FILE_UPLOAD__ 挨着 __DSH_TRANSPORT__），我们照做。
+ *     宿主源，不是中继前缀）→ 宿主凭据闸 403 missing_credential。官方 ui/bootstrap.js 也是
+ *     在这里一并设的（__DSH_FILE_UPLOAD__ 挨着 __DSH_TRANSPORT__）。
  *   · dsh-client-hmr 的 /plugins/events（EventSource）与 dsh-client-ui-open-in-app 的
- *     /open-in-app/apps（裸 fetch）没有官方钩子可接，会落到宿主源被 403；样例的做法是**逐个打补丁**
- *     （它打了 client-hmr 与 ui-open-in-app）：EventSource 换 URL（桥的 runtimeUrl）、fetch 换
+ *     /open-in-app/apps（裸 fetch）没有官方钩子可接，会落到宿主源被 403；这两处**逐个打补丁**
+ *     （client-hmr 与 ui-open-in-app）：EventSource 换 URL（桥的 runtimeUrl）、fetch 换
  *     __DSH_TRANSPORT__.fetch。我们同法（src-integrations/client-hmr、src-integrations/ui-open-in-app）。
  *
- * 2026-09-12 更新（真机上又冒出一个裸请求 /api/present.host）：逐点打补丁的成本随 DSH 版本线性涨，
- * 改成**一处接管**——installRequestTakeover 直接包住本页的 fetch / XMLHttpRequest / EventSource /
+ * 一处接管：installRequestTakeover 直接包住本页的 fetch / XMLHttpRequest / EventSource /
  * WebSocket / sendBeacon，凡「发给本页 origin、且不在宿主前缀 /api/apps/ 下」的 URL 一律改指中继前缀。
  * 上面两处逐包补丁保留（同一目标、互为兼容，不再新增第三处）；__DSH_TRANSPORT__ 仍是内核 connection
  * 客户端的 opt-in 通道，语义不变（它对外部 origin 抛错，接管层则原样放行）。

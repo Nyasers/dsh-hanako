@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/lib/watch-sse.js — Hana tasks/approval watch SSE 消费（App v2 步骤 4a，迁移指南 §9）
+// src/lib/watch-sse.js — Hana tasks/approval watch SSE 消费
 //
 // 背景与分侧：watch(taskId/approvalId) 返回 SSE，
 // 首条 snapshot（完整当前记录），后续 app-task（增量/终态记录）；缓冲溢出由服务端发 reset

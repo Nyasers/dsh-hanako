@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/lib/approve-respond.js — dshana_session approve 应答编排（App 主进程侧，步骤 4a）
+// src/lib/approve-respond.js — dshana_session approve 应答编排（App 主进程侧）
 //
 // 职责：
 //   用户/Agent 经 dshana_session(action=approve, sessionId, approvalId, outcome) 应答 →

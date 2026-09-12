@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/lib/model-requests.js — 受管 runtime 内活动模型 requestId 注册表（App v2 步骤 4a）
+// src/lib/model-requests.js — 受管 runtime 内活动模型 requestId 注册表
 //
 // 角色：DSH session.cancel 中止回合时，provider adapter 已随流 signal abort 调
 // hana.models.cancel(requestId)；但取消链要求显式

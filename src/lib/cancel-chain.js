@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/lib/cancel-chain.js — dshana_session cancel / 执行超时取消编排（App 主进程侧，步骤 4a）
+// src/lib/cancel-chain.js — dshana_session cancel / 执行超时取消编排（App 主进程侧）
 //
 // 职责：
 //   ① 触发：dshana_session(action=cancel)（本模块 cancelDshTask）或执行超时看门狗

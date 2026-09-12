@@ -10,7 +10,7 @@
 // 由打包器 resolve、产物自包含，不在 dist/ui 另放 vendored 拷贝。到本 App 后端路由一律
 // hana.api.fetch：宿主在 App surface iframe URL 附 appSurfaceSession query，SDK 注入
 // X-Hana-App-Surface-Session header——裸 fetch 会被宿主网关 403 missing_credential
-// （真机实测 0.930.1）。受管 runtime iframe 首访透传 appSurfaceSession（宿主按 surface
+// （真机实测）。受管 runtime iframe 首访透传 appSurfaceSession（宿主按 surface
 // 授权并种 hana_app_runtime cookie）。视觉沿袭 v1 webui-shell 纸张风（CSS 变量 +
 // fallback 纸张色），数据语义 v2 boot-state（phase idle/starting/ready/error/stopped）。
 import { hana } from "@hana/plugin-sdk";
@@ -575,7 +575,7 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
   //         （App 卡面不被允许用这个能力通道，SDK 直接拒）
   //   原生：NotAllowedError（Permissions-Policy 把 Clipboard API 在本文档里关死）
   // 转发逻辑保留（宿主哪天放开，不用改代码就能活）。**报错每次都说**：她要的是即时反馈，
-  // 不是被静音过的失败（“每个环节只说一次”已按她的要求撤回）。唯一未试过的候选是
+  // 不是被静音过的失败（失败每次即时上报）。唯一未试过的候选是
   // document.execCommand('copy')（DSH 只在 writeText 不存在时才走它），大概被同一道策略管着，不做。
   function writeClipboard(text) {
     if (!hana || !hana.clipboard || typeof hana.clipboard.writeText !== "function") {
@@ -711,7 +711,7 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
   }
 
   // ---- 标题栏内的交互区域（Hana 0.950.0+；“APPS.md・标题栏内的交互区域”）----
-  // 宿主顶部那条半透明标题带会盖住页面内容，落在带内的控件点不到——真机上就是“那个位置
+  // 宿主顶部那条半透明标题带会盖住页面内容，落在带内的控件点不到——表现就是“那个位置
   // 有按钮也按不了”。官方门：await hana.surface.setInteractiveRegions(regions)，**运行时调用、
   // 不需要清单权限**，只对**黑板主卡与拆窗主卡**开放（FP / 设置页 / 未就绪页面不行），返回
   // { applied: true }；坐标是 **iframe 视口的 CSS 像素**。

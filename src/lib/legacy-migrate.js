@@ -3,13 +3,13 @@
 //
 // src/lib/legacy-migrate.js — dsh-hanako 旧插件（v1）数据迁移逻辑（纯 node 内置依赖）
 //
-// 目标（迁移指南 §12 / DESIGN「步骤 4b/5 收口」）：旧插件数据布局
+// 目标：旧插件数据布局
 //   <hanakoHome>/plugin-data/dsh-hanako/{dsh-home, logs, config.json, node_modules, pnpm-dist}
 // 迁入 App v2 数据区 ctx.dataDir = <hanakoHome>/app-data/dshana/，使：
 //   · dsh-home/{sessions, storages, settings.yaml, .anonymous-user-id} → <私有源目录>/…
 //     （DSH_HOME 指向当前数据源的 home，见 src/runtime/main.js env 设置）
 //     ⚠ 源目录名 dsh-home 是 v1 的历史布局（不可改）；目标用 PRIVATE_HOME_NAME（.dsh）
-//   · logs/* **不迁移**：App 侧文件日志已退役（日志走宿主 ctx.logger，见 spec §8 j），旧日志无落点
+//   · logs/* **不迁移**：App 侧日志走宿主 ctx.logger，旧日志无落点
 //   · config.json（v1 全局设置）→ 参考拷贝 dataDir/legacy-config.json + 映射建议输出
 //     （v2 设置存宿主 preferences（contributes.settings 经 ctx.config），脚本不代写宿主态）
 //   · profiles/dshana **不复制**：其 node_modules/@dsh-hanako 是 junction/拷贝指向 v1 插件
@@ -22,7 +22,7 @@
 //   · 不覆盖唯一备份：备份目录已存在（内容非空）即跳过，换后缀新建，绝不覆盖旧备份。
 //   · 幂等：目标 dataDir/dshana/migrated.json（source+at+stats+backupDir）存在且 source
 //     一致 → already-migrated（--force 才允许覆盖目标重跑，仍不动源）。
-//   · 停机指引（真机执行时主上下文与姐姐协调）：迁移窗口内旧插件应停止写入——脚本容忍
+//   · 停机指引：迁移窗口内旧插件应停止写入——脚本容忍
 //     只读拷贝（jsonl 追加竞态最坏 = 尾部半行，DSH 读取侧逐行容错），但会话正被写时
 //     拷贝数量/内容可能与最后实际不符；正式迁移前先停旧 DSH/会话写入再执行。
 //   · Windows：路径统一 path.join/原生分隔符；junction 不在复制范围（profiles 跳过）；

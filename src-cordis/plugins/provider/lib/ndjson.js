@@ -4,7 +4,7 @@
 // src-cordis/plugins/provider/lib/ndjson.js — NDJSON 逐行读取器（纯函数/零依赖）
 //
 // hana.models.stream 的响应是 NDJSON（application/x-ndjson，每行一个 JSON 事件；详见
-// SDK models.d.ts 与迁移指南 §8）。一个网络 chunk 可能包含多行或半行，解析必须保留
+// SDK models.d.ts）。一个网络 chunk 可能包含多行或半行，解析必须保留
 // 跨 chunk 的半行余量。本模块导出：
 //   createNdjsonLineReader()  —— 行级 async iterable（喂 byte/text chunk）
 //   parseNdjsonEvent(line)    —— 单行 JSON.parse（容错抛错带行号上下文）

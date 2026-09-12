@@ -11,7 +11,7 @@
 //
 // 闸的意义：overlay 是「上游某版文件 + 我们的 delta」的整文件拷贝，清单记下当时上游文件的 sha256。
 // 构建时用**当前镜像**重算比对；不一致 = 上游动过 → 构建失败并指名要 rebase 的文件。
-// 于是"拷贝即冻结"在流程上不可能发生（这正是 0.1.2 冻结导致真机黑屏的根因）。
+// 于是"拷贝即冻结"在流程上不可能发生。
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";

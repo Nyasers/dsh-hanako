@@ -380,7 +380,7 @@ export async function main(argv) {
   // ---- 7) 桥挂载：订阅 DSH 事件 → Hana task/审批。
   // 先于 readyMarker（App 等到 ready 后才提交 session.create/prompt，事件在 prompt 之后
   // 才发生——先挂订阅无遗漏窗口）。失败不阻断就绪（桥不可用时任务将无终态/审批回投，
-  // 由 App 侧日志与超时暴露——见 DESIGN「已测/未测边界」）。----
+  // 由 App 侧日志与超时暴露）。----
   // ---- 6.5) DSH 凭据交换 + 中继（本 App 唯一服务面）----
   // 官方 connection（BrowserAuth）生效后，宿主 runtime 代理会剥 cookie，App 页/App 主进程都
   // 无法直接携带 DSH 凭据。交换得到 DSH cookie 后由中继统一注入——注册给宿主的 service.port

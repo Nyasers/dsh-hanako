@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/build.js — 主 bundle（src 域）构建入口（App v2 交付形态）
+// src/build.js — 主 bundle（src 域）构建入口（App 交付形态）
 // 布局：领域专用脚本随各自源码——rspack.config.mjs（本目录，配置源）与本入口放 src/，
 // 共享工具（collect/walk/terser/assert + minify/template loader）在 scripts/（根级）。
-// 产物（dist/ = App 安装目录形态，迁移指南 §3；宿主读 dist 根 manifest.json + entry）：
+// 产物（dist/ = App 安装目录形态；宿主读 dist 根 manifest.json + entry）：
 //   manifest.json       App v2 manifest（entry "index.js" / icon "assets/icon.png"）
 //   index.js            rspack 单 bundle（入口具名导出 apply + default.apply）
 //   assets/icon.png     App 身份图标（manifest.icon 指向的包内真实图片）
 //   skills/             App skills（dshana / dsh-session，SKILL.md 随包分发）
-//   runtime/dsh-host.mjs  受管 Node runtime 入口（migration step 2；见 src/runtime/；
+//   runtime/dsh-host.mjs  受管 Node runtime 入口（见 src/runtime/；
 //                         cordis/ 产物由 build:cordis 另产出 dist/cordis，随包分发）
 //   ui/                   App ui/ 静态树（migration step 4b/5；cards route 指向壳页，
 //                         见 src/ui/——相对资源路径，宿主以 /api/apps/<id>/ui<route> 服务）
@@ -86,7 +86,7 @@ rewriter(DIST_DIR);
 fs.copySync(join(ROOT, "src", "manifest.json"), join(DIST_DIR, "manifest.json"));
 fs.copySync(join(ROOT, "src", "skills"), join(DIST_DIR, "skills"));
 // App 图标：src/assets/icon.png 为唯一规范源（manifest.icon "assets/icon.png"）；
-// 依赖部署（2026-09-10 改自包含打包）：DSH 依赖由 pack.mjs 物化进安装目录 node_modules，
+// 依赖部署（自包含打包）：DSH 依赖由 pack.mjs 物化进安装目录 node_modules，
 // dist = App 安装目录形态（含 cordis 产物）；运行时不再安装，dist 保持轻量壳。
 const iconSrc = join(ROOT, "src", "assets", "icon.png");
 if (!fs.pathExistsSync(iconSrc))

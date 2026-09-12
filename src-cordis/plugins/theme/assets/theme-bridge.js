@@ -64,11 +64,9 @@
       st.remove();
     }
   }
-  // 同文档注入形态（当前主路径）：桥与壳页在同一**文档**里，主题变量直接
-  // 从文档根算就行，不再经 parent/壳页往返；本桥仍
-  // 按旧拓扑校验来源（`e.source !== window.parent` 就丢）——壳页现在只能自投
-  // （e.source === window），消息全被丢弃 → 内层 dsh WebUI 永远拿不到主题（真机反馈
-  // “壳页跟随了，DSHWebUI 没有”）。
+  // 同文档注入形态（当前主路径）：桥与壳页在同一**文档**里，主题变量直接从文档根算就行，
+  // 不经 parent/壳页往返。此处不能按旧拓扑校验消息来源（`e.source !== window.parent` 就丢）：
+  // 壳页是自投（e.source === window），那样会把消息全丢掉，内层 dsh WebUI 拿不到主题。
   function readDocumentVars() {
     var cs = null;
     try { cs = getComputedStyle(document.documentElement); } catch (e) { return null; }

@@ -3,7 +3,7 @@
 //
 // src/ui/settings.js — DSHana App 自己的设置页脚本（contributes.settings.ui.route = /settings.html）。
 //
-// 为什么是我们自己的页（她的决定）：宿主设置区里那个「DSHana」标签页直接渲染本页，配置经
+// 为什么是我们自己的页：宿主设置区里那个「DSHana」标签页直接渲染本页，配置经
 // App 自己的后端读写（GET/POST /dshana/settings → dataDir/config.json 的 global.*），不再让
 // 宿主按 manifest schema 代画表单——"两处表单两份值"的分叉从此不存在。缺省值由
 // src/lib/config.js 的 APP_SETTING_DEFAULTS 持有（30 / 1800，与原 schema 的 default 一致）。
