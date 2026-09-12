@@ -20,7 +20,7 @@
 export const BINDING_KEY = "dshanaTaskBinding";
 
 /** 单元版本。 */
-export const BINDING_STATE_VERSION = 3;
+export const BINDING_STATE_VERSION = 4;
 
 /** 事件类型。 */
 export const BINDING_CLAIM_EVENT = "dshana/task-binding";
@@ -39,6 +39,7 @@ export function claimPayload(claim) {
   return {
     taskId: claim && typeof claim.taskId === "string" ? claim.taskId : null,
     rpcId: claim && typeof claim.rpcId === "string" && claim.rpcId !== "" ? claim.rpcId : null,
+    action: claim && typeof claim.action === "string" && claim.action !== "" ? claim.action : null,
     timeoutSec: intOrNull(claim && claim.timeoutSec),
     approvalTimeoutMs: intOrNull(claim && claim.approvalTimeoutMs),
   };

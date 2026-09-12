@@ -26,7 +26,7 @@
 export const BINDING_KEY = "dshanaTaskBinding";
 
 /** 单元版本：折叠语义变化时递增（宿主据此丢弃不匹配的缓存行重新折叠）。 */
-export const BINDING_STATE_VERSION = 3;
+export const BINDING_STATE_VERSION = 4;
 
 /** 事件类型。 */
 export const BINDING_CLAIM_EVENT = "dshana/task-binding";
@@ -42,6 +42,7 @@ export function emptyBinding() {
   return {
     taskId: null,
     rpcId: null,
+    action: null,
     timeoutSec: null,
     approvalTimeoutMs: null,
     ended: null,
@@ -73,6 +74,8 @@ export function foldBinding(state, event) {
     return {
       taskId,
       rpcId: typeof data.rpcId === "string" && data.rpcId !== "" ? data.rpcId : null,
+      // 动作名（create/send）：随绑定一起，进宿主任务完成结果的 dsh.action
+      action: typeof data.action === "string" && data.action !== "" ? data.action : null,
       timeoutSec: intOrNull(data.timeoutSec),
       approvalTimeoutMs: intOrNull(data.approvalTimeoutMs),
       ended: null,
@@ -113,6 +116,7 @@ export const bindingStateSchema = {
     return {
       taskId: value.taskId ?? null,
       rpcId: value.rpcId ?? null,
+      action: value.action ?? null,
       timeoutSec: intOrNull(value.timeoutSec),
       approvalTimeoutMs: intOrNull(value.approvalTimeoutMs),
       ended: value.ended ?? null,
@@ -138,6 +142,7 @@ export function claimPayload(claim) {
   return {
     taskId: claim.taskId,
     rpcId: typeof claim.rpcId === "string" && claim.rpcId !== "" ? claim.rpcId : null,
+    action: typeof claim.action === "string" && claim.action !== "" ? claim.action : null,
     timeoutSec: intOrNull(claim.timeoutSec),
     approvalTimeoutMs: intOrNull(claim.approvalTimeoutMs),
   };

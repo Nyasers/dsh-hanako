@@ -456,8 +456,9 @@ export async function main(argv) {
           const sessionId = typeof a.sessionId === "string" ? a.sessionId : "";
           const payload = depositBindingClaim(sessionId, {
             taskId: a.taskId,
-            // rpcId 随认领一起落投影：approval-bridge 读它（原先只在映射文件里）。
+            // rpcId / action 随认领一起落投影：桥读它们（原先只在映射文件里）。
             rpcId: a.rpcId,
+            action: a.action,
             timeoutSec: a.timeoutSec,
             approvalTimeoutMs: a.approvalTimeoutMs,
           });

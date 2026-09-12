@@ -31,6 +31,7 @@
 // 容错纪律：订阅/回投失败只记日志不阻断 runtime；映射不存在（非 dshana_session 发起的
 // 会话，如 DSH Web UI 直开）的事件直接忽略。
 import { readTaskMap, markTaskMapEnded } from "../lib/task-map.ts";
+import { bindingStateOf } from "../lib/binding-slot.ts";
 import { BINDING_END_EVENT, appendSessionEvent } from "../lib/binding-slot.ts";
 import { runWatchReconcile } from "../lib/watch-sse.ts";
 import { rpcSessionCancel } from "../lib/dsh-rpc.ts";
@@ -104,9 +105,10 @@ export function classifyDshEvent(event, args) {
  */
 class SessionBridge {
   settled = false; // 已 complete/fail/cancel（幂等）
-  constructor({ hana, dataDir, sessions, log, serviceBaseUrl, bridgeKey, cancelModelRequests }) {
+  constructor({ hana, dataDir, sessions, log, serviceBaseUrl, bridgeKey, cancelModelRequests, ctx = null }) {
     this.hana = hana;
     this.dataDir = dataDir;
+    this.ctx = ctx;
     this.sessions = sessions && typeof sessions.get === "function" ? sessions : null;
     this.log = log;
     this.serviceBaseUrl = typeof serviceBaseUrl === "string" && serviceBaseUrl ? serviceBaseUrl : null;
@@ -123,10 +125,13 @@ class SessionBridge {
     this.hostCancelDone = false; // 宿主取消反向触发只做一次
   }
 
-  /** 首个事件载入映射；无映射（非 dshana_session 会话）返回 false。 */
+  /**
+   * 首个事件载入绑定：投影优先（同进程 stateOf，零文件读），取不到回落私有映射文件。
+   * 无绑定（非 dshana_session 会话）返回 false。
+   */
   load() {
     if (this.map) return true;
-    const m = readTaskMap(this.dataDir, this.sessionId);
+    const m = bindingStateOf(this.ctx, this.sessionId, null, () => readTaskMap(this.dataDir, this.sessionId));
     if (!m || !m.taskId) return false;
     this.map = m;
     this.taskId = m.taskId;
@@ -387,6 +392,8 @@ export function startTaskBridge({ ctx, hana, dataDir, log, serviceBaseUrl, bridg
             serviceBaseUrl,
             bridgeKey,
             cancelModelRequests: doCancelModels,
+            // 投影读取的把手：同进程 sessionProjections（详见 lib/binding-slot.ts 的 bindingStateOf）
+            ctx,
           });
           b.sessionId = frame.sessionId;
           bridges.set(frame.sessionId, b);

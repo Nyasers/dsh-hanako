@@ -26,7 +26,7 @@ import {
 } from "../src/lib/binding-slot.ts";
 
 test("两套构建树的版本与事件名逐字一致（跨 bundle 约定靠常量对齐）", () => {
-  assert.equal(BINDING_STATE_VERSION, 3);
+  assert.equal(BINDING_STATE_VERSION, 4);
   assert.equal(BINDING_STATE_VERSION, RUNTIME_STATE_VERSION);
   assert.equal(BINDING_CANCEL_EVENT, RUNTIME_CANCEL_EVENT);
   assert.equal(BINDING_CANCEL_EVENT, "dshana/task-cancel");
@@ -87,4 +87,17 @@ test("state 校验：cancel 格缺省补 null，形状不对就抛", () => {
   });
   assert.deepEqual(kept.cancel, { reason: "user", at: 5 });
   assert.throws(() => bindingStateSchema.parse("nope"), /必须是对象/);
+});
+
+test("折叠：认领带上 rpcId 与 action（桥读它们），没给就是 null", () => {
+  const withRpc = foldBinding(emptyBinding(), {
+    type: BINDING_CLAIM_EVENT,
+    seq: 1,
+    data: { taskId: "task-1", rpcId: "rpc-7", action: "send" },
+  });
+  assert.equal(withRpc.rpcId, "rpc-7");
+  assert.equal(withRpc.action, "send");
+  const without = foldBinding(emptyBinding(), { type: BINDING_CLAIM_EVENT, seq: 2, data: { taskId: "task-1" } });
+  assert.equal(without.rpcId, null, "没给就是 null，不编造");
+  assert.equal(without.action, null, "没给就是 null，不编造");
 });
