@@ -26,18 +26,20 @@
 export const BINDING_KEY = "dshanaTaskBinding";
 
 /** 单元版本：折叠语义变化时递增（宿主据此丢弃不匹配的缓存行重新折叠）。 */
-export const BINDING_STATE_VERSION = 1;
+export const BINDING_STATE_VERSION = 2;
 
 /** 事件类型。 */
 export const BINDING_CLAIM_EVENT = "dshana/task-binding";
 export const BINDING_END_EVENT = "dshana/task-binding-ended";
+/** 取消标记：取消链在发 DSH cancel **之前** 落的事件（会话级，随下次认领清空）。 */
+export const BINDING_CANCEL_EVENT = "dshana/task-cancel";
 
 /** 投影未注册（能力缺席）时的错误码——绝不是"这条会话没有绑定"。 */
 export const BINDING_UNAVAILABLE = "BINDING_UNAVAILABLE";
 
 /** 空绑定（未认领）。`at` 是最后一次生效事件的 seq，便于诊断。 */
 export function emptyBinding() {
-  return { taskId: null, timeoutSec: null, approvalTimeoutMs: null, ended: null, at: null };
+  return { taskId: null, timeoutSec: null, approvalTimeoutMs: null, ended: null, cancel: null, at: null };
 }
 
 function intOrNull(value) {
@@ -65,8 +67,15 @@ export function foldBinding(state, event) {
       timeoutSec: intOrNull(data.timeoutSec),
       approvalTimeoutMs: intOrNull(data.approvalTimeoutMs),
       ended: null,
+      // 新认领 = 新任务：上一轮的取消标记在职于旧任务，随认领清空
+      cancel: null,
       at,
     };
+  }
+  if (event.type === BINDING_CANCEL_EVENT) {
+    // 会话级标记（取消是会话上的动作，不要求对上 taskId）；last-wins
+    const reason = typeof data.reason === "string" && data.reason !== "" ? data.reason : null;
+    return { ...cur, cancel: { reason, at } };
   }
   if (event.type === BINDING_END_EVENT) {
     // 无认领、或收尾的 taskId 不是当前认领（陈旧的收尾）⇒ 不动。
@@ -97,6 +106,7 @@ export const bindingStateSchema = {
       timeoutSec: intOrNull(value.timeoutSec),
       approvalTimeoutMs: intOrNull(value.approvalTimeoutMs),
       ended: value.ended ?? null,
+      cancel: value.cancel ?? null,
       at: intOrNull(value.at),
     };
   },
