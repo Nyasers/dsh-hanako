@@ -576,30 +576,24 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
   //   宿主：Plugin UI capability "clipboard.writeText" is not allowed in card slots
   //         （App 卡面不被允许用这个能力通道，SDK 直接拒）
   //   原生：NotAllowedError（Permissions-Policy 把 Clipboard API 在本文档里关死）
-  // 所以转发逻辑保留（宿主哪天放开，不用改代码就能活），但日志收敛为“每个环节只说一次”，
-  // 不再每次复制刷三行。唯一未试过的候选是 document.execCommand('copy')（DSH 只在
-  // writeText 不存在时才走它），它大概被同一道策略管着，不做。
-  var clipboardWarned = {};
-  function clipboardWarn(key, message, detail) {
-    if (clipboardWarned[key]) return;
-    clipboardWarned[key] = true;
-    try { console.warn("[dshana/clipboard] " + message, detail === undefined ? "" : detail); } catch (err) { /* 忽略 */ }
-  }
+  // 转发逻辑保留（宿主哪天放开，不用改代码就能活）。**报错每次都说**：她要的是即时反馈，
+  // 不是被静音过的失败（“每个环节只说一次”已按她的要求撤回）。唯一未试过的候选是
+  // document.execCommand('copy')（DSH 只在 writeText 不存在时才走它），大概被同一道策略管着，不做。
   function writeClipboard(text) {
     if (!hana || !hana.clipboard || typeof hana.clipboard.writeText !== "function") {
-      clipboardWarn("no-api", "宿主 SDK 无 hana.clipboard.writeText（能力 app/ui.clipboard-write 在这个面未开放）");
+      console.warn("[dshana/clipboard] 宿主 SDK 无 hana.clipboard.writeText（能力 app/ui.clipboard-write 未授予？）");
       return Promise.reject(new Error("host clipboard API unavailable"));
     }
     return Promise.resolve(hana.clipboard.writeText(text)).then(
       function (payload) {
         if (payload && payload.written === false) {
-          clipboardWarn("refused", "宿主返回 written:false（复制未发生）：", payload);
+          console.warn("[dshana/clipboard] 宿主返回 written:false（复制未发生）：", payload);
           throw new Error("host clipboard write refused");
         }
         return true;
       },
       function (error) {
-        clipboardWarn("capability", "宿主能力调用失败（本次复制不会完成）：", (error && error.message) || error);
+        console.warn("[dshana/clipboard] 宿主能力调用失败：", (error && error.message) || error);
         throw error instanceof Error ? error : new Error(String(error));
       }
     );

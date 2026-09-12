@@ -156,6 +156,30 @@ test("没有 clipboard API 时静默跳过（不阻断页面）", () => {
   dispose();
 });
 
+test("默认报告：每次失败都即时上报（不做“只说一次”的静音）", async () => {
+  // 她明确要求：退回到即时反馈的状态，每次都说。这条防的是“体贴地帮她把噪声收敛掉”——
+  // 那会把观测面从她手里拿走，也会让“失败被静音”重演一次。
+  const warns = [];
+  const original = console.warn;
+  console.warn = (...args) => { warns.push(args); };
+  try {
+    const { target, clipboard } = fakeWindow();
+    target.__DSHANA__ = { clipboardWrite: () => Promise.reject(new Error("not allowed in card slots")) };
+    clipboard.writeText = () => Promise.reject(new Error("policy blocked"));
+    Object.defineProperty(target, "Clipboard", { value: undefined });
+    installClipboardShadow({ target }); // 不传 report → 走默认
+    await clipboard.writeText("a").catch(() => {});
+    await clipboard.writeText("b").catch(() => {});
+  } finally {
+    console.warn = original;
+  }
+  const bridgeFailed = warns.filter((a) => String(a[0]).includes("bridge failed"));
+  const nativeFailed = warns.filter((a) => String(a[0]).includes("native failed"));
+  assert.equal(bridgeFailed.length, 2, "两次尝试应上报两次桥失败，而不是被去重成一次");
+  assert.equal(nativeFailed.length, 2, "两次尝试应上报两次原生失败");
+  assert.ok(String(bridgeFailed[0][1] && bridgeFailed[0][1].message).includes("not allowed in card slots"), "要带上宿主的原因");
+});
+
 test("createClipboardShadow：桥存在时原生的同步抛错不会被碰到", async () => {
   const clipboard = {
     writeText() { throw new Error("should not be called"); },
