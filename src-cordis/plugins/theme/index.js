@@ -118,6 +118,21 @@ const TOKEN_MAP = [
   ["--dsw-alias-state-error-secondary", "--danger"],
   ["--dsw-alias-state-success-primary", "--green"],
   ["--dsw-alias-state-success-secondary", "--green"],
+  // state 语义色（2026-09-12 补全）：原来只映了 business/error/success 的 primary/secondary，
+  // 结果 DSH 自带的**连接状态指示灯**（ui-primitives 的 ConnectionIndicator，落在侧栏 footer 的
+  // settings 区）不跟随主题——它用的是 warn-* 系列。而宿主主题没有 amber 语义色（只有 --green /
+  // --danger），所以按“只用宿主变量、不搬固定值”的纪律取最近的语义位：
+  //   warn/success 的 tint 用中性遮罩 --overlay-medium 与强调浅色 --accent-light；
+  //   标签色用 --danger / --green 保住“这是告警 / 这是成功”的读法。
+  ["--dsw-alias-state-warn-primary", "--danger"],
+  ["--dsw-alias-state-warn-label", "--danger"],
+  ["--dsw-alias-state-warn-tertiary", "--overlay-medium"],
+  ["--dsw-alias-state-success-label", "--green"],
+  ["--dsw-alias-state-success-tertiary", "--accent-light"],
+  ["--dsw-alias-state-error-label", "--danger"],
+  ["--dsw-alias-state-error-tertiary", "--overlay-medium"],
+  ["--dsw-alias-state-business-label", "--accent"],
+  ["--dsw-alias-state-business-secondary", "--accent-light"],
   // scrollbar：复刻 Hana 原生语言（中性灰，不主题化）
   ["--dsw-alias-scrollbar-bg-l1", "~rgba(128,128,128,0.2)"],
   ["--dsw-alias-scrollbar-bg-l2", "~rgba(128,128,128,0.2)"],
