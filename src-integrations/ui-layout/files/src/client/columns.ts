@@ -2,15 +2,6 @@
  * Normal column geometry: the right column shrinks, then loses its track,
  * before the center drops below its minimum. The sidebar never concedes here;
  * AppFrame supplies its effective preference after responsive collapse.
- *
- * hana 集成（integrations/ui-layout）：本文件是上游同名的整文件 overlay，与上游的差只有
- * 一处 —— computeColumns 增加第四参 sidebarPresent（样例同名参数，语义一致）：
- *   sidebarPresent === false → 侧栏宽 0（**不是** SIDEBAR_COLLAPSED）
- * 上游三参版把 0 解释成「用户折叠了侧栏」→ 回落 56px 轨道；主卡（workspace）与 FP
- * （navigation）都**没有**可折叠的侧栏轨道，用三参版会让：
- *   主卡：多出一条 56px 空轨，把 centerCol 挤窄（2026-09-11 真机现象）
- *   FP  ：纯侧栏单列本来就整幅，轨宽不参与；但 cols.sidebar 会被当成 56 计
- * 样例用这第四参把两件事分开：「没有侧栏这回事」与「侧栏被折叠」。
  */
 
 /** Resolved widths for one frame. */

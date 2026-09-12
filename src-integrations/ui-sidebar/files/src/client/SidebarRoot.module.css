@@ -428,8 +428,6 @@
   }
 }
 
-/* hana 集成（integrations/ui-sidebar）：settings / workspace 面上，本槽位只装设置面板，
-   自身铺满父级（主卡里父级是 AppFrame 的绝对定位 settingsShell）、同样不吃指针事件。 */
 .surfaceSettings {
   width: 100%;
   height: 100%;

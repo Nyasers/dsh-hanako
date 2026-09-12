@@ -32,21 +32,16 @@ export const inject = ['sessions', 'slots', 'locale']
  * @param ctx - client root context.
  */
 export function apply(ctx: ClientContext): void {
-  // hana 集成（src-integrations/ui-open-in-app）——样例的同一处改法：
-  // 浏览器裸 fetch 打宿主源必被凭据闸 403（missing_credential）。改用官方 __DSH_TRANSPORT__
+    // 浏览器裸 fetch 打宿主源必被凭据闸 403（missing_credential）。改用官方 __DSH_TRANSPORT__
   // （把请求重写到 App 的私有运行时基址）当 carrier；拿不到时传 undefined，退回控制器
-  // 默认的原生 fetch（与上游行为一致）。
-  const bridgeFetch = (globalThis as {
+    const bridgeFetch = (globalThis as {
     __DSH_TRANSPORT__?: { fetch?: (input: string | URL, init?: RequestInit) => Promise<Response> }
   }).__DSH_TRANSPORT__?.fetch
   const fetcher = bridgeFetch === undefined
     ? undefined
     : (input: string | URL, init?: RequestInit): Promise<Response> =>
       bridgeFetch(new URL(input, 'http://dsh.internal'), init)
-  // 图标不是 fetch 而是 <img> 加载，transport 包不住它——只能换地址：用我们桥的
-  // runtimeUrl() 把 /open-in-app/icon/<id> 映射到私有运行时基址（样例的 bridge.runtimeUrl
-  // 就是干这个的）。桥不在场时原样返回，与上游行为一致。
-  const bridgeUrl = (globalThis as {
+        const bridgeUrl = (globalThis as {
     __DSHANA__?: { runtimeUrl?: (path: string) => string }
   }).__DSHANA__?.runtimeUrl
   const iconUrl = (path: string): string => {

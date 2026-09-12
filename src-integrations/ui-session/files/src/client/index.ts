@@ -515,10 +515,8 @@ export function apply(ctx: Context): void {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// hana 集成（integrations/ui-session）：跨面会话选中同步
 //
 // 动因：FP 与主卡是两个文档 = 两个 DSH 实例，各自恢复、各自维护选中，天然不同步。
-// 角色（壳页给 window.__DSHANA__，见 src/ui/app-shell.js 的 SURFACE_API）：
 //   role='navigation'（FP/sidebar）= 发射端：本地选中变化 → 写共享状态；只发不收。
 //   role='workspace'（主卡）      = 接收端：共享状态变化 → ctx.sessions.open/clear；
 //                                   只收不发（主卡无切换 UI，不会与本地选择打架）。
