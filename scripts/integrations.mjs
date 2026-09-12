@@ -305,6 +305,15 @@ export async function buildIntegrations(integrations, { tag, mirrorDir = MIRROR,
       cpSync(src, dst);
     }
 
+    // 2.5) 覆盖层类型检查（构建只转译不检查；未定义的名字/不存在的成员在这一步拦）。
+    //      跳过口只给本机调试（DSHANA_SKIP_TYPECHECK=1），跳过会大声说一声。
+    if (process.env.DSHANA_SKIP_TYPECHECK === "1") {
+      log(`[integrations] ${short}: **跳过覆盖层类型检查**（DSHANA_SKIP_TYPECHECK=1）`);
+    } else {
+      const { typecheckOverlay } = await import("./overlay-typecheck.mjs");
+      typecheckOverlay({ short, stage, files: it.files, repoRoot, mirrorDir, log: (m) => log(m) });
+    }
+
     // 3) externals = 原版 bundle 自己的 require 集合。
     //    例外：client 半只有类型导入的包（如 dsh-client-hmr）——原版产物里**零 require**。
     //    这不能当「抽取失败」（fail-closed 会误杀整个集成）：改为从缓存的源码取非相对
@@ -435,7 +444,7 @@ async function main() {
 
   if (cmd === "build") {
     try {
-      const built = await buildIntegrations(integrations, { tag });
+      const built = await buildIntegrations(integrations, { tag, log: (m) => console.log(m) });
       for (const b of built) console.log(`[integrations] 产物：${b.out}`);
     } catch (e) {
       console.error("[integrations] 编译失败：" + ((e && e.message) || e));
