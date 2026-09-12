@@ -26,6 +26,11 @@ const DOMAINS = [
     config: "tsconfig.cordis.json",
     ours: (file) => file.startsWith("src-cordis/"),
   },
+  {
+    name: "src",
+    config: "tsconfig.src.json",
+    ours: (file) => file.startsWith("src/"),
+  },
 ];
 
 /**

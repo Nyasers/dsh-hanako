@@ -14,7 +14,7 @@
 // 授权并种 hana_app_runtime cookie）。视觉沿袭 v1 webui-shell 纸张风（CSS 变量 +
 // fallback 纸张色），数据语义 v2 boot-state（phase idle/starting/ready/error/stopped）。
 import { hana } from "@hana/plugin-sdk";
-import { injectDshIndex, installTransport } from "./dsh-inject.js";
+import { injectDshIndex, installTransport } from "./dsh-inject.ts";
 
 (function () {
   "use strict";
@@ -28,7 +28,7 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
   var isSidebar = false;
 
   // ---- 小工具 ----
-  function $(sel, root) { return (root || document).querySelector(sel); }
+  function $(sel, root = document) { return (root || document).querySelector(sel); }
   function esc(s) {
     return String(s == null ? "" : s)
       .replace(/&/g, "&amp;").replace(/"/g, "&quot;")
@@ -146,10 +146,10 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
   // 免交互：DSH 的拉起由 App 的自动链负责（apply 即 ensureManagedRuntime +
   // 崩溃重起 + 端口占用自动换端口），页面不提供「启动 / 重启」按钮——那是让用户替系统干活。
   // 页面只负责说清当前状态（状态行 + 出错时的 <pre>）。
-  function idleViewHtml() {
+  function idleViewHtml(s) {
     return "";
   }
-  function bootingViewHtml() {
+  function bootingViewHtml(s) {
     return ""; // 启动中台面只有 loader + 状态行
   }
   function actionViewHtml(s) {
@@ -516,7 +516,7 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
     });
   }
   /** force=true 忽略共享快照直接自取（本面刚发过动作，必须立刻看到结果）。 */
-  function poll(force) {
+  function poll(force = false) {
     if (!isSidebar) { fetchOwnState(); return; }
     readShared("boot-state").then(function (v) {
       var fresh = v && typeof v.at === "number" && v.at > 0 && Date.now() - v.at < BOOT_STATE_STALE_MS;

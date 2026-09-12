@@ -21,7 +21,7 @@ import {
   privateHomeOf,
   sourceOf,
   validateSettings,
-} from "../src/lib/data-source.js";
+} from "../src/lib/data-source.ts";
 
 /** 临时目录夹具（await 回调体，退出时清理）。 */
 const withTempDir = async (fn) => {

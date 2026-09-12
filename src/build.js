@@ -16,7 +16,8 @@
 // v1 遗留变化：不再生成 dist/routes/index.js 壳（v1 宿主按 routes/ 目录扫描具名导出
 // pluginRoutes；v2 路由走 ctx.routes.register 单 route app，宿主不扫 dist 目录）。
 // 用法：node src/build.js [RSPACK_ENV=<构建环境目录>]
-// 注意：.mjs 不被 collectSource 收集（只收 .js），本文件不随 bundle 打包。
+// 注意：本文件是构建入口，不在 bundle 里（主入口由 rspack.config.mjs 指定为 src/index.ts）；
+// 但 collectSource 会把 src/ 下的 .js/.ts 一并收作 URL 回写与静态 URL 断言的扫描面。
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { basename, dirname, join } from "node:path";
 
@@ -100,12 +101,12 @@ const uiSrc = join(ROOT, "src", "ui");
 if (!fs.pathExistsSync(uiSrc)) {
   throw new Error("App ui/ 静态树缺失（src/ui）：contributes.cards 的 route 指向 ui 内页面（见 manifest.json）");
 }
-// 静态面（*.html 等非脚本资源）直接拷贝；页面脚本（*.js/*.mjs）是构建源，由 ui bundle 收进
-// dist/ui/app-shell.js（浏览器 SDK 一并内联），不另放源码副本。
+// 静态面（*.html 等非脚本资源）直接拷贝；页面脚本（*.ts/*.tsx/*.js/*.mjs）是构建源，由 ui bundle 收进
+// dist/ui/app-shell.js 与 dist/ui/settings.js（浏览器 SDK 一并内联），不另放源码副本。
 fs.copySync(uiSrc, join(DIST_DIR, "ui"), {
   filter: (src) => {
     const name = basename(src);
-    if (name.endsWith(".js") || name.endsWith(".mjs")) return false;
+    if (name.endsWith(".js") || name.endsWith(".mjs") || name.endsWith(".ts") || name.endsWith(".tsx")) return false;
     return true;
   },
 });

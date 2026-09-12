@@ -20,7 +20,7 @@ export default {
   name: "dshana",
   mode: "production",
   target: "node",
-  entry: path.join(root, "src", "index.js"),
+  entry: path.join(root, "src", "index.ts"),
   output: {
     path: DIST_DIR,
     filename: "index.js",

@@ -28,8 +28,8 @@
 // 审批等待不计入执行超时：任务执行超时走 cancel 链（session-run 看门狗 → session.cancel
 // → 本桥 answerer 的 req.signal 中止 → 上面收尾路径），宿主审批由 approval 的 timeoutMs
 // 独立自动拒绝。
-import { readTaskMap, addApproval, settleApproval, isValidSessionId } from "../lib/task-map.js";
-import { approvalOutcomeOf, runWatchReconcile } from "../lib/watch-sse.js";
+import { readTaskMap, addApproval, settleApproval, isValidSessionId } from "../lib/task-map.ts";
+import { approvalOutcomeOf, runWatchReconcile } from "../lib/watch-sse.ts";
 
 // 审批超时：**30s 是我们自己的策略，不是宿主默认**。APPS.md（0.951.4，后台任务与审批节）明写
 // `requestApproval({…, timeoutMs})` 的 `timeoutMs: 0` 禁用超时，**默认也是 0**；父任务结束会拒绝剩余
@@ -134,9 +134,9 @@ export function startApprovalBridge({ ctx, hana, dataDir, log }) {
     try { if (typeof log === "function") log("[approval-bridge] " + msg); } catch { /* 忽略 */ }
   };
 
-  const onEvent = (event, handler) => {
+  const onEvent = (event, handler, opts = undefined) => {
     try {
-      const off = ctx.on(event, handler);
+      const off = ctx.on(event, handler, opts);
       if (typeof off === "function") offs.push(off);
     } catch {
       /* 单事件订阅失败跳过 */

@@ -16,7 +16,7 @@ import {
   RUNTIME_ENTRY,
   PORT_MIN,
   PORT_MAX,
-} from "../src/lib/managed-runtime.js";
+} from "../src/lib/managed-runtime.ts";
 
 test("choosePort: 落在 [PORT_MIN, PORT_MAX) 的确定整数（宿主 service 端口契约 1024..65535）", () => {
   assert.equal(choosePort(() => PORT_MIN), PORT_MIN);

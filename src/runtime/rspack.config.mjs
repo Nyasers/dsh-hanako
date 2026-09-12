@@ -27,7 +27,7 @@ export default {
   name: "dshana-runtime",
   mode: "production",
   target: "node",
-  entry: path.join(root, "src", "runtime", "main.js"),
+  entry: path.join(root, "src", "runtime", "main.ts"),
   output: {
     path: path.join(DIST_DIR, "runtime"),
     filename: "dsh-host.mjs",

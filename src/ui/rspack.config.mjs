@@ -25,8 +25,8 @@ export default {
   mode: "production",
   target: "web",
   entry: {
-    "app-shell": ui("app-shell.js"),
-    settings: ui("settings.js"),
+    "app-shell": ui("app-shell.ts"),
+    settings: ui("settings.ts"),
   },
   output: {
     path: path.join(DIST_DIR, "ui"),

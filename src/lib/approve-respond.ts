@@ -14,8 +14,8 @@
 //   超时/父任务结束/撤销：宿主侧把审批结算成 rejected（timeoutMs 自动拒绝 / 父任务终态
 //   拒绝剩余审批），approval-bridge watch 同样把 rejected 投给 DSH 等待者——DSH 得到
 //   确定终态，绝不隐式放行。本模块不设本地定时器（不重复宿主语义）。
-import { appCtx, appDataDir } from "./app-runtime.js";
-import { readTaskMap, findPendingApproval, settleApproval } from "./task-map.js";
+import { appCtx, appDataDir } from "./app-runtime.ts";
+import { readTaskMap, findPendingApproval, settleApproval } from "./task-map.ts";
 
 /** 校验并应答一个挂起审批；返回 { content:[...], details }（与 v1 approve.js 同形态）。 */
 export async function respondApprovalAction({ input, log }) {

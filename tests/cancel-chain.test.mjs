@@ -5,13 +5,13 @@
 // 执行器依赖宿主 ctx（app-runtime 注入），仅在无宿主时验证纯面与设置注入路径。
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { initAppRuntime } from "../src/lib/app-runtime.js";
+import { initAppRuntime } from "../src/lib/app-runtime.ts";
 import {
   planCancel,
   resolveTaskTimeoutSec,
   resolveApprovalTimeoutMs,
-} from "../src/lib/cancel-chain.js";
-import { cancelAccepted } from "../src/lib/dsh-rpc.js";
+} from "../src/lib/cancel-chain.ts";
+import { cancelAccepted } from "../src/lib/dsh-rpc.ts";
 
 const SID = "session-11111111-2222-3333-4444-555555555555";
 

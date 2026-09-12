@@ -30,11 +30,11 @@
 //
 // 容错纪律：订阅/回投失败只记日志不阻断 runtime；映射不存在（非 dshana_session 发起的
 // 会话，如 DSH Web UI 直开）的事件直接忽略。
-import { readTaskMap, markTaskMapEnded } from "../lib/task-map.js";
-import { BINDING_END_EVENT, appendSessionEvent } from "../lib/binding-slot.js";
-import { runWatchReconcile } from "../lib/watch-sse.js";
-import { rpcSessionCancel } from "../lib/dsh-rpc.js";
-import { cancelSessionModelRequests } from "../lib/model-requests.js";
+import { readTaskMap, markTaskMapEnded } from "../lib/task-map.ts";
+import { BINDING_END_EVENT, appendSessionEvent } from "../lib/binding-slot.ts";
+import { runWatchReconcile } from "../lib/watch-sse.ts";
+import { rpcSessionCancel } from "../lib/dsh-rpc.ts";
+import { cancelSessionModelRequests } from "../lib/model-requests.ts";
 
 // 事件白名单（与 v1 dsh-events 的会话事件子集一致；其余事件不订阅）
 export const BRIDGE_EVENTS = [
@@ -103,6 +103,7 @@ export function classifyDshEvent(event, args) {
  * sessionId 一个条目即可，不用 turn 级坐标（v1 的复杂终点源于跨任务共享会话）。
  */
 class SessionBridge {
+  settled = false; // 已 complete/fail/cancel（幂等）
   constructor({ hana, dataDir, sessions, log, serviceBaseUrl, bridgeKey, cancelModelRequests }) {
     this.hana = hana;
     this.dataDir = dataDir;

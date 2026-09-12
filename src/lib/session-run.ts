@@ -20,16 +20,16 @@
 // Hana task 终态（child task-bridge complete/fail 后，宿主投递到来源会话）并释放串行化锁。
 // 本模块不把 DSH turn 的最终文本带回 execute——内容读取统一走 dshana_session action=get。
 import { join } from "node:path";
-import { appCtx, appDataDir } from "./app-runtime.js";
-import { currentDshHome } from "./data-source.js";
-import { ensureManagedRuntime } from "./managed-runtime.js";
-import { nextRpcId } from "./rpc-envelope.js";
-import { writeTaskMap, markTaskMapEnded, isValidSessionId, pruneTaskMaps } from "./task-map.js";
-import { withSessionTurn, enterSessionTurn } from "./session-serialize.js";
-import { readDshDefaultModel } from "./config.js";
-import { serviceBase } from "./service-base.js";
-import { rpcViaControl, invokeControl } from "./controller.js";
-import { resolveTaskTimeoutSec, resolveApprovalTimeoutMs, cancelSessionWork } from "./cancel-chain.js";
+import { appCtx, appDataDir } from "./app-runtime.ts";
+import { currentDshHome } from "./data-source.ts";
+import { ensureManagedRuntime } from "./managed-runtime.ts";
+import { nextRpcId } from "./rpc-envelope.ts";
+import { writeTaskMap, markTaskMapEnded, isValidSessionId, pruneTaskMaps } from "./task-map.ts";
+import { withSessionTurn, enterSessionTurn } from "./session-serialize.ts";
+import { readDshDefaultModel } from "./config.ts";
+import { serviceBase } from "./service-base.ts";
+import { rpcViaControl, invokeControl } from "./controller.ts";
+import { resolveTaskTimeoutSec, resolveApprovalTimeoutMs, cancelSessionWork } from "./cancel-chain.ts";
 
 // ---- 归一/校验（纯函数面，便于单测）----
 export function normalizeCreateSend({ action, input } = {}) {

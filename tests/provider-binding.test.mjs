@@ -30,7 +30,7 @@ import {
   appendSessionEvent,
   claimPayload as runtimeClaimPayload,
   depositBindingClaim as runtimeDeposit,
-} from "../src/lib/binding-slot.js";
+} from "../src/lib/binding-slot.ts";
 
 const SID = "session-11111111-2222-3333-4444-555555555555";
 

@@ -17,7 +17,7 @@ import {
   installRequestTakeover,
   resolveRelaySocketUrl,
   resolveRelayUrl,
-} from "../src/ui/dsh-inject.js";
+} from "../src/ui/dsh-inject.ts";
 
 const PAGE = "https://hana.local";
 const BASE = new URL("https://hana.local/api/apps/dshana/routes/_runtime/r1/_surface/tok/");

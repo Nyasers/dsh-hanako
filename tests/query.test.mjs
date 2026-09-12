@@ -13,7 +13,7 @@ import {
   textFromMessageBlocks,
   titleFromProjections,
   titleFromRecords,
-} from "../src/tools/subtool/query.js";
+} from "../src/tools/subtool/query.ts";
 
 const SID = "session-11111111-2222-3333-4444-555555555555";
 

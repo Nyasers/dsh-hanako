@@ -5,7 +5,7 @@
 // 覆盖：同 session 后到任务等前任务退出、不同 session 并行、create 槽位先占后放。
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { withSessionTurn, enterSessionTurn } from "../src/lib/session-serialize.js";
+import { withSessionTurn, enterSessionTurn } from "../src/lib/session-serialize.ts";
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));

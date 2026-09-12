@@ -8,7 +8,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import { createHash } from "node:crypto";
-import { startDshBridge, wsCloseFrame, FREEZE_CLOSE_CODE } from "../src/runtime/bridge.js";
+import { startDshBridge, wsCloseFrame, FREEZE_CLOSE_CODE } from "../src/runtime/bridge.ts";
 
 const KEY = "bridge-key-0123456789abcdef";
 const CONTROL = "control-key-0123456789abcdef";

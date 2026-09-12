@@ -29,10 +29,10 @@
 // 默认实现经 src/lib/managed-runtime.js 读取真实单例；测试注入 fake。
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { managedRuntimeDetails, ensureManagedRuntime, stopManagedRuntime, bridgeAccess } from "../lib/managed-runtime.js";
-import { buildBootSnapshot, APP_ID } from "../lib/boot-state.js";
-import { resolveApprovalTimeoutSec, resolveDefaultTimeoutSec } from "../lib/config.js";
-import { readDefaultModel, writeDefaultModel } from "../lib/model-settings.js";
+import { managedRuntimeDetails, ensureManagedRuntime, stopManagedRuntime, bridgeAccess } from "../lib/managed-runtime.ts";
+import { buildBootSnapshot, APP_ID } from "../lib/boot-state.ts";
+import { resolveApprovalTimeoutSec, resolveDefaultTimeoutSec } from "../lib/config.ts";
+import { readDefaultModel, writeDefaultModel } from "../lib/model-settings.ts";
 export const DASHANA_ROUTE_PREFIX = "/dshana";
 
 // ---- 应用设置（GET/POST /dshana/settings）----

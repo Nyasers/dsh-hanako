@@ -11,7 +11,7 @@ import {
   stripSnapshotMeta,
   phaseCopy,
   APP_ID,
-} from "../src/lib/boot-state.js";
+} from "../src/lib/boot-state.ts";
 
 test("runtimeProxyPrefix: 宿主契约形态（/api/apps/<appId>/routes/_runtime/<runtimeId>/，含尾斜杠）", () => {
   assert.equal(runtimeProxyPrefix({ runtimeId: "rt-1" }), "/api/apps/" + APP_ID + "/routes/_runtime/rt-1/");

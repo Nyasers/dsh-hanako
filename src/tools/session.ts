@@ -19,12 +19,12 @@
 //
 // 数据目录取 ctx.dataDir（宿主 app-data/<id>/）；工具名 "dshana_session" 以本文件 name 为单一
 // 事实源（v2 注册不自动加前缀，重名会被宿主当场拒掉）。
-import { execute as queryExecute } from "./subtool/query.js"; // list/get 只读查询（subtool）
-import { submitDshTask } from "../lib/session-run.js"; // create/send 提交链
-import { cancelSessionWork } from "../lib/cancel-chain.js"; // cancel 编排
-import { respondApprovalAction } from "../lib/approve-respond.js"; // approve 应答编排
-import { findTaskMapByTaskId, findTaskMapByApprovalId, isValidSessionId } from "../lib/task-map.js"; // 句柄反查（只在 App 侧）
-import { taskOwnership, ownershipRefusalText } from "../lib/task-ownership.js"; // 归属校验通则（宿主 parentSessionPath）
+import { execute as queryExecute } from "./subtool/query.ts"; // list/get 只读查询（subtool）
+import { submitDshTask } from "../lib/session-run.ts"; // create/send 提交链
+import { cancelSessionWork } from "../lib/cancel-chain.ts"; // cancel 编排
+import { respondApprovalAction } from "../lib/approve-respond.ts"; // approve 应答编排
+import { findTaskMapByTaskId, findTaskMapByApprovalId, isValidSessionId } from "../lib/task-map.ts"; // 句柄反查（只在 App 侧）
+import { taskOwnership, ownershipRefusalText } from "../lib/task-ownership.ts"; // 归属校验通则（宿主 parentSessionPath）
 
 // 注：本模块不自己定位 App 根/数据目录——数据目录由 query subtool 经 ctx 取。
 
