@@ -22,7 +22,7 @@
 // 暴露（src/runtime/seed.ts）；受管子进程入口 = runtime/dsh-host.mjs（dist 构建产物）。
 //
 // 日志：只走宿主 ctx.logger；ctx.logger 缺失或抛错时回落 stderr（宁可吵，不静默丢日志）。
-import { initAppRuntime } from "./lib/app-runtime.ts";
+import { initAppRuntime, toolCtxFrom } from "./lib/app-runtime.ts";
 // 受管 DSH runtime：启动封装 + 释放（disposer 负责收尾）
 import { disposeManagedRuntime, ensureManagedRuntime } from "./lib/managed-runtime.ts";
 // 工具模块（导出 name/description/parameters/execute；v2 工具名即注册名，无自动前缀）
@@ -68,24 +68,22 @@ export function apply(ctx) {
   // ---- 工具注册（v2 ctx.tools.register；execute 由宿主在 App 进程内经 RPC 回调执行）----
   // 工具名 = dshSession.name（"dshana_session"，全局唯一；v2 不自动加前缀，重名会被宿主
   // 当场拒掉）。action 参数与返回语义见 tools/session.js。
-  // 每个 execute 收到一个工具上下文（v2 execute 上下文袋缺省兼容）：log 走宿主 ctx.logger；
-  // dataDir/config 供工具业务读取。
-  const makeToolCtx = () => ({
-    dataDir,
-    config: ctx.config,
-    log: {
-      debug: (...a) => log("debug", ...a),
-      info: (...a) => log("info", ...a),
-      warn: (...a) => log("warn", ...a),
-      error: (...a) => log("error", ...a),
-    },
-  });
+  // 每个 execute 收到的工具上下文由 toolCtxFrom 构造：宿主 ctx 的浅拷贝 + 统一日志出口。
+  // 必须是整份宿主 ctx——工具业务要用 ctx.runtime（控制面请求）、ctx.tasks（宿主任务句柄）、
+  // ctx.storage 等宿主能力；只挑几项手抄进来就会漏，而漏一项就是静默降级（控制面直接报
+  // "宿主不支持受管服务请求"，句柄归属校验恒判查不到）。appCtx() 给出的本来就是完整 ctx。
+  const toolLog = {
+    debug: (...a) => log("debug", ...a),
+    info: (...a) => log("info", ...a),
+    warn: (...a) => log("warn", ...a),
+    error: (...a) => log("error", ...a),
+  };
 
   const unregisterTool = ctx.tools.register({
     name: dshSession.name,
     description: dshSession.description,
     parameters: dshSession.parameters,
-    execute: (input, callCtx) => dshSession.execute(input, makeToolCtx()),
+    execute: (input, callCtx) => dshSession.execute(input, toolCtxFrom(ctx, toolLog)),
   });
   log("info", `工具注册:${dshSession.name}（ctx.tools.register，v2 全局唯一名，无自动前缀）`);
 
