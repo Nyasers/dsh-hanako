@@ -9,7 +9,7 @@
 import { readFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { minifyJs } from "./minify-assets.mjs";
+import { minifyJs, minifyHtml } from "./minify-assets.mjs";
 
 // 收集目录下全部 .js 的 file:// URL（rspack 会把 import.meta.url 静态化为构建机源码
 // 绝对路径；构建后产物出现这些字面量一律替换回 import.meta.url——分发路径失效根因）。
@@ -57,26 +57,27 @@ export function makeUrlRewriter(staticUrlToMeta) {
 // 产物二次 terser：rspack（swc）已压一轮，这里压字符串资产（HTML/CSS/JS 内联）；须在
 // URL 回写（makeUrlRewriter）之后——先压会改写引号导致回写锚点失配。跳过
 // node_modules（npm 自带产物）与 dsh-plugin（归 pack 静态压缩步）。
-export async function extraTerser(root) {
+export async function extraMinify(root) {
   const files = [];
   const collect = (dir) => {
     for (const name of readdirSync(dir)) {
       const p = join(dir, name);
       if (name === "node_modules" || name === "dsh-plugin") continue;
       if (statSync(p).isDirectory()) collect(p);
-      else if (p.endsWith(".js") || p.endsWith(".mjs")) files.push(p);
+      else if (/\.(js|mjs|html)$/.test(name)) files.push(p);
     }
   };
   collect(root);
-  console.log("[build] extra terser (" + files.length + " files)...");
+  console.log("[build] extra minify (" + files.length + " files)...");
   for (const file of files) {
     const code = readFileSync(file, "utf8");
     const before = Buffer.byteLength(code, "utf8");
     let out;
     try {
-      out = await minifyJs(code); // module: true —— ESM bundle 与 routes 壳均适用
+      // .html 是静态壳页（React 不参与，它们是原样拷进 dist 的）：只去注释与收空白。
+      out = file.endsWith(".html") ? await minifyHtml(code) : await minifyJs(code);
     } catch (err) {
-      throw new Error("extra terser 失败（" + file + "）：" + err.message);
+      throw new Error("extra minify 失败（" + file + "）：" + err.message);
     }
     writeFileSync(file, out, "utf8");
     const after = Buffer.byteLength(out, "utf8");

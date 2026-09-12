@@ -28,7 +28,7 @@ import uiConfig from "./ui/rspack.config.mjs"; // ui/ 域（壳页脚本 bundle�
 import {
   collectSource,
   makeUrlRewriter,
-  extraTerser,
+  extraMinify,
   assertNoStaticFileUrl,
 } from "../scripts/build-common.mjs";
 
@@ -116,7 +116,7 @@ console.log("ui/ 静态面 -> dist/ui（*.html 等；脚本由 ui bundle 产出�
 await compile(uiConfig, "build:src ui bundle");
 console.log("ui bundle -> dist/ui/app-shell.js（浏览器 SDK 构建期内联）");
 
-// 3) 二次 terser（主区）+ 静态 URL 断言
-await extraTerser(DIST_DIR);
+// 3) 二次压缩（主区：JS + 静态壳页 HTML）+ 静态 URL 断言
+await extraMinify(DIST_DIR);
 assertNoStaticFileUrl(DIST_DIR);
 console.log("build:src done ->", DIST_DIR);
