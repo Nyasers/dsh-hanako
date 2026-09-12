@@ -141,20 +141,15 @@ export function installClipboardShadow(options = {}) {
   const clipboard = nav.clipboard;
   if (clipboard === undefined || clipboard === null) return () => {};
 
-  const report = options.report || (() => {
-    // 默认报告：**每个环节只说一次**。宿主在 card slot 里明确不允许这个能力
-    // （真机 2026-09-12：Plugin UI capability "clipboard.writeText" is not allowed in card slots），
-    // 而原生又被 Permissions-Policy 挡住——两条路都在宿主手里。方向已按她的决定暂停，
-    // 但转发逻辑保留：宿主哪天放开，这套代码不用改就能活。此时控制台不该每次复制都刷三行。
-    const said = new Set();
-    return (stage, error) => {
-      if (said.has(stage)) return;
-      said.add(stage);
-      try {
-        console.warn(`[dshana/clipboard] ${stage} 一次告知（后续同类不再重复）：`, error);
-      } catch { /* 忽略 */ }
-    };
-  })();
+  const report = options.report || ((stage, error) => {
+    // 默认报告：**每次都说**。宿主在 card slot 里明确不允许这个能力（真机 2026-09-12：
+    // Plugin UI capability "clipboard.writeText" is not allowed in card slots），原生又被
+    // Permissions-Policy 挡住——两条路都在宿主手里，方向已按她的决定暂停；转发逻辑保留，
+    // 宿主哪天放开，这套代码不用改就能活。报错要即时、可归因，不做“只说一次”的静音。
+    try {
+      console.warn(`[dshana/clipboard] ${stage} failed:`, error);
+    } catch { /* 忽略 */ }
+  });
   const bridge = options.bridge !== undefined ? options.bridge : target.__DSHANA__;
   const { shadow, writeShadow } = createClipboardShadow({ clipboard, bridge, report });
   // 还原用「原值」，不是 createClipboardShadow 里那份 bound（bound 是给调用用的，写回去等于换属性）。
