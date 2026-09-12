@@ -34,7 +34,7 @@ function makeFakeDeps(over = {}) {
   const calls = { getSnapshot: 0, start: 0, stop: 0 };
   const state = { phase: "idle", ready: false, runtimeId: null, proxyPrefix: null, service: null, error: null, note: "未启动（fake）", updatedAt: "t" };
   return {
-    appId: "dsh-hanako",
+    appId: "dshana",
     version: "2.0.0-test",
     log: () => {},
     ...over,
@@ -116,7 +116,7 @@ test("GET /dshana/boot-state: 200 归一化快照（ok+app+state）", () => {
   const out = handler(ctx);
   assert.equal(ctx.status, 200);
   assert.equal(ctx.body.ok, true);
-  assert.equal(ctx.body.app.id, "dsh-hanako");
+  assert.equal(ctx.body.app.id, "dshana");
   assert.equal(ctx.body.state.phase, "idle");
   assert.equal(out.status, 200);
   assert.equal(deps.calls.getSnapshot, 1);
@@ -149,7 +149,7 @@ test("POST /dshana/start: idle → 202 accepted + fire start（不阻塞请求�
 
 test("POST /dshana/start: 已 ready/starting → 不重复触发", async () => {
   const { app, routes } = makeFakeApp();
-  const readyState = { phase: "ready", ready: true, runtimeId: "rt-1", proxyPrefix: "/api/apps/dsh-hanako/routes/_runtime/rt-1/", service: { state: "ready", port: 4317 }, error: null, note: "ready", updatedAt: "t" };
+  const readyState = { phase: "ready", ready: true, runtimeId: "rt-1", proxyPrefix: "/api/apps/dshana/routes/_runtime/rt-1/", service: { state: "ready", port: 4317 }, error: null, note: "ready", updatedAt: "t" };
   const deps = makeFakeDeps({ getSnapshot: () => readyState });
   registerDshanaRoutes(app, deps);
   const [,, handler] = routes.find(([m, p]) => m === "POST" && p === "/dshana/start");

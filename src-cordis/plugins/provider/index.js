@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// @dsh-hanako/provider — DSH provider adapter（v2 重写：模型推理走受管 runtime 内 hana）
+// @dshana/provider — DSH provider adapter（v2 重写：模型推理走受管 runtime 内 hana）
 //
 // v1（0.1.2）形态：消费宿主 provider 路由（models.json + apiKey）注册官方 PiAiAdapter 直连
 // 各 provider 端点。v2（迁移指南 §8/决策 B）不再有 apiKey/baseURL/直连：**推理在受管
@@ -34,7 +34,7 @@ import { toHanaMessages } from "./lib/messages.js";
 import { buildDoneChunks, createHanaStreamState } from "./lib/stream.js";
 import { resolveModelIdentity } from "./lib/identity.js";
 
-export const name = "@dsh-hanako/provider";
+export const name = "@dshana/provider";
 export const inject = ["llm"];
 
 /** 动态依赖解析基座（profiles 全量视图优先——pnpm 严格结构下 dsh-pkg 顶层只有直接声明）。 */

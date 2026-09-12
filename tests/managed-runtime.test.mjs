@@ -53,9 +53,9 @@ test("makeReadyMarker: 前缀 + 随机 opaque；不含换行；两次不同", ()
 });
 
 test("buildRuntimeConfig: 基础形态（与 options.js normalizeRuntimeConfig 对偶）", () => {
-  const c = buildRuntimeConfig({ dataDir: "/hana/app-data/dsh-hanako", dshPort: 47120, bridgePort: 4317, bridgeKey: "k".repeat(32), controlKey: "c".repeat(32) });
+  const c = buildRuntimeConfig({ dataDir: "/hana/app-data/dshana", dshPort: 47120, bridgePort: 4317, bridgeKey: "k".repeat(32), controlKey: "c".repeat(32) });
   assert.deepEqual(c, {
-    dataDir: "/hana/app-data/dsh-hanako",
+    dataDir: "/hana/app-data/dshana",
     dshPort: 47120,
     bridgePort: 4317,
     bridgeKey: "k".repeat(32),

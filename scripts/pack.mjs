@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// scripts/pack.mjs — dsh-hanako 自包含打包（适配单 bundle 收敛架构；构建脚本不随源码编译）
+// scripts/pack.mjs — dshana 自包含打包（适配单 bundle 收敛架构；构建脚本不随源码编译）
 // 交付物 = 代码 bundle（dist/）+ cordis 插件 + ui/ 静态树 + **物化后的生产依赖树**
 // （含 win32/darwin/linux × x64/arm64 预编译资产），安装即用、无需 npm install。
 // 依赖物化形态对齐样例 hana-dsh：hoisted 布局（顶层真实目录、无软链接——软链进 zip 跨机
 // 解压即断）。物化在 _tmp/pkg-root/ 隔离进行，不触碰仓库 node_modules。
 // 流程：复制交付清单（prepack 钩子已先行 build）→ 物化生产依赖 → 断言多平台资产 → zip → SHA256。
 // 用法：pnpm run pack --target <名字>（prepack 自动前置 build；单独 node scripts/pack.mjs 要求 dist/ 已构建）
-// 产出：releases/dsh-hanako-v<version>[-<target>].zip + .sha256。**zip 根 = 包根**：manifest.json、
+// 产出：releases/dshana-v<version>[-<target>].zip + .sha256。**zip 根 = 包根**：manifest.json、
 //   index.js、node_modules/、ui/ 等全部在 zip 根级，不得套一层目录（宿主安装时在包根读 manifest.json）。
 // 两个临时目录的分工（都在 _tmp/ 下，起手清残留、用完即清、收尾由 postpack 钩子清）：
 //   · _tmp/pkg-root/<target>：依赖物化**工位**。要跑一次真 install，就得有个像独立项目的目录
@@ -386,8 +386,8 @@ const pkgRoot = join(ROOT, "_tmp", "pkg");
 for (const stale of [pkgRoot, stagingRoot]) fs.removeSync(stale);
 {
   const modules = materializeProdDeps(spec);
-  // 命名：通用包无后缀（既有 CI/脚本按 dsh-hanako-v<ver>.zip 取件），平台包带目标后缀
-  const base = spec.name === "universal" ? `dsh-hanako-v${version}` : `dsh-hanako-v${version}-${spec.name}`;
+  // 命名：通用包无后缀（既有 CI/脚本按 dshana-v<ver>.zip 取件），平台包带目标后缀
+  const base = spec.name === "universal" ? `dshana-v${version}` : `dshana-v${version}-${spec.name}`;
   const pkgDir = join(pkgRoot, base); // 组装暂存目录（内容原样进 zip 根，此目录名不出现在包里）
   fs.removeSync(pkgDir);
   fs.copySync(distDir, pkgDir);

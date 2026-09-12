@@ -24,7 +24,7 @@ const root = path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.ur
 const DIST_DIR = path.join(root, "dist");
 
 export default {
-  name: "dsh-hanako-runtime",
+  name: "dshana-runtime",
   mode: "production",
   target: "node",
   entry: path.join(root, "src", "runtime", "main.js"),

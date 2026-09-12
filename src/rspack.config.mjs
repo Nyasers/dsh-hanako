@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/rspack.config.mjs — dsh-hanako 主 bundle 构建配置（src 域：随源码根，见布局原则\n// 「领域专用脚本随各自源码」；.mjs 不被 collectSource 收集，不随 bundle 打包）
-// 与 hana-remote-dev 的 rspack.config.mjs 对齐，按 dsh-hanako 实际适配：
+// src/rspack.config.mjs — dshana 主 bundle 构建配置（src 域：随源码根，见布局原则\n// 「领域专用脚本随各自源码」；.mjs 不被 collectSource 收集，不随 bundle 打包）
+// 与 hana-remote-dev 的 rspack.config.mjs 对齐，按 dshana 实际适配：
 //   - 单入口 src/index.js → 单产物 dist/index.js（生命周期 + dshana_session 工具 + lib + 路由全部收敛）
 //   - 输出 ESM module（纯 ESM 无原生模块，不需要 CJS+loadBundle 沙箱；宿主直接 import）
 //   - library.type=module：入口具名导出（apply）真 emit 成 ESM export，宿主直接 import
@@ -17,7 +17,7 @@ const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const DIST_DIR = path.join(root, "dist");
 
 export default {
-  name: "dsh-hanako",
+  name: "dshana",
   mode: "production",
   target: "node",
   entry: path.join(root, "src", "index.js"),

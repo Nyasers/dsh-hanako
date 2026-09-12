@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/index.js — dsh-hanako App v2 入口（迁移指南 §13 步骤 1）
+// src/index.js — dshana App v2 入口（迁移指南 §13 步骤 1）
 //
 // v2 形态：模块导出 apply(ctx)（宿主在隔离 App 进程内加载本文件并调用；入口契约兼容
 // 具名 apply / default.apply / 默认函数，这里两种都导出）。apply 完成注册后即返回，
@@ -37,7 +37,7 @@
 // 依赖部署策略（2026-09-10 改为自包含打包）：DSH 依赖（@deepseek-ai/dsh + cordis + dsh-*
 // 官方插件树 + 多平台原生产物）由 pack.mjs 在构建时物化进包（安装目录 node_modules，
 // hoisted 布局；见 scripts/pack.mjs 1.7），安装即用、无运行时安装。版本随 App 声明
-// （package.json dependencies 单一事实源，无独立升级通道）；cordis 产物（@dsh-hanako/*）
+// （package.json dependencies 单一事实源，无独立升级通道）；cordis 产物（@dshana/*）
 // 随包在安装目录 cordis/，profile 经 junction 链接（见 src/runtime/seed.js）。受管子进程
 // 入口 = runtime/dsh-host.mjs（dist 构建产物，见 src/build.js 与 src/runtime/）。
 import { initAppRuntime } from "./lib/app-runtime.js";
@@ -64,7 +64,7 @@ import { registerDshanaRoutes, defaultDshanaRouteDeps } from "./routes/dshana-ro
  * runtime、任务与流）。
  */
 export function apply(ctx) {
-  const appId = "dsh-hanako";
+  const appId = "dshana";
   const dataDir = ctx && typeof ctx.dataDir === "string" && ctx.dataDir ? ctx.dataDir : null;
   if (!dataDir) throw new Error(appId + " App v2 apply: ctx.dataDir 缺失（宿主未提供数据目录）");
 
@@ -117,9 +117,9 @@ export function apply(ctx) {
 
   // ---- ctx.routes.register：壳页/诊断面（迁移步骤 4b/5 收口）----
   // 契约（@hana/app-sdk + server 0.930.1 实证）：单 bundle App 只能 register 一次，
-  // registrar 收到宿主创建的 Hono sub-app（public URL /api/apps/dsh-hanako/routes/dshana/*，
+  // registrar 收到宿主创建的 Hono sub-app（public URL /api/apps/dshana/routes/dshana/*，
   // app_route 鉴权；registrar 可返回 Promise，宿主 await 后发布）。到受管 runtime 服务的
-  // 浏览器通道由宿主自动暴露在 /api/apps/dsh-hanako/routes/_runtime/<runtimeId>/（服务
+  // 浏览器通道由宿主自动暴露在 /api/apps/dshana/routes/_runtime/<runtimeId>/（服务
   // readyMarker 后成立，自动代理 HTTP/SSE/WS + 重定向重写 + HttpOnly cookie）——本 registrar
   // 不需要转发受管服务，只提供壳页消费的 boot 状态与启动/停止面。
   // ui/ 壳页（dist/ui/*.html）以相对同源 fetch 本组端点轮询（页面经 App surface

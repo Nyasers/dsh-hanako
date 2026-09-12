@@ -5,7 +5,7 @@
 
 ## 为什么要有这一层
 
-我们曾在 `@dsh-hanako/view` 里 **vendor 了一份 0.1.2 的官方 ui-layout 源码**再改。
+我们曾在 `@dshana/view` 里 **vendor 了一份 0.1.2 的官方 ui-layout 源码**再改。
 拷贝那一刻它就冻结了：0.1.5 把 root 子槽从 `conversation/details` 改成 `sidebar + main(keyed)`，
 我们那份 frame 没跟上 → 官方 occupant 挂不上、根钩子无人提供 → **真机全页黑屏**。
 

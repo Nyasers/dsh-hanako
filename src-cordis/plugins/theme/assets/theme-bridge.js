@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// @dsh-hanako/theme 的注入桥脚本（独立文件，review 修订：内容文件化）。
+// @dshana/theme 的注入桥脚本（独立文件，review 修订：内容文件化）。
 // 本文件 = 原内嵌于 index.js 的 BRIDGE 字符串正文（逐字节搬移，仅一处插值改造）：
 // 经 tapIndex 注入每个 index 响应的 <head>，运行时由 index.js 读取并包
-// <script id="@dsh-hanako/theme-bridge"> 后注入。
+// <script id="@dshana/theme-bridge"> 后注入。
 //
 // 插值约定：正文唯一动态点是数据表注入行
 //     var m = __DSH_THEME_TOKENS__;
@@ -56,9 +56,9 @@
     return c;
   }
   function applyOrRemove() {
-    var st = document.getElementById("@dsh-hanako/theme-dyn");
+    var st = document.getElementById("@dshana/theme-dyn");
     if (followHost() && cur) {
-      if (!st) { st = document.createElement("style"); st.id = "@dsh-hanako/theme-dyn"; document.head.appendChild(st); }
+      if (!st) { st = document.createElement("style"); st.id = "@dshana/theme-dyn"; document.head.appendChild(st); }
       st.textContent = "body{" + cssOf(cur) + "}";
     } else if (st) {
       st.remove();

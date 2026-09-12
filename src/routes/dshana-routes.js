@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/routes/dshana-routes.js — dsh-hanako App v2 ctx.routes.register 单 registrar
+// src/routes/dshana-routes.js — dshana App v2 ctx.routes.register 单 registrar
 // （迁移指南 §10/§13 步骤 4/5；v1 routes/webui.js + card.js 两工厂在 v2 合并为单 route app）
 //
 // 宿主契约（ctx.routes，实证于 server 0.930.1 bundle / @hana/app-sdk）：

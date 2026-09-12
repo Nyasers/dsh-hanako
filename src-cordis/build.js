@@ -114,7 +114,7 @@ async function buildClientHalves(packages, outRoot) {
   for (const { name, pkgDir, cfg } of packages) {
     if (!cfg.client) continue;
     await buildClientBundle({
-      id: `@dsh-hanako/${name}`,
+      id: `@dshana/${name}`,
       pkgDir,
       outDir: join(outRoot, name),
       externals: cfg.client.externals,

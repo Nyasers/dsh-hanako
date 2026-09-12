@@ -1,7 +1,7 @@
-# @dsh-hanako/dshana — 定制 bundle patch。
+# @dshana/dshana — 定制 bundle patch。
 #
 # 层序（profile manifest 的 dsh.profile.bundles，后写胜出）：
-#   @deepseek-ai/dsh-base → @deepseek-ai/dsh-web-app → @dsh-hanako/dshana（本文件）
+#   @deepseek-ai/dsh-base → @deepseek-ai/dsh-web-app → @dshana/dshana（本文件）
 #
 # 官方两层已经提供：surface 值覆盖（system-prompt / session-query-sqlite / tools）、服务层
 # （session / settings / workspace controller、web-startup / webserver / web-runtime、client-hmr）、
@@ -11,13 +11,13 @@
 #
 # **本文件不重复官方行**，只放两类内容：
 #   1) 对官方行的覆盖 / disable（我们自己的值）
-#   2) @dsh-hanako/* 定制插件 insert
+#   2) @dshana/* 定制插件 insert
 #
 # 机制：一切经本 bundle 的 dsh.bundle.patch 声明（见 src-cordis/package.json），不使用 profile
 # 用户层 cordis.patch.yml，也不使用命令行 --patch 叠加。
 #
 # 2026-09-11 起向官方样例 hana-dsh 看齐：连接与鉴权面交回官方（connection 由 dsh-web-app 层
-# 提供，App 侧经 runtime 中继补 cookie），不再用 @dsh-hanako/bridge 伪造免鉴权 connection。
+# 提供，App 侧经 runtime 中继补 cookie），不再用 @dshana/bridge 伪造免鉴权 connection。
 
 # ── 1) 对官方行的覆盖 ───────────────────────────────────────────────────────
 
@@ -31,28 +31,28 @@
     surfaceContext: true
     trustedHosts: !!js ctx.webStartup.trustedHosts
 
-# 官方 ui-layout 的「root 装配者」角色原本由 @dsh-hanako/view（client 半）接管；该插件已于
+# 官方 ui-layout 的「root 装配者」角色原本由 @dshana/view（client 半）接管；该插件已于
 # 2026-09-12 退役（连同 bus）。现行装配形状 = 官方行原样 + src-integrations 按面覆盖，
 # 所以官方 ui-layout 保留，下面的 disable 不再需要（那次成对换回的实验结论已落定）。
 # - id: ui-layout
 #   disabled: true
 
-# ── 2) @dsh-hanako/* 定制插件 ──────────────────────────────────────────────
+# ── 2) @dshana/* 定制插件 ──────────────────────────────────────────────
 - insert:
-    # 注（2026-09-12 退役）：@dsh-hanako/logger 已删。bus 一走，它整个实现（总线转发 +
+    # 注（2026-09-12 退役）：@dshana/logger 已删。bus 一走，它整个实现（总线转发 +
     # 环形缓冲 + 断点补发）就只剩“写一行到 cordis logger”，没存在价值；唯一消费者 theme
     # 已改为直接用内建 LoggerService（行首带 [theme] 前缀），provider 本来就是自带的。
 
-    - id: '@dsh-hanako/clipboard'
-      name: '@dsh-hanako/clipboard'
+    - id: '@dshana/clipboard'
+      name: '@dshana/clipboard'
 
-    - id: '@dsh-hanako/theme'
-      name: '@dsh-hanako/theme'
+    - id: '@dshana/theme'
+      name: '@dshana/theme'
 
-    - id: '@dsh-hanako/provider'
-      name: '@dsh-hanako/provider'
+    - id: '@dshana/provider'
+      name: '@dshana/provider'
 
-    # 注（2026-09-11 退役）：@dsh-hanako/settings 整块退场——它在 dsh 设置页提供的
+    # 注（2026-09-11 退役）：@dshana/settings 整块退场——它在 dsh 设置页提供的
     # 「DSHana 设置」分页预定由**宿主面设置页**（contributes.settings.ui.route）替代；
     # 且它早已不可用：read/save 走的是 v1 路由 /api/hana-settings.*，App v2 下裸 fetch
     # 一直 403（真机 2026-09-11 实测，同批 403 见 dsh-upgrade-0.1.5 规范）。
@@ -62,16 +62,16 @@
     # 的读与写」；版本显示用构建期常量即可（v2 起版本锁插件发版，无远端检查）。
     # 原实现可在 git 历史里找回：src-cordis/plugins/settings/。
 
-    # 注（2026-09-12 退役）：@dsh-hanako/bus 已删（她的指令）。它是 v1 遗留的 dshana.bus WS
+    # 注（2026-09-12 退役）：@dshana/bus 已删（她的指令）。它是 v1 遗留的 dshana.bus WS
     # 服务端，v2 宿主不再连它（控制面早改走 ctx.runtime.fetch → runtime 中继 /_control）。
-    # 最后一个消费者是 @dsh-hanako/logger 的总线转发段，那次一并收敛为薄的控制台实现。
+    # 最后一个消费者是 @dshana/logger 的总线转发段，那次一并收敛为薄的控制台实现。
 
-    # 注（2026-09-11 真机验证结论）：@dsh-hanako/app（serve fork 官方前端到根路径）
+    # 注（2026-09-11 真机验证结论）：@dshana/app（serve fork 官方前端到根路径）
     # 已删除。它与官方 web-runtime 的 frontend-static 抢同一个 fallback 席位，导致 index
     # 请求不经 ctx.connection.authorizeIndex → 进程 token 换 cookie 失败（runtime 启动
     # 卡在 auth-exchange，exit 7）。官方 frontend-static 自己就是正确的 index 处理者，
     # 前端服务交回官方。
 
-    # 注（2026-09-12 退役）：@dsh-hanako/view 已删——它当年是 fpFullPanel 的视图装配者
+    # 注（2026-09-12 退役）：@dshana/view 已删——它当年是 fpFullPanel 的视图装配者
     # （替官方 ui-layout 的 root 装配者角色），0.1.5 那次黑屏实验后成对换回官方，此后一直
     # 不在册。现在的装配形状就是官方 ui-layout + src-integrations（按面覆盖）。

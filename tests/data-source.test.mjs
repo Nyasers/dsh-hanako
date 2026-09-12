@@ -74,7 +74,7 @@ test("normalizeHomeForId: 斜杠与尾斜杠归一；win32 额外小写", () => 
 });
 
 test("sourceOf: private 恒为内置目录 + 常量 sourceId；shared 由 home+profile 决定", () => {
-  const dataDir = "/app-data/dsh-hanako";
+  const dataDir = "/app-data/dshana";
   const priv = sourceOf({ mode: "private" }, dataDir);
   assert.equal(priv.sourceId, "private");
   assert.equal(priv.home, privateHomeOf(dataDir));

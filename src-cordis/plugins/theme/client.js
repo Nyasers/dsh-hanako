@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// @dsh-hanako/theme 前端 client 模块：把「用户主题偏好」投影到文档属性。
+// @dshana/theme 前端 client 模块：把「用户主题偏好」投影到文档属性。
 //
 // 为什么由本插件做（而不是去 patch 官方 ui-layout 的 ThemePresenter）：偏好是 DSH 侧的事实，
 // 而 DSH 客户端插件本来就运行在 DSH 进程内、能直接读主题服务（ctx.theme）；投影是我们自己的

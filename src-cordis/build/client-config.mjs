@@ -14,12 +14,12 @@
 //   require 的调用（loader 模块表注入，不内联不全局化）。
 //
 // 资源/编译面（client 描述可选字段，见各包 cordis.config.mjs）：
-//   externals: loader 模块表 require 解析清单（默认 react 系；@dsh-hanako/view 加
+//   externals: loader 模块表 require 解析清单（默认 react 系；@dshana/view 加
 //     @deepseek-ai/dsh-client-store——平台 seed，与官方 ui-layout bundle 同款外部）
 //   defines:   tsdown define（编译期常量替换；各包自声明，如 view 的 DSH_CLIENT_TITLE）
 // 资源内联："./x.css?inline" / "./x.svg?inline" 文本内联虚拟模块（通用文本 loader，
 //   规避 tsdown css-guard：虚拟 id 不以 .css 结尾——官方同款加 .mjs 后缀）；
-//   "./x.module.css"（官方 TSX 组件 CSS Modules 语义，@dsh-hanako/view vendor 官方
+//   "./x.module.css"（官方 TSX 组件 CSS Modules 语义，@dshana/view vendor 官方
 //   ui-layout AppFrame 等源码需要）→ css-modules 虚拟模块（默认导出 local→带前缀 class
 //   映射 + 模块执行时注入 <style data-plugin-css>，纯运行时无 React 路径）。
 // 环境常量：浏览器产物无 process 全局——define 把 process.env 整体替换为空对象、

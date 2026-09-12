@@ -5,7 +5,7 @@
 //
 // 目标（迁移指南 §12 / DESIGN「步骤 4b/5 收口」）：旧插件数据布局
 //   <hanakoHome>/plugin-data/dsh-hanako/{dsh-home, logs, config.json, node_modules, pnpm-dist}
-// 迁入 App v2 数据区 ctx.dataDir = <hanakoHome>/app-data/dsh-hanako/，使：
+// 迁入 App v2 数据区 ctx.dataDir = <hanakoHome>/app-data/dshana/，使：
 //   · dsh-home/{sessions, storages, settings.yaml, .anonymous-user-id} → <私有源目录>/…
 //     （DSH_HOME 指向当前数据源的 home，见 src/runtime/main.js env 设置）
 //     ⚠ 源目录名 dsh-home 是 v1 的历史布局（不可改）；目标用 PRIVATE_HOME_NAME（.dsh）

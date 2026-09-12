@@ -9,7 +9,7 @@
 //   createNdjsonLineReader()  —— 行级 async iterable（喂 byte/text chunk）
 //   parseNdjsonEvent(line)    —— 单行 JSON.parse（容错抛错带行号上下文）
 //   splitLines 助手          —— 同步文本切行（纯函数，单测覆盖半行余量逻辑）
-// 消费方：@dsh-hanako/provider v2 adapter（hana.models.stream 响应 → DSH llm 流）。
+// 消费方：@dshana/provider v2 adapter（hana.models.stream 响应 → DSH llm 流）。
 // 零宿主/零 DSH import：可被 node --test 直接 import（交付物 4 单测面）。
 
 /**

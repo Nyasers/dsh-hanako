@@ -10,7 +10,7 @@
 //       --target <App dataDir> [--force] [--backup-dir <dir>]
 //
 // 环境变量缺省：--source 缺省取 DSHANA_LEGACY_HOME；--target 缺省取 DSHANA_DATA_DIR。
-// App dataDir = <hanakoHome>/app-data/dsh-hanako（ctx.dataDir；由主上下文在真机提供）。
+// App dataDir = <hanakoHome>/app-data/dshana（ctx.dataDir；由主上下文在真机提供）。
 //
 // 本脚本不真跑于本刀（旧插件数据是活的）——只交付代码与 --check 只读验证路径；--apply 的
 // 停机指引：迁移窗口内旧插件应先停止写入（主上下文与姐姐协调），脚本对源只读、不删除。
@@ -37,7 +37,7 @@ migrate-legacy — 把 v1 插件数据（dsh-home/config）迁入 App v2 数据�
 
   --hanako-home <dir>   宿主 home（旧源 = <dir>/plugin-data/dsh-hanako）
   --source <dir>        旧插件数据根（plugin-data/dsh-hanako；优先于 --hanako-home）
-  --target <dir>        App 数据区（ctx.dataDir，例如 <hanakoHome>/app-data/dsh-hanako）
+  --target <dir>        App 数据区（ctx.dataDir，例如 <hanakoHome>/app-data/dshana）
   --backup-dir <dir>    备份目录（默认 <target>/migration-backup；已存在不覆盖）
   --check               只读分析并退出（默认）
   --apply               执行复制 + 标记（幂等；不删除源/备份）

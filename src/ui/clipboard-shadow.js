@@ -12,7 +12,7 @@
 //                                              catch { return false } }
 //       …document.execCommand('copy') 兜底**只在 writeText 不存在时**才走
 //     也就是「原生一失败就直接 false，没有第二条路」——所以影子必须在属性被读到之前就位。
-//   · DSH 的 client 插件（@dsh-hanako/clipboard 的 client 半）是 boot manifest 里按需激活的
+//   · DSH 的 client 插件（@dshana/clipboard 的 client 半）是 boot manifest 里按需激活的
 //     （dsh-client-modules 把每条声明成 { id, inject, immediately }，只有 immediately 才在启动
 //     时就激活），装得晚且不保证被激活；壳页在注入 DSH 之前装，才是真正的「全局 + 最早」。
 //

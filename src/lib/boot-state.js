@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/lib/boot-state.js — dsh-hanako App v2 壳页/诊断面的 boot 状态快照与提示文案（纯函数）
+// src/lib/boot-state.js — dshana App v2 壳页/诊断面的 boot 状态快照与提示文案（纯函数）
 //
 // 消费方：ctx.routes.register 的壳页诊断面（src/routes/dshana-routes.js）与 ui/ 壳页
 // （GET /api/apps/<appId>/routes/dshana/boot-state）。本模块只做「状态归一化 + 文案」，
@@ -19,7 +19,7 @@
 // 阶段（phase，来自 src/lib/managed-runtime.js 单例）：
 //   idle（未启动）/ starting（启动中：runtime 拉起 + profile 种子化 + 服务监听）/ ready（就绪）/
 //   error（上次启动失败，含 code+userText 供重试指引）/ stopped（已停止）
-export const APP_ID = "dsh-hanako";
+export const APP_ID = "dshana";
 
 /** 宿主受管服务代理前缀（u1e 同形；appId/runtimeId 空值返回 null）。
  * 2026-09-11 起支持 bridgeKey：中继作为唯一服务面后，路径需带 `_hana/<key>/` 段（浏览器
