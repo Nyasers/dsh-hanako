@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// tools/lib/config.js — dsh-hanako 配置解析共用模块（lib 提取）
+// tools/lib/config.js — dshana 配置解析共用模块（lib 提取）
 // 从 tools/dsh-run.js 剥离的纯解析/零状态函数：默认模型/预设（settings.yaml 行级）、
 // reasoningEffort、审批超时。全部零宿主状态（不碰 globalThis 单例，只读文件/参数），
 // dsh-run.js 静态 import。cwd 无配置回退（defaultCwd 已删除）：create 必传显式指定。

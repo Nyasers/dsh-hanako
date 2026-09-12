@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/ui/app-shell.js — dsh-hanako App v2 壳页逻辑（main/sidebar 共用；浏览器 ESM）
+// src/ui/app-shell.js — dshana App v2 壳页逻辑（main/sidebar 共用；浏览器 ESM）
 //
 // 相对资源纪律（迁移指南 §10）：经 <script type="module" src="./app-shell.js"> 相对引入，
 // 页面内不出现根路径绝对 URL。浏览器 SDK = 官方 @hana/plugin-sdk（devDependencies，
@@ -288,7 +288,7 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
 
   // 挂到宿主桥（__DSHANA__）上的跨面接口：
   //   设置视图 → src-integrations/ui-settings-general；会话选中 → src-integrations/ui-session；
-  //   剪贴板 → @dsh-hanako/clipboard 的 client 半（同文档，直接调，无消息协议）。
+  //   剪贴板 → @dshana/clipboard 的 client 半（同文档，直接调，无消息协议）。
   var SURFACE_API = {
     readSettingsView: readSettingsView,
     writeSettingsView: writeSettingsView,
@@ -349,7 +349,7 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
     var m = /const\s+preference\s*=\s*"([^"]+)"/.exec(String(html || ""));
     return m && /^(system|light|dark)$/.test(m[1]) ? m[1] : null;
   }
-  // 旧的 ?dshana-view= 参数已退役（2026-09-12）：它唯一的消费者是 @dsh-hanako/view 客户端插件，
+  // 旧的 ?dshana-view= 参数已退役（2026-09-12）：它唯一的消费者是 @dshana/view 客户端插件，
   // 而该插件已不在册（官方 ui-layout 放开后就成对换回了）；正式路径读的是 __DSHANA__.role，
   // 而 role 的事实源是页面自己的声明（meta / 壳属性）。故不再改写当前 URL。
   function showInjectionError(err) {

@@ -79,5 +79,5 @@ required: ["action"]
 
 ## 关联
 
-- 故障排查、三态自举页、数据源与主题：见 [dsh-hanako 技能](../dsh-hanako)
+- 故障排查、三态自举页、数据源与主题：见 [dshana 技能](../dshana)
 - 会话与账本在 App 数据目录内（不碰 `~/.DSH`）

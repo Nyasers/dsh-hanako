@@ -1,9 +1,9 @@
 ---
-name: dsh-hanako
-description: "dsh-hanako App（把 DeepSeek Harness 接进 Hana 的受管子代理执行器）的使用与排错指南。触发场景：DSHana 卡显示未启动/启动中/需要处理（三态自举页）、DSH 起不来或启动超时、DSH 任务失败排查、审批怎么应答（dshana_session action=approve）、默认模型怎么配、DSH 数据源（private/shared）怎么切、DSH Web UI 打不开、主题跟随宿主、DeepSeek Harness 相关。遇到 dsh-hanako 相关需求优先读本技能再动手。"
+name: dshana
+description: "dshana App（把 DeepSeek Harness 接进 Hana 的受管子代理执行器）的使用与排错指南。触发场景：DSHana 卡显示未启动/启动中/需要处理（三态自举页）、DSH 起不来或启动超时、DSH 任务失败排查、审批怎么应答（dshana_session action=approve）、默认模型怎么配、DSH 数据源（private/shared）怎么切、DSH Web UI 打不开、主题跟随宿主、DeepSeek Harness 相关。遇到 dshana 相关需求优先读本技能再动手。"
 ---
 
-# dsh-hanako 使用与排错指南
+# dshana 使用与排错指南
 
 DSHana 把 DeepSeek Harness（DSH）作为**受管子代理执行器**接进 Hana：App 加载后自动拉起一个受管 Node runtime，里面跑 DSH web 服务；DSH 前端以**同文档注入**方式挂进 DSHana 卡（不是 iframe 内嵌）。DSH 依赖随 App 包物化，**运行时不需要安装任何东西**。
 
@@ -21,7 +21,7 @@ DSHana 把 DeepSeek Harness（DSH）作为**受管子代理执行器**接进 Han
 
 ## DSHana 卡三态
 
-壳页轮询 `GET /api/apps/dsh-hanako/routes/dshana/boot-state`，按 `phase` 渲染：
+壳页轮询 `GET /api/apps/dshana/routes/dshana/boot-state`，按 `phase` 渲染：
 
 | 状态 | 表现 | 怎么办 |
 |---|---|---|
@@ -42,7 +42,7 @@ DSHana 把 DeepSeek Harness（DSH）作为**受管子代理执行器**接进 Han
 
 ## 主题
 
-只有 DSH 主题偏好为 **system** 时跟随宿主配色（经 `@dsh-hanako/theme` 子插件注入）；在 DSH 内显式选 light/dark 时完全用 DSH 自己的主题，宿主配色不介入。
+只有 DSH 主题偏好为 **system** 时跟随宿主配色（经 `@dshana/theme` 子插件注入）；在 DSH 内显式选 light/dark 时完全用 DSH 自己的主题，宿主配色不介入。
 
 ## 排错表
 

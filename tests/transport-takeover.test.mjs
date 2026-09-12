@@ -20,7 +20,7 @@ import {
 } from "../src/ui/dsh-inject.js";
 
 const PAGE = "https://hana.local";
-const BASE = new URL("https://hana.local/api/apps/dsh-hanako/routes/_runtime/r1/_surface/tok/");
+const BASE = new URL("https://hana.local/api/apps/dshana/routes/_runtime/r1/_surface/tok/");
 const conf = { pageOrigin: PAGE };
 const relayed = (input) => resolveRelayUrl(input, BASE, conf);
 const expectRelayed = (input, expectedPath) => {
@@ -52,8 +52,8 @@ test("query 与 hash 原样保留", () => {
 });
 
 test("宿主前缀（/api/apps/）与中继自身一律放行，防二次重写", () => {
-  assert.equal(relayed("/api/apps/dsh-hanako/routes/_runtime/r1/_surface/tok/api/present.host"), null);
-  assert.equal(relayed("/api/apps/dsh-hanako/ui/default.html"), null);
+  assert.equal(relayed("/api/apps/dshana/routes/_runtime/r1/_surface/tok/api/present.host"), null);
+  assert.equal(relayed("/api/apps/dshana/ui/default.html"), null);
   assert.equal(relayed(BASE.toString() + "api/present.host"), null);
   assert.deepEqual(HOST_PATH_PREFIXES, ["/api/apps/"]);
 });
@@ -68,12 +68,12 @@ test("WebSocket 映射：跟随中继前缀的 http(s) → ws(s)", () => {
   const mapped = resolveRelaySocketUrl("/api/remote.mux", BASE, conf);
   assert.ok(mapped);
   assert.equal(mapped.protocol, "wss:");
-  assert.equal(mapped.toString(), "wss://hana.local/api/apps/dsh-hanako/routes/_runtime/r1/_surface/tok/api/remote.mux");
+  assert.equal(mapped.toString(), "wss://hana.local/api/apps/dshana/routes/_runtime/r1/_surface/tok/api/remote.mux");
   // 输入自己就是 wss:// 时 origin 归一后同样认得（协议族等价）。
   const secure = resolveRelaySocketUrl("wss://hana.local/api/remote.mux", BASE, conf);
   assert.ok(secure);
   assert.equal(secure.protocol, "wss:");
-  assert.equal(secure.toString(), "wss://hana.local/api/apps/dsh-hanako/routes/_runtime/r1/_surface/tok/api/remote.mux");
+  assert.equal(secure.toString(), "wss://hana.local/api/apps/dshana/routes/_runtime/r1/_surface/tok/api/remote.mux");
   assert.equal(resolveRelaySocketUrl("https://example.com/api/remote.mux", BASE, conf), null);
 });
 
@@ -121,11 +121,11 @@ test("接管面：五个原语都被改写，宿主侧与外部 origin 不动，
 
   // fetch：重写 + same-origin 凭据
   await target.fetch("/api/present.host");
-  await target.fetch("/api/apps/dsh-hanako/routes/keep-me");
+  await target.fetch("/api/apps/dshana/routes/keep-me");
   await target.fetch("https://example.com/out");
   assert.deepEqual(calls.filter((c) => c.kind === "fetch").map((c) => c.url), [
     BASE.toString() + "api/present.host",
-    "/api/apps/dsh-hanako/routes/keep-me",
+    "/api/apps/dshana/routes/keep-me",
     "https://example.com/out",
   ]);
 
@@ -136,7 +136,7 @@ test("接管面：五个原语都被改写，宿主侧与外部 origin 不动，
 
   // EventSource / WebSocket
   assert.equal(new target.EventSource("/api/events.host").url, BASE.toString() + "api/events.host");
-  assert.equal(new target.WebSocket("/api/remote.mux").url, "wss://hana.local/api/apps/dsh-hanako/routes/_runtime/r1/_surface/tok/api/remote.mux");
+  assert.equal(new target.WebSocket("/api/remote.mux").url, "wss://hana.local/api/apps/dshana/routes/_runtime/r1/_surface/tok/api/remote.mux");
   assert.equal(target.WebSocket.OPEN, 1);
   assert.equal(target.EventSource.OPEN, 1);
 

@@ -6,7 +6,7 @@
 // 复用 v1 lib/profile-seed.js（纯路径逻辑零宿主依赖）在子进程内完成：
 //   profiles/<name> 由官方 initProfile 初始化（manifest/cordis.patch.yml 用户层/
 //   pnpm-workspace.yaml，幂等只补缺失）；
-//   node_modules/@dsh-hanako scope 链接 → cordisSrc（默认 <installDir>/cordis，@dsh-hanako
+//   node_modules/@dshana scope 链接 → cordisSrc（默认 <installDir>/cordis，@dshana
 //   产物 10 包平铺 scope 根），junction/symlink 失败回退整体拷贝。
 // 链接源在 installDir（只读）：junction 指向只读目录可正常读取；App 升级换目录后链接
 // 漂移由 ensureProfileSeeded 自愈重建（指向新 installDir），重建失败回退拷贝保证可用。

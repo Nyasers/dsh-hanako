@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// @dsh-hanako/clipboard — DSH Web UI 剪贴板桥（2026-09-12 起：只有一个 client 半）。
+// @dshana/clipboard — DSH Web UI 剪贴板桥（2026-09-12 起：只有一个 client 半）。
 //
 // 语义：嵌入场景（DSHana 卡）下 navigator.clipboard.writeText 被宿主的 Permissions-Policy
 // 拒绝（真机 permissions.query({name:'clipboard-write'}) → 'denied'）。写权限的绕行在
@@ -17,7 +17,7 @@
 // rspack），故显式留一个空实现并在注释里记明，不做多余的事（不注册路由、不注入 index）。
 // 依赖数组为空——本包不消费任何 cordis 服务。
 
-export const name = '@dsh-hanako/clipboard'
+export const name = '@dshana/clipboard'
 
 export function apply() {
   /* 就地留白：见文件头“本半无运行时行为”。 */

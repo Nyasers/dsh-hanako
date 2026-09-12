@@ -21,7 +21,7 @@ const DIST_DIR = path.join(root, "dist");
 const ui = (f) => path.join(root, "src", "ui", f);
 
 export default {
-  name: "dsh-hanako-ui",
+  name: "dshana-ui",
   mode: "production",
   target: "web",
   entry: {

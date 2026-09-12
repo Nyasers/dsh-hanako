@@ -5,8 +5,8 @@
 // 从 src/lifecycle.js ensureDshanaProfile 剥离的纯路径逻辑（设计 specs/current/
 // dshana-profile-bundle/spec.md D1/D2/D4/D5）：profile 目录（$DSH_HOME/profiles/dshana）
 // 由插件运行时初始化为用户自有真实目录（不再整树 junction 挂插件产物），9 个
-// @dsh-hanako/* 子插件 + bundle @dsh-hanako/dshana 经单条 scope 目录链接暴露（scopeSrc =
-// PLUGIN_ROOT/cordis——10 包平铺于 cordis 资产根，链接名 @dsh-hanako 供 cordis 解析）。
+// @dshana/* 子插件 + bundle @dshana/dshana 经单条 scope 目录链接暴露（scopeSrc =
+// PLUGIN_ROOT/cordis——10 包平铺于 cordis 资产根，链接名 @dshana 供 cordis 解析）。
 //
 // 官方生成工具（2026-09-04 定案）：profile 文件（manifest package.json / 用户层
 // cordis.patch.yml / pnpm-workspace.yaml）由 @deepseek-ai/dsh-app-boot 的 initProfile
@@ -18,7 +18,7 @@
 // 形态判定（迁移只处理已声明「纯内置物」的两态，其余拒绝——绝不整树删除）：
 //   profiles/dshana 不存在                      → initProfile 初始化 + scope 链接
 //   isSymbolicLink（老整树 junction）           → rmdir 链接本身后初始化
-//   实体目录且 node_modules/@dsh-hanako 已是链接 → 幂等 ensure（initProfile 只补缺失；
+//   实体目录且 node_modules/@dshana 已是链接 → 幂等 ensure（initProfile 只补缺失；
 //                                                 链接漂移才重建；不覆盖用户改动）
 //   实体目录且 manifest 为纯内置物（name=dsh-profile-dshana 且 dependencies 空）：
 //     scope 为实体目录（老拷贝残留）            → 清内置残留后 initProfile 补齐
@@ -55,10 +55,10 @@ const PROFILE_MANIFEST_NAME = "dsh-profile-dshana";
 //
 // 层序语义（2026-09-11 定案，向官方样例 hana-dsh 看齐）：官方 `@deepseek-ai/dsh-web-app`
 // bundle 自带 connection（BrowserAuth token/cookie 鉴权面）、gateway、完整 browser roster
-// 与 agent-presets；`@dsh-hanako/dshana` 在其后只放「对官方行的覆盖 + @dsh-hanako/* 定制
+// 与 agent-presets；`@dshana/dshana` 在其后只放「对官方行的覆盖 + @dshana/* 定制
 // 插件」，不再照抄官方行，也不手写实现 connection。层序后写胜出：dshana 可 disable/覆盖
-// 官方行（如 ui-layout 由 @dsh-hanako/view 接管）。
-export const PROFILE_BUNDLES = ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", "@dsh-hanako/dshana"];
+// 官方行（如 ui-layout 由 @dshana/view 接管）。
+export const PROFILE_BUNDLES = ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", "@dshana/dshana"];
 export const PROFILE_PATCH_RELOAD = "live";
 
 // 历史内置 bundle 名并集（随包托管边界：profile 目录只有 cordis.patch.yml 归用户，其余
@@ -141,7 +141,7 @@ function rmBestEffort(p) {
 
 // 清理老拷贝内置残留：内置三文件（manifest/旧 roster 用户层/pnpm-workspace，该形态已
 // 声明纯内置物无用户内容可能——旧 cordis.patch.yml 是构建期内置 58 行 roster 非用户
-// 内容，roster 已进 bundle patch）+ node_modules/@dsh-hanako 实体拷贝；其余未知文件
+// 内容，roster 已进 bundle patch）+ node_modules/@dshana 实体拷贝；其余未知文件
 // 保守保留不碰。cordis.yml 残留保留（dsh boot 自维护写回空根）。
 function cleanupLegacyCopy(profileDir, log) {
   for (const name of LEGACY_BUILTIN_FILES) {
@@ -151,10 +151,10 @@ function cleanupLegacyCopy(profileDir, log) {
       log(`[cordis] 清理老拷贝内置文件：${name}`);
     }
   }
-  const scopeCopy = join(profileDir, "node_modules", "@dsh-hanako");
+  const scopeCopy = join(profileDir, "node_modules", "@dshana");
   if (existsSync(scopeCopy)) {
     rmBestEffort(scopeCopy);
-    log("[cordis] 清理老拷贝 scope 实体目录：node_modules/@dsh-hanako");
+    log("[cordis] 清理老拷贝 scope 实体目录：node_modules/@dshana");
   }
 }
 
@@ -163,7 +163,7 @@ function cleanupLegacyCopy(profileDir, log) {
 // "failed"（建链接与拷贝都失败）
 function ensureScopeLink(profileDir, scopeSrc, createLink, log) {
   const nmDir = join(profileDir, "node_modules");
-  const link = join(nmDir, "@dsh-hanako");
+  const link = join(nmDir, "@dshana");
   mkdirSync(nmDir, { recursive: true });
   try {
     const st = lstatSync(link);
@@ -175,7 +175,7 @@ function ensureScopeLink(profileDir, scopeSrc, createLink, log) {
       }
       rmSync(link, { force: true }); // 删链接本身（rmSync 对符号链接/junction 均只删链接不递归；POSIX 下 rmdir 对 symlink 报 ENOTDIR）
     } else if (st.isDirectory()) {
-      // 实体目录残留（老拷贝 / pnpm 误建等）：@dsh-hanako 为插件保留区，删后重建
+      // 实体目录残留（老拷贝 / pnpm 误建等）：@dshana 为插件保留区，删后重建
       rmSync(link, { recursive: true, force: true });
     } else {
       rmSync(link, { force: true }); // 文件等异常形态
@@ -185,17 +185,17 @@ function ensureScopeLink(profileDir, scopeSrc, createLink, log) {
   }
   try {
     createLink(scopeSrc, link);
-    log(`[cordis] @dsh-hanako scope 链接（${process.platform === "win32" ? "junction" : "symlink"}）-> ${scopeSrc}`);
+    log(`[cordis] @dshana scope 链接（${process.platform === "win32" ? "junction" : "symlink"}）-> ${scopeSrc}`);
     return "linked";
   } catch (e) {
     // 链接建立失败（跨盘/权限等）：回退整体拷贝 scope 目录（保证 profile 可用）
-    log(`[cordis] @dsh-hanako scope 链接失败（${(e && e.message) || e}），回退拷贝 scope 目录`);
+    log(`[cordis] @dshana scope 链接失败（${(e && e.message) || e}），回退拷贝 scope 目录`);
     try {
       cpSync(scopeSrc, link, { recursive: true, force: true });
-      log(`[cordis] @dsh-hanako scope 落位（拷贝回退）-> ${link}`);
+      log(`[cordis] @dshana scope 落位（拷贝回退）-> ${link}`);
       return "scope-copied";
     } catch (e2) {
-      log(`[cordis] @dsh-hanako scope 落位失败：${(e2 && e2.message) || e2}`);
+      log(`[cordis] @dshana scope 落位失败：${(e2 && e2.message) || e2}`);
       return "failed";
     }
   }
@@ -244,11 +244,11 @@ export function ensureProfileSeeded(opts) {
       log("[cordis] profiles/dshana 为非目录形态，拒绝迁移（由诊断引导人工处理）");
       return "refused";
     }
-    // 实体目录：若 node_modules/@dsh-hanako 已是链接 = 新形态（或漂移，链接 ensure 修复），
+    // 实体目录：若 node_modules/@dshana 已是链接 = 新形态（或漂移，链接 ensure 修复），
     // 不清理（用户文件如 cordis.patch.yml 归用户所有）；scope 路径缺失（新形态被 pnpm
     // 剪枝等）同样不清理——只补链接，保守保留已有文件；仅当 scope 为实体目录（老整树
     // 拷贝残留的典型形态）且 manifest 为纯内置物时才清内置残留重初始化。
-    const scopeLink = join(profileDir, "node_modules", "@dsh-hanako");
+    const scopeLink = join(profileDir, "node_modules", "@dshana");
     let scopeIsLink = false;
     try {
       scopeIsLink = lstatSync(scopeLink).isSymbolicLink();

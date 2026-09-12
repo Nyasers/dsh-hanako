@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/runtime/main.js — dsh-hanako App v2 受管 Node runtime 入口主体（迁移指南 §13 步骤 2）
+// src/runtime/main.js — dshana App v2 受管 Node runtime 入口主体（迁移指南 §13 步骤 2）
 //
 // 打包产物：dist/runtime/dsh-host.mjs（rspack ESM bundle；宿主 ctx.runtime.start({ runtime:
 // "node", entry: "runtime/dsh-host.mjs", ... }) 加载后自持生命周期，不再回宿主进程）。
@@ -159,7 +159,7 @@ function makeShutdown(state, exitCodeLog) {
       state.bridge = null;
     }
     try {
-      // @dsh-hanako/provider 等子插件经该句柄取 hana client（见 main.js 步骤 1 注释）
+      // @dshana/provider 等子插件经该句柄取 hana client（见 main.js 步骤 1 注释）
       if (globalThis.__dshanaHana === hana) globalThis.__dshanaHana = null;
     } catch { /* 忽略 */ }
     try {
@@ -286,7 +286,7 @@ export async function main(argv) {
     return EXIT.IPC_UNAVAILABLE;
   }
   state.hana = hana;
-  // 步骤 3 契约：@dsh-hanako/provider 等受管子进程内子插件经该句柄调用宿主
+  // 步骤 3 契约：@dshana/provider 等受管子进程内子插件经该句柄调用宿主
   // tasks/models/network（connectAppRuntime 的 client 对象；与插件同进程，globalThis
   // 共享——provider adapter 重建见 src-cordis/plugins/provider/index.js v2）。关闭顺序：
   // 先停 task-bridge/流，再 ctx dispose，最后 hana.close()（指南 §7 流纪律）。

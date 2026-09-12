@@ -21,7 +21,7 @@
     "启动握手靠读快照：载体是 App 全局存储（始终有当前值），不会像 BroadcastChannel 那样",
     "「接收端晚启动就错过宣告」。两个边界：列表 phase!=='ready' 不宣告（避开恢复中间态）；",
     "启动宣告为「无选中」时不写 null（视为无意见），免得清掉主卡自己恢复出来的选中。",
-    "上游 v1 实现（@dsh-hanako/view 的 sync-bridge.js，BroadcastChannel 'dshana.sync'，",
+    "上游 v1 实现（@dshana/view 的 sync-bridge.js，BroadcastChannel 'dshana.sync'，",
     "协议 {v:1,type:'select'|'clear'}）已退役，其 V4 单向收敛结论（导航源只在 sideba、",
     "main 无切换 UI）原样保留为这里的设计依据；载体从 BroadcastChannel 换成 App 全局存储。"
   ]

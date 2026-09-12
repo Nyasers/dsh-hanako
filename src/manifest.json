@@ -1,6 +1,6 @@
 {
   "manifestVersion": 2,
-  "id": "dsh-hanako",
+  "id": "dshana",
   "name": "DSHana",
   "version": "1.0.0-beta.5+dsh-0.1.5-rc.2",
   "description": "把 DeepSeek Harness 变成 HanaAgent 的子代理",

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// @dsh-hanako/theme — 把 Hana 宿主主题「全量配色」注入 dsh Web UI（v0.8.1）。
+// @dshana/theme — 把 Hana 宿主主题「全量配色」注入 dsh Web UI（v0.8.1）。
 //
 // 语义：嵌入场景（DSHana 标签页）下 dsh 始终使用 Hana 配色——
 //   明暗：经壳页面 color-scheme 传导（dsh preference=system 时解析宿主明暗）
@@ -38,12 +38,12 @@
 // 语义色、toast/tooltip 深色浮层、工具栏半透明、反白文字/边框、骨架屏）。
 //
 // 依赖注入：webServer 服务（host 半部），与 dsh-client-ui-theme 同姿势。日志直接写 cordis
-// 内建 LoggerService（runtime stdout，行首带 [theme] 前缀）——@dsh-hanako/logger 已于
+// 内建 LoggerService（runtime stdout，行首带 [theme] 前缀）——@dshana/logger 已于
 // 2026-09-12 随 bus 一起退役（它当时只剩三行转发，没有存在价值）。
 
 import bridgeBody from "./assets/theme-bridge.js";
 
-export const name = "@dsh-hanako/theme";
+export const name = "@dshana/theme";
 
 // 映射表在 ./token-map.js（纯数据零依赖，可被 node --test 直接 import；本文件顶部那句
 // assets/theme-bridge.js 的默认导出由打包器注入，普通 node import 会直接 SyntaxError）。
@@ -52,7 +52,7 @@ import { TOKEN_MAP } from "./token-map.js";
 // 动态脚本：宿主声明（壳桥 vars + preference）直接应用。正文在
 // assets/theme-bridge.js（自包含浏览器 JS），唯一动态点 = TOKEN_MAP 数据表注入
 // （占位符 __DSH_THEME_TOKENS__ 模块初始化时替换为序列化常量）。
-const BRIDGE = `<script id="@dsh-hanako/theme-bridge">
+const BRIDGE = `<script id="@dshana/theme-bridge">
 ${bridgeBody.replace("__DSH_THEME_TOKENS__", JSON.stringify(TOKEN_MAP))}
 </script>`;
 
@@ -61,7 +61,7 @@ export function apply(ctx, config) {
     httpCtx.effect(() => {
       try {
         httpCtx.webServer.tapIndex((html) => {
-          if (html.includes('id="@dsh-hanako/theme-bridge"')) return html;
+          if (html.includes('id="@dshana/theme-bridge"')) return html;
           return html.replace("</head>", BRIDGE + "</head>");
         });
         try { ctx.logger?.info?.("[theme] 主题注入 tapIndex 已注册"); } catch { /* 忽略 */ }

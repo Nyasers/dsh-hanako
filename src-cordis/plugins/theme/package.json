@@ -1,5 +1,5 @@
 {
-  "name": "@dsh-hanako/theme",
+  "name": "@dshana/theme",
   "version": "1.0.0-beta.5+dsh-0.1.5-rc.2",
   "private": true,
   "type": "module",
@@ -19,6 +19,6 @@
     }
   },
   "cordis": {
-    "name": "@dsh-hanako/theme"
+    "name": "@dshana/theme"
   }
 }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// @dsh-hanako/clipboard 前端 client 半。
+// @dshana/clipboard 前端 client 半。
 //
 // 2026-09-12 定案（她的指令）：「在壳级全局 shadow 就行」。影子本体与安装逻辑搬到
 // src/ui/clipboard-shadow.js，由**壳页**在注入 DSH 之前装（全局 + 最早）——那里才是真正

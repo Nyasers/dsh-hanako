@@ -21,9 +21,9 @@ test("runtimeProxyPrefix: 宿主契约形态（/api/apps/<appId>/routes/_runtime
 });
 
 test("parseRuntimeProxyPrefix: 反解析（校验/单测用）", () => {
-  assert.deepEqual(parseRuntimeProxyPrefix("/api/apps/dsh-hanako/routes/_runtime/rt-1/"), { appId: "dsh-hanako", runtimeId: "rt-1" });
-  assert.deepEqual(parseRuntimeProxyPrefix("/api/apps/dsh-hanako/routes/_runtime/rt-1"), { appId: "dsh-hanako", runtimeId: "rt-1" });
-  assert.equal(parseRuntimeProxyPrefix("/api/apps/dsh-hanako/routes/dshana/boot-state"), null);
+  assert.deepEqual(parseRuntimeProxyPrefix("/api/apps/dshana/routes/_runtime/rt-1/"), { appId: "dshana", runtimeId: "rt-1" });
+  assert.deepEqual(parseRuntimeProxyPrefix("/api/apps/dshana/routes/_runtime/rt-1"), { appId: "dshana", runtimeId: "rt-1" });
+  assert.equal(parseRuntimeProxyPrefix("/api/apps/dshana/routes/dshana/boot-state"), null);
   assert.equal(parseRuntimeProxyPrefix(null), null);
 });
 
@@ -44,7 +44,7 @@ test("buildBootSnapshot: ready 需 phase+runtimeId+service.state=ready（绝不�
   assert.equal(notReady.proxyPrefix, null, "service 未就绪不给前缀");
   const ready = buildBootSnapshot({ phase: "ready", runtimeId: "rt-1", info: { service: { state: "ready", port: 4317 } }, lastError: null });
   assert.equal(ready.ready, true);
-  assert.equal(ready.proxyPrefix, "/api/apps/dsh-hanako/routes/_runtime/rt-1/");
+  assert.equal(ready.proxyPrefix, "/api/apps/dshana/routes/_runtime/rt-1/");
   assert.deepEqual(ready.service, { state: "ready", port: 4317 });
 });
 

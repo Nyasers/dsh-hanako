@@ -33,7 +33,7 @@ export class UsageError extends Error {
   }
 }
 
-export const USAGE = `用法：dsh-host.mjs <runtime-config.json>（dsh-hanako App v2 受管 Node runtime 入口）
+export const USAGE = `用法：dsh-host.mjs <runtime-config.json>（dshana App v2 受管 Node runtime 入口）
   <runtime-config.json>  私有运行时配置文件绝对路径（App 主进程写入，0600，启动即删）；
                          内容见 options.js 头注释 schema（常规形态 / preflight 预检形态）。
   --help                 显示本帮助

@@ -45,7 +45,7 @@ export function isSessionMethod(method) {
 /**
  * 构造 client-request 信封（v1 形态；结果可直接 JSON 序列化 POST）。
  * DSH web /api 网关校验 body.method === 端点路径段（斜杠形态，official rpc-host 与
- * @dsh-hanako/bridge 同款，见迁移后核对记录）——method 传 'session.create' 或
+ * @dshana/bridge 同款，见迁移后核对记录）——method 传 'session.create' 或
  * 'session/create' 均可，信封内统一写斜杠形态。
  * @returns {{ body: object, rpcId: string }} body = 待 POST 的 JSON 体。
  */

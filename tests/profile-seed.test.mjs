@@ -71,13 +71,13 @@ function tmpRoot(t) {
   return root;
 }
 
-// 构造 scope 源（@dsh-hanako 目录，含几个包文件）
+// 构造 scope 源（@dshana 目录，含几个包文件）
 function makeScopeSrc(root) {
   const scope = join(root, "scope-src");
   mkdirSync(join(scope, "logger"), { recursive: true });
   mkdirSync(join(scope, "dshana"), { recursive: true });
   writeFileSync(join(scope, "logger", "index.js"), "// logger fixture\n");
-  writeFileSync(join(scope, "dshana", "package.json"), "{\"name\":\"@dsh-hanako/dshana\"}\n");
+  writeFileSync(join(scope, "dshana", "package.json"), "{\"name\":\"@dshana/dshana\"}\n");
   return scope;
 }
 
@@ -105,7 +105,7 @@ function assertSeededFiles(profileDir) {
 
 // 断言 scope 为链接且指向 scopeSrc
 function assertScopeLink(profileDir, scopeSrc) {
-  const link = join(profileDir, "node_modules", "@dsh-hanako");
+  const link = join(profileDir, "node_modules", "@dshana");
   const st = lstatSync(link);
   assert.ok(st.isSymbolicLink(), "scope 应为目录链接");
   assert.equal(realpathSync(link), realpathSync(scopeSrc), "scope 链接应指向 scopeSrc");
@@ -120,7 +120,7 @@ function snapshot(profileDir) {
   }
   return {
     files,
-    scopeRealpath: realpathSync(join(profileDir, "node_modules", "@dsh-hanako")),
+    scopeRealpath: realpathSync(join(profileDir, "node_modules", "@dshana")),
   };
 }
 
@@ -144,7 +144,7 @@ test("clean：不存在 → initProfile(官方 bundles/patchReload) + 三文件 
   assert.equal(calls[0].patchReload, PROFILE_PATCH_RELOAD);
   // 链接对文件透明可读（子插件经 scope 暴露）
   assert.equal(
-    readFileSync(join(profileDir, "node_modules", "@dsh-hanako", "logger", "index.js"), "utf8"),
+    readFileSync(join(profileDir, "node_modules", "@dshana", "logger", "index.js"), "utf8"),
     "// logger fixture\n",
   );
   assert.ok(logs.some((l) => l.includes("scope 链接")), "应记链接日志");
@@ -180,8 +180,8 @@ test("老整树实体拷贝迁移：清内置残留 → initProfile 补齐 + sco
   const scopeSrc = makeScopeSrc(root);
   const profileDir = profileDirOf(root);
   // 老拷贝残留：实体目录含内置三文件 + scope 实体拷贝（含旧文件标记）+ cordis.yml 残留
-  mkdirSync(join(profileDir, "node_modules", "@dsh-hanako", "logger"), { recursive: true });
-  writeFileSync(join(profileDir, "node_modules", "@dsh-hanako", "logger", "legacy-marker.txt"), "old-copy\n");
+  mkdirSync(join(profileDir, "node_modules", "@dshana", "logger"), { recursive: true });
+  writeFileSync(join(profileDir, "node_modules", "@dshana", "logger", "legacy-marker.txt"), "old-copy\n");
   writeFileSync(join(profileDir, "package.json"), "{\n  \"name\": \"dsh-profile-dshana\",\n  \"private\": true,\n  \"dependencies\": {}\n}\n");
   writeFileSync(join(profileDir, "cordis.patch.yml"), "# 58 行老 roster 内容……\n- id: system-prompt\n");
   writeFileSync(join(profileDir, "cordis.yml"), "# 老拷贝残留\n[]\n");
@@ -196,7 +196,7 @@ test("老整树实体拷贝迁移：清内置残留 → initProfile 补齐 + sco
   assert.equal(outcome, "linked");
   assertSeededFiles(profileDir); // 清理后 initProfile 补齐（patch 为模板）
   assertScopeLink(profileDir, scopeSrc);
-  assert.ok(!existsSync(join(profileDir, "node_modules", "@dsh-hanako", "logger", "legacy-marker.txt")), "旧实体拷贝应被清理");
+  assert.ok(!existsSync(join(profileDir, "node_modules", "@dshana", "logger", "legacy-marker.txt")), "旧实体拷贝应被清理");
   assert.ok(existsSync(join(profileDir, "cordis.yml")), "cordis.yml 残留保留（dsh 自维护文件，不由种子清理）");
   assert.ok(logs.some((l) => l.includes("老拷贝")), "应记老拷贝清理日志");
 });
@@ -243,18 +243,18 @@ test("scope 漂移修复：错误链接 / 实体残留 → 重建指向 scopeSrc
   mkdirSync(wrong, { recursive: true });
   const profileDir = profileDirOf(root);
   mkdirSync(join(profileDir, "node_modules"), { recursive: true });
-  makeDirLink(wrong, join(profileDir, "node_modules", "@dsh-hanako"));
+  makeDirLink(wrong, join(profileDir, "node_modules", "@dshana"));
   const init = makeStubInitProfile([]);
   const out1 = ensureProfileSeeded({ profileDir, scopeSrc, initProfile: init, log: () => {} });
   assert.equal(out1, "linked");
   assertScopeLink(profileDir, scopeSrc);
-  rmSync(join(profileDir, "node_modules", "@dsh-hanako"), { recursive: true, force: true });
-  mkdirSync(join(profileDir, "node_modules", "@dsh-hanako", "junk"), { recursive: true });
-  writeFileSync(join(profileDir, "node_modules", "@dsh-hanako", "junk", "x.txt"), "residue");
+  rmSync(join(profileDir, "node_modules", "@dshana"), { recursive: true, force: true });
+  mkdirSync(join(profileDir, "node_modules", "@dshana", "junk"), { recursive: true });
+  writeFileSync(join(profileDir, "node_modules", "@dshana", "junk", "x.txt"), "residue");
   const out2 = ensureProfileSeeded({ profileDir, scopeSrc, initProfile: init, log: () => {} });
   assert.equal(out2, "linked");
   assertScopeLink(profileDir, scopeSrc);
-  assert.ok(!existsSync(join(profileDir, "node_modules", "@dsh-hanako", "junk", "x.txt")), "实体残留应被清理重建");
+  assert.ok(!existsSync(join(profileDir, "node_modules", "@dshana", "junk", "x.txt")), "实体残留应被清理重建");
 });
 
 test("scope 缺失（pnpm 剪枝等）：不清理用户文件，只补链接", (t) => {
@@ -293,7 +293,7 @@ test("链接失败回退：createLink 抛错 → scope 目录整体拷贝落位"
   });
   assert.equal(out, "scope-copied");
   assertSeededFiles(profileDir);
-  const link = join(profileDir, "node_modules", "@dsh-hanako");
+  const link = join(profileDir, "node_modules", "@dshana");
   const st = lstatSync(link);
   assert.ok(st.isDirectory() && !st.isSymbolicLink(), "回退应为实体拷贝");
   assert.equal(readFileSync(join(link, "logger", "index.js"), "utf8"), "// logger fixture\n");
@@ -367,7 +367,7 @@ test("manifest 随包归一：补缺失期望项、CLI 追加保留、patchReloa
   // 模拟异常/旧态 + 用户 CLI 追加：删期望项 dsh-base、patchReload 改 startup、加 @user/extra
   const mp = join(profileDir, "package.json");
   const j = JSON.parse(readFileSync(mp, "utf8"));
-  j.dsh.profile.bundles = ["@dsh-hanako/dshana", "@user/extra"];
+  j.dsh.profile.bundles = ["@dshana/dshana", "@user/extra"];
   j.dsh.profile.patchReload = "startup";
   writeFileSync(mp, JSON.stringify(j, null, 2) + "\n");
   const logs = [];

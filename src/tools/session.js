@@ -13,7 +13,7 @@
 //
 // v2 变化（相对 v1 tools/session.js，迁移指南 §13 步骤 1/3）：
 //  1. 工具名注册策略：工具名 "dshana_session"（本文件 name 为单一事实源）。
-//     v1 宿主注册出的 "dsh-hanako_dsh_session" 是宿主按插件 id 自动加前缀的工件，不是作者
+//     v1 宿主注册出的 "dshana_dsh_session" 是宿主按插件 id 自动加前缀的工件，不是作者
 //     意图名；v2 ctx.tools.register 不自动加前缀、工具名全局唯一。改名（dsh_session →
 //     dshana_session）随 sample-align W4 落地：借用官方样例 hana_dsh_* 的命名空间习惯，
 //     同时保持单工具形态；全仓文档/SKILL/参数描述同步。若宿主加载时报重名，只需改本文件
@@ -282,7 +282,7 @@ export async function execute(input, ctx) {
   } catch (e) {
     // ctx 为 App apply 注入的工具上下文（见 index.js makeToolCtx：log = 统一日志文件 +
     // 宿主 logger）；缺失时静默（防御）
-    ctx?.log?.error?.("[dsh-hanako] dshana_session failed:", e?.stack || e?.message || String(e));
+    ctx?.log?.error?.("[dshana] dshana_session failed:", e?.stack || e?.message || String(e));
     throw e;
   }
 }
