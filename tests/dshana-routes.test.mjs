@@ -4,11 +4,16 @@
 // tests/dshana-routes.test.mjs — src/routes/dshana-routes.js 挂载/响应单测（fake app/ctx）
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import {
   registerDshanaRoutes,
+  defaultDshanaRouteDeps,
   DASHANA_ROUTE_PREFIX,
   dshanaRoutesTable,
 } from "../src/routes/dshana-routes.ts";
+import { writeTaskMap, markTaskMapEnded } from "../src/lib/task-map.ts";
 
 function makeFakeApp() {
   const routes = [];
@@ -27,6 +32,18 @@ function makeFakeCtx() {
     ctx.status = typeof status === "number" ? status : 200;
     return { status: ctx.status, body };
   };
+  ctx.html = (body, status) => {
+    ctx.body = body;
+    ctx.status = typeof status === "number" ? status : 200;
+    return { status: ctx.status, body };
+  };
+  return ctx;
+}
+
+/** 查询串 ctx（GET 路由用；fake 只认 query(name)） */
+function queryCtx(params) {
+  const ctx = makeFakeCtx();
+  ctx.req = { query: (name) => (name in params ? params[name] : undefined) };
   return ctx;
 }
 
@@ -45,12 +62,13 @@ function makeFakeDeps(over = {}) {
   };
 }
 
-test("挂载清单：GET boot-state/health/settings/model + POST start/stop/settings/model（前缀 dshana）", () => {
+test("挂载清单：GET boot-state/health/settings/model/card-state + POST start/stop/settings/model（前缀 dshana）", () => {
   const { app, routes } = makeFakeApp();
   registerDshanaRoutes(app, makeFakeDeps());
   const paths = routes.map(([m, p]) => m + " " + p).sort();
   assert.deepEqual(paths, [
     "GET /dshana/boot-state",
+    "GET /dshana/card-state",
     "GET /dshana/health",
     "GET /dshana/model",
     "GET /dshana/settings",
@@ -428,4 +446,59 @@ test("GET /dshana/settings: 带当前切换 operation（供轮询）", async () 
   const ctx = makeFakeCtx();
   await handler(ctx);
   assert.equal(ctx.body.operation.state, "failed");
+});
+
+// ---- 会话流卡的状态面（ui/card.html 加载后的一次性取数，不是轮询面）----
+
+const CARD_SID = "session-0f0e0d0c-0b0a-4009-0807-060504030201";
+
+test("GET /dshana/card-state: 200 返回卡页可直接换进 DOM 的状态行 HTML", async () => {
+  const { app, routes } = makeFakeApp();
+  registerDshanaRoutes(app, makeFakeDeps({
+    readCardState: (sid) => {
+      assert.equal(sid, CARD_SID);
+      return { state: "tracked", label: "运行中", detail: "App 侧仍在跟踪（rpcId rpc-1）" };
+    },
+  }));
+  const [,, handler] = routes.find(([m, p]) => m === "GET" && p === "/dshana/card-state");
+  const ctx = queryCtx({ sessionId: CARD_SID });
+  await handler(ctx);
+  assert.equal(ctx.status, 200);
+  assert.match(ctx.body, /^<div class="state" id="dsh-state" data-state="tracked">/);
+  assert.match(ctx.body, /运行中/);
+  assert.match(ctx.body, /rpc-1/);
+});
+
+test("GET /dshana/card-state: sessionId 形态不对 → 400（形状错，不当 200 的空状态）", async () => {
+  const { app, routes } = makeFakeApp();
+  let called = 0;
+  registerDshanaRoutes(app, makeFakeDeps({
+    readCardState: () => { called += 1; return { state: "tracked", label: "运行中", detail: "" }; },
+  }));
+  const [,, handler] = routes.find(([m, p]) => m === "GET" && p === "/dshana/card-state");
+  for (const params of [{}, { sessionId: "not-a-session" }]) {
+    const ctx = queryCtx(params);
+    await handler(ctx);
+    assert.equal(ctx.status, 400);
+    assert.match(ctx.body, /data-state="unknown"/);
+  }
+  assert.equal(called, 0, "id 不合法时不去读状态面");
+});
+
+test("GET /dshana/card-state: 默认实现读 task-map（无记录 / 跟踪中 / 已终结）", async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "dshana-card-state-"));
+  try {
+    const deps = defaultDshanaRouteDeps({ appId: "dshana", config: { dataDir }, logger: { info() {} } });
+    assert.equal((await deps.readCardState(CARD_SID)).state, "unknown", "没有映射就是没有记录（不猜还在跑）");
+    writeTaskMap(dataDir, { taskId: "task-1", dshSessionId: CARD_SID, action: "create", rpcId: "rpc-1" });
+    const tracked = await deps.readCardState(CARD_SID);
+    assert.equal(tracked.state, "tracked");
+    assert.match(tracked.detail, /rpc-1/);
+    markTaskMapEnded(dataDir, CARD_SID, "success");
+    const ended = await deps.readCardState(CARD_SID);
+    assert.equal(ended.state, "ended", "终态优先于跟踪中");
+    assert.match(ended.detail, /success/);
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
 });

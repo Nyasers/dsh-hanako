@@ -24,6 +24,8 @@
 //   POST /dshana/stop        停止受管 runtime（幂等）
 //   GET  /dshana/model       默认模型（读自 DSH 的 settings 段 agent-default-model）+ 候选模型目
 //   POST /dshana/model       改默认模型（整段替换；带 expectedRevision，落后就 409）
+//   GET  /dshana/card-state  会话流卡页的状态面（一次性取数：读 App 自己的 task-map；回卡页
+//                            可直接换进 DOM 的状态行 HTML）
 //
 // 依赖注入（可测性）：deps = { appId, version, getSnapshot(), start(), stop(), log() }。
 // 默认实现经 src/lib/managed-runtime.ts 读取真实单例；测试注入 fake。
@@ -34,6 +36,7 @@ import { buildBootSnapshot, APP_ID } from "../lib/boot-state.ts";
 import { dataSources, defaultDshHome, sourceOf } from "../lib/data-source.ts";
 import { sourceSwitcher } from "../lib/source-switch.ts";
 import { readDefaultModel, writeDefaultModel } from "../lib/model-settings.ts";
+import { readTaskMap, isValidSessionId } from "../lib/task-map.ts";
 export const DASHANA_ROUTE_PREFIX = "/dshana";
 
 // ---- 应用设置（GET/POST /dshana/settings）----
@@ -70,6 +73,34 @@ async function readSettingsView(ctx, dataDir) {
   };
 }
 
+/** HTML 文本转义（卡状态下发片段里的文案注入）。 */
+function escHtml(s) {
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+/** 本地时间戳（分钟精度）；非法值给空串。 */
+function stampMinute(ms) {
+  const d = new Date(Number(ms));
+  if (!Number.isFinite(d.getTime())) return "";
+  const p = (n) => String(n).padStart(2, "0");
+  return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
+}
+
+/**
+ * 卡状态行片段：与 ui/card.html 的初始状态行同形（div.state#dsh-state[data-state] 里
+ * 一个圆点 + 一个文案 + 一个 detail），卡页就地把这段换进 DOM，故这里的类名与 id 是
+ * 卡页的渲染契约。data-state ∈ tracked / ended / cancelling / unknown。
+ */
+function cardStateHtml({ state, label, detail }) {
+  return (
+    '<div class="state" id="dsh-state" data-state="' + escHtml(state) + '">' +
+    '<span class="dot"></span><span>' + escHtml(label) + "</span>" +
+    (detail ? '<span class="detail">' + escHtml(detail) + "</span>" : "") +
+    "</div>"
+  );
+}
+
 /** 默认依赖实现（读 App 运行包 + 受管 runtime 单例；模块级状态在 App 进程内共享）。 */
 
 export function defaultDshanaRouteDeps(ctx) {
@@ -88,6 +119,29 @@ export function defaultDshanaRouteDeps(ctx) {
     appId: (ctx && ctx.appId) || APP_ID,
     version: "",
     log,
+    // 卡数据面：读 App 自己的 task-map（<dataDir>/dshana/taskmaps/<sid>.json，App 主进程与
+    // 受管 runtime 共用的跨进程事实源）。无记录一律 unknown——不猜「也许还在跑」。
+    readCardState: (sessionId) => {
+      const entry = dataDir ? readTaskMap(dataDir, sessionId) : null;
+      if (!entry) {
+        return {
+          state: "unknown",
+          label: "无跟踪记录",
+          detail: "App 侧没有这个会话的提交记录（可能已回收，或不是本 App 提交的会话）",
+        };
+      }
+      if (entry.ended) {
+        return {
+          state: "ended",
+          label: "已终结",
+          detail: "终态 " + String(entry.ended.status || "terminal") + (stampMinute(entry.ended.at) ? " · " + stampMinute(entry.ended.at) : ""),
+        };
+      }
+      if (entry.cancel) {
+        return { state: "cancelling", label: "已请求取消", detail: "reason " + String(entry.cancel.reason || "user") };
+      }
+      return { state: "tracked", label: "运行中", detail: "App 侧仍在跟踪（rpcId " + String(entry.rpcId || "") + "）" };
+    },
     readSettings: () => readSettingsView(ctx, dataDir),
     readModel: () => {
       if (!appFetch) throw new Error("ctx.network.fetch 不可用（manifest network 白名单 / 宿主代发门）");
@@ -149,6 +203,10 @@ export function registerDshanaRoutes(app, deps) {
   const start = typeof d.start === "function" ? d.start : () => ensureManagedRuntime({});
   const stop = typeof d.stop === "function" ? d.stop : () => stopManagedRuntime();
   const readSettings = typeof d.readSettings === "function" ? d.readSettings : () => ({});
+  const readCardState =
+    typeof d.readCardState === "function"
+      ? d.readCardState
+      : () => ({ state: "unknown", label: "未接线", detail: "deps.readCardState 未注入" });
   const writeSettings = typeof d.writeSettings === "function" ? d.writeSettings : (patch) => patch;
   const switchSource =
     typeof d.switchSource === "function"
@@ -167,6 +225,14 @@ export function registerDshanaRoutes(app, deps) {
       return { status: status || 200, body };
     }
     return c.json(body, status);
+  };
+
+  // HTML 响应（卡状态面）：与 json 同一条 duck-typing 纪律，fake ctx 里没 html 也能测。
+  const html = (c, status, body) => {
+    if (typeof c?.html !== "function") {
+      return { status: status || 200, body };
+    }
+    return c.html(body, status || 200);
   };
 
   // ---- GET /dshana/boot-state：壳页轮询主面 ----
@@ -224,6 +290,23 @@ export function registerDshanaRoutes(app, deps) {
       } catch (e) {
         log("warn", "/dshana/model 读取失败：" + ((e && e.message) || e));
         return json(c, 200, { ok: false, ready: true, error: (e && e.message) || String(e) });
+      }
+    });
+
+    // ---- GET /dshana/card-state：会话流卡页的状态面（一次性取数，无 SSE / 无轮询）----
+    // 卡页（ui/card.html，宿主以 /api/apps/<appId>/ui/card.html 服务）加载后取一次：读 App
+    // 自己的 task-map 给出该 DSH 会话在 App 侧的跟踪态。响应是卡页可直接换进 DOM 的状态行
+    // HTML（形制见 cardStateHtml）。会话 id 形态不对回 400（形状错，不是「没状态」）。
+    app.get(DASHANA_ROUTE_PREFIX + "/card-state", async (c) => {
+      const sid = String((c && c.req && typeof c.req.query === "function" ? c.req.query("sessionId") : "") || "").trim();
+      if (!isValidSessionId(sid)) {
+        return html(c, 400, cardStateHtml({ state: "unknown", label: "会话 id 不合法", detail: "" }));
+      }
+      try {
+        return html(c, 200, cardStateHtml(await readCardState(sid)));
+      } catch (e) {
+        log("warn", "/dshana/card-state 读取失败：" + ((e && e.message) || e));
+        return html(c, 500, cardStateHtml({ state: "unknown", label: "状态读取失败", detail: (e && e.message) || String(e) }));
       }
     });
   }
@@ -365,6 +448,7 @@ export function dshanaRoutesTable() {
     ["GET", DASHANA_ROUTE_PREFIX + "/health"],
     ["GET", DASHANA_ROUTE_PREFIX + "/settings"],
     ["GET", DASHANA_ROUTE_PREFIX + "/model"],
+    ["GET", DASHANA_ROUTE_PREFIX + "/card-state"],
     ["POST", DASHANA_ROUTE_PREFIX + "/start"],
     ["POST", DASHANA_ROUTE_PREFIX + "/stop"],
     ["POST", DASHANA_ROUTE_PREFIX + "/settings"],

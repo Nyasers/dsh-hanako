@@ -8,6 +8,8 @@
 //   · create/send 走 lib/session-run.js：ctx.tasks.create → ensureManagedRuntime → loopback RPC
 //     （session.create / selectModel / prompt）→ 写会话↔任务映射 → 终态由 runtime 的
 //     task-bridge 回投来源会话；同会话多次 send 由 App 侧串行化；
+//     create/send 的返回值在 details.dsh 之外另带 details.card（会话流卡字面量，卡页 =
+//     ui/card.html，见 sessionCard），dsh 的形状不变；
 //   · cancel 走 lib/cancel-chain.js（写 cancel 标记 + DSH session.cancel + 等 DSH 真中止后
 //     宿主任务 canceled；宿主任务 canceled/aborted 的反向触发在 runtime 的 task-bridge）；
 //   · approve 走 lib/approve-respond.js（ctx.tasks.respondApproval 结算宿主审批，决策只投给
@@ -25,6 +27,7 @@ import { cancelSessionWork } from "../lib/cancel-chain.ts"; // cancel 编排
 import { respondApprovalAction } from "../lib/approve-respond.ts"; // approve 应答编排
 import { findTaskMapByTaskId, findTaskMapByApprovalId, isValidSessionId } from "../lib/task-map.ts"; // 句柄反查（只在 App 侧）
 import { taskOwnership, ownershipRefusalText } from "../lib/task-ownership.ts"; // 归属校验通则（宿主 parentSessionPath）
+import { APP_ID } from "../lib/boot-state.ts"; // App id 单一事实源（卡字面量的 pluginId 必须等于它）
 
 // 注：本模块不自己定位 App 根/数据目录——数据目录由 query subtool 经 ctx 取。
 
@@ -67,6 +70,41 @@ async function resolveTarget(input, ctx) {
   const verdict = taskOwnership({ taskRecord: record, sessionPath, explicitSessionId: false });
   if (!verdict.ok) throw new Error(ownershipRefusalText(verdict.reason));
   return { sessionId: String(entry.dshSessionId || ""), explicit: false, taskId, ownership: verdict.reason };
+}
+
+/** 卡页文件名（App ui/ 静态树内；宿主把流内卡的 route 解析成 /api/apps/<appId>/ui<route>）。 */
+const SESSION_CARD_ROUTE = "/card.html";
+
+/**
+ * 会话流卡的卡片字面量（create / send 的返回值 details.card）。
+ *
+ * 宿主契约（server 0.951.4 bundle 实证，见 APPS.md「形式归属」）：工具结果的 details.card
+ * 被运行时透传成流内 plugin_card 块，随后由卡 iframe 加载 route。三条硬要求：
+ *   · pluginId 必填且必须等于本工具的归属 App id（不等于会被当场丢掉）；
+ *   · route 必须是宿主能解析到本 App 的写法——App 卡走 ui/ 静态树
+ *     （/api/apps/<appId>/ui<route>），不是 ctx.routes 的 /routes/ 命名空间；
+ *   · aspectRatio 要有限正数（渲染期算成 "n / 1" 的比例占位）。
+ * 卡页需要的数据全压在查询串里（提交时快照，卡页不做轮询），?ts= 防缓存；
+ * 卡页只向 App 后端做一次 card-state 取数，换个更准的状态行。
+ */
+function sessionCard({ action, sessionId, taskId, cwd }) {
+  const now = Date.now();
+  const params = [
+    "ts=" + now,
+    "at=" + now,
+    "action=" + encodeURIComponent(action),
+    "sid=" + encodeURIComponent(sessionId),
+    "status=running",
+  ];
+  if (cwd) params.push("cwd=" + encodeURIComponent(cwd));
+  const what = action === "send" ? "续发消息" : "新建会话";
+  return {
+    pluginId: APP_ID,
+    route: SESSION_CARD_ROUTE + "?" + params.join("&"),
+    title: "DSHana " + what + "已提交",
+    description: sessionId.slice(0, 12) + "… · " + (cwd || "未指定工作目录") + " · taskId " + taskId,
+    aspectRatio: 4,
+  };
 }
 
 export const name = "dshana_session";
@@ -153,7 +191,11 @@ export const parameters = {
 // 真机边界（宿主取消 UI 反向触发 / DSH 超窗未确认的取消升级 / 审批通知形态）装包后
 // 由主上下文验收。
 
-async function doExecute(input, ctx) {
+/**
+ * action 实现体。deps 只给单测注入提交链（缺省用真实 submitDshTask）；线上路径经 execute
+ * 调用时 deps 为 undefined，行为不变。
+ */
+export async function doExecute(input, ctx, deps) {
   const action = String(input.action ?? "").trim();
 
   if (action === "list") {
@@ -175,10 +217,12 @@ async function doExecute(input, ctx) {
     // callToken 由宿主工具调用上下文提供（input.context.callToken，v2 契约），只在
     // ctx.tasks.create 消费一次，不落盘不落日志。
     const callToken = (input && input.context && input.context.callToken) || "";
-    // submitDshTask 返回 { promise, ready }：ready 在 prompt 被 DSH 接受后 resolve 定位键
+    // 提交面（deps 可注入以单测 create/send 分支；缺省用真实 submitDshTask）返回
+    // { promise, ready }：ready 在 prompt 被 DSH 接受后 resolve 定位键
     // （sessionId/rpcId/taskId），提交阶段失败则 reject（错误上抛给工具面）；promise 是后台
     // 生命周期（等 task 终态、释放串行锁），本处不 await。
-    const { ready } = submitDshTask({ action, input, callToken, log: ctx && ctx.log });
+    const submit = deps && typeof deps.submitDshTask === "function" ? deps.submitDshTask : submitDshTask;
+    const { ready } = submit({ action, input, callToken, log: ctx && ctx.log });
     const loc = await ready;
     const actionName = loc.action === "send" ? "send（续会话）" : "create（新建会话）";
     const sid = String(loc.sessionId || "");
@@ -199,6 +243,8 @@ async function doExecute(input, ctx) {
           status: "running",
           cwd: loc.cwd || undefined,
         },
+        // 会话流卡（新增字段；dsh 的形状不动——SKILL 与句柄契约都读它）
+        card: sessionCard({ action: loc.action, sessionId: sid, taskId: loc.taskId, cwd: loc.cwd }),
       },
     };
   }
@@ -261,7 +307,7 @@ async function doExecute(input, ctx) {
 
 export async function execute(input, ctx) {
   try {
-    return await doExecute(input, ctx);
+    return await doExecute(input, ctx, null);
   } catch (e) {
     // ctx 为 App apply 注入的工具上下文（见 index.js makeToolCtx：log = 统一日志文件 +
     // 宿主 logger）；缺失时静默（防御）
