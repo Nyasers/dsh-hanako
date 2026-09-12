@@ -69,10 +69,14 @@ export function apply(ctx) {
   // 工具名 = dshSession.name（"dshana_session"，全局唯一；v2 不自动加前缀，重名会被宿主
   // 当场拒掉）。action 参数与返回语义见 tools/session.js。
   // 每个 execute 收到一个工具上下文（v2 execute 上下文袋缺省兼容）：log 走宿主 ctx.logger；
-  // dataDir/config 供工具业务读取。
+  // dataDir/config 供工具业务读取；runtime/tasks 是工具面的宿主能力出口——list/get 经
+  // ctx.runtime.fetch 发受管服务请求（lib/controller.js），句柄路径经 ctx.tasks.get 校验
+  // 任务归属（tools/session.js resolveTarget）——缺了它们这两条路在真机上直接失败。
   const makeToolCtx = () => ({
     dataDir,
     config: ctx.config,
+    runtime: ctx.runtime,
+    tasks: ctx.tasks,
     log: {
       debug: (...a) => log("debug", ...a),
       info: (...a) => log("info", ...a),
