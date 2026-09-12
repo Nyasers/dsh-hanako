@@ -47,7 +47,12 @@ afterEach(() => {
   try { rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
 });
 
-const ACTIVE_BINDING = { taskId: "task-1", timeoutSec: 60, approvalTimeoutMs: 30000, ended: null, at: 3 };
+function seedTaskMap(taskId) {
+  const d = join(dir, "dshana", "taskmaps");
+  mkdirSync(d, { recursive: true });
+  const body = { taskId, dshSessionId: SID, action: "create", rpcId: "r_1" };
+  writeFileSync(join(d, SID + ".json"), JSON.stringify(body), "utf8");
+}
 
 function ndjsonResponse(events) {
   const text = events.map((e) => JSON.stringify(e)).join("\n") + "\n";
@@ -69,16 +74,8 @@ function makeHana(events) {
   };
 }
 
-// 绑定状态由宿主投影提供（provider 侧只读 deps.readBinding）——测试直接给状态，
-// 缺省 = 无绑定（App 身份）；传 undefined 才是「读不到」那条路径（由 identity 单测覆盖）。
-function makeAdapter(hana, log, warn, binding) {
-  return buildHanaAdapter(FakeLlmAdapter, FakeLlmError, {
-    models: MODELS,
-    hana,
-    log,
-    warn,
-    readBinding: () => (binding === undefined ? { taskId: null, ended: null } : binding),
-  });
+function makeAdapter(hana, log, warn) {
+  return buildHanaAdapter(FakeLlmAdapter, FakeLlmError, { models: MODELS, hana, log, warn });
 }
 
 async function collect(adapter, options) {
@@ -104,10 +101,10 @@ const okEvents = [
   },
 ];
 
-test("App 身份（无绑定）：两个身份参数都不传，且日志说明原因", async () => {
+test("App 身份（无任务映射）：两个身份参数都不传，且日志说明原因", async () => {
   const hana = makeHana(okEvents);
   const lines = [];
-  const adapter = makeAdapter(hana, (m) => lines.push(m), undefined, { taskId: null, ended: null });
+  const adapter = makeAdapter(hana, (m) => lines.push(m));
   const out = await collect(adapter, { provider: "hana", model: "m1", sessionId: SID, messages: userMessages });
 
   const req = hana.seen[0];
@@ -117,15 +114,16 @@ test("App 身份（无绑定）：两个身份参数都不传，且日志说明�
   assert.equal(typeof req.requestId, "string");
   assert.equal(req.requestId.length > 0, true);
   assert.equal(lines.length, 1);
-  assert.match(lines[0], /无绑定/);
+  assert.match(lines[0], /无任务映射/);
   assert.equal(out.length > 0, true);
   assert.match(JSON.stringify(out), /你好/);
 });
 
-test("委派身份（有绑定且未收尾）：带 taskId、不带 callToken、不写身份日志", async () => {
+test("委派身份（有任务映射）：带 taskId、不带 callToken、不写身份日志", async () => {
+  seedTaskMap("task-1");
   const hana = makeHana(okEvents);
   const lines = [];
-  const adapter = makeAdapter(hana, (m) => lines.push(m), undefined, ACTIVE_BINDING);
+  const adapter = makeAdapter(hana, (m) => lines.push(m));
   await collect(adapter, { provider: "hana", model: "m1", sessionId: SID, messages: userMessages });
 
   assert.equal(hana.seen[0].taskId, "task-1");

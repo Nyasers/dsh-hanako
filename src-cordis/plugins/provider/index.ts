@@ -33,7 +33,6 @@ import { providerRoutes, listModelsForProvider, resolveModelInfo, supportedEffor
 import { toHanaMessages } from "./lib/messages.ts";
 import { buildDoneChunks, createHanaStreamState } from "./lib/stream.ts";
 import { resolveModelIdentity } from "./lib/identity.ts";
-import { bindingUnit, BINDING_KEY, BINDING_CLAIM_EVENT, claimPayload, pendingBindingClaim, clearBindingClaim } from "./lib/binding.ts";
 
 export const name = "@dshana/provider";
 export const inject = ["llm"];
@@ -63,51 +62,19 @@ function sleep(ms) {
 }
 
 // ---- 运行环境 ----
-
-/**
- * 读会话绑定：投影优先（本进程 stateOf，零日志读）；会话还冷着时把控制面投递的认领就地落地。
- * 控制面在 send 路径上到达时会话尚未 attach（DSH 要到 prompt 进来才 resume），所以认领分两步：
- * 先投同进程邮箱，再由这里在模型请求前 append 进会话日志——那一刻我们在自己的回合里，会话
- * 必然已 attach。邮箱只是传递点，落地与否则由返回值/日志说话。
- *
- * @param {object} ctx cordis 上下文（同进程的 sessions / sessionProjections 服务）
- * @param {string} sessionId DSH 会话 id（llm options.sessionId）
- * @returns {object|undefined} 绑定状态；undefined = 投影未注册（能力缺席，由身份判定显式失败）
- */
-function readSessionBinding(ctx, sessionId) {
-  const registry = typeof ctx.get === "function" ? ctx.get("sessionProjections") : null;
-  const sessions = typeof ctx.get === "function" ? ctx.get("sessions") : null;
-  const session = sessions && typeof sessions.get === "function" && sessionId ? sessions.get(sessionId) : null;
-  const readState = registry && session && typeof registry.stateOf === "function"
-    ? () => registry.stateOf(session, BINDING_KEY)
-    : null;
-  if (readState) {
-    const state = readState();
-    if (state !== undefined) return state;
-  }
-  const pending = pendingBindingClaim(sessionId);
-  if (pending && session && typeof session.append === "function") {
-    try {
-      session.append(BINDING_CLAIM_EVENT, claimPayload(pending));
-      clearBindingClaim(sessionId, pending.taskId);
-      const after = readState ? readState() : undefined;
-      if (after !== undefined) return after;
-      return { ...claimPayload(pending), ended: null, at: null };
-    } catch (e) {
-      warn(ctx, "会话认领落地失败（session=" + String(sessionId).slice(0, 12) + "）：" + ((e && e.message) || e));
-    }
-  }
-  return readState ? readState() : undefined;
+function dataDirOf() {
+  const v = process.env.DSHANA_HOME;
+  return typeof v === "string" && v ? v : null;
 }
 
-// 独立会话（无绑定 = DSH Web UI 自建）按 App 身份推理：每会话只提示一次——
+// 独立会话（无任务映射 = DSH Web UI 自建）按 App 身份推理：每会话只提示一次——
 // 日志要能回答“这次请求为什么没有 task 绑定”，这是诊断信息而非错误。
 const APP_IDENTITY_LOGGED = new Set();
 function noteAppIdentity(logLine, sessionId) {
   const key = String(sessionId || "?");
   if (APP_IDENTITY_LOGGED.has(key) || APP_IDENTITY_LOGGED.size >= 64) return;
   APP_IDENTITY_LOGGED.add(key);
-  logLine("会话 " + key + " 无绑定 → 按 App 身份推理（DSH Web UI 独立会话，不传 callToken/taskId）");
+  logLine("会话 " + key + " 无任务映射 → 按 App 身份推理（DSH Web UI 独立会话，不传 callToken/taskId）");
 }
 
 // 参数收敛提示（按 provider/model 去重，不逐次刷屏）。宿主对模型请求的字段有硬校验，
@@ -267,19 +234,20 @@ export function buildHanaAdapter(LlmAdapter, LlmError, deps) {
     }
 
     async *stream(options) {
+      const dataDir = dataDirOf();
       const sessionId = options && options.sessionId;
       const item = models.find((m) => m && m.provider === options.provider && m.id === options.model) || null;
       const requestId = randomUUID();
       // 身份判定（三态，见 lib/identity.js）：
-      //   无绑定 ⇒ App 身份（用户在 WebUI 自建的会话）；
-      //   绑定在 + 任务终结 ⇒ App 身份（用户接着用，事实而非降级）；
-      //   绑定在 + 任务活动 ⇒ taskId（必须）；
-      //   绑定读不到（投影未注册）⇒ **显式失败**，绝不改走 App 身份。
+      //   无标记 ⇒ App 身份（用户在 WebUI 自建的会话）；
+      //   标记在 + 任务终结 ⇒ App 身份（用户接着用，事实而非降级）；
+      //   标记在 + 任务活动 ⇒ taskId（必须）；
+      //   标记在但读不出（损坏）⇒ **显式失败**，绝不改走 App 身份。
       // 失效/归属不正确的 taskId 仍由宿主报错并原样上抛——不做“删掉身份参数重试”的兜底。
       let identity;
       let source;
       try {
-        ({ identity, source } = resolveModelIdentity(deps.readBinding(sessionId)));
+        ({ identity, source } = resolveModelIdentity(dataDir, sessionId));
       } catch (e) {
         throw new LlmError(
           "模型身份判定失败（会话绑定不可读）：" + ((e && e.message) || e),
@@ -449,20 +417,7 @@ export async function apply(ctx, config) {
       warn(ctx, "hana client（globalThis.__dshanaHana）不可用——provider 停用（受管 runtime 未正确注入宿主 IPC）");
       return;
     }
-    // 2. 绑定投影单元：本插件是唯一的读方，单元也跟着它注册（宿主的折叠权威只认一份定义）。
-    // 无 wire ⇒ 不进客户端快照；仅本进程 stateOf 读。
-    try {
-      ctx.inject(["sessionProjections"], (pCtx) => {
-        try {
-          pCtx.sessionProjections.register(bindingUnit());
-        } catch (e) {
-          warn(ctx, "绑定投影单元注册失败：" + ((e && e.message) || e));
-        }
-      });
-    } catch {
-      /* 注册表服务不可用：身份判定在请求期显式失败（BINDING_UNAVAILABLE） */
-    }
-    // 3. 附件 store（图片 base64 解析；缺失时图片内容报 UNSUPPORTED_CONTENT）
+    // 2. 附件 store（图片 base64 解析；缺失时图片内容报 UNSUPPORTED_CONTENT）
     let attachmentStore = null;
     try {
       ctx.inject(["attachments"], (aCtx) => {
@@ -474,7 +429,7 @@ export async function apply(ctx, config) {
     } catch {
       /* attachments 服务不可用：图片内容报 UNSUPPORTED_CONTENT */
     }
-    // 4. 目录快照（models.list；引擎未就绪窗口内重试 ≤20s）
+    // 3. 目录快照（models.list；引擎未就绪窗口内重试 ≤20s）
     let models = [];
     const deadline = Date.now() + 20000;
     for (;;) {
@@ -520,11 +475,10 @@ export async function apply(ctx, config) {
       models,
       hana,
       getImages: () => attachmentStore,
-      readBinding: (sessionId) => readSessionBinding(ctx, sessionId),
       log: (msg) => log(ctx, msg),
       warn: (msg) => warn(ctx, msg),
     });
-    // 6. 注册（空 routes 不注册——llm 注册表要求非空；目录空已在上方 return）。
+    // 5. 注册（空 routes 不注册——llm 注册表要求非空；目录空已在上方 return）。
     // 宿主目录是启动快照：受管进程存活期不变化（改宿主模型配置需 runtime 重启生效——
     // 与受管 runtime 生命周期一致的取舍）。
     ctx.llm.registerAdapter(routes, adapter);
