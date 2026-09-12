@@ -66,3 +66,15 @@ export function appCtx() {
   const app = getAppRuntime();
   return app && app.ctx ? app.ctx : null;
 }
+
+/**
+ * 工具执行上下文：宿主 ctx 的浅拷贝 + 统一日志出口（工具代码读 ctx.log，宿主给的是
+ * ctx.logger，名字不同所以要换）。
+ *
+ * 为什么是拷贝整份而不是枚举几项：工具业务要用 ctx.runtime（控制面请求）、ctx.tasks
+ * （宿主任务句柄归属校验）、ctx.storage 等宿主能力，枚举式手抄漏一项就是静默降级
+ * （控制面直接报“宿主不支持受管服务请求”、句柄归属恒判查不到），而且下次加能力还会漏。
+ */
+export function toolCtxFrom(ctx, log) {
+  return { ...ctx, log };
+}
