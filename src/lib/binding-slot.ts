@@ -20,7 +20,7 @@
 export const BINDING_KEY = "dshanaTaskBinding";
 
 /** 单元版本。 */
-export const BINDING_STATE_VERSION = 2;
+export const BINDING_STATE_VERSION = 3;
 
 /** 事件类型。 */
 export const BINDING_CLAIM_EVENT = "dshana/task-binding";
@@ -38,9 +38,41 @@ function intOrNull(value) {
 export function claimPayload(claim) {
   return {
     taskId: claim && typeof claim.taskId === "string" ? claim.taskId : null,
+    rpcId: claim && typeof claim.rpcId === "string" && claim.rpcId !== "" ? claim.rpcId : null,
     timeoutSec: intOrNull(claim && claim.timeoutSec),
     approvalTimeoutMs: intOrNull(claim && claim.approvalTimeoutMs),
   };
+}
+
+/**
+ * 读一条会话的任务绑定：**投影优先**（同进程 stateOf，零文件读），取不到再回落私有映射文件。
+ *
+ * 两条路同源（都由控制面认领写入），回落只为绑定事件在投影落地之前建的者会话。
+ * 返回值形状与 task-map 的记录对齐（taskId/rpcId/cancel/app…），调用方不必分叉。
+ *
+ * @param {object} ctx DSH cordis 上下文（同进程的 sessions / sessionProjections 服务）
+ * @param {string} sessionId DSH 会话 id
+ * @param {object} [session] 事件回调给到的会话对象（有就直接用，省一次 sessions.get）
+ * @param {function} [fileFallback] 取不到投影时调它拿文件记录（不传就不回落）
+ */
+export function bindingStateOf(ctx, sessionId, session, fileFallback) {
+  const registry = ctx && typeof ctx.get === "function" ? ctx.get("sessionProjections") : null;
+  if (registry && typeof registry.stateOf === "function") {
+    let s = session;
+    if (!s && typeof ctx.get === "function" && typeof sessionId === "string" && sessionId !== "") {
+      const sessions = ctx.get("sessions");
+      s = sessions && typeof sessions.get === "function" ? sessions.get(sessionId) : null;
+    }
+    if (s) {
+      try {
+        const state = registry.stateOf(s, BINDING_KEY);
+        if (state && state.taskId) return state;
+      } catch {
+        /* 单条会话读不到不当致命：交给回落 */
+      }
+    }
+  }
+  return typeof fileFallback === "function" ? fileFallback() || null : null;
 }
 
 /** 取消事件数据（只带原因，不带别的私货）。 */

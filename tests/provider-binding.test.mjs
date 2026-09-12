@@ -56,7 +56,7 @@ test("折叠：认领写入 taskId 与超时，ended 归零", () => {
     seq: 7,
     data: { taskId: "task-1", timeoutSec: 60, approvalTimeoutMs: 30000 },
   });
-  assert.deepEqual(s, { taskId: "task-1", timeoutSec: 60, approvalTimeoutMs: 30000, ended: null, cancel: null, at: 7 });
+  assert.deepEqual(s, { taskId: "task-1", rpcId: null, timeoutSec: 60, approvalTimeoutMs: 30000, ended: null, cancel: null, at: 7 });
 });
 
 test("折叠：收尾对上 taskId 才生效", () => {
@@ -110,6 +110,7 @@ test("折叠不共享引用（宿主按 Object.is 判变化）", () => {
 test("stateSchema.parse：合法状态规范化返回", () => {
   assert.deepEqual(bindingStateSchema.parse({ taskId: "t", ended: null }), {
     taskId: "t",
+    rpcId: null,
     timeoutSec: null,
     approvalTimeoutMs: null,
     ended: null,
@@ -118,6 +119,7 @@ test("stateSchema.parse：合法状态规范化返回", () => {
   });
   assert.deepEqual(bindingStateSchema.parse({ taskId: null, ended: "failed", timeoutSec: 1.9, at: 3.7 }), {
     taskId: null,
+    rpcId: null,
     timeoutSec: 1,
     approvalTimeoutMs: null,
     ended: "failed",
@@ -137,7 +139,7 @@ test("stateSchema.parse：形状不对就抛（缓存行会被丢弃并从 init 
 test("邮箱：投递 → 读取 → 清理；taskId 对不上不清", () => {
   bindingMailbox().clear();
   const payload = depositBindingClaim(SID, { taskId: "task-1", timeoutSec: 60, approvalTimeoutMs: 0 });
-  assert.deepEqual(payload, { taskId: "task-1", timeoutSec: 60, approvalTimeoutMs: 0 });
+  assert.deepEqual(payload, { taskId: "task-1", rpcId: null, timeoutSec: 60, approvalTimeoutMs: 0 });
   assert.deepEqual(pendingBindingClaim(SID), payload);
   assert.equal(clearBindingClaim(SID, "task-other"), false);
   assert.deepEqual(pendingBindingClaim(SID), payload);
@@ -163,7 +165,7 @@ test("邮箱：两套构建树的约定逐字一致（key 与事件名）", () =
 test("邮箱：运行期侧投递后 provider 侧读得到（同一张 globalThis Map）", () => {
   bindingMailbox().clear();
   runtimeDeposit(SID, { taskId: "task-9" });
-  assert.deepEqual(pendingBindingClaim(SID), { taskId: "task-9", timeoutSec: null, approvalTimeoutMs: null });
+  assert.deepEqual(pendingBindingClaim(SID), { taskId: "task-9", rpcId: null, timeoutSec: null, approvalTimeoutMs: null });
   bindingMailbox().clear();
 });
 
