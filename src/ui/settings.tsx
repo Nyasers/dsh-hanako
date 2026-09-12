@@ -70,6 +70,7 @@ function applyTheme(snap: ThemeSnap | null | undefined) {
 
 // ---- 小工具 ----
 const START_TIMEOUT_MS = 120000;
+const MODEL_KEY_SEP = "\u0000"; // provider 与 model id 之间（见 modelOptions）
 
 function errText(e: unknown) {
   const m = e && (e as { message?: string }).message;
@@ -89,26 +90,39 @@ const FIELDS: { key: string; label: string; hint: string }[] = [
 type CatalogModel = { id?: string; name?: string; efforts?: { id?: string; name?: string }[] };
 type CatalogGroup = { id?: string; name?: string; models?: CatalogModel[] };
 
-/** 第一段：provider 列表。 */
-function providerOptions(model: any): SelectOption[] {
-  const groups: CatalogGroup[] = (model && model.catalog && model.catalog.groups) || [];
-  return groups.filter((g) => g.id).map((g) => ({ value: String(g.id), label: String(g.name || g.id) }));
-}
+type ModelOption = SelectOption & { group?: string };
 
 /**
- * 第二段：该 provider 下的模型。用宿主 Select：它是 Base UI 的 select widget，弹层定位器会算
- * --available-height 并 overflowY:auto，模型再多也能滚。
+ * 候选拉平成一个列表，用 group 标出 provider。
+ *
+ * 宿主 Select 的 options 支持 group 字段：运行时（组件库里的 select widget）遇到带 group 的项
+ * 就成组渲染，画组标题、组间插分隔线——与宿主自己的模型选择器同一个形状。类型面没声明这个
+ * 字段，所以这里显式标注。
+ *
+ * value = provider + 分隔符 + model：不同 provider 会有同名模型，不能只拿 model id 当值。
  */
-function modelOptionsFor(model: any, provider: string): SelectOption[] {
+function modelOptions(model: any): ModelOption[] {
   const groups: CatalogGroup[] = (model && model.catalog && model.catalog.groups) || [];
+  const out: ModelOption[] = [];
   for (const g of groups) {
-    if (String(g.id) !== provider) continue;
-    return (g.models || []).filter((m) => m.id).map((m) => ({ value: String(m.id), label: String(m.name || m.id) }));
+    const name = String(g.name || g.id || "");
+    if (!g.id) continue;
+    for (const m of g.models || []) {
+      if (!m.id) continue;
+      out.push({ value: String(g.id) + MODEL_KEY_SEP + String(m.id), label: String(m.name || m.id), group: name });
+    }
   }
-  return [];
+  return out;
 }
 
-/** 第三段：选中模型支持的推理档位（没有就返回空数组，那一行不渲染）。 */
+/** 选中值拆成 provider 与 model（value 的写法见 modelOptions）。 */
+function splitPicked(picked: string): { provider: string; model: string } {
+  const at = picked.indexOf(MODEL_KEY_SEP);
+  if (at <= 0) return { provider: "", model: "" };
+  return { provider: picked.slice(0, at), model: picked.slice(at + MODEL_KEY_SEP.length) };
+}
+
+/** 第三段（推理档位）：选中模型支持的档位，没有就返回空数组，那一行不渲染。 */
 function effortsOf(model: any, provider: string, modelId: string): { id?: string; name?: string }[] {
   const groups: CatalogGroup[] = (model && model.catalog && model.catalog.groups) || [];
   for (const g of groups) {
@@ -147,8 +161,7 @@ function App() {
   const [model, setModel] = useState<any>(null); // 最近一次读回的整份状态（ready/current/revision/catalog）
   const [modelHint, setModelHint] = useState("");
   const [modelWarn, setModelWarn] = useState(false);
-  const [providerSel, setProviderSel] = useState("");
-  const [modelSel, setModelSel] = useState("");
+  const [picked, setPicked] = useState("");
   const [effort, setEffort] = useState("");
   const [modelSaving, setModelSaving] = useState(false);
   const [modelSaved, setModelSaved] = useState(false);
@@ -202,12 +215,11 @@ function App() {
     }
   }, []);
 
-  // 每次读回整份状态后，把三段选择对齐到权威当前值。
+  // 每次读回整份状态后，把选择与档位对齐到权威当前值。
   useEffect(() => {
     const cur = model && model.current;
     if (!cur || !cur.provider) return;
-    setProviderSel(String(cur.provider));
-    setModelSel(typeof cur.model === "string" ? cur.model : "");
+    setPicked(String(cur.provider) + MODEL_KEY_SEP + String(cur.model || ""));
     setEffort(typeof cur.reasoningEffort === "string" ? cur.reasoningEffort : "");
   }, [model]);
 
@@ -248,12 +260,13 @@ function App() {
   };
 
   const saveModel = async () => {
-    if (!providerSel || !modelSel) {
+    const sel = splitPicked(picked);
+    if (!sel.provider || !sel.model) {
       setModelWarn(true);
-      setModelHint("请先选一个 provider 与模型。");
+      setModelHint("请先选一个模型。");
       return;
     }
-    const body: Record<string, unknown> = { provider: providerSel, model: modelSel };
+    const body: Record<string, unknown> = { provider: sel.provider, model: sel.model };
     if (effort) body.reasoningEffort = effort;
     if (model && typeof model.revision === "number") body.expectedRevision = model.revision;
     setModelSaving(true);
@@ -330,21 +343,14 @@ function App() {
     setModelHint("启动超时：DSH 还没就绪，稍后刷新本页重试。");
   };
 
-  const providerOpts = providerOptions(model);
-  const modelOpts = modelOptionsFor(model, providerSel);
-  const effortOptions: SelectOption[] = effortsOf(model, providerSel, modelSel).map((e) => ({
+  const modelOpts = modelOptions(model);
+  const sel = splitPicked(picked);
+  const effortOptions: SelectOption[] = effortsOf(model, sel.provider, sel.model).map((e) => ({
     value: String(e.id || ""),
     label: String(e.name || e.id || ""),
   }));
   const dshReady = !!(model && model.ready !== false);
-  const modelEmpty = model && model.catalog && providerOpts.length === 0;
-
-  /** 换 provider：跟着把它下面的第一个模型选上（两段联动，不留空选）。 */
-  const pickProvider = (value: string) => {
-    setProviderSel(value);
-    const opts = modelOptionsFor(model, value);
-    setModelSel(opts.length > 0 ? opts[0].value : "");
-  };
+  const modelEmpty = model && model.catalog && modelOpts.length === 0;
   const fails = (model && model.catalog && model.catalog.failures) || [];
   const catalogHint = modelEmpty
     ? "DSH 目前没有可选的模型。"
@@ -409,19 +415,6 @@ function App() {
         ) : (
           <>
             <SettingRow
-              label="Provider"
-              layout="stacked"
-              control={
-                <Select
-                  ariaLabel="Provider"
-                  value={providerSel}
-                  options={providerOpts}
-                  disabled={providerOpts.length === 0}
-                  onChange={pickProvider}
-                />
-              }
-            />
-            <SettingRow
               label="模型"
               hint={modelHint || catalogHint || undefined}
               hintVariant={modelWarn ? "warn" : "default"}
@@ -429,10 +422,10 @@ function App() {
               control={
                 <Select
                   ariaLabel="默认模型"
-                  value={modelSel}
+                  value={picked}
                   options={modelOpts}
                   disabled={modelOpts.length === 0}
-                  onChange={setModelSel}
+                  onChange={setPicked}
                 />
               }
             />
