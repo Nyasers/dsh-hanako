@@ -25,6 +25,7 @@ export const FAIL_CODES = new Set([
   "TS2551", // Property does not exist（带拼写建议）
   "TS2554", // Expected N arguments, but got M
   "TS2451", // Cannot redeclare block-scoped variable —— 同名声明两次
+  "TS2300", // Duplicate identifier —— 同一名字引入/声明两次（含重复 import）
   "TS2393", // Duplicate function implementation —— 函数定义两份
   "TS1005", // 语法错：期望某种记号
   "TS1109", // 语法错：表达式缺失

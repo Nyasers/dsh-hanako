@@ -5,6 +5,9 @@
 // 执行器依赖宿主 ctx（app-runtime 注入），仅在无宿主时验证纯面与设置注入路径。
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { initAppRuntime } from "../src/lib/app-runtime.ts";
 import {
   planCancel,
@@ -32,18 +35,35 @@ test("cancelAccepted: 空值/ok/accepted 视为接受", () => {
   assert.equal(cancelAccepted({ ok: false }), false);
 });
 
-test("resolveTaskTimeoutSec / resolveApprovalTimeoutMs：无宿主回落与设置注入", () => {
+test("resolveTaskTimeoutSec / resolveApprovalTimeoutMs：无宿主回落与自持设置注入", () => {
   initAppRuntime(null); // 无宿主：回落
   assert.equal(resolveTaskTimeoutSec(0), 600);
   assert.equal(resolveTaskTimeoutSec(undefined), 600);
   assert.equal(resolveTaskTimeoutSec(120), 120);
-  assert.equal(resolveApprovalTimeoutMs(), 30000); // manifest 默认 30s
-  const settings = { defaultTimeoutSec: 90, approvalTimeoutSec: 7 };
-  initAppRuntime({ ctx: {}, dataDir: ".", readConfig: (k) => settings[k] });
-  assert.equal(resolveTaskTimeoutSec(0), 90);
-  assert.equal(resolveTaskTimeoutSec(60), 60);
-  assert.equal(resolveApprovalTimeoutMs(), 7000);
-  settings.approvalTimeoutSec = 0; // 显式禁用
-  assert.equal(resolveApprovalTimeoutMs(), 0);
-  initAppRuntime(null);
+  assert.equal(resolveApprovalTimeoutMs(), 30000); // 缺省 30s
+
+  // 超时值住在自持设置里（dataDir/integration/settings.json，与数据模式同栈）
+  const dir = mkdtempSync(join(tmpdir(), "dshana-timeout-"));
+  try {
+    mkdirSync(join(dir, "integration"), { recursive: true });
+    const write = (settings) =>
+      writeFileSync(
+        join(dir, "integration", "settings.json"),
+        JSON.stringify({ version: 1, revision: 1, settings }),
+        "utf8",
+      );
+    const base = { mode: "private", path: null, profile: "dshana" };
+    write({ ...base, defaultTimeoutSec: 90, approvalTimeoutSec: 7 });
+    initAppRuntime({ ctx: {}, dataDir: dir });
+    assert.equal(resolveTaskTimeoutSec(0), 90);
+    assert.equal(resolveTaskTimeoutSec(60), 60);
+    assert.equal(resolveApprovalTimeoutMs(), 7000);
+
+    write({ ...base, defaultTimeoutSec: 0, approvalTimeoutSec: 0 });
+    assert.equal(resolveApprovalTimeoutMs(), 0, "approvalTimeoutSec=0 = 显式禁用");
+    assert.equal(resolveTaskTimeoutSec(0), 600, "defaultTimeoutSec=0 不采用，回落 600");
+  } finally {
+    initAppRuntime(null);
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
