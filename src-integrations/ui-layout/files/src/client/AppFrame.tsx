@@ -140,10 +140,21 @@ export function AppFrame({
   //   standalone  拆窗：侧栏 + 中列 + 右列，带拖柄
   // 宿主桥由壳页（src/ui/app-shell.js）在注入 DSH 前发布；未发布时按 workspace 退。
   const role = (window as { __DSHANA__?: { role?: string } }).__DSHANA__?.role
-  // 面（三态）：default = 整幅 DSH UI（full 与拆窗共用）；main = 主卡（无 DSH 侧栏）；
-  // sidebar = FP（只有侧栏）。认不出/未声明时也按 **default** 画：这是上游本来的行为
-  // （整幅 UI），而不是把它当成主卡少一列。
-  const surface = role === 'navigation' || role === 'settings' || role === 'standalone' ? role : 'standalone'
+  // 面（三态）：default = 整幅 DSH UI（full 与拆窗共用）；main = 主卡（workspace，无 DSH 侧栏）；
+  // sidebar = FP（navigation，只有侧栏）；另有 settings。
+  // 关键：上游这四个角色词里 **workspace 是“其余”那一支，不是“未知”**——它和
+  // navigation / settings / standalone 并列。只有**真的认不出**（role 缺失或不是角色词）时才按
+  // 上游默认的整幅 UI（standalone）画。
+  // 2026-09-12 教训：我一度把 fallback 写成 standalone 而漏了 workspace 这一支，于是主卡被判成
+  // 拆窗面 → 多出一条 sidebarCol（拖动把手也出来了）；当时还不可见，因为拆窗面的侧栏会被持久化
+  // 的 0 宽当“收起”吞掉——直到拆窗面改成“侧栏始终在”，空白列才露出来。
+  const ROLE_SURFACES: Record<string, string> = {
+    navigation: 'navigation',
+    settings: 'settings',
+    standalone: 'standalone',
+    workspace: 'workspace',
+  }
+  const surface = ROLE_SURFACES[role ?? ''] ?? 'standalone'
 
   // Track the frame's own box (not the window): rAF-throttled ResizeObserver.
   useLayoutEffect(() => {
