@@ -271,6 +271,17 @@ function App() {
     void loadModel();
   }, [loadConfig, loadModel]);
 
+  // 设置变更广播的落地：宿主 App 存储只有 get/set、没有订阅口（已核 SDK 的 d.ts），
+  // 所以本页在重新可见时重读一次——另一个窗口改过设置也不会拿着旧值继续操作。
+  // 切换进行中不重读（免得把页面上的进度显示冲掉）。
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible" && !switching) void loadConfig();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [loadConfig, switching]);
+
   const saveConfig = async () => {
     const patch: Record<string, number> = {};
     for (const f of FIELDS) {
