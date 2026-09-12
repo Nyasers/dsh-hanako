@@ -127,6 +127,22 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
 
   // ---- main 视图渲染（#boot-panel innerHTML）----
   // 只有两件东西值得占版面：启动按钮，和报错时那块 <pre>。时间线与折叠详情都撤了。
+  // ---- 页面打开时补一次启动（她 2026-09-12：光轮询不会重试，打开页面至少该重试一次）----
+  // 为何放在壳页：App 进程里的退避重试可能早已用尽/被冻结（装完时那次失败常常发生在 App 被
+  // 批准之前——进程根本没在跑）。用户打开页面是最强的一次“我要用它”信号，此刻补一脚；服务端
+  // single-flight，重复调用无害（未就绪才动手，ready/starting 时接口自己会答 already-ready）。
+  // 只针对 idle / error：stopped 是用户主动停的，不替他复活。每页只踢一次。
+  var kickedOnLoad = false;
+  function kickStartIfNeeded(s) {
+    if (kickedOnLoad || !s) return;
+    var phase = s.phase || "idle";
+    if (phase !== "idle" && phase !== "error") return;
+    kickedOnLoad = true;
+    var st = $("#dsh-status");
+    if (st && phase === "error") st.textContent = "启动失败，正在重试…";
+    postAction("start").then(function () { poll(true); }).catch(function () { /* 忽略：状态面会显示 */ });
+  }
+
   // 免交互（2026-09-12 她的决定）：DSH 的拉起由 App 的自动链负责（apply 即 ensureManagedRuntime +
   // 崩溃重起 + 端口占用自动换端口），页面不提供「启动 / 重启」按钮——那是让用户替系统干活。
   // 页面只负责说清当前状态（状态行 + 出错时的 <pre>）。
@@ -184,6 +200,7 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
     body.setAttribute("data-view", view === "booting" ? "booting" : view === "action" ? "action" : "idle");
     if (spin) spin.hidden = view !== "booting";
     if (status) status.textContent = statusText(view, s);
+    kickStartIfNeeded(s);
     if (panel) {
       var html = view === "booting" ? bootingViewHtml(s)
         : view === "action" ? actionViewHtml(s)
@@ -366,6 +383,7 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
   // ---- sidebar 紧凑渲染 ----
   function renderSidebar(s, view) {
     var main = $("[data-dshana-shell]");
+    if (main) kickStartIfNeeded(s);
     main.setAttribute("data-phase", s.phase || "idle");
     var chip = $("[data-dsh-phase]", main);
     if (chip) chip.textContent = PHASE_CHIP[s.phase] || s.phase || "–";
