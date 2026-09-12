@@ -21,6 +21,8 @@
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
     "resolveJsonModule": true,
+    // .tsx 的 JSX 转译口径：与构建（swc automatic runtime）一致，不写 import React。
+    "jsx": "react-jsx",
     // 相对 import 显式写 .ts（Node ESM 可直跑、bundler 能解、官方 DSH 源码同款）。
     "allowImportingTsExtensions": true
   },
