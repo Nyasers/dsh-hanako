@@ -197,6 +197,61 @@ function stagingWorkspaceYaml(spec) {
   return "# pack.mjs 生成（每次打包重建，勿手改）\nnodeLinker: hoisted\n\n" + body;
 }
 
+/** 集成覆盖的声明（每个 integration.json 的 package 字段与 overlay 数）。 */
+function integrationDecls(integrationsDir) {
+  if (!fs.pathExistsSync(integrationsDir)) {
+    throw new Error(`集成目录不存在：${integrationsDir}（预期 src-integrations/；拒绍产出未打补丁的包）`);
+  }
+  const out = [];
+  for (const e of fs.readdirSync(integrationsDir, { withFileTypes: true })) {
+    if (!e.isDirectory()) continue;
+    const p = join(integrationsDir, e.name, "integration.json");
+    if (!fs.pathExistsSync(p)) continue;
+    const decl = JSON.parse(fs.readFileSync(p, "utf8"));
+    out.push({
+      name: e.name,
+      package: decl.package,
+      files: Array.isArray(decl.files) ? decl.files.length : 0,
+    });
+  }
+  if (out.length === 0) {
+    throw new Error(`没有有效的集成声明（${integrationsDir}）：拒绍产出未打补丁的包`);
+  }
+  return out;
+}
+
+/**
+ * 物化完成后先确认集成目标包齐备，再进组装。物化是外部进程（pnpm），它退出与文件完全落盘
+ * 之间有时差；没有这道闸时，残树会一路跑到覆盖阶段才报“物化树里没有 px”，看起来像是集成层的问题。
+ * 有界等待（≤30s）只是给那个时差留窗口，等了还是缺就是真的缺，当场失败并点名。
+ */
+function assertIntegrationTargets(modules, integrationsDir) {
+  const targets = integrationDecls(integrationsDir);
+  const missingOf = () => targets.filter((t) => !fs.pathExistsSync(join(modules, t.package, "package.json")));
+  let missing = missingOf();
+  if (missing.length > 0) {
+    console.log(`[pack] 等物化落盘（缺 ${missing.length} 个集成目标包，最多等 30s）…`);
+    const deadline = Date.now() + 30000;
+    while (missing.length > 0 && Date.now() < deadline) {
+      sleepSync(1000);
+      missing = missingOf();
+    }
+  }
+  if (missing.length > 0) {
+    throw new Error(
+      `物化树缺少集成目标包（${missing.length}/${targets.length} 个，拒绝打包）：\n  - `
+      + missing.map((t) => t.package).join("\n  - "),
+    );
+  }
+  return targets.length;
+}
+
+/** 同步睡一会（打包脚本内部的顺序流程，不用事件循环）。 */
+function sleepSync(ms) {
+  const sab = new SharedArrayBuffer(4);
+  Atomics.wait(new Int32Array(sab), 0, 0, ms);
+}
+
 /** 逐目标干净安装（各自暂存目录 + 各自 supportedArchitectures）；返回该目标的 node_modules 路径。 */
 function materializeProdDeps(spec) {
   const { spawnSync } = require("node:child_process");
@@ -219,7 +274,7 @@ function materializeProdDeps(spec) {
   if (missing.length) {
     throw new Error(`${spec.name} 缺少平台资产（该平台的包会跑不起来）：\n  - ${missing.join("\n  - ")}`);
   }
-  console.log(`[pack] ${spec.name} 物化完成（平台资产 ${spec.assets.length} 项齐备）`);
+  console.log(`[pack] ${spec.name} 物化完成（平台资产 ${spec.assets.length} 项齐备，集成目标 ${assertIntegrationTargets(modules, join(ROOT, "src-integrations"))} 项）`);
   const pruned = pruneNodeModules(modules, spec);
   if (pruned.files > 0) {
     console.log(
