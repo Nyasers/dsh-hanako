@@ -47,7 +47,7 @@ function applyTheme(snap) {
 }
 
 // ---- 设置读写 ----
-function setStatus(text, tone) {
+function setStatus(text, tone = "") {
   const el = $("#status");
   if (!el) return;
   el.textContent = text || "";
@@ -123,7 +123,7 @@ async function save() {
 const MODEL_KEY_SEP = "\u0000"; // provider 与 model id 之间：避免不同 provider 的同名模型撞车
 let modelState = null; // 最近一次读回的 { current, revision, catalog }
 
-function modelStatus(text, tone) {
+function modelStatus(text, tone = "") {
   const el = $("#modelStatus");
   if (!el) return;
   el.textContent = text || "";
@@ -131,7 +131,7 @@ function modelStatus(text, tone) {
   el.classList.toggle("ok", tone === "ok");
 }
 
-function setModelReady(ready, hint) {
+function setModelReady(ready, hint = "") {
   const sel = $("#model");
   const save = $("#modelSave");
   const start = $("#modelStart");
@@ -183,6 +183,7 @@ function renderModel(model) {
   modelState = { ...(modelState || {}), ...model };
   const sel = $("#model");
   const hintEl = $("#modelHint");
+  const hasCatalog = !!model.catalog;
   const groups = (model.catalog && model.catalog.groups) || [];
   const current = model.current || (model.catalog && model.catalog.default) || null;
   if (sel) {

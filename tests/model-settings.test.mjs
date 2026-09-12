@@ -8,8 +8,8 @@
 //   · 段版本冲突的码是 settings/conflict（DSH 侧 SettingsConflictError 自报 SETTINGS_CONFLICT）。
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildClientRequest } from "../src/lib/rpc-envelope.js";
-import { AGENT_DEFAULT_MODEL_NS, isSettingsConflict, settingsViewOf } from "../src/lib/dsh-rpc.js";
+import { buildClientRequest } from "../src/lib/rpc-envelope.ts";
+import { AGENT_DEFAULT_MODEL_NS, isSettingsConflict, settingsViewOf } from "../src/lib/dsh-rpc.ts";
 
 test("settingsViewOf: 认 namespaces 数组（真机形状）", () => {
   const view = { ns: AGENT_DEFAULT_MODEL_NS, value: { provider: "p", model: "m" }, revision: 0, applies: "live" };

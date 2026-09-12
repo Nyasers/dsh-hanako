@@ -8,7 +8,7 @@ import {
   registerDshanaRoutes,
   DASHANA_ROUTE_PREFIX,
   dshanaRoutesTable,
-} from "../src/routes/dshana-routes.js";
+} from "../src/routes/dshana-routes.ts";
 
 function makeFakeApp() {
   const routes = [];

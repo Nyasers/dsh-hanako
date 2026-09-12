@@ -22,14 +22,14 @@
 // 暴露（src/runtime/seed.js）；受管子进程入口 = runtime/dsh-host.mjs（dist 构建产物）。
 //
 // 日志：只走宿主 ctx.logger；ctx.logger 缺失或抛错时回落 stderr（宁可吵，不静默丢日志）。
-import { initAppRuntime } from "./lib/app-runtime.js";
+import { initAppRuntime } from "./lib/app-runtime.ts";
 // 受管 DSH runtime：启动封装 + 释放（disposer 负责收尾）
-import { disposeManagedRuntime, ensureManagedRuntime } from "./lib/managed-runtime.js";
+import { disposeManagedRuntime, ensureManagedRuntime } from "./lib/managed-runtime.ts";
 // 工具模块（导出 name/description/parameters/execute；v2 工具名即注册名，无自动前缀）
-import * as dshSession from "./tools/session.js";
+import * as dshSession from "./tools/session.ts";
 // 壳页/诊断面单 registrar（ctx.routes.register 只挂本 App 后端面；到受管 runtime 的服务
 // 由宿主按 /api/apps/<id>/routes/_runtime/<runtimeId>/ 自动代理，本文件不转发）
-import { registerDshanaRoutes, defaultDshanaRouteDeps } from "./routes/dshana-routes.js";
+import { registerDshanaRoutes, defaultDshanaRouteDeps } from "./routes/dshana-routes.ts";
 
 // ---- 统一日志：只走宿主 ctx.logger ----
 // App 侧不写自己的文件日志；ctx.logger 缺失（旧 host）或宿主抛错时回落 stderr。

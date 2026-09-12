@@ -21,7 +21,7 @@ import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { isAbsolute, join, normalize } from "node:path";
-import { appDataDir, getAppRuntime } from "./app-runtime.js";
+import { appDataDir, getAppRuntime } from "./app-runtime.ts";
 
 export const SETTINGS_VERSION = 1;
 export const SOURCE_MODES = Object.freeze(["private", "shared"]);
@@ -193,7 +193,7 @@ export function createDataSourceStore(ctx) {
 let storeRef = null;
 
 /** 单例存储（同一 App 进程一份）。测试可用 resetDataSourceStore 复位。 */
-export function dataSources(ctx) {
+export function dataSources(ctx = null) {
   if (storeRef) return storeRef;
   const c = ctx || (getAppRuntime() || {}).ctx;
   storeRef = createDataSourceStore(c);

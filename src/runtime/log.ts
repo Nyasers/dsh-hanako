@@ -13,7 +13,7 @@
 // 本模块零依赖 node 内置（只 process），可安全被 rspack 打进 dist/runtime/dsh-host.mjs。
 function ts() {
   const d = new Date();
-  const p = (n, w) => String(n).padStart(w || 2, "0");
+  const p = (n, w = 2) => String(n).padStart(w, "0");
   return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
 }
 function write(stream, tag, ...args) {

@@ -10,7 +10,7 @@
 //   ④ 拿不到 context.sessionPath（按钮通道）⇒ 放行；记录缺 parentSessionPath ⇒ 拒绝（fail-closed）
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { taskOwnership, ownershipRefusalText } from "../src/lib/task-ownership.js";
+import { taskOwnership, ownershipRefusalText } from "../src/lib/task-ownership.ts";
 
 const HERE = "/home/u/.hanako/sessions/aaaa.jsonl";
 const OTHER = "/home/u/.hanako/sessions/bbbb.jsonl";

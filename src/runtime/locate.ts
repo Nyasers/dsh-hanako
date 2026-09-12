@@ -33,7 +33,7 @@ export function readPkgVersion(pkgDir) {
  * { profileBoot, bootEntry, appBoot, appBootEntry, dshPkgDir, version }；
  * 缺包/无可用 profile-boot → throw 可读错误（分类由调用方转退出码）。
  */
-export async function locateDsh({ depsRoot, log = () => {} }) {
+export async function locateDsh({ depsRoot, log = (..._args) => {} }) {
   const dshPkg = join(depsRoot, "@deepseek-ai", "dsh");
   if (!existsSync(join(dshPkg, "package.json"))) {
     throw new Error(

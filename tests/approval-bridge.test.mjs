@@ -16,7 +16,7 @@ import {
   ToolCallCache,
   DEFAULT_APPROVAL_TIMEOUT_MS,
   TOOL_ARGS_PREVIEW_MAX,
-} from "../src/runtime/approval-bridge.js";
+} from "../src/runtime/approval-bridge.ts";
 
 test("approvalOwnsTask：parentTaskId 一致才放行", () => {
   assert.equal(approvalOwnsTask({ parentTaskId: "task-1" }, "task-1"), true);

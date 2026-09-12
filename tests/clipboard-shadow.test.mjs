@@ -12,7 +12,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { createClipboardShadow, installClipboardShadow } from "../src/ui/clipboard-shadow.js";
+import { createClipboardShadow, installClipboardShadow } from "../src/ui/clipboard-shadow.ts";
 
 /** 造一个假的宿主窗：navigator.clipboard + Clipboard 原型 + 记录。 */
 function fakeWindow({ withClipboard = true } = {}) {

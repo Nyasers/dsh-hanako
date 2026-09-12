@@ -1,0 +1,30 @@
+{
+  // src 域（App 主 bundle + 受管 runtime + 壳页脚本）的类型检查配置。
+  // 与 tsconfig.cordis.json 同形；口径与失败清单见 scripts/ts-diagnostics.mjs。
+  // 路径相对本文件（仓库根）解析，不写绝对路径。
+  "compilerOptions": {
+    "noEmit": true,
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["node"],
+    // 本仓直接依赖住在 pnpm 隐藏目录：不指这里，cordis / dsh 那批包解析不到，
+    // 报错会落在"包没装"而不是我们的代码上。
+    "paths": { "*": ["./node_modules/.pnpm/node_modules/*"] },
+    "typeRoots": ["./node_modules/.pnpm/node_modules/@types"],
+    "strict": true,
+    "noImplicitAny": false,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    // 相对 import 显式写 .ts（Node ESM 可直跑、bundler 能解、官方 DSH 源码同款）。
+    "allowImportingTsExtensions": true
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx"]
+  // 非失败类诊断只看计数，不阻断；想看明细：
+  //   node node_modules/typescript/bin/tsc -p tsconfig.src.json --pretty false
+}

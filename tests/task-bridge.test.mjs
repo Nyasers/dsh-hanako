@@ -4,7 +4,7 @@
 // tests/task-bridge.test.mjs — src/runtime/task-bridge.js 事件归类纯函数单测
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { classifyDshEvent, BRIDGE_EVENTS } from "../src/runtime/task-bridge.js";
+import { classifyDshEvent, BRIDGE_EVENTS } from "../src/runtime/task-bridge.ts";
 
 test("classifyDshEvent: api-session/status true/false", () => {
   assert.deepEqual(classifyDshEvent("api-session/status", ["s1", false]), { kind: "status", sessionId: "s1", running: false });

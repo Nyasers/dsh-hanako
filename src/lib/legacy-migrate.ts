@@ -35,7 +35,7 @@
 import { readFileSync, writeFileSync, renameSync, existsSync, statSync, mkdirSync, readdirSync } from "node:fs";
 import path from "node:path";
 // 目标私有源目录名与运行时实际读取处同源（data-source.js）；本模块不再自带一份字面值
-import { PRIVATE_HOME_NAME } from "./data-source.js";
+import { PRIVATE_HOME_NAME } from "./data-source.ts";
 
 export const LEGACY_SUBDIR = "dsh-hanako"; // plugin-data 下的旧插件数据目录名
 export const LEGACY_PLUGIN_DATA_REL = path.join("plugin-data", LEGACY_SUBDIR);

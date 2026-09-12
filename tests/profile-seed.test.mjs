@@ -30,7 +30,7 @@ import {
   ensureProfileSeeded,
   PROFILE_BUNDLES,
   PROFILE_PATCH_RELOAD,
-} from "../src/lib/profile-seed.js";
+} from "../src/lib/profile-seed.ts";
 
 // 官方 initProfile 语义的 stub：缺失才写三文件（manifest/用户层模板/pnpm-workspace），
 // 记录调用参数；manifest 为合法 dsh-profile-dshana（二次判定 readLegacyCopyInfo 会解析）。

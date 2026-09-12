@@ -7,7 +7,7 @@
 // 非法 JSON / 读取失败。读取经注入的 readFile 打桩，不触盘。
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseRuntimeConfig, normalizeRuntimeConfig, UsageError, USAGE } from "../src/runtime/options.js";
+import { parseRuntimeConfig, normalizeRuntimeConfig, UsageError, USAGE } from "../src/runtime/options.ts";
 
 const GOOD = {
   dataDir: "/hana/app-data/dshana",

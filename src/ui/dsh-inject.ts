@@ -15,7 +15,7 @@
 //
 // 依赖：全部走浏览器原生 API（DOMParser / fetch / WebSocket / <script> 注入），无第三方包。
 
-import { installClipboardShadow } from "./clipboard-shadow.js";
+import { installClipboardShadow } from "./clipboard-shadow.ts";
 
 const DSH_INTERNAL_ORIGIN = "http://dsh.internal";
 
@@ -318,7 +318,7 @@ export function createStreamMux(privateBase, WebSocketCtor = window.WebSocket) {
 }
 
 /** 追加一个 script（module 或 classic），按顺序执行。 */
-function appendScript(source, module) {
+function appendScript(source, module = false) {
   return new Promise((resolve, reject) => {
     const script = document.createElement("script");
     if (module) script.type = "module";
@@ -337,7 +337,7 @@ function appendScript(source, module) {
  * @param {URL} privateBase 中继前缀绝对 URL（尾带 /）
  * @param {{containerId?: string}} [opts]
  */
-export async function injectDshIndex(indexHtml, privateBase, opts) {
+export async function injectDshIndex(indexHtml, privateBase, opts = {}) {
   const containerId = (opts && opts.containerId) || "root";
   const parsed = new DOMParser().parseFromString(indexHtml, "text/html");
   // 清掉壳页自举 UI，准备 DSH 挂载容器

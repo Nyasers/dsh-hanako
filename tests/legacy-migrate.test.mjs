@@ -20,7 +20,7 @@ import {
   targetDshHomeOf,
   legacyRootOf,
   markerPathOf,
-} from "../src/lib/legacy-migrate.js";
+} from "../src/lib/legacy-migrate.ts";
 
 function makeFixture() {
   // repo _tmp 下建样本（工作区可写；测试自清理）

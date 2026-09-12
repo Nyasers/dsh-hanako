@@ -13,7 +13,7 @@ import {
   buildClientRequest,
   parseServerResponse,
   defaultRpcTimeoutMs,
-} from "../src/lib/rpc-envelope.js";
+} from "../src/lib/rpc-envelope.ts";
 
 test("endpointOf: 点号方法 → 斜杠端点；斜杠方法直通", () => {
   assert.equal(endpointOf("session.create"), "session/create");
