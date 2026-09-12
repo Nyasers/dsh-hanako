@@ -518,10 +518,13 @@ export function apply(ctx: Context): void {
 //
 // 动因：FP 与主卡是两个文档 = 两个 DSH 实例，各自恢复、各自维护选中，天然不同步。
 //   role='navigation'（FP/sidebar）= 发射端：本地选中变化 → 写共享状态；只发不收。
-//   role='workspace'（主卡）      = 接收端：共享状态变化 → ctx.sessions.open/clear；
-//                                   只收不发（主卡无切换 UI，不会与本地选择打架）。
+//   role='workspace'（主卡）      = 接收端：共享状态变化 → ctx.sessions.open/clear。
+//   主卡自己也有切换入口（切工作区、新建会话），所以**只采纳比自己动手更新的意见**：
+//   共享值带写入时刻 at，主卡每次自己改选中就记下时刻；读到的写法比它旧就说明是 FP
+//   上次留下的陈旧意见，一律丢弃——否则主卡的动作会被它压回去。
+//   主卡自己改选中时也把新值写回（只收不回会把陈旧值留在存里，重开卡片时又把它拉回去）。
 //   settings / standalone 不参与。
-// 单项：导航源只在 sideba/FP，主卡不反向施压。无回环（接收端不发射）。
+// 方向：导航源在 FP/sidebar；主卡的回写只发生在它自身的用户动作上，且 FP 不读，无回环。
 // 启动握手：不靠“广播宣告”，靠**读快照**——载体（App 全局存储）始终有当前值，
 // 没有 BroadcastChannel 那种「接收端晚于发射端启动就错过宣告」的时序窗口。
 // 两个边界：
@@ -533,7 +536,7 @@ export function apply(ctx: Context): void {
 /** 壳页桥面里本插件用到的部分（仅有用的字段，缺失即不参与）。 */
 interface SurfaceSelectionBridge {
   readonly role?: string
-  readSelection?(): Promise<{ sessionId: string | null }>
+  readSelection?(): Promise<{ sessionId: string | null; at?: number }>
   writeSelection?(sessionId: string | null): Promise<void>
   onSelectionChanged?(listener: () => void): () => void
 }
@@ -577,20 +580,44 @@ function installCrossSurfaceSelection(ctx: Context): void {
   const onChanged = bridge.onSelectionChanged
   if (read === undefined || onChanged === undefined) return
   let generation = 0
+  let applying = false
+  let localAt = 0
+  let seen = list.getSnapshot().current ?? null
+  const write = bridge.writeSelection
   const applyRemote = (): void => {
     const request = ++generation
     void read().then((next) => {
       if (request !== generation) return
       const id = next?.sessionId ?? null
+      const at = typeof next?.at === 'number' ? next.at : 0
+      if (at <= localAt) return
       if (id === (list.getSnapshot().current ?? null)) return
+      applying = true
       const applied = id === null ? ctx.sessions.clear() : ctx.sessions.open(id)
-      void Promise.resolve(applied).catch(() => { /* 会话可能已不存在，忽略 */ })
+      void Promise.resolve(applied)
+        .catch(() => { /* 会话可能已不存在，忽略 */ })
+        .then(() => { applying = false })
     }, () => { /* 读失败保持本地 */ })
   }
   ctx.effect(() => {
     const off = onChanged(applyRemote)
-    // 本地列表就绪后再对一次（启动时共享值早于主卡恢复到位的情况）。
-    const offList = list.subscribe(() => { applyRemote() })
+    // 主卡自己的选中变化：记下时刻再对一次（远端更旧就被 applyRemote 丢回去）。
+    // 同时把新选中写回共享状态——不写回的话存里会留着一个陈旧值，
+    // 下次卡片重开时启动对账又把主卡拉回那个旧会话。
+    // 恢复中的变化不是用户动作，不记时刻也不写回。
+    const offList = list.subscribe(() => {
+      const snap = list.getSnapshot()
+      const current = snap.current ?? null
+      if (current === seen) return
+      seen = current
+      if (snap.phase !== 'ready') return
+      if (applying) return
+      localAt = Date.now()
+      if (write !== undefined) {
+        void Promise.resolve(write(current)).catch(() => { /* 写失败不回滚本地 */ })
+      }
+      applyRemote()
+    })
     applyRemote()
     return () => {
       off()

@@ -274,15 +274,21 @@ import { injectDshIndex, installTransport } from "./dsh-inject.js";
     return writeShared("settings-view", { open: open, section: section });
   }
 
-  // 会话选中：{ sessionId }。启动握手靠读快照（存储有当前值，没有“错过广播”的问题）。
+  // 会话选中：{ sessionId, at }。at 是写入时刻，接收端据此判断这条意见是否比自己的动手新
+  // （主卡自己切工作区/新建会话也会改本地选中，旧意见不得把它压回去）。
+  // 启动握手靠读快照（存储有当前值，没有“错过广播”的问题）。
   function readSelection() {
     return readShared("selection").then(function (v) {
-      return { sessionId: v && typeof v.sessionId === "string" && v.sessionId ? v.sessionId : null };
+      return {
+        sessionId: v && typeof v.sessionId === "string" && v.sessionId ? v.sessionId : null,
+        at: v && typeof v.at === "number" ? v.at : 0,
+      };
     });
   }
   function writeSelection(sessionId) {
     return writeShared("selection", {
       sessionId: typeof sessionId === "string" && sessionId ? sessionId : null,
+      at: Date.now(),
     });
   }
 
