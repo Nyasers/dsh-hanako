@@ -1,0 +1,31 @@
+{
+  // src-cordis 域（cordis 子插件）的类型检查配置。
+  // 为什么在这里：本仓构建只转译不检查；这份配置让 scripts/typecheck.mjs 能把
+  // "自相矛盾"那一类拦在构建期（未定义的名字、不存在的成员、语法错）。
+  // 路径相对本文件（仓库根）解析，所以不写绝对路径。
+  "compilerOptions": {
+    "noEmit": true,
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["node"],
+    // 本仓的直接依赖住在 pnpm 的隐藏目录：不指这里的话，cordis / dsh 那批包解析不到，
+    // 报错会落在"包没装"而不是我们的代码上。
+    "paths": { "*": ["./node_modules/.pnpm/node_modules/*"] },
+    "typeRoots": ["./node_modules/.pnpm/node_modules/@types"],
+    "strict": true,
+    "noImplicitAny": false,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    // 相对 import 显式写 .ts（Node ESM 可直跑、bundler 能解、官方 DSH 源码同款）。
+    "allowImportingTsExtensions": true
+  },
+  "include": ["src-cordis/**/*.ts", "src-cordis/**/*.tsx"]
+  // 注：非失败类诊断（strict 下的 possibly-null / 赋值、以及类型来源类）只计入日志，
+  // 不阻断构建；想看明细就直接跑：node node_modules/typescript/bin/tsc -p tsconfig.cordis.json --pretty false
+}
