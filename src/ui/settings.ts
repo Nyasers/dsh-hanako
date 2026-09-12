@@ -186,7 +186,8 @@ function renderModel(model) {
   const hasCatalog = !!model.catalog;
   const groups = (model.catalog && model.catalog.groups) || [];
   const current = model.current || (model.catalog && model.catalog.default) || null;
-  if (sel) {
+  if (sel && hasCatalog) {
+    // 只有拿到完整候选才重建选项：写回后回填 current/revision 的半份数据不得清空列表
     sel.innerHTML = "";
     for (const g of groups) {
       const og = document.createElement("optgroup");
@@ -211,7 +212,7 @@ function renderModel(model) {
     const fails = (model.catalog && model.catalog.failures) || [];
     if (model.catalogError) hintEl.textContent = "候选暂不可用：" + model.catalogError;
     else if (fails.length) hintEl.textContent = "部分 provider 加载失败：" + fails.map((f) => f.name || f.id).join("、");
-    else if (sel && sel.options.length === 0) hintEl.textContent = "DSH 目前没有可选的模型。";
+    else if (hasCatalog && sel && sel.options.length === 0) hintEl.textContent = "DSH 目前没有可选的模型。";
     else hintEl.textContent = current ? "当前：" + current.provider + " / " + current.model : "";
   }
 }
@@ -233,18 +234,20 @@ async function loadModel() {
     if (!data.ready) {
       setModelReady(false, data.error || "DSH 未运行：默认模型在 DSH 起来后才能选");
       modelStatus("");
-      return;
+      return false;
     }
     setModelReady(true);
     if (!data.ok) {
       modelStatus("读取失败：" + (data.error || "未知原因"), "err");
-      return;
+      return false;
     }
     renderModel(data.model);
     modelStatus("");
+    return true;
   } catch (e) {
     setModelReady(false, "读取失败，稍后重试");
     modelStatus("读取失败：" + ((e && e.message) || e), "err");
+    return false;
   }
 }
 
@@ -277,8 +280,10 @@ async function saveModel() {
       return;
     }
     if (!data || data.ok !== true) throw new Error((data && data.error) || "HTTP " + res.status);
-    renderModel({ current: data.model && data.model.current, revision: data.model && data.model.revision });
-    modelStatus("已保存", "ok");
+    // 写回只回 current/revision（候选不在写作范围内）：从 GET 重读整份状态再报结果，
+    // 否则拿半份数据重画会把候选列表清空。
+    const ok = await loadModel();
+    modelStatus(ok ? "已保存" : "已保存，但重读状态失败，请刷新本页", ok ? "ok" : "err");
   } catch (e) {
     modelStatus("保存失败：" + ((e && e.message) || e), "err");
   } finally {
