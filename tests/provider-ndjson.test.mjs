@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// tests/provider-ndjson.test.mjs — src-cordis/plugins/provider/lib/ndjson.js 单测
+// tests/provider-ndjson.test.mjs — src-cordis/plugins/provider/lib/ndjson.ts 单测
 // 覆盖：跨 chunk 半行拼接、多行/整行边界、flush 兜底、空行跳过、坏行抛错语义。
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -10,7 +10,7 @@ import {
   parseNdjsonEvent,
   createNdjsonLineReader,
   readNdjsonEvents,
-} from "../src-cordis/plugins/provider/lib/ndjson.js";
+} from "../src-cordis/plugins/provider/lib/ndjson.ts";
 
 test("consumeTextChunk: 整行/多行/半行余量", () => {
   assert.deepEqual(consumeTextChunk("a\nb\nc\n"), { lines: ["a", "b", "c"], rest: "" });

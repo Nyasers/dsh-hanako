@@ -30,7 +30,16 @@
 // tsdown 为 devDep（构建工具不进运行时依赖）。
 import { build } from "tsdown";
 import { dirname, join, resolve } from "node:path";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+
+/** client 半入口解析：调用方给了具体文件就用它；否则 client.ts 优先，退到 client.js。
+ * 产物名始终是 client.js（__ModuleLoader__ 按包名注册的那个文件）。 */
+function clientEntry(pkgDir, entry) {
+  const given = join(pkgDir, entry);
+  if (existsSync(given)) return given;
+  const ts = join(pkgDir, "client.ts");
+  return existsSync(ts) ? ts : join(pkgDir, "client.js");
+}
 
 const INLINE_QUERY = "?inline";
 const TEXT_PREFIX = "\0hanako-text:";
@@ -133,7 +142,7 @@ export async function buildClientBundle({ id, pkgDir, outDir, externals = ["reac
   };
   await build({
     name: id + "/client",
-    entry: { client: join(pkgDir, entry) },
+    entry: { client: clientEntry(pkgDir, entry) },
     outDir,
     format: "cjs",
     platform: "browser",

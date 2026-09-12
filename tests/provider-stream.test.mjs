@@ -13,7 +13,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { buildDoneChunks, createHanaStreamState } from "../src-cordis/plugins/provider/lib/stream.js";
+import { buildDoneChunks, createHanaStreamState } from "../src-cordis/plugins/provider/lib/stream.ts";
 
 const scope = { provider: "hana", model: "deepseek-chat", requestId: "req-1" };
 

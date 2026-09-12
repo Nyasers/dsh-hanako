@@ -16,10 +16,17 @@
 // rspack 单包配置对象（纯数据，不含 rspack import；rspack 本体由编排侧 src-cordis/build.js
 // 统一解析，RSPACK_ENV / 本地 node_modules 两路）。opts 覆盖口供特殊包逃生。
 import path from "node:path";
+import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url)))); // src-cordis/build → repo 根
 const MINIFY_LOADER = path.join(ROOT, "scripts", "minify-loader.mjs");
+
+/** 服务半入口：优先 index.ts（TS 源），否则 index.js。产物名始终是 index.js。 */
+export function serviceEntry(pkgDir) {
+  const ts = path.join(pkgDir, "index.ts");
+  return fs.existsSync(ts) ? ts : path.join(pkgDir, "index.js");
+}
 
 export function serviceBundle({ name, pkgDir, outDir, rules = [], optimization = {} }) {
   const assetsDir = path.join(pkgDir, "assets");
@@ -27,7 +34,7 @@ export function serviceBundle({ name, pkgDir, outDir, rules = [], optimization =
     name: `cordis/${name}`,
     mode: "production",
     target: "node",
-    entry: path.join(pkgDir, "index.js"),
+    entry: serviceEntry(pkgDir),
     output: {
       path: outDir,
       filename: "index.js",

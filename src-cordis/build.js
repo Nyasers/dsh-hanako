@@ -5,8 +5,9 @@
 // 布局：领域专用随源码——cordis 域脚本/配置全在 src-cordis/（build/ preset + 每包
 // cordis.config.mjs 描述），共享工具（rspack 本体解析/URL 回写/terser/assert + 共享
 // minify-loader）在 scripts/ 根级。产物 dist/cordis/**：
-//   7 子插件：service 半 rspack（index.js bundle）+ client 半 tsdown（settings/view 等，closure-factory）
-//   + dshana roster bundle（package.json + cordis.patch.yml）+ 静态 package.json/client.js
+//   3 子插件（provider / theme / clipboard）：service 半 rspack（源 index.ts → 产物 index.js bundle），
+//   theme 与 clipboard 另出 client 半（源 client.ts → 产物 client.js，tsdown closure-factory）
+//   + dshana roster bundle（package.json + cordis.patch.yml）+ 静态 package.json
 // 用法：node src-cordis/build.js [RSPACK_ENV=<构建环境目录>]
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
