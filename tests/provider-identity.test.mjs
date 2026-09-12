@@ -2,9 +2,13 @@
 // Copyright (c) 2026 Nyasers
 //
 // tests/provider-identity.test.mjs — src-cordis/plugins/provider/lib/identity.js 单测
-// 覆盖《DSHana 调用 Hana 模型接口指南》§3/§5 的身份判定：有映射=taskId（Hana 委派）、
-// 无映射=App 身份（DSH Web UI 独立会话，两个身份参数都不传）；容错不抛；身份字段只有
-// taskId（callToken 是工具调用期推理的事，本 adapter 从不传）。
+//
+// 锁死的是**三态判定**（2026-09-12 她定调：App 身份仅限“用户直接在 WebUI 使用”）：
+//   ① 无映射          ⇒ App 身份（用户自建会话）
+//   ② 映射在 + ended  ⇒ App 身份（任务已终结，用户接着在 WebUI 里跑——事实，不是降级）
+//   ③ 映射在 + 活动   ⇒ { taskId }（必须，绑定不能丢）
+//   ④ 映射在但读不出  ⇒ **抛错**（TASK_MAP_BROKEN）——绝不伪装成 ①
+// 身份字段只有 taskId（callToken 是工具调用期推理的事，本 adapter 从不传）。
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
@@ -27,39 +31,67 @@ function seedMap(sessionId, body) {
   const text = typeof body === "string" ? body : JSON.stringify(body);
   writeFileSync(join(d, sessionId + ".json"), text, "utf8");
 }
+function mapPath(sessionId) {
+  return join(dir, "dshana", "taskmaps", sessionId + ".json");
+}
+const ACTIVE = { taskId: "task-1", dshSessionId: SID, action: "create", rpcId: "r_1" };
 
-test("无映射（DSH Web UI 自建会话）→ App 身份：identity 为空对象", () => {
+test("① 无映射（用户自建会话）→ App 身份，reason=unowned-session", () => {
   const r = resolveModelIdentity(dir, SID);
-  assert.deepEqual(r, { identity: {}, source: "app" });
+  assert.deepEqual(r, { identity: {}, source: "app", reason: "unowned-session" });
   assert.equal("taskId" in r.identity, false);
   assert.equal("callToken" in r.identity, false);
 });
 
-test("有映射（dshana_session 委派）→ taskId 身份，且只带 taskId", () => {
-  seedMap(SID, { taskId: "task-1", dshSessionId: SID, action: "create", rpcId: "r_1" });
+test("③ 映射在且任务活动 → taskId 身份，且只带 taskId", () => {
+  seedMap(SID, ACTIVE);
   const r = resolveModelIdentity(dir, SID);
   assert.deepEqual(r, { identity: { taskId: "task-1" }, source: "task" });
   assert.deepEqual(Object.keys(r.identity), ["taskId"]);
 });
 
+test("② 映射在但任务终结（ended）→ App 身份，reason=task-ended（不遗留陈旧 taskId）", () => {
+  seedMap(SID, { ...ACTIVE, ended: { at: Date.now(), status: "task-terminal" } });
+  const r = resolveModelIdentity(dir, SID);
+  assert.deepEqual(r, { identity: {}, source: "app", reason: "task-ended" });
+});
+
+test("②→③ 终结后同会话再 send（重写映射）→ 回到 taskId 身份", () => {
+  seedMap(SID, { ...ACTIVE, ended: { at: Date.now(), status: "task-terminal" } });
+  assert.equal(resolveModelIdentity(dir, SID).source, "app");
+  seedMap(SID, ACTIVE); // writeTaskMap 每次重建记录，不带 ended
+  assert.deepEqual(resolveModelIdentity(dir, SID), { identity: { taskId: "task-1" }, source: "task" });
+});
+
 test("dataDir/sessionId 缺失 → App 身份（不抛）", () => {
-  assert.deepEqual(resolveModelIdentity(null, SID), { identity: {}, source: "app" });
-  assert.deepEqual(resolveModelIdentity(dir, null), { identity: {}, source: "app" });
-  assert.deepEqual(resolveModelIdentity(null, null), { identity: {}, source: "app" });
-  assert.deepEqual(resolveModelIdentity(undefined, undefined), { identity: {}, source: "app" });
+  assert.deepEqual(resolveModelIdentity(null, SID), { identity: {}, source: "app", reason: "unowned-session" });
+  assert.deepEqual(resolveModelIdentity(dir, null), { identity: {}, source: "app", reason: "unowned-session" });
+  assert.deepEqual(resolveModelIdentity(null, null), { identity: {}, source: "app", reason: "unowned-session" });
+  assert.deepEqual(resolveModelIdentity(undefined, undefined), { identity: {}, source: "app", reason: "unowned-session" });
+  assert.deepEqual(resolveModelIdentity(dir, "../../etc/passwd"), { identity: {}, source: "app", reason: "unowned-session" });
 });
 
-test("非法 sessionId / 损坏映射 / 无 taskId → App 身份（容错不抛，防路径穿越）", () => {
-  assert.deepEqual(resolveModelIdentity(dir, "../../etc/passwd"), { identity: {}, source: "app" });
-  seedMap(SID, "{broken");
-  assert.deepEqual(resolveModelIdentity(dir, SID), { identity: {}, source: "app" });
-  seedMap(SID, { dshSessionId: SID }); // 合法 JSON 但无 taskId
-  assert.deepEqual(resolveModelIdentity(dir, SID), { identity: {}, source: "app" });
-});
+// ④ 这一组是本次语义修正的核心：以前一律降级成 App 身份，等于把“状态丢了”伪装成“用户会话”。
+for (const [why, body] of [
+  ["JSON 解析失败", "{broken"],
+  ["缺 taskId", { dshSessionId: SID }],
+  ["taskId 为空串", { taskId: "", dshSessionId: SID }],
+  ["dshSessionId 非法", { taskId: "task-1", dshSessionId: "not-a-session" }],
+  ["顶层不是对象", "null"],
+]) {
+  test(`④ 映射损坏（${why}）→ 抛 TASK_MAP_BROKEN，不降级成 App 身份`, () => {
+    seedMap(SID, body);
+    assert.throws(
+      () => resolveModelIdentity(dir, SID),
+      (e) => e && e.code === "TASK_MAP_BROKEN",
+    );
+  });
+}
 
-test("委派任务终结、映射被删 → 同会话回到 App 身份（不遗留陈旧 taskId）", () => {
-  seedMap(SID, { taskId: "task-1", dshSessionId: SID });
-  assert.deepEqual(resolveModelIdentity(dir, SID).source, "task");
-  rmSync(join(dir, "dshana", "taskmaps", SID + ".json"));
-  assert.deepEqual(resolveModelIdentity(dir, SID), { identity: {}, source: "app" });
+test("④ 目录里没有映射文件（没被写过 or 被 prune）→ 仍是 ① App 身份，不抛", () => {
+  mkdirSync(join(dir, "dshana", "taskmaps"), { recursive: true });
+  assert.deepEqual(resolveModelIdentity(dir, SID), { identity: {}, source: "app", reason: "unowned-session" });
+  rmSync(join(dir, "dshana"), { recursive: true, force: true });
+  assert.deepEqual(resolveModelIdentity(dir, SID), { identity: {}, source: "app", reason: "unowned-session" });
+  assert.equal(mapPath(SID).includes("taskmaps"), true);
 });

@@ -10,10 +10,11 @@
 //   · 目录：hana.models.list() → 显式 provider/model 选择（id 原样透传，不二次映射）；
 //   · 推理：hana.models.stream({ requestId, provider, model, messages, systemPrompt, tools,
 //     reasoningEffort?, maxTokens?, temperature?, taskId? })——requestId 由本 adapter 自管
-//     （cancel 按 requestId 定向）。**身份二选一且不能同传**：有会话→任务映射（dshana_session
-//     委派、任务仍活动）传 taskId，保留任务绑定与结果回投；没有映射（DSH Web UI 自建会话）
-//     则 callToken/taskId 都不传 = 归属 App 自己（《DSHana 调用 Hana 模型接口指南》§3/§5，
-//     见 lib/identity.js）。不传 scope——那是 models.utility 的参数，stream 不接受；
+//     （cancel 按 requestId 定向）。**身份三态且不能同传**（见 lib/identity.js）：无标记 =
+//     用户自建会话 = App 身份；标记在 + 任务终结（用户接着在 WebUI 用）= App 身份；
+//     标记在 + 任务活动 = taskId（保留任务绑定与结果回投）；标记在但读不出 = **显式失败**，
+//     不改走 App 身份（《DSHana 调用 Hana 模型接口指南》§3/§5）。不传 scope——那是
+//     models.utility 的参数，stream 不接受；
 //   · NDJSON 逐行解析（lib/ndjson.js），done.assistant 完整保存回放（含 text/reasoning/
 //     toolCall 续接签名，lib/stream.js buildDoneChunks + 回放信封）；error 事件=失败不算成功；
 //   · 图片：DSH 消息含 ImageBlock 时经 attachment store 读字节 → base64+MIME（不传路径），
@@ -235,13 +236,26 @@ export function buildHanaAdapter(LlmAdapter, LlmError, deps) {
     async *stream(options) {
       const dataDir = dataDirOf();
       const sessionId = options && options.sessionId;
-      // 身份判定（指南 §5）：有任务映射（dshana_session 委派、任务仍活动）→ taskId；
-      // 没有（DSH Web UI 自建会话，或委派任务已终结后用户继续在 Web UI 里跑）→ 两者都不传。
-      // 失效/归属不正确的 taskId 由宿主报错并原样上抛——不做"删掉身份参数重试"的兜底（指南 §5）。
-      const { identity, source } = resolveModelIdentity(dataDir, sessionId);
-      if (source === "app") noteAppIdentity(logLine, sessionId);
       const item = models.find((m) => m && m.provider === options.provider && m.id === options.model) || null;
       const requestId = randomUUID();
+      // 身份判定（指南 §5 / 三态，见 lib/identity.js）：
+      //   无标记 ⇒ App 身份（用户在 WebUI 自建的会话）；
+      //   标记在 + 任务终结 ⇒ App 身份（用户接着用，事实而非降级）；
+      //   标记在 + 任务活动 ⇒ taskId（必须）；
+      //   标记在但读不出（损坏）⇒ **显式失败**，绝不改走 App 身份。
+      // 失效/归属不正确的 taskId 仍由宿主报错并原样上抛——不做“删掉身份参数重试”的兜底。
+      let identity;
+      let source;
+      try {
+        ({ identity, source } = resolveModelIdentity(dataDir, sessionId));
+      } catch (e) {
+        throw new LlmError(
+          "模型身份判定失败（会话任务标记不可读）：" + ((e && e.message) || e),
+          (e && e.code) || "TASK_IDENTITY_UNRESOLVED",
+          { requestId },
+        );
+      }
+      if (source === "app") noteAppIdentity(logLine, sessionId);
       const ac = new AbortController();
       const onAbort = () => {
         ac.abort();

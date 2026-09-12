@@ -31,7 +31,7 @@ import { appCtx, appDataDir } from "./app-runtime.js";
 import { currentDshHome } from "./data-source.js";
 import { ensureManagedRuntime } from "./managed-runtime.js";
 import { nextRpcId } from "./rpc-envelope.js";
-import { writeTaskMap, removeTaskMap, isValidSessionId, pruneTaskMaps } from "./task-map.js";
+import { writeTaskMap, markTaskMapEnded, isValidSessionId, pruneTaskMaps } from "./task-map.js";
 import { withSessionTurn, enterSessionTurn } from "./session-serialize.js";
 import { readDshDefaultModel } from "./config.js";
 import { serviceBase } from "./service-base.js";
@@ -356,9 +356,10 @@ export function submitDshTask({ action, input, callToken, log }) {
       logLine(log, "[dsh-session] task 终态 " + ((rec && rec.status) || "?") + "（session=" + sessionId + "）");
       return loc;
     } catch (e) {
-      // 提交阶段失败：删映射（若有 sessionId）+ 任务 fail（已建时）+ ready reject
+      // 提交阶段失败：标记终态（若有 sessionId；**不删文件**——删了就分不出“用户自建会话”
+      // 与“我们建的但状态丢了”）+ 任务 fail（已建时）+ ready reject
       if (sessionId) {
-        try { removeTaskMap(dataDir, sessionId); } catch { /* 忽略 */ }
+        try { markTaskMapEnded(dataDir, sessionId, "submit-failed"); } catch { /* 忽略 */ }
       }
       if (taskId) {
         const msg = "DSH 任务提交失败（" + parsed.action + "）：" + ((e && e.message) || e);

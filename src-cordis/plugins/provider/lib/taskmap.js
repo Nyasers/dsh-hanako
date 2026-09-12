@@ -21,17 +21,32 @@ export function taskMapDir(dataDir) {
   return join(dataDir, "dshana", "taskmaps");
 }
 
-/** 读取会话任务映射；不存在/损坏/格式不合法返回 null（不抛）。 */
+/** 读取会话任务映射。
+ *
+ *  返回 null ⇒ **这个会话不是我们创建的**（映射不存在）——这是 App 身份唯一的入口之一。
+ *  存在但损坏/格式不合法 ⇒ **抛错**（code `TASK_MAP_BROKEN`）：状态丢了必须显式失败，
+ *  不能伪装成“用户自建会话”（三态判定见 lib/identity.js）。
+ */
 export function readTaskMap(dataDir, sessionId) {
+  if (!dataDir) return null;
   if (typeof sessionId !== "string" || !SESSION_ID_RE.test(sessionId)) return null;
+  const p = join(taskMapDir(dataDir), sessionId + ".json");
+  if (!existsSync(p)) return null;
+  let j;
   try {
-    const p = join(taskMapDir(dataDir), sessionId + ".json");
-    if (!existsSync(p)) return null;
-    const j = JSON.parse(readFileSync(p, "utf8"));
-    if (!j || typeof j.taskId !== "string" || !j.taskId) return null;
-    if (typeof j.dshSessionId !== "string" || !SESSION_ID_RE.test(j.dshSessionId)) return null;
-    return j;
+    j = JSON.parse(readFileSync(p, "utf8"));
   } catch {
-    return null;
+    throw brokenMap("JSON 解析失败", sessionId);
   }
+  if (!j || typeof j.taskId !== "string" || !j.taskId) throw brokenMap("缺 taskId", sessionId);
+  if (typeof j.dshSessionId !== "string" || !SESSION_ID_RE.test(j.dshSessionId)) {
+    throw brokenMap("dshSessionId 非法", sessionId);
+  }
+  return j;
+}
+
+function brokenMap(why, sessionId) {
+  const err = new Error("task-map: 映射损坏（" + why + "，session=" + String(sessionId) + "）");
+  err.code = "TASK_MAP_BROKEN";
+  return err;
 }
