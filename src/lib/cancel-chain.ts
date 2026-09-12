@@ -78,9 +78,9 @@ export async function executeCancel({ dataDir, sessionId, reason, log }) {
   } catch (e) {
     logWarn(log, "[dsh-session] cancel 标记写失败（继续取消）：" + ((e && e.message) || e));
   }
-  // ①b 会话事件日志里的取消标记（投影 dshanaTaskBinding 的 cancel 格）由 **runtime 侧**落：
-  //     宿主 ctx 不提供 sessions 句柄，App 进程拿不到会话；落点是 task-bridge 的宿主取消
-  //     反向触发路径（onHostCancel），那里才有 sessions，且天然先于它自己发的 session.cancel。
+  // ①b 取消标记只落映射文件（App 与 runtime 共用的跨进程事实源）：App 侧在上面 ① 写，runtime
+  //     侧的宿主取消路径（task-bridge 的 onHostCancel）写同一文件。App 进程拿不到会话句柄，
+  //     取消不经会话事件日志。
   // ② DSH session.cancel（loopback；失败不阻断——记录并交由终态兜底）
   let dshAccepted = null;
   let dshError = null;

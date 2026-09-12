@@ -38,13 +38,6 @@ import { connectAppRuntime } from "@hana/app-sdk";
 import { startTaskBridge } from "./task-bridge.ts"; // DSH 事件 → Hana task 回投
 import { startApprovalBridge } from "./approval-bridge.ts"; // DSH 审批 → Hana requestApproval / watch 对账
 import { resolveInstallRoot, locateDsh } from "./locate.ts";
-import {
-  BINDING_CLAIM_EVENT,
-  appendSessionEvent,
-  claimPayload,
-  clearBindingClaim,
-  depositBindingClaim,
-} from "../lib/binding-slot.ts";
 // 依赖随包物化在安装目录 node_modules（无运行时 ensure）。
 import { seedDshanaProfile } from "./seed.ts";
 
@@ -446,35 +439,6 @@ export async function main(argv) {
           if (busy) throw new Error("DSH 仍有运行中/排队中的任务，先结束或停止它们再切换数据源。");
           info("switch-gate：无在途工作，允许切换数据源（prepare-switch）");
           return { ready: true };
-        }
-        if (action === "bind-task") {
-          // 会话↔任务认领（App 提交前调用）：落点是会话自己的日志，折叠由 provider 注册的
-          // 投影单元做。会话已 attach（create 路径）就当场 append；还冷着（send 路径：DSH
-          // 要到 prompt 进来才 resume）就投同进程邮箱，由 provider 在模型请求前落地。
-          // 认领不进邮箱也不静默：参数不合法直接抛（调用侧看见），参数合法则返回落点。
-          const a = args && typeof args === "object" ? args : {};
-          const sessionId = typeof a.sessionId === "string" ? a.sessionId : "";
-          const payload = depositBindingClaim(sessionId, {
-            taskId: a.taskId,
-            // rpcId / action 随认领一起落投影：桥读它们（原先只在映射文件里）。
-            rpcId: a.rpcId,
-            action: a.action,
-            timeoutSec: a.timeoutSec,
-            approvalTimeoutMs: a.approvalTimeoutMs,
-          });
-          const sessions = typeof boot.ctx.get === "function" ? boot.ctx.get("sessions") : null;
-          let landed = "mailbox";
-          try {
-            if (appendSessionEvent(sessions, sessionId, BINDING_CLAIM_EVENT, claimPayload(payload))) {
-              clearBindingClaim(sessionId, payload.taskId);
-              landed = "session";
-            }
-          } catch (e) {
-            // 落地抛错不算认领失败：邮箱还在，provider 本回合里还有一次机会。
-            warn("bind-task", "认领落地失败（留邮箱由 provider 兜）：" + ((e && e.message) || e));
-          }
-          info("bind-task：会话 " + sessionId.slice(0, 12) + " ← 任务 " + payload.taskId + "（落点 " + landed + "）");
-          return { taskId: payload.taskId, landed };
         }
         if (action !== "rpc") throw new Error("未知控制动作：" + String(action));
         const body = args && args.body;

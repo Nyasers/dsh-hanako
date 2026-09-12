@@ -30,9 +30,7 @@
 //
 // 容错纪律：订阅/回投失败只记日志不阻断 runtime；映射不存在（非 dshana_session 发起的
 // 会话，如 DSH Web UI 直开）的事件直接忽略。
-import { readTaskMap, markTaskMapEnded } from "../lib/task-map.ts";
-import { bindingStateOf } from "../lib/binding-slot.ts";
-import { BINDING_CANCEL_EVENT, BINDING_END_EVENT, appendSessionEvent, cancelPayload } from "../lib/binding-slot.ts";
+import { readTaskMap, markTaskMapEnded, markCancelRequested } from "../lib/task-map.ts";
 import { runWatchReconcile } from "../lib/watch-sse.ts";
 import { rpcSessionCancel } from "../lib/dsh-rpc.ts";
 import { cancelSessionModelRequests } from "../lib/model-requests.ts";
@@ -105,11 +103,9 @@ export function classifyDshEvent(event, args) {
  */
 class SessionBridge {
   settled = false; // 已 complete/fail/cancel（幂等）
-  constructor({ hana, dataDir, sessions, log, serviceBaseUrl, bridgeKey, cancelModelRequests, ctx = null }) {
+  constructor({ hana, dataDir, log, serviceBaseUrl, bridgeKey, cancelModelRequests }) {
     this.hana = hana;
     this.dataDir = dataDir;
-    this.ctx = ctx;
-    this.sessions = sessions && typeof sessions.get === "function" ? sessions : null;
     this.log = log;
     this.serviceBaseUrl = typeof serviceBaseUrl === "string" && serviceBaseUrl ? serviceBaseUrl : null;
     this.bridgeKey = typeof bridgeKey === "string" && bridgeKey ? bridgeKey : null;
@@ -125,13 +121,10 @@ class SessionBridge {
     this.hostCancelDone = false; // 宿主取消反向触发只做一次
   }
 
-  /**
-   * 首个事件载入绑定：投影优先（同进程 stateOf，零文件读），取不到回落私有映射文件。
-   * 无绑定（非 dshana_session 会话）返回 false。
-   */
+  /** 首个事件载入映射；无映射（非 dshana_session 会话）返回 false。 */
   load() {
     if (this.map) return true;
-    const m = bindingStateOf(this.ctx, this.sessionId, null, () => readTaskMap(this.dataDir, this.sessionId));
+    const m = readTaskMap(this.dataDir, this.sessionId);
     if (!m || !m.taskId) return false;
     this.map = m;
     this.taskId = m.taskId;
@@ -242,17 +235,13 @@ class SessionBridge {
       "宿主任务 " + (rec && rec.status) + "（task=" + this.taskId + "）——反向触发 DSH cancel（session=" +
       (this.sessionId || "").slice(0, 12) + "）",
     );
-    // ① 取消标记落进会话日志（投影 dshanaTaskBinding 的 cancel 格），**先于** DSH cancel。
-    //     这个动作只能在 runtime 里做：App 进程没有 sessions 句柄（宿主 ctx 也不提供 get），
-    //     而子进程/重启后的终态判定读的是投影——不落就等于“没取消过”。
-    const cancelLanded = appendSessionEvent(
-      this.sessions,
-      this.sessionId,
-      BINDING_CANCEL_EVENT,
-      cancelPayload("user"),
-    );
-    if (!cancelLanded && this.sessionId) {
-      this.note("取消标记事件未落地（session=" + String(this.sessionId).slice(0, 12) + "）——会话不在场");
+    // ① 取消标记先落进映射文件，**先于** DSH cancel。这个动作只能在 runtime 里做：App 进程
+    //     没有 sessions 句柄（宿主 ctx 也不提供 get），而子进程/重启后的终态判定读的是
+    //     映射——不落就等于“没取消过”。幂等：重复写只是覆盖同一 reason/时间戳。
+    try {
+      markCancelRequested(this.dataDir, this.sessionId, "user");
+    } catch (e) {
+      this.note("取消标记写入映射失败（继续收尾）：" + ((e && e.message) || e));
     }
     // ② 通知 DSH session.cancel（本机回环 RPC）；失败记录（DSH 可能已自行中止）
     try {
@@ -292,7 +281,7 @@ class SessionBridge {
     this.settled = true;
     this.stopHostWatch();
     const { ok, message } = decision || {};
-    // 本进程亲手请求过取消（hostCancelDone）也算：那是我们发出的动作，不依赖投影/映射的回读是否及时。
+    // 本进程亲手请求过取消（hostCancelDone）也算：那是我们发出的动作，不依赖映射的回读是否及时。
     const cancel =
       this.mapCancelRequested() || this.hostCancelDone || (decision && decision.cancelOverride === true);
     try {
@@ -320,22 +309,6 @@ class SessionBridge {
       // 终态回投失败：任务可能已被他方终态（App 卸载/取消/宿主已终态）——幂等语义，忽略并清映射
       this.note("任务终态回投失败（task=" + this.taskId + "）：" + ((e && e.message) || e));
     } finally {
-      try {
-        // 会话↔任务绑定收尾：ended 标记进会话自己的日志（provider 的投影单元折叠）。
-        // 只标记、不抹除认领——"读过但已收尾"与"从没认领过"在模型请求身份上是两种判定
-        // （见 provider/lib/identity.js 三态）。会话不在场（已卸载/未 attach）时落地不了，
-        // 记一句日志：那种情况下身份会退回 App，必须看得出原因。
-        const status = cancel ? "canceled" : (ok ? "completed" : "failed");
-        const landed = appendSessionEvent(this.sessions, this.sessionId, BINDING_END_EVENT, {
-          taskId: this.taskId,
-          status,
-        });
-        if (!landed && this.sessionId) {
-          this.note("绑定收尾未落地（session=" + String(this.sessionId).slice(0, 12) + "，status=" + status + "）——会话不在场");
-        }
-      } catch (e) {
-        this.note("绑定收尾失败（session=" + String(this.sessionId).slice(0, 12) + "）：" + ((e && e.message) || e));
-      }
       try {
         // 终态只标记 ended，**不删文件**：删了就分不出“用户自建会话”与“我们建的但状态丢了”，
         // 而这两者在模型请求身份上是两种判定（见 provider/lib/identity.js 三态）。
@@ -398,17 +371,7 @@ export function startTaskBridge({ ctx, hana, dataDir, log, serviceBaseUrl, bridg
         let b = bridges.get(frame.sessionId);
         if (!b) {
           pruneSettled();
-          b = new SessionBridge({
-            hana,
-            dataDir,
-            sessions: typeof ctx.get === "function" ? ctx.get("sessions") : null,
-            log,
-            serviceBaseUrl,
-            bridgeKey,
-            cancelModelRequests: doCancelModels,
-            // 投影读取的把手：同进程 sessionProjections（详见 lib/binding-slot.ts 的 bindingStateOf）
-            ctx,
-          });
+          b = new SessionBridge({ hana, dataDir, log, serviceBaseUrl, bridgeKey, cancelModelRequests: doCancelModels });
           b.sessionId = frame.sessionId;
           bridges.set(frame.sessionId, b);
         }
