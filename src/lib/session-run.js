@@ -259,12 +259,19 @@ export function submitDshTask({ action, input, callToken, log }) {
         task = await ctx.tasks.create({
           callToken: token,
           label: taskLabel,
+          // 档位显式声明：宿主默认就是这两个（有令牌 ⇒ session；delivery 默认 next-turn），
+          // 写出来是为了不吃隐式默认——改默认值不会静默改变本 App 的形状（APPS.md
+          // “后台任务与审批”节：档位只在创建时确定，update 改不了）。
+          // create 时 DSH 会话尚未诞生，sessionId 由建会话后的 update 回写。
+          scope: "session",
+          delivery: "next-turn",
           metadata: {
             dsh: {
               action: parsed.action,
               cwd: parsed.cwd || undefined,
               sessionId: parsed.sessionId || undefined,
-              task: parsed.taskText.slice(0, 200),
+              // 提示词摘要**不进**宿主记录：那是用户内容。诊断需要的摘要在我们自己的
+              // 映射文件（dataDir/dshana/taskmaps，私有）里，不上宿主库。
               timeoutSec: parsed.timeoutSec || undefined,
             },
           },
@@ -333,6 +340,27 @@ export function submitDshTask({ action, input, callToken, log }) {
         timeoutSec,
         approvalTimeoutMs,
       });
+      // ⑤b 宿主任务元数据回写（task → DSH 会话的**持久记录**；我们那份映射是热路径 + 私有副本）。
+      //     写完整 dsh 对象：update 的 metadata 是整体替换还是浅合并，文档没写，给全量在两种
+      //     语义下都正确。失败不改任务结局（映射文件仍是配对事实源）但必须出声——静默的记账
+      //     失败会让人以为宿主机里查得到（“失败不静默”）。
+      try {
+        const back = await ctx.tasks.update(taskId, {
+          metadata: {
+            dsh: {
+              action: parsed.action,
+              cwd: parsed.cwd || undefined,
+              sessionId,
+              timeoutSec: parsed.timeoutSec || undefined,
+            },
+          },
+        });
+        if (!back || !back.taskId) {
+          logLine(log, "[dsh-session][warn] 宿主任务元数据回写未确认（task=" + taskId + "）");
+        }
+      } catch (e) {
+        logLine(log, "[dsh-session][error] 宿主任务元数据回写失败（task=" + taskId + "）：" + ((e && e.message) || e));
+      }
       // ⑥ prompt（fire：{ accepted:true } 立即返回）
       await rpcCall(ctx, base, {
         method: "session/prompt",
