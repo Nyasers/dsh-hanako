@@ -44,7 +44,11 @@ function applyTheme(snap: ThemeSnap | null | undefined) {
   if (!snap || typeof snap !== "object") return;
   const root = document.documentElement;
   if (typeof snap.theme === "string" && snap.theme) root.setAttribute("data-theme", snap.theme);
-  if (typeof snap.appearance === "string" && snap.appearance) root.setAttribute("data-appearance", snap.appearance);
+  if (typeof snap.appearance === "string" && snap.appearance) {
+    root.setAttribute("data-appearance", snap.appearance);
+    // 原生控件与滚动条跟着宿主明暗，而不是跟着系统（两者不一致时页面会半黑半白）。
+    root.style.colorScheme = snap.appearance === "dark" ? "dark" : "light";
+  }
   const url = typeof snap.cssUrl === "string" ? snap.cssUrl : "";
   if (!url) return;
   themeCssUrl = url;
