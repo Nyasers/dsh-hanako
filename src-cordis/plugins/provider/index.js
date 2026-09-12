@@ -4,9 +4,9 @@
 // @dshana/provider — DSH provider adapter（v2 重写：模型推理走受管 runtime 内 hana）
 //
 // v1（0.1.2）形态：消费宿主 provider 路由（models.json + apiKey）注册官方 PiAiAdapter 直连
-// 各 provider 端点。v2（迁移指南 §8/决策 B）不再有 apiKey/baseURL/直连：**推理在受管
+// 各 provider 端点。本 adapter 不再有 apiKey/baseURL/直连：**推理在受管
 // runtime 内经 connectAppRuntime().models 发起**（受管子进程与 DSH 同进程，hana client
-// 由 dsh-host.mjs 挂 globalThis.__dshanaHana，见 src/runtime/main.js 步骤 1 注释）：
+// 由 dsh-host.mjs 挂 globalThis.__dshanaHana，见 src/runtime/main.js）：
 //   · 目录：hana.models.list() → 显式 provider/model 选择（id 原样透传，不二次映射）；
 //   · 推理：hana.models.stream({ requestId, provider, model, messages, systemPrompt, tools,
 //     reasoningEffort?, maxTokens?, temperature?, taskId? })——requestId 由本 adapter 自管
@@ -101,7 +101,7 @@ function warn(ctx, msg) {
   }
 }
 
-// ---- 步骤 4a：活动模型 requestId 注册表（globalThis 与 dsh-host bundle 共享）----
+// ---- 活动模型 requestId 注册表（globalThis 与 dsh-host bundle 共享）----
 // 键名与 src/lib/model-requests.js MODEL_REQUEST_GLOBAL_KEY 字面一致（本插件与 task-bridge
 // 分属 cordis 插件 bundle / dsh-host bundle，不能互相 import——同进程 globalThis 约定，
 // 与 __dshanaHana 同款）。结构：Map<dshSessionId, Set<requestId>>；取消消费侧只读。
@@ -238,7 +238,7 @@ export function buildHanaAdapter(LlmAdapter, LlmError, deps) {
       const sessionId = options && options.sessionId;
       const item = models.find((m) => m && m.provider === options.provider && m.id === options.model) || null;
       const requestId = randomUUID();
-      // 身份判定（指南 §5 / 三态，见 lib/identity.js）：
+      // 身份判定（三态，见 lib/identity.js）：
       //   无标记 ⇒ App 身份（用户在 WebUI 自建的会话）；
       //   标记在 + 任务终结 ⇒ App 身份（用户接着用，事实而非降级）；
       //   标记在 + 任务活动 ⇒ taskId（必须）；
@@ -343,13 +343,13 @@ export function buildHanaAdapter(LlmAdapter, LlmError, deps) {
           );
         }
       }
-      // 步骤 4a：活动模型流注册（task-bridge 宿主取消/审批链按会话定向 models.cancel，
+      // 活动模型流注册（task-bridge 的取消/审批链按会话定向 models.cancel，
       // 只停本工作不误停他人会话；键契约见 src/lib/model-requests.js MODEL_REQUEST_GLOBAL_KEY）
       registerActiveModelRequest(sessionId, requestId);
       try {
         const response = await deps.hana.models.stream(request);
         let done = false;
-        // 增量状态机（2026-09-12 真机反馈：改成真流式）：text-delta/reasoning-delta 立刻转成
+        // 增量状态机：text-delta/reasoning-delta 立刻转成
         // block-start + delta 产出，Web UI 才能逐字长出来；done 时仍由 buildDoneChunks 产出
         // 权威 block-end（签名只在 done.assistant 里）+ usage + finish。
         const streamState = createHanaStreamState();
@@ -376,7 +376,7 @@ export function buildHanaAdapter(LlmAdapter, LlmError, deps) {
               );
             }
             // start 忽略；text-delta/reasoning-delta 实时产出；tool-call 只从 done 取
-            // （指南 §4：同一个 tool call 不能重复执行）。
+            // （同一个 tool call 不能重复执行）。
             const live = streamState.push(ev);
             for (const c of live) yield c;
           }
