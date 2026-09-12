@@ -31,20 +31,17 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { managedRuntimeDetails, ensureManagedRuntime, stopManagedRuntime, bridgeAccess } from "../lib/managed-runtime.ts";
 import { buildBootSnapshot, APP_ID } from "../lib/boot-state.ts";
-import { resolveApprovalTimeoutSec, resolveDefaultTimeoutSec } from "../lib/config.ts";
+import { dataSources, sourceOf } from "../lib/data-source.ts";
 import { readDefaultModel, writeDefaultModel } from "../lib/model-settings.ts";
 export const DASHANA_ROUTE_PREFIX = "/dshana";
 
 // ---- 应用设置（GET/POST /dshana/settings）----
-// 只认两项（原 manifest contributes.settings.schema 的那两个键），值落在 dataDir/config.json
-// 的 global.*——和宿主设置界面当初写的是同一处，也正是 src/lib/config.ts 里
-// resolveApprovalTimeoutSec / resolveDefaultTimeoutSec 优先直读的那份值：改完即时生效，
-// 不需要重启。
+// 两个超时与数据模式同栈：一份设置（dataDir/integration/settings.json）、一个 revision，
+// 缺省值由 lib/config.ts 的 APP_SETTING_DEFAULTS 单点持有（30 / 1800）。
 // 为什么不用 schema 门：设置标签页直接渲染本 App 自己的页
-// （contributes.settings.ui.route），配置经 App 自己的后端读写，宿主不再代画表单；缺省值
-// 随之由 lib/config.js 的 APP_SETTING_DEFAULTS 持有（值不变：30 / 1800）。
-const APP_SETTING_KEYS = ["approvalTimeoutSec", "defaultTimeoutSec"];
-const APP_SETTING_LEGACY = { approvalTimeoutSec: "approvalTimeoutMs", defaultTimeoutSec: "defaultTimeoutMs" };
+// （contributes.settings.ui.route），配置经 App 自己的后端读写，宿主不再代画表单。
+// 写带 expectedRevision：不匹配回 409，不静默覆盖。
+const APP_SETTING_BROADCAST_KEY = "dshana:settings";
 
 /** 读 dataDir/config.json（缺失/坏 JSON 一律当空对象：设置面不该把诊断面拖下水）。 */
 function readConfigJson(dataDir) {
@@ -58,21 +55,17 @@ function readConfigJson(dataDir) {
   }
 }
 
-/** 只挑白名单键、只认有限非负数；其余忽略（设置面不接受任意键写入）。 */
-function pickAppSettings(input) {
-  const out = {};
-  for (const k of APP_SETTING_KEYS) {
-    const v = input ? input[k] : undefined;
-    if (typeof v === "number" && Number.isFinite(v) && v >= 0) out[k] = Math.round(v);
-  }
-  return out;
-}
-
-/** 生效值（与运行时同一读法）：交给 config.js 的 resolver 从 config.json + 缺省值算出。 */
-function effectiveSettings(dataDir) {
+/**
+ * App 级设置的视图：两个超时与数据模式在同一份设置、同一个 revision（W2）。
+ * source 由设置推出（home/sourceId 供页面回显与运行时接线），lastShared 供“切回共享”预填。
+ */
+async function readSettingsView(ctx, dataDir) {
+  const st = await dataSources(ctx).read();
   return {
-    approvalTimeoutSec: resolveApprovalTimeoutSec({ dataDir }),
-    defaultTimeoutSec: resolveDefaultTimeoutSec({ dataDir }),
+    revision: st.revision,
+    settings: st.settings,
+    source: sourceOf(st.settings, dataDir),
+    lastShared: st.lastShared || null,
   };
 }
 
@@ -94,7 +87,7 @@ export function defaultDshanaRouteDeps(ctx) {
     appId: (ctx && ctx.appId) || APP_ID,
     version: "",
     log,
-    readSettings: () => effectiveSettings(dataDir),
+    readSettings: () => readSettingsView(ctx, dataDir),
     readModel: () => {
       if (!appFetch) throw new Error("ctx.network.fetch 不可用（manifest network 白名单 / 宿主代发门）");
       return readDefaultModel(appFetch);
@@ -103,19 +96,35 @@ export function defaultDshanaRouteDeps(ctx) {
       if (!appFetch) throw new Error("ctx.network.fetch 不可用（manifest network 白名单 / 宿主代发门）");
       return writeDefaultModel(appFetch, patch);
     },
-    writeSettings: (patch) => {
+    writeSettings: async (patch, expectedRevision) => {
       if (!dataDir) throw new Error("ctx.config.dataDir 不可用，无法写应用设置");
-      const j = readConfigJson(dataDir);
-      const global = j.global && typeof j.global === "object" ? { ...j.global } : {};
-      for (const [k, v] of Object.entries(patch)) {
-        global[k] = v;
-        // 新键落盘即撤旧毫秒键（config.js 的兼容分支随之不再命中，免单位误读）
-        const legacy = APP_SETTING_LEGACY[k];
-        if (legacy) delete global[legacy];
+      const store = dataSources(ctx);
+      const cur = await store.read();
+      if (typeof expectedRevision === "number" && expectedRevision !== cur.revision) {
+        const err = new Error(
+          "设置已被别处改过（revision " + cur.revision + " ≠ " + expectedRevision + "），请刷新后重试",
+        );
+        err.code = "SETTINGS_CONFLICT";
+        err.revision = cur.revision;
+        throw err;
       }
-      j.global = global;
-      writeFileSync(join(dataDir, "config.json"), JSON.stringify(j, null, 2) + "\n", "utf8");
-      return effectiveSettings(dataDir);
+      const next = await store.write({ ...cur.settings, ...patch });
+      // 变更广播：已开页面据此刷新。宿主 App 存储只有 get/set（没有订阅口），
+      // 所以已开页在重新可见时重读；并发写仍由上面的 revision 把关。
+      try {
+        if (ctx.storage && ctx.storage.global && typeof ctx.storage.global.set === "function") {
+          await ctx.storage.global.set(APP_SETTING_BROADCAST_KEY, { revision: next.revision, at: Date.now() });
+        }
+      } catch (e) {
+        log("warn", "设置变更广播写入失败（不影响本次写入）：" + ((e && e.message) || e));
+      }
+      const st = await store.read();
+      return {
+        revision: st.revision,
+        settings: st.settings,
+        source: sourceOf(st.settings, dataDir),
+        lastShared: st.lastShared || null,
+      };
     },
     getSnapshot: () => {
       const access = bridgeAccess();
@@ -175,10 +184,13 @@ export function registerDshanaRoutes(app, deps) {
       }
     });
 
-    // ---- GET /dshana/settings：设置页读生效值 ----
-    app.get(DASHANA_ROUTE_PREFIX + "/settings", (c) => {
+    // ---- GET /dshana/settings：App 级设置的权威读 ----
+    // 一份设置、一个 revision：两个超时与数据模式同栈（W2）。
+    // 一律 200，成败看 ok；设置页不依赖 DSH 运行也能渲染。
+    app.get(DASHANA_ROUTE_PREFIX + "/settings", async (c) => {
       try {
-        return json(c, 200, { ok: true, settings: readSettings() });
+        const view = await readSettings();
+        return json(c, 200, { ok: true, ready: true, ...view });
       } catch (e) {
         log("warn", "/dshana/settings 读取失败：" + ((e && e.message) || e));
         return json(c, 500, { ok: false, error: (e && e.message) || String(e) });
@@ -233,18 +245,33 @@ export function registerDshanaRoutes(app, deps) {
       }
     });
 
-    // ---- POST /dshana/settings：设置页写回（只收白名单两项）----
+    // ---- POST /dshana/settings：只改常规项（两个超时）；数据来源走切换链 ----
+    // 形状：{ settings: {...}, expectedRevision }。带来源字段一律 400：改来源必须先起新源、
+    // 成功才落盘（见 spec D-m），所以那条路归 /settings/restart。
+    // revision 不匹配回 409（不静默覆盖）；设置值非法回 400（存储侧校验的话原样上抬）。
     app.post(DASHANA_ROUTE_PREFIX + "/settings", async (c) => {
       try {
         const body = c && c.req && typeof c.req.json === "function" ? await c.req.json() : null;
-        const patch = pickAppSettings(body);
-        if (Object.keys(patch).length === 0) {
-          return json(c, 400, { ok: false, error: "没有可写入的设置项（只认 " + APP_SETTING_KEYS.join("/") + "，数值且 ≥ 0）" });
+        const patch = body && typeof body.settings === "object" && body.settings ? body.settings : null;
+        if (!patch) return json(c, 400, { ok: false, error: "需要 { settings, expectedRevision } 形状" });
+        const sourceKeys = ["mode", "path", "profile"].filter((k) => k in patch);
+        if (sourceKeys.length) {
+          return json(c, 400, {
+            ok: false,
+            error: "数据来源不在本端点改（必须先是新源再落盘）：" + sourceKeys.join("/") + " —— 用 POST " + DASHANA_ROUTE_PREFIX + "/settings/restart",
+          });
         }
-        return json(c, 200, { ok: true, settings: writeSettings(patch) });
+        const expectedRevision = typeof body.expectedRevision === "number" ? body.expectedRevision : undefined;
+        const view = await writeSettings(patch, expectedRevision);
+        return json(c, 200, { ok: true, ...view });
       } catch (e) {
-        log("warn", "/dshana/settings 写入失败：" + ((e && e.message) || e));
-        return json(c, 500, { ok: false, error: (e && e.message) || String(e) });
+        if (e && e.code === "SETTINGS_CONFLICT") {
+          return json(c, 409, { ok: false, code: "SETTINGS_CONFLICT", error: (e && e.message) || String(e), revision: e.revision });
+        }
+        const msg = (e && e.message) || String(e);
+        if (/未知键|必须|只能是|绝对路径|NUL/.test(msg)) return json(c, 400, { ok: false, error: msg });
+        log("warn", "/dshana/settings 写入失败：" + msg);
+        return json(c, 500, { ok: false, error: msg });
       }
     });
 

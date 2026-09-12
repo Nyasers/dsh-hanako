@@ -63,42 +63,104 @@ test("挂载清单：GET boot-state/health/settings/model + POST start/stop/sett
   assert.equal(DASHANA_ROUTE_PREFIX, "/dshana");
 });
 
-test("GET /dshana/settings: 200 返回生效值（deps 注入）", () => {
+test("GET /dshana/settings: 200 返回设置视图（两个超时 + 数据模式 + revision）", async () => {
   const { app, routes } = makeFakeApp();
   registerDshanaRoutes(app, makeFakeDeps({
-    readSettings: () => ({ approvalTimeoutSec: 30, defaultTimeoutSec: 1800 }),
+    readSettings: async () => ({
+      revision: 7,
+      settings: { mode: "private", path: null, profile: "dshana", approvalTimeoutSec: 30, defaultTimeoutSec: 1800 },
+      source: { sourceId: "private", home: "C:/data/.dsh", profileName: "dshana", shared: false, mode: "private" },
+      lastShared: null,
+    }),
   }));
   const [,, handler] = routes.find(([m, p]) => m === "GET" && p === "/dshana/settings");
   const ctx = makeFakeCtx();
-  handler(ctx);
+  await handler(ctx);
   assert.equal(ctx.status, 200);
   assert.equal(ctx.body.ok, true);
-  assert.deepEqual(ctx.body.settings, { approvalTimeoutSec: 30, defaultTimeoutSec: 1800 });
+  assert.equal(ctx.body.revision, 7);
+  assert.equal(ctx.body.settings.approvalTimeoutSec, 30);
+  assert.equal(ctx.body.settings.mode, "private");
+  assert.equal(ctx.body.source.sourceId, "private");
 });
 
-test("POST /dshana/settings: 白名单过滤 + 写回 + 返回生效值", async () => {
+test("POST /dshana/settings: 带 expectedRevision 写入并回新视图", async () => {
   const { app, routes } = makeFakeApp();
-  let written = null;
+  let seen = null;
   registerDshanaRoutes(app, makeFakeDeps({
-    writeSettings: (patch) => {
-      written = patch;
-      return { approvalTimeoutSec: patch.approvalTimeoutSec ?? 30, defaultTimeoutSec: 1800 };
+    writeSettings: async (patch, expectedRevision) => {
+      seen = { patch, expectedRevision };
+      return {
+        revision: 8,
+        settings: { mode: "private", path: null, profile: "dshana", approvalTimeoutSec: 45, defaultTimeoutSec: 1800 },
+        source: { sourceId: "private", home: "C:/data/.dsh", profileName: "dshana", shared: false, mode: "private" },
+        lastShared: null,
+      };
     },
   }));
   const [,, handler] = routes.find(([m, p]) => m === "POST" && p === "/dshana/settings");
   const ctx = makeFakeCtx();
-  ctx.req = { json: async () => ({ approvalTimeoutSec: 45, bogus: 1, defaultTimeoutSec: -3 }) };
+  ctx.req = { json: async () => ({ settings: { approvalTimeoutSec: 45 }, expectedRevision: 7 }) };
   await handler(ctx);
   assert.equal(ctx.status, 200);
-  assert.deepEqual(written, { approvalTimeoutSec: 45 }, "只写白名单且仅有限非负数（负数被剔）");
+  assert.deepEqual(seen, { patch: { approvalTimeoutSec: 45 }, expectedRevision: 7 }, "只把 settings 里的补丁与原 revision 交给写面");
+  assert.equal(ctx.body.revision, 8);
   assert.equal(ctx.body.settings.approvalTimeoutSec, 45);
 });
 
-test("POST /dshana/settings: 无合法项 → 400（不写盘）", async () => {
+test("POST /dshana/settings: revision 落后 → 409 + code（不静默覆盖）", async () => {
+  const { app, routes } = makeFakeApp();
+  registerDshanaRoutes(app, makeFakeDeps({
+    writeSettings: async () => {
+      const e = new Error("设置已被别处改过（revision 9 ≠ 7），请刷新后重试");
+      e.code = "SETTINGS_CONFLICT";
+      e.revision = 9;
+      throw e;
+    },
+  }));
+  const [,, handler] = routes.find(([m, p]) => m === "POST" && p === "/dshana/settings");
+  const ctx = makeFakeCtx();
+  ctx.req = { json: async () => ({ settings: { approvalTimeoutSec: 45 }, expectedRevision: 7 }) };
+  await handler(ctx);
+  assert.equal(ctx.status, 409);
+  assert.equal(ctx.body.ok, false);
+  assert.equal(ctx.body.code, "SETTINGS_CONFLICT");
+  assert.equal(ctx.body.revision, 9, "把当前 revision 一并给回，页面好刷新");
+});
+
+test("POST /dshana/settings: 带来源字段 → 400（改来源必须走切换链）", async () => {
   const { app, routes } = makeFakeApp();
   let called = 0;
   registerDshanaRoutes(app, makeFakeDeps({
-    writeSettings: () => { called += 1; return {}; },
+    writeSettings: async () => { called += 1; return {}; },
+  }));
+  const [,, handler] = routes.find(([m, p]) => m === "POST" && p === "/dshana/settings");
+  const ctx = makeFakeCtx();
+  ctx.req = { json: async () => ({ settings: { mode: "shared", path: "D:/dsh" }, expectedRevision: 1 }) };
+  await handler(ctx);
+  assert.equal(ctx.status, 400);
+  assert.match(ctx.body.error, /数据来源不在本端点改/);
+  assert.equal(called, 0, "来源变更不得当普通设置写");
+});
+
+test("POST /dshana/settings: 设置值非法（存储侧校验）→ 400，不当 500", async () => {
+  const { app, routes } = makeFakeApp();
+  registerDshanaRoutes(app, makeFakeDeps({
+    writeSettings: async () => { throw new Error("approvalTimeoutSec 必须是不小于 0 的整数秒（收到 -3）"); },
+  }));
+  const [,, handler] = routes.find(([m, p]) => m === "POST" && p === "/dshana/settings");
+  const ctx = makeFakeCtx();
+  ctx.req = { json: async () => ({ settings: { approvalTimeoutSec: -3 }, expectedRevision: 1 }) };
+  await handler(ctx);
+  assert.equal(ctx.status, 400);
+  assert.match(ctx.body.error, /approvalTimeoutSec/);
+});
+
+test("POST /dshana/settings: 形状不对 → 400（不写盘）", async () => {
+  const { app, routes } = makeFakeApp();
+  let called = 0;
+  registerDshanaRoutes(app, makeFakeDeps({
+    writeSettings: async () => { called += 1; return {}; },
   }));
   const [,, handler] = routes.find(([m, p]) => m === "POST" && p === "/dshana/settings");
   const ctx = makeFakeCtx();
@@ -106,7 +168,7 @@ test("POST /dshana/settings: 无合法项 → 400（不写盘）", async () => {
   await handler(ctx);
   assert.equal(ctx.status, 400);
   assert.equal(ctx.body.ok, false);
-  assert.equal(called, 0, "无合法项时不应调用写回");
+  assert.equal(called, 0, "形状不对时不应调用写面");
 });
 
 test("GET /dshana/boot-state: 200 归一化快照（ok+app+state）", () => {

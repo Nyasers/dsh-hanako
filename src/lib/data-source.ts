@@ -19,6 +19,7 @@
 // 本模块是叶子（只依赖 app-runtime 取值助手），不做 runtime 启停；切换编排在别的模块。
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
+import { readFileSync } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { isAbsolute, join, normalize } from "node:path";
 import { appDataDir, getAppRuntime } from "./app-runtime.ts";
@@ -251,6 +252,29 @@ export function dataSources(ctx = null) {
 
 export function resetDataSourceStore() {
   storeRef = null;
+}
+
+/**
+ * 同步读设置：只给同步调用面用（cancel-chain 的超时解析是同步的，异步化会往外扩散）。
+ * 不走 store 的内存缓存：这份文件只有几行，"改完即时生效"比省一次读更重要。
+ * 读失败（损坏/版本不符）抛错，与 store 同口径；文件不存在则回落 private 默认。
+ */
+export function readSettingsSync(dataDir) {
+  const filename = join(dataDir, "integration", "settings.json");
+  let stored;
+  try {
+    stored = JSON.parse(readFileSync(filename, "utf8"));
+  } catch (e) {
+    if (e && e.code === "ENOENT") return validateSettings(withLegacyTimeouts({}, dataDir));
+    if (e instanceof SyntaxError) throw new Error("DSH 数据来源设置文件不是合法 JSON：" + e.message);
+    throw e;
+  }
+  if (!stored || typeof stored !== "object" || stored.version !== SETTINGS_VERSION) {
+    throw new Error(
+      "DSH 数据来源设置文件版本不受支持（version=" + JSON.stringify(stored && stored.version) + "，本版 " + SETTINGS_VERSION + "）",
+    );
+  }
+  return validateSettings(withLegacyTimeouts(stored.settings, dataDir));
 }
 
 /** 当前数据源身份（读设置文件；文件损坏时抛错——不得静默切错源）。 */

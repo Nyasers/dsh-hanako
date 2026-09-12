@@ -157,6 +157,8 @@ function App() {
   const [cfgWarn, setCfgWarn] = useState(false);
   const [cfgSaving, setCfgSaving] = useState(false);
   const [cfgSaved, setCfgSaved] = useState(false);
+  // 自持设置的 revision（乐观并发：写回带上，落后就 409）
+  const [cfgRevision, setCfgRevision] = useState<number | null>(null);
 
   const [model, setModel] = useState<any>(null); // 最近一次读回的整份状态（ready/current/revision/catalog）
   const [modelHint, setModelHint] = useState("");
@@ -180,6 +182,7 @@ function App() {
       const { res, data } = await readJson("dshana/settings");
       if (!res.ok) throw new Error("HTTP " + res.status);
       setDraft(stringifySettings(data && data.settings));
+      setCfgRevision(data && typeof data.revision === "number" ? data.revision : null);
       setCfgHint("");
       setCfgWarn(false);
     } catch (e) {
@@ -246,10 +249,18 @@ function App() {
       const { res, data } = await readJson("dshana/settings", {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify(patch),
+        body: JSON.stringify({ settings: patch, expectedRevision: cfgRevision ?? undefined }),
       });
+      if (res.status === 409) {
+        // 别处改过（revision 前进）：不静默覆盖，重读后就着新值重来
+        setCfgWarn(true);
+        setCfgHint("设置已被别处改过，已刷新。");
+        await loadConfig();
+        return;
+      }
       if (!res.ok || !data || data.ok !== true) throw new Error((data && data.error) || "HTTP " + res.status);
       setDraft(stringifySettings(data.settings)); // 以后端返回的生效值为准
+      if (typeof data.revision === "number") setCfgRevision(data.revision);
       setCfgSaved(true);
     } catch (e) {
       setCfgHint("保存失败：" + errText(e));

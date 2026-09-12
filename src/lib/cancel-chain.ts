@@ -22,6 +22,7 @@ import { appCtx, appDataDir, appConfig } from "./app-runtime.ts";
 import { readTaskMap, markCancelRequested } from "./task-map.ts";
 import { rpcSessionCancel, cancelAccepted } from "./dsh-rpc.ts";
 import { rpcViaControl } from "./controller.ts";
+import { readSettingsSync } from "./data-source.ts";
 
 export const CANCEL_CONFIRM_MS = 15000; // DSH 中止确认窗口（超窗升级宿主 cancel）
 export const CANCEL_ESCALATE_REASON = "cancel-confirm-timeout";
@@ -136,18 +137,32 @@ export async function cancelSessionWork({ sessionId, reason, log, confirmMs = CA
   return { ...res, status: "cancelling" };
 }
 
-/** 执行超时秒解析（纯函数面）：显式值 > 0 采用；否则 App 设置 defaultTimeoutSec
- * （schema 默认 1800），非法/0 回落 600（manifest 描述同语义）。 */
+/**
+ * 当前 App 设置（同步读自持存储）；离线或文件损坏返回 null，由调用方决定回落。
+ * 超时值从这里取：设置页写的就是这份存储（与数据模式同栈同 revision）。
+ */
+function settingsOrNull() {
+  try {
+    const dir = appDataDir();
+    if (!dir) return null;
+    return readSettingsSync(dir);
+  } catch {
+    return null;
+  }
+}
+
+/** 执行超时秒解析（纯函数面）：显式值 > 0 采用；否则 App 设置 defaultTimeoutSec；
+ * 读不到/非法/0 回落 600（与工具描述同语义）。 */
 export function resolveTaskTimeoutSec(explicitSec) {
   if (Number.isFinite(Number(explicitSec)) && Number(explicitSec) > 0) return Math.round(Number(explicitSec));
-  const v = Number(appConfig("defaultTimeoutSec"));
+  const v = Number(settingsOrNull()?.defaultTimeoutSec);
   if (Number.isFinite(v) && v > 0) return Math.round(v);
   return 600;
 }
 
 /** 审批自动拒绝超时毫秒（approval-bridge 经映射下传；0 = 宿主不自动拒绝）。 */
 export function resolveApprovalTimeoutMs() {
-  const v = Number(appConfig("approvalTimeoutSec"));
+  const v = Number(settingsOrNull()?.approvalTimeoutSec);
   if (!Number.isFinite(v)) return 30000;
   return v > 0 ? Math.round(v * 1000) : 0;
 }
