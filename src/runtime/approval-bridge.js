@@ -59,6 +59,17 @@ export function previewArgs(value, max = TOOL_ARGS_PREVIEW_MAX) {
   return s.length > max ? s.slice(0, max) + "…" : s;
 }
 
+/** 纯函数：宿主审批记录是否确实属于我们以为的那条任务（以宿主字段为准）。
+ *
+ *  契约上 `AppTaskApprovalRecordV2.parentTaskId` 必填；**缺失按不一致处理**（fail-closed）——
+ *  宁可拒绝一次审批，也不拿一条来源不明的审批去等结果。
+ */
+export function approvalOwnsTask(approval, expectedTaskId) {
+  const got = approval && typeof approval.parentTaskId === "string" ? approval.parentTaskId : "";
+  const want = String(expectedTaskId || "");
+  return Boolean(got) && got === want;
+}
+
 /** tool-call 缓存：callId → { name, args }（审批请求只带 callId，name/args 由模型
  *  assistant/message 的 tool-call 块补齐——v1 toolCache 同款信息源）。 */
 export function collectToolCallsFromEvent(sessionId, ev) {
@@ -222,6 +233,18 @@ export function startApprovalBridge({ ctx, hana, dataDir, log }) {
       return pending;
     }
     doRespond = (outcome) => hana.tasks.respondApproval({ approvalId, outcome });
+    // 宿主权威字段交叉校验（2026-09-12）：审批记录自带 parentTaskId。不一致或缺失说明我们的
+    // 映射与宿主记录已经漂移——这种情况把审批结算成 rejected（fail-closed，绝不放行），
+    // 不继续等一个可能属于别人的结果。放到 addApproval 之前：没通过校验的审批不进映射表。
+    if (!approvalOwnsTask(approval, map.taskId)) {
+      note(
+        "审批 parentTaskId 与映射不一致（宿主 " + String((approval && approval.parentTaskId) || "缺失") +
+          " / 映射 " + String(map.taskId) + "）：fail-closed 拒绝",
+      );
+      try { await doRespond("rejected"); } catch { /* 尽力：宿主侧拒绝失败也仍投 rejected */ }
+      settleOutcome("rejected");
+      return pending;
+    }
     // 记录到映射文件（App approve 校验/去重 + 应答上下文）；写失败不阻断（watch 为准）
     try {
       addApproval(dataDir, sessionId, {
