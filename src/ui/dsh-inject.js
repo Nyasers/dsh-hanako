@@ -15,6 +15,8 @@
 //
 // 依赖：全部走浏览器原生 API（DOMParser / fetch / WebSocket / <script> 注入），无第三方包。
 
+import { installClipboardShadow } from "./clipboard-shadow.js";
+
 const DSH_INTERNAL_ORIGIN = "http://dsh.internal";
 
 /** 相对引用解析：拒绝外部 origin，同前缀则原样返回，否则挂到中继前缀下。 */
@@ -447,7 +449,14 @@ export function installTransport(privateBase, { role, bridge } = {}) {
     // src-integrations/ui-settings-general 靠它做「FP 点设置、主卡打开」。
     ...(bridge && typeof bridge === "object" ? bridge : {}),
   };
+  // 剪贴板影子：壳级全局安装，也必须在 DSH 注入之前。
+  // 理由（实读 dsh-web-frontend 主 bundle 的 writeClipboard）：它在调用时才读
+  // navigator.clipboard?.writeText，而原生一失败就 `return false`，execCommand 兜底只在
+  // writeText **不存在**时才走——嵌入场景里原生被 Permissions-Policy 关死，于是复制永远失败，
+  // 还每次先留一条 [Violation]。影子必须在属性被读到之前就位；桥面已就绪，故放在 __DSHANA__ 之后。
+  const restoreClipboard = installClipboardShadow({ bridge: window.__DSHANA__ });
   return () => {
+    try { restoreClipboard(); } catch { /* 忽略 */ }
     try { restoreTakeover(); } catch { /* 忽略 */ }
     try { delete window.__DSH_TRANSPORT__; } catch { /* 忽略 */ }
     try { delete window.__DSH_FILE_UPLOAD__; } catch { /* 忽略 */ }

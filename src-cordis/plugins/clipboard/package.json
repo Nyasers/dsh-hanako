@@ -11,7 +11,8 @@
   },
   "dsh": {
     "client": {
-      "platform": "web"
+      "platform": "web",
+      "immediately": true
     }
   },
   "cordis": {
