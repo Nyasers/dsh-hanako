@@ -14,6 +14,8 @@ import {
   dshanaRoutesTable,
 } from "../src/routes/dshana-routes.ts";
 import { writeTaskMap, markTaskMapEnded } from "../src/lib/task-map.ts";
+import { initAppRuntime } from "../src/lib/app-runtime.ts";
+import { resetDataSourceStore } from "../src/lib/data-source.ts";
 
 function makeFakeApp() {
   const routes = [];
@@ -488,7 +490,7 @@ test("GET /dshana/card-state: sessionId 形态不对 → 400（形状错，不�
 test("GET /dshana/card-state: 默认实现读 task-map（无记录 / 跟踪中 / 已终结）", async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "dshana-card-state-"));
   try {
-    const deps = defaultDshanaRouteDeps({ appId: "dshana", config: { dataDir }, logger: { info() {} } });
+    const deps = defaultDshanaRouteDeps({ appId: "dshana", dataDir, logger: { info() {} } });
     assert.equal((await deps.readCardState(CARD_SID)).state, "unknown", "没有映射就是没有记录（不猜还在跑）");
     writeTaskMap(dataDir, { taskId: "task-1", dshSessionId: CARD_SID, action: "create", rpcId: "rpc-1" });
     const tracked = await deps.readCardState(CARD_SID);
@@ -499,6 +501,43 @@ test("GET /dshana/card-state: 默认实现读 task-map（无记录 / 跟踪中 /
     assert.equal(ended.state, "ended", "终态优先于跟踪中");
     assert.match(ended.detail, /success/);
   } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+// ---- 真机 ctx 形状契约 ----
+// 曾经踩到：deps 按 ctx.config.dataDir 取数据目录，而宿主（@hana/app-sdk）只在 ctx 顶层给
+// dataDir，ctx.config 是设置读写面。后果 = 读路径静默降级（卡状态恒 unknown），写设置恒 500。
+
+/** 真机形状的宿主 ctx：dataDir 在顶层；config 只有方法，没有 dataDir。 */
+function hostLikeCtx(dataDir) {
+  return {
+    appId: "dshana",
+    dataDir,
+    logger: { info() {} },
+    config: { get: () => undefined, getAll: () => ({}), set() {}, setMany() {} },
+  };
+}
+
+test("defaultDshanaRouteDeps: 数据目录取宿主顶层 ctx.dataDir（ctx.config 上没有 dataDir）", async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "dshana-host-ctx-"));
+  try {
+    const deps = defaultDshanaRouteDeps(hostLikeCtx(dataDir));
+    assert.equal((await deps.readCardState(CARD_SID)).state, "unknown");
+    writeTaskMap(dataDir, { taskId: "task-1", dshSessionId: CARD_SID, action: "create", rpcId: "rpc-1" });
+    assert.equal((await deps.readCardState(CARD_SID)).state, "tracked", "顶层 dataDir 必须真的接进 task-map 读取");
+
+    // 写设置：旧写法在这份 ctx 下恒空 → 必抛；顶层取值后应能落盘并回新视图
+    resetDataSourceStore();
+    initAppRuntime({ ctx: hostLikeCtx(dataDir), dataDir });
+    const view = await deps.writeSettings({ approvalTimeoutSec: 45 }, 0);
+    assert.equal(view.settings.approvalTimeoutSec, 45);
+    assert.equal(view.revision, 1);
+    const onDisk = JSON.parse(fs.readFileSync(path.join(dataDir, "integration", "settings.json"), "utf8"));
+    assert.equal(onDisk.settings.approvalTimeoutSec, 45, "写设置必须真的落在 ctx.dataDir 下");
+  } finally {
+    initAppRuntime(null);
+    resetDataSourceStore();
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
 });
