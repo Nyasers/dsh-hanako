@@ -517,20 +517,17 @@ export function apply(ctx: Context): void {
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // 动因：FP 与主卡是两个文档 = 两个 DSH 实例，各自恢复、各自维护选中，天然不同步。
-//   role='navigation'（FP/sidebar）= 发射端：本地选中变化 → 写共享状态；只发不收。
-//   role='workspace'（主卡）      = 接收端：共享状态变化 → ctx.sessions.open/clear。
-//   主卡自己也有切换入口（切工作区、新建会话），所以**只采纳比自己动手更新的意见**：
-//   共享值带写入时刻 at，主卡每次自己改选中就记下时刻；读到的写法比它旧就说明是 FP
-//   上次留下的陈旧意见，一律丢弃——否则主卡的动作会被它压回去。
-//   主卡自己改选中时也把新值写回（只收不回会把陈旧值留在存里，重开卡片时又把它拉回去）。
+//   两个面都参与，而且是对称的：本地选中变化 → 写壳页共享状态；共享状态变化 → 跟随。
+//   于是 FP 点会话主卡跟着切，主卡切工作区/新建会话后 FP 也跟着走。
+//   不打架靠两条：
+//     · 意见带写入时刻 at：只采纳比自己动手更新的。旧的是对方上次留下的陈述，不是指令；
+//     · 自己应用对方值时打 applying 标记：那一刻的列表变化既不记时刻也不回宣告——
+//       这是防广播风暴的那一刀（没它两面会互相回声）。
 //   settings / standalone 不参与。
-// 方向：导航源在 FP/sidebar；主卡的回写只发生在它自身的用户动作上，且 FP 不读，无回环。
+// 恢复落地的第一跳不算用户动作（只记 seen，随后与共享状态对一次），否则重载任一面都会
+// 把它自己恢复出来的选中当成新指令宣告出去，把对方拉回去。
 // 启动握手：不靠“广播宣告”，靠**读快照**——载体（App 全局存储）始终有当前值，
-// 没有 BroadcastChannel 那种「接收端晚于发射端启动就错过宣告」的时序窗口。
-// 两个边界：
-//   · 列表未就绪（phase!=='ready'，正在恢复）→ 不宣告，避开中间态抖动；
-//   · 启动宣告若为「无选中」则视为「无意见」（不写 null），免得把主卡自己恢复出来的
-//     选中误清掉；之后的真实清空照常下发。
+// 没有“接收端晚于发射端启动就错过宣告”的时序窗口。
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** 壳页桥面里本插件用到的部分（仅有用的字段，缺失即不参与）。 */
@@ -551,39 +548,21 @@ function selectionBridge(): SurfaceSelectionBridge | undefined {
 function installCrossSurfaceSelection(ctx: Context): void {
   const bridge = selectionBridge()
   if (bridge === undefined) return
-  const list = ctx.sessions.list
-  if (bridge.role === 'navigation') {
-    const write = bridge.writeSelection
-    if (write === undefined) return
-    let last: string | null | undefined
-    const publish = (announce: boolean): void => {
-      const snap = list.getSnapshot()
-      if (snap.phase !== 'ready') return
-      const current = snap.current ?? null
-      if (current === last) return
-      if (current === null && last === undefined && announce) {
-        last = null
-        return
-      }
-      last = current
-      void Promise.resolve(write(current)).catch(() => { /* 写失败不炸桥 */ })
-    }
-    publish(true)
-    ctx.effect(() => {
-      const off = list.subscribe(() => { publish(false) })
-      return () => { off() }
-    }, 'ui-session: cross-surface selection emitter')
-    return
-  }
-  if (bridge.role !== 'workspace') return
+  const role = bridge.role
+  if (role !== 'navigation' && role !== 'workspace') return
   const read = bridge.readSelection
+  const write = bridge.writeSelection
   const onChanged = bridge.onSelectionChanged
-  if (read === undefined || onChanged === undefined) return
+  if (read === undefined || write === undefined || onChanged === undefined) return
+  const list = ctx.sessions.list
+  const snap0 = list.getSnapshot()
   let generation = 0
   let applying = false
   let localAt = 0
-  let seen = list.getSnapshot().current ?? null
-  const write = bridge.writeSelection
+  let seen = snap0.current ?? null
+  // 面上线时列表已就绪 ⇒ 恢复早已落地，往后的选中变化都算用户动作。
+  let settled = snap0.phase === 'ready'
+
   const applyRemote = (): void => {
     const request = ++generation
     void read().then((next) => {
@@ -599,23 +578,24 @@ function installCrossSurfaceSelection(ctx: Context): void {
         .then(() => { applying = false })
     }, () => { /* 读失败保持本地 */ })
   }
+
   ctx.effect(() => {
     const off = onChanged(applyRemote)
-    // 主卡自己的选中变化：记下时刻再对一次（远端更旧就被 applyRemote 丢回去）。
-    // 同时把新选中写回共享状态——不写回的话存里会留着一个陈旧值，
-    // 下次卡片重开时启动对账又把主卡拉回那个旧会话。
-    // 恢复中的变化不是用户动作，不记时刻也不写回。
     const offList = list.subscribe(() => {
       const snap = list.getSnapshot()
       const current = snap.current ?? null
       if (current === seen) return
       seen = current
       if (snap.phase !== 'ready') return
+      if (!settled) {
+        // 恢复落地的第一跳：只记录，随后与共享状态对一次（谁更新谁说了算）。
+        settled = true
+        applyRemote()
+        return
+      }
       if (applying) return
       localAt = Date.now()
-      if (write !== undefined) {
-        void Promise.resolve(write(current)).catch(() => { /* 写失败不回滚本地 */ })
-      }
+      void Promise.resolve(write(current)).catch(() => { /* 写失败不回滚本地 */ })
       applyRemote()
     })
     applyRemote()
@@ -623,7 +603,7 @@ function installCrossSurfaceSelection(ctx: Context): void {
       off()
       offList()
     }
-  }, 'ui-session: cross-surface selection receiver')
+  }, 'ui-session: cross-surface selection')
 }
 
 function samePendingInteractions(
