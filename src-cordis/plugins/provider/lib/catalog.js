@@ -19,6 +19,22 @@
 /** 宿主/pi-ai 共用 thinking effort 词表（off..max 升序；DSH agent 默认 high 必须可接受）。 */
 export const CANONICAL_EFFORT_IDS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
+/**
+ * 宿主 models.stream 对**请求字段** maxTokens 的硬上限（宿主写死的默认 limits.maxTokens，
+ * 校验器原文："maxTokens must be a positive integer no larger than 65536."）。这是
+ * App 接口自己的闸，不是模型能力：模型 published 上限可能远大于它（如 1M 上下文 / 384k 输出）。
+ * 另有一条按模型的 "maxTokens exceeds the selected model's published limit."。
+ */
+export const HOST_MAX_OUTPUT_TOKENS = 65536;
+
+/**
+ * 一条目录项 published 的 max output tokens（正整数才有效，否则 null）。
+ * 这是**模型真实能力**（DSH 目录应当看到的值），不夹宿主的请求上限。
+ */
+export function modelPublishedMaxTokens(item) {
+  return item && Number.isInteger(item.maxTokens) && item.maxTokens > 0 ? item.maxTokens : null;
+}
+
 function asStringSet(value) {
   const set = new Set();
   if (Array.isArray(value)) {
@@ -107,6 +123,8 @@ export function resolveModelInfo(item) {
     info.context = { contextWindow: item.contextWindow };
   }
   if (Number.isInteger(item.maxTokens) && item.maxTokens > 0) {
+    // 目录声明模型真实上限（不夹宿主请求上限）：DSH 要看到“这模型能出多少”。
+    // 宿主那边 65536 的请求闸由 adapter 在 stream() 里处理（超限不传字段）。
     info.defaultMaxTokens = item.maxTokens;
   }
   if (efforts.length > 0) {
