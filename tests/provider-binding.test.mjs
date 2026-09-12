@@ -13,6 +13,7 @@ import {
   BINDING_STATE_VERSION,
   BINDING_CLAIM_EVENT,
   BINDING_END_EVENT,
+  BINDING_CANCEL_EVENT,
   bindingUnit,
   bindingStateSchema,
   emptyBinding,
@@ -26,8 +27,11 @@ import {
 import {
   BINDING_CLAIM_EVENT as RUNTIME_CLAIM_EVENT,
   BINDING_END_EVENT as RUNTIME_END_EVENT,
+  BINDING_CANCEL_EVENT as RUNTIME_CANCEL_EVENT,
+  BINDING_STATE_VERSION as RUNTIME_STATE_VERSION,
   BINDING_KEY as RUNTIME_KEY,
   appendSessionEvent,
+  cancelPayload,
   claimPayload as runtimeClaimPayload,
   depositBindingClaim as runtimeDeposit,
 } from "../src/lib/binding-slot.ts";
@@ -52,7 +56,7 @@ test("折叠：认领写入 taskId 与超时，ended 归零", () => {
     seq: 7,
     data: { taskId: "task-1", timeoutSec: 60, approvalTimeoutMs: 30000 },
   });
-  assert.deepEqual(s, { taskId: "task-1", timeoutSec: 60, approvalTimeoutMs: 30000, ended: null, at: 7 });
+  assert.deepEqual(s, { taskId: "task-1", timeoutSec: 60, approvalTimeoutMs: 30000, ended: null, cancel: null, at: 7 });
 });
 
 test("折叠：收尾对上 taskId 才生效", () => {
@@ -109,6 +113,7 @@ test("stateSchema.parse：合法状态规范化返回", () => {
     timeoutSec: null,
     approvalTimeoutMs: null,
     ended: null,
+    cancel: null,
     at: null,
   });
   assert.deepEqual(bindingStateSchema.parse({ taskId: null, ended: "failed", timeoutSec: 1.9, at: 3.7 }), {
@@ -116,6 +121,7 @@ test("stateSchema.parse：合法状态规范化返回", () => {
     timeoutSec: 1,
     approvalTimeoutMs: null,
     ended: "failed",
+    cancel: null,
     at: 3,
   });
 });

@@ -20,11 +20,13 @@
 export const BINDING_KEY = "dshanaTaskBinding";
 
 /** 单元版本。 */
-export const BINDING_STATE_VERSION = 1;
+export const BINDING_STATE_VERSION = 2;
 
 /** 事件类型。 */
 export const BINDING_CLAIM_EVENT = "dshana/task-binding";
 export const BINDING_END_EVENT = "dshana/task-binding-ended";
+/** 取消标记：取消链在发 DSH cancel **之前** 落的事件（与 provider 侧同字）。 */
+export const BINDING_CANCEL_EVENT = "dshana/task-cancel";
 
 const MAILBOX_KEY = "__dshanaBindingMailbox";
 
@@ -39,6 +41,11 @@ export function claimPayload(claim) {
     timeoutSec: intOrNull(claim && claim.timeoutSec),
     approvalTimeoutMs: intOrNull(claim && claim.approvalTimeoutMs),
   };
+}
+
+/** 取消事件数据（只带原因，不带别的私货）。 */
+export function cancelPayload(reason) {
+  return { reason: typeof reason === "string" && reason !== "" ? reason : null };
 }
 
 function mailbox() {

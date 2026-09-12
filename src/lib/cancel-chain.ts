@@ -23,6 +23,7 @@ import { readTaskMap, markCancelRequested } from "./task-map.ts";
 import { rpcSessionCancel, cancelAccepted } from "./dsh-rpc.ts";
 import { rpcViaControl } from "./controller.ts";
 import { readSettingsSync } from "./data-source.ts";
+import { appendSessionEvent, BINDING_CANCEL_EVENT, cancelPayload } from "./binding-slot.ts";
 
 export const CANCEL_CONFIRM_MS = 15000; // DSH 中止确认窗口（超窗升级宿主 cancel）
 export const CANCEL_ESCALATE_REASON = "cancel-confirm-timeout";
@@ -72,11 +73,21 @@ export async function executeCancel({ dataDir, sessionId, reason, log }) {
   if (!plan.dshCancelNeeded) {
     return { status: "already-requested", sessionId: sid, taskId: entry.taskId, reason: (entry.cancel && entry.cancel.reason) || reason };
   }
-  // ① 写取消标记（先于 RPC：task-bridge 终态判定据此把 aborted 结算成 canceled）
+  // ① 写取消标记（先于 RPC：终态判定据此把 aborted 结算成 canceled）
   try {
     markCancelRequested(dataDir, sid, reason || "user");
   } catch (e) {
     logWarn(log, "[dsh-session] cancel 标记写失败（继续取消）：" + ((e && e.message) || e));
+  }
+  // ①b 同一时刻把标记落到**会话事件日志**（投影 dshanaTaskBinding 的 cancel 格）：
+  //     子进程侧的终态判定读的是它，不再依赖私有映射文件。两条路都试、都不阻挡取消，
+  //     未落地就照实记日志（标记的意义正在于“先于 RPC”，不假装成功）。
+  try {
+    const sessions = ctx && typeof ctx.get === "function" ? ctx.get("sessions") : null;
+    const landed = appendSessionEvent(sessions, sid, BINDING_CANCEL_EVENT, cancelPayload(reason || "user"));
+    if (!landed) logWarn(log, "[dsh-session] cancel 标记事件未落地（会话不在场）：" + sid);
+  } catch (e) {
+    logWarn(log, "[dsh-session] cancel 标记事件写入抛错：" + ((e && e.message) || e));
   }
   // ② DSH session.cancel（loopback；失败不阻断——记录并交由终态兜底）
   let dshAccepted = null;
