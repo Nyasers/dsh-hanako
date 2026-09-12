@@ -16,6 +16,9 @@ import {
   readTaskMap,
   removeTaskMap,
   markTaskMapEnded,
+  addApproval,
+  findTaskMapByTaskId,
+  findTaskMapByApprovalId,
   listTaskMaps,
   pruneTaskMaps,
 } from "../src/lib/task-map.js";
@@ -95,6 +98,29 @@ test("终态标记：ended 写入且**不删文件**（与删除语义区分开�
   assert.equal(markTaskMapEnded(dir, "session-99999999-8888-7777-6666-555555555555"), null);
   // prune 仍能按 TTL 收走（终态不等于永久滞留）
   assert.ok(pruneTaskMaps(dir, 0) >= 1);
+});
+
+test("句柄反查：findTaskMapByTaskId（活动优先）/ findTaskMapByApprovalId", () => {
+  const other = "session-bbbbbbbb-cccc-dddd-eeee-ffffffffffff";
+  writeTaskMap(dir, { taskId: "task-1", dshSessionId: SID, action: "create" });
+  writeTaskMap(dir, { taskId: "task-2", dshSessionId: other, action: "create" });
+  addApproval(dir, other, { approvalId: "ap-1", toolName: "bash" });
+
+  assert.equal(findTaskMapByTaskId(dir, "task-1").dshSessionId, SID);
+  assert.equal(findTaskMapByTaskId(dir, "task-2").dshSessionId, other);
+  assert.equal(findTaskMapByTaskId(dir, "nope"), null, "找不到必须显式 null（调用方给明确错误）");
+  assert.equal(findTaskMapByTaskId(dir, ""), null);
+
+  assert.equal(findTaskMapByApprovalId(dir, "ap-1").dshSessionId, other);
+  assert.equal(findTaskMapByApprovalId(dir, "ap-none"), null);
+
+  // 活动（未 ended）优先：同名任务的新映射把旧的比下去
+  markTaskMapEnded(dir, SID, "task-terminal");
+  writeTaskMap(dir, { taskId: "task-1", dshSessionId: other, action: "send" });
+  assert.equal(findTaskMapByTaskId(dir, "task-1").dshSessionId, other, "活动那条优先");
+  // 全部都 ended 时仍然能查到（取最新一条，供 get/诊断用）
+  markTaskMapEnded(dir, other, "task-terminal");
+  assert.equal(findTaskMapByTaskId(dir, "task-1").dshSessionId, other);
 });
 
 test("prune：TTL 保留新鲜、清过期", () => {
