@@ -249,6 +249,8 @@ async function reapFailedRuntime(ctx) {
  * 启动 + 等到就绪（single-flight 单例）。opts: { taskId?, cordisSrc?, depsRoot? }。
  * 成功返回 { runtimeId, info }（state=ready）；失败抛 Error（message 含归类与用户指引），
  * 单例清空以便下次调用重试。首次调用 = profile 种子化 + DSH boot（日志可见）。
+ */
+
 // ---- 失败后的自动重试（2026-09-12 她定）----
 // 首次安装时“能力/权限尚未授予”是常态：apply 自动链的第一次 ensure 必然失败。既然页面不再提供
 // 手动「启动 / 重启」按钮（无交互设计），这条链就得自己回来——失败即按退避重试，直到成功、
