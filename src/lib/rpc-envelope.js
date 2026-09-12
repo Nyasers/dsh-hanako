@@ -46,15 +46,17 @@ export function isSessionMethod(method) {
  * DSH web /api 网关校验 body.method === 端点路径段（斜杠形态，official rpc-host 与
  * @dshana/bridge 同款，见迁移后核对记录）——method 传 'session.create' 或
  * 'session/create' 均可，信封内统一写斜杠形态。
+ * bare=true：即使方法名在 session 命名空间下也裸传 payload（session/modelCatalog 这类无参
+ * 方法没有 request 信封，网关按声明的参数名逐个解析 args，多包一层会被判参数不符）。
  * @returns {{ body: object, rpcId: string }} body = 待 POST 的 JSON 体。
  */
-export function buildClientRequest({ method, payload, rpcId } = {}) {
+export function buildClientRequest({ method, payload, rpcId, bare = false } = {}) {
   const m = String(method ?? "");
   if (!m) throw new Error("rpc-envelope: method 不能为空");
   const id = String(rpcId || "") || nextRpcId();
   const endpoint = endpointOf(m);
   const isList = endpoint === "session/list";
-  const inner = isSessionMethod(m)
+  const inner = !bare && isSessionMethod(m)
     ? {
         [isList ? "_request" : "request"]: {
           ...(payload && typeof payload === "object" ? payload : {}),

@@ -117,6 +117,214 @@ async function save() {
   }
 }
 
+// ---- 默认模型（值归 DSH 的 settings 段 agent-default-model；本页只是它的一扇门）----
+// 与上面两项不同：这份值不在我们的 config.json 里，读写都经 App 后转到 DSH 自己的 settings 服务，
+// 所以 DSH 没运行时本节给体面态（提示 + 启动按钮），而不是整页报错。
+const MODEL_KEY_SEP = "\u0000"; // provider 与 model id 之间：避免不同 provider 的同名模型撞车
+let modelState = null; // 最近一次读回的 { current, revision, catalog }
+
+function modelStatus(text, tone) {
+  const el = $("#modelStatus");
+  if (!el) return;
+  el.textContent = text || "";
+  el.classList.toggle("err", tone === "err");
+  el.classList.toggle("ok", tone === "ok");
+}
+
+function setModelReady(ready, hint) {
+  const sel = $("#model");
+  const save = $("#modelSave");
+  const start = $("#modelStart");
+  const hintEl = $("#modelHint");
+  if (sel && !ready) sel.disabled = true;
+  if (save) save.disabled = !ready;
+  if (start && start.classList) start.classList.toggle("hidden", ready);
+  if (hintEl && !ready && hint) hintEl.textContent = hint;
+}
+
+/** 当前选中项 → 该模型的 effort 档位（没有就隐藏）。 */
+function renderEffort(current) {
+  const sel = $("#model");
+  const field = $("#effortField");
+  const eff = $("#effort");
+  if (!sel || !field || !eff) return;
+  const chosen = [...sel.options].find((o) => o.value === sel.value);
+  let efforts = [];
+  if (chosen && chosen.dataset.efforts) {
+    try {
+      efforts = JSON.parse(chosen.dataset.efforts) || [];
+    } catch {
+      efforts = [];
+    }
+  }
+  eff.innerHTML = "";
+  if (efforts.length === 0) {
+    field.classList.add("hidden");
+    return;
+  }
+  const keep = document.createElement("option");
+  keep.value = "";
+  keep.textContent = current && current.reasoningEffort ? "保持当前（" + current.reasoningEffort + "）" : "保持当前设置";
+  eff.appendChild(keep);
+  for (const e of efforts) {
+    const opt = document.createElement("option");
+    opt.value = e.id;
+    opt.textContent = e.name || e.id;
+    eff.appendChild(opt);
+  }
+  if (current && current.reasoningEffort && [...eff.options].some((o) => o.value === current.reasoningEffort)) {
+    eff.value = current.reasoningEffort;
+  }
+  field.classList.remove("hidden");
+}
+
+function renderModel(model) {
+  if (!model) return;
+  modelState = { ...(modelState || {}), ...model };
+  const sel = $("#model");
+  const hintEl = $("#modelHint");
+  const groups = (model.catalog && model.catalog.groups) || [];
+  const current = model.current || (model.catalog && model.catalog.default) || null;
+  if (sel) {
+    sel.innerHTML = "";
+    for (const g of groups) {
+      const og = document.createElement("optgroup");
+      og.label = g.name || g.id;
+      for (const m of g.models || []) {
+        const opt = document.createElement("option");
+        opt.value = g.id + MODEL_KEY_SEP + m.id;
+        opt.textContent = m.name || m.id;
+        if (m.efforts && m.efforts.length) opt.dataset.efforts = JSON.stringify(m.efforts);
+        og.appendChild(opt);
+      }
+      if (og.childElementCount > 0) sel.appendChild(og);
+    }
+    if (current) {
+      const want = current.provider + MODEL_KEY_SEP + current.model;
+      if ([...sel.options].some((o) => o.value === want)) sel.value = want;
+    }
+    sel.disabled = sel.options.length === 0;
+  }
+  renderEffort(current);
+  if (hintEl) {
+    const fails = (model.catalog && model.catalog.failures) || [];
+    if (model.catalogError) hintEl.textContent = "候选暂不可用：" + model.catalogError;
+    else if (fails.length) hintEl.textContent = "部分 provider 加载失败：" + fails.map((f) => f.name || f.id).join("、");
+    else if (sel && sel.options.length === 0) hintEl.textContent = "DSH 目前没有可选的模型。";
+    else hintEl.textContent = current ? "当前：" + current.provider + " / " + current.model : "";
+  }
+}
+
+async function readModel() {
+  const res = await hana.api.fetch("dshana/model", {
+    method: "GET",
+    cache: "no-store",
+    headers: { Accept: "application/json" },
+  });
+  const data = await res.json().catch(() => null);
+  if (!data) throw new Error("HTTP " + res.status);
+  return data;
+}
+
+async function loadModel() {
+  try {
+    const data = await readModel();
+    if (!data.ready) {
+      setModelReady(false, data.error || "DSH 未运行：默认模型在 DSH 起来后才能选");
+      modelStatus("");
+      return;
+    }
+    setModelReady(true);
+    if (!data.ok) {
+      modelStatus("读取失败：" + (data.error || "未知原因"), "err");
+      return;
+    }
+    renderModel(data.model);
+    modelStatus("");
+  } catch (e) {
+    setModelReady(false, "读取失败，稍后重试");
+    modelStatus("读取失败：" + ((e && e.message) || e), "err");
+  }
+}
+
+async function saveModel() {
+  const sel = $("#model");
+  const raw = String((sel && sel.value) || "");
+  const at = raw.indexOf(MODEL_KEY_SEP);
+  if (at <= 0) {
+    modelStatus("请先选一个模型。", "err");
+    return;
+  }
+  const body = { provider: raw.slice(0, at), model: raw.slice(at + MODEL_KEY_SEP.length) };
+  const eff = $("#effort");
+  if (eff && eff.value) body.reasoningEffort = eff.value;
+  if (modelState && typeof modelState.revision === "number") body.expectedRevision = modelState.revision;
+  const btn = $("#modelSave");
+  if (btn) btn.disabled = true;
+  modelStatus("保存中…");
+  try {
+    const res = await hana.api.fetch("dshana/model", {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => null);
+    if (res.status === 409) {
+      modelStatus("默认模型已被别处改过，已刷新。", "err");
+      await loadModel();
+      return;
+    }
+    if (!data || data.ok !== true) throw new Error((data && data.error) || "HTTP " + res.status);
+    renderModel({ current: data.model && data.model.current, revision: data.model && data.model.revision });
+    modelStatus("已保存", "ok");
+  } catch (e) {
+    modelStatus("保存失败：" + ((e && e.message) || e), "err");
+  } finally {
+    const b = $("#modelSave");
+    if (b) b.disabled = false;
+  }
+}
+
+/** DSH 未运行时的入口：拉起它，然后轮流读本节直到就绪（超时如实报）。 */
+async function startDshForModel() {
+  const btn = $("#modelStart");
+  if (btn) btn.disabled = true;
+  modelStatus("正在启动 DSH…");
+  try {
+    await hana.api.fetch("dshana/start", { method: "POST", cache: "no-store" });
+  } catch (e) {
+    modelStatus("启动请求失败：" + ((e && e.message) || e), "err");
+    if (btn) btn.disabled = false;
+    return;
+  }
+  const deadline = Date.now() + 120000;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 2000));
+    let data = null;
+    try {
+      data = await readModel();
+    } catch {
+      continue; // 启动中路由/中继还没就绪，接着等
+    }
+    if (data.ready && data.ok) {
+      setModelReady(true);
+      renderModel(data.model);
+      modelStatus("DSH 已就绪", "ok");
+      if (btn) btn.disabled = false;
+      return;
+    }
+    if (data.ready && !data.ok) {
+      setModelReady(true);
+      modelStatus("读取失败：" + (data.error || "未知原因"), "err");
+      if (btn) btn.disabled = false;
+      return;
+    }
+  }
+  modelStatus("启动超时：DSH 还没就绪，稍后刷新本页重试。", "err");
+  if (btn) btn.disabled = false;
+}
+
 // ---- 启动 ----
 (function boot() {
   try {
@@ -144,5 +352,14 @@ async function save() {
       void save();
     });
   }
+  const modelSel = $("#model");
+  if (modelSel) {
+    modelSel.addEventListener("change", () => renderEffort(modelState && modelState.current));
+  }
+  const modelBtn = $("#modelSave");
+  if (modelBtn) modelBtn.addEventListener("click", () => { void saveModel(); });
+  const startBtn = $("#modelStart");
+  if (startBtn) startBtn.addEventListener("click", () => { void startDshForModel(); });
   void load();
+  void loadModel();
 })();

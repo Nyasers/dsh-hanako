@@ -15,9 +15,9 @@
 import { buildClientRequest, parseServerResponse, defaultRpcTimeoutMs } from "./rpc-envelope.js";
 
 /** 注入式 RPC 调用：fetchFn(url, init) => Promise<Response>；超时/中止经 AbortSignal。 */
-export async function rpcCallWithFetch(fetchFn, base, { method, payload, rpcId, signal, timeoutMs }) {
+export async function rpcCallWithFetch(fetchFn, base, { method, payload, rpcId, signal, timeoutMs, bare }) {
   if (typeof fetchFn !== "function") throw new Error("dsh-rpc: 需要 fetch 注入（ctx.network.fetch / 全局 fetch）");
-  const { body } = buildClientRequest({ method, payload, rpcId });
+  const { body } = buildClientRequest({ method, payload, rpcId, bare });
   const deadline = Number(timeoutMs) > 0 ? Number(timeoutMs) : defaultRpcTimeoutMs();
   const ctl = AbortSignal.timeout(deadline);
   const merged = signal ? AbortSignal.any([signal, ctl]) : ctl;
@@ -52,4 +52,75 @@ export function cancelAccepted(value) {
     if (value.ok === true || value.accepted === true) return true;
   }
   return value === undefined || value === null; // DSH 网关常返回空 result.value = 已接受
+}
+
+// ---- settings 面（默认模型）：值归 DSH 的 settings 服务，我们只过手，不存副本 ----
+
+/** 默认模型所在的 settings 段名（持有者 @deepseek-ai/dsh-agent-default-model）。 */
+export const AGENT_DEFAULT_MODEL_NS = "agent-default-model";
+
+/** settings/describe：各段视图（value + revision）。无参方法。 */
+export function rpcSettingsDescribe(fetchFn, base, opts = {}) {
+  return rpcCallWithFetch(fetchFn, base, {
+    method: "settings/describe",
+    payload: {},
+    rpcId: opts.rpcId,
+    signal: opts.signal,
+    timeoutMs: opts.timeoutMs,
+  });
+}
+
+/**
+ * settings/replace：整段替换（`replace(ns, section, expectedRevision)`，args 按参数名给）。
+ * expectedRevision 只在是有限数时才带上——不带 = 不校验版本（DSH 只在带版本时判冲突）。
+ */
+export function rpcSettingsReplace(fetchFn, base, { ns, section, expectedRevision }, opts = {}) {
+  const args = { ns: String(ns), section };
+  if (typeof expectedRevision === "number" && Number.isFinite(expectedRevision)) {
+    args.expectedRevision = expectedRevision;
+  }
+  return rpcCallWithFetch(fetchFn, base, {
+    method: "settings/replace",
+    payload: args,
+    rpcId: opts.rpcId,
+    signal: opts.signal,
+    timeoutMs: opts.timeoutMs,
+  });
+}
+
+/** session/modelCatalog：候选模型（按 provider 分组）。无参方法——不走 session 信封（bare）。 */
+export function rpcModelCatalog(fetchFn, base, opts = {}) {
+  return rpcCallWithFetch(fetchFn, base, {
+    method: "session/modelCatalog",
+    payload: {},
+    bare: true,
+    rpcId: opts.rpcId,
+    signal: opts.signal,
+    timeoutMs: opts.timeoutMs,
+  });
+}
+
+/**
+ * 从 settings/describe 的返回里取某段视图（纯函数）。describe 的形状是
+ * `{ writable, hasDocument, namespaces: SettingsNamespaceView[] }`——按 `ns` 找那一项；
+ * 也容错以段名为键的对象形状。取不到返回 null。
+ */
+export function settingsViewOf(described, ns) {
+  if (!described || typeof described !== "object") return null;
+  const list = described.namespaces;
+  if (Array.isArray(list)) {
+    return list.find((v) => v && typeof v === "object" && v.ns === ns) ?? null;
+  }
+  const bag = described.sections ?? list ?? described;
+  if (!bag || typeof bag !== "object") return null;
+  const view = bag[ns];
+  return view && typeof view === "object" ? view : null;
+}
+
+/** 冲突判定（纯函数）：DSH 对版本不符的写入报 `settings/conflict`（真机探测核对）。 */
+export function isSettingsConflict(error) {
+  const code = String((error && (error.code || error.dshCode)) || "");
+  if (code === "SETTINGS_CONFLICT" || code === "settings/conflict") return true;
+  const msg = String((error && error.message) || "");
+  return /SETTINGS_CONFLICT|conflict|revision/i.test(code + " " + msg);
 }

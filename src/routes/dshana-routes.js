@@ -22,6 +22,8 @@
 //   POST /dshana/start       手动触发受管 runtime 启动（App 自动链之外的兑底入口；fire-and-forget，
 //                            立刻 202 返回，壳页轮询 boot-state 跟进；已就绪/启动中幂等）
 //   POST /dshana/stop        停止受管 runtime（幂等）
+//   GET  /dshana/model       默认模型（读自 DSH 的 settings 段 agent-default-model）+ 候选模型目
+//   POST /dshana/model       改默认模型（整段替换；带 expectedRevision，落后就 409）
 //
 // 依赖注入（可测性）：deps = { appId, version, getSnapshot(), start(), stop(), log() }。
 // 默认实现经 src/lib/managed-runtime.js 读取真实单例；测试注入 fake。
@@ -30,6 +32,7 @@ import { join } from "node:path";
 import { managedRuntimeDetails, ensureManagedRuntime, stopManagedRuntime, bridgeAccess } from "../lib/managed-runtime.js";
 import { buildBootSnapshot, APP_ID } from "../lib/boot-state.js";
 import { resolveApprovalTimeoutSec, resolveDefaultTimeoutSec } from "../lib/config.js";
+import { readDefaultModel, writeDefaultModel } from "../lib/model-settings.js";
 export const DASHANA_ROUTE_PREFIX = "/dshana";
 
 // ---- 应用设置（GET/POST /dshana/settings）----
@@ -85,11 +88,21 @@ export function defaultDshanaRouteDeps(ctx) {
   };
   // 设置面用 App 自己的私有数据目录（ctx.config.dataDir，宿主提供）
   const dataDir = ctx && ctx.config && typeof ctx.config.dataDir === "string" ? ctx.config.dataDir : "";
+  // 默认模型不经我们存储：经中继打 DSH 自己的 settings 服务（与 session/cancel 同一条通道）。
+  const appFetch = ctx && ctx.network && typeof ctx.network.fetch === "function" ? ctx.network.fetch : null;
   return {
     appId: (ctx && ctx.appId) || APP_ID,
     version: "",
     log,
     readSettings: () => effectiveSettings(dataDir),
+    readModel: () => {
+      if (!appFetch) throw new Error("ctx.network.fetch 不可用（manifest network 白名单 / 宿主代发门）");
+      return readDefaultModel(appFetch);
+    },
+    writeModel: (patch) => {
+      if (!appFetch) throw new Error("ctx.network.fetch 不可用（manifest network 白名单 / 宿主代发门）");
+      return writeDefaultModel(appFetch, patch);
+    },
     writeSettings: (patch) => {
       if (!dataDir) throw new Error("ctx.config.dataDir 不可用，无法写应用设置");
       const j = readConfigJson(dataDir);
@@ -125,6 +138,12 @@ export function registerDshanaRoutes(app, deps) {
   const stop = typeof d.stop === "function" ? d.stop : () => stopManagedRuntime();
   const readSettings = typeof d.readSettings === "function" ? d.readSettings : () => ({});
   const writeSettings = typeof d.writeSettings === "function" ? d.writeSettings : (patch) => patch;
+  const readModel = typeof d.readModel === "function" ? d.readModel : async () => {
+    throw new Error("默认模型读写不可用：deps.readModel 未注入");
+  };
+  const writeModel = typeof d.writeModel === "function" ? d.writeModel : async () => {
+    throw new Error("默认模型读写不可用：deps.writeModel 未注入");
+  };
 
   const json = (c, status, body) => {
     if (typeof c?.json !== "function") {
@@ -163,6 +182,21 @@ export function registerDshanaRoutes(app, deps) {
       } catch (e) {
         log("warn", "/dshana/settings 读取失败：" + ((e && e.message) || e));
         return json(c, 500, { ok: false, error: (e && e.message) || String(e) });
+      }
+    });
+
+    // ---- GET /dshana/model：默认模型 + 候选（DSH 未运行时给 ready=false，不是错误）----
+    // 契约：一律 200，成败看 ok / ready——设置页不依赖 DSH 运行也能渲染（AC W2-1）。
+    app.get(DASHANA_ROUTE_PREFIX + "/model", async (c) => {
+      const snap = getSnapshot();
+      if (!snap.ready) {
+        return json(c, 200, { ok: false, ready: false, error: "DSH 未运行：默认模型在 DSH 起来后才能读" });
+      }
+      try {
+        return json(c, 200, { ok: true, ready: true, model: await readModel() });
+      } catch (e) {
+        log("warn", "/dshana/model 读取失败：" + ((e && e.message) || e));
+        return json(c, 200, { ok: false, ready: true, error: (e && e.message) || String(e) });
       }
     });
   }
@@ -213,6 +247,42 @@ export function registerDshanaRoutes(app, deps) {
         return json(c, 500, { ok: false, error: (e && e.message) || String(e) });
       }
     });
+
+    // ---- POST /dshana/model：改默认模型（DSH settings 段整段替换）----
+    // 409 = 段 revision 已前进（别处改过）：上游 DSH 报 settings/conflict，这里原样上抬。
+    app.post(DASHANA_ROUTE_PREFIX + "/model", async (c) => {
+      const snap = getSnapshot();
+      if (!snap.ready) {
+        return json(c, 200, { ok: false, ready: false, error: "DSH 未运行：默认模型在 DSH 起来后才能改" });
+      }
+      let body = null;
+      try {
+        body = c && c.req && typeof c.req.json === "function" ? await c.req.json() : null;
+      } catch {
+        body = null;
+      }
+      const provider = typeof body?.provider === "string" ? body.provider.trim() : "";
+      const model = typeof body?.model === "string" ? body.model.trim() : "";
+      if (!provider || !model) {
+        return json(c, 400, { ok: false, error: "需要 provider 与 model（非空字符串）" });
+      }
+      const patch = { provider, model };
+      if (typeof body.reasoningEffort === "string" && body.reasoningEffort.trim()) {
+        patch.reasoningEffort = body.reasoningEffort.trim();
+      }
+      if (typeof body.expectedRevision === "number" && Number.isFinite(body.expectedRevision)) {
+        patch.expectedRevision = body.expectedRevision;
+      }
+      try {
+        return json(c, 200, { ok: true, ready: true, model: await writeModel(patch) });
+      } catch (e) {
+        if (e && e.code === "SETTINGS_CONFLICT") {
+          return json(c, 409, { ok: false, ready: true, code: "SETTINGS_CONFLICT", error: (e && e.message) || "默认模型已被别处改过" });
+        }
+        log("warn", "/dshana/model 写入失败：" + ((e && e.message) || e));
+        return json(c, 200, { ok: false, ready: true, error: (e && e.message) || String(e) });
+      }
+    });
   }
 
   return app;
@@ -224,8 +294,10 @@ export function dshanaRoutesTable() {
     ["GET", DASHANA_ROUTE_PREFIX + "/boot-state"],
     ["GET", DASHANA_ROUTE_PREFIX + "/health"],
     ["GET", DASHANA_ROUTE_PREFIX + "/settings"],
+    ["GET", DASHANA_ROUTE_PREFIX + "/model"],
     ["POST", DASHANA_ROUTE_PREFIX + "/start"],
     ["POST", DASHANA_ROUTE_PREFIX + "/stop"],
     ["POST", DASHANA_ROUTE_PREFIX + "/settings"],
+    ["POST", DASHANA_ROUTE_PREFIX + "/model"],
   ];
 }
