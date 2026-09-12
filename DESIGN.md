@@ -6,7 +6,7 @@
 
 **注释写现状与原因，不写演变史。** 代码注释回答“现在是什么、为什么这样”；“以前是什么、怎么变成
 今天这样”属于 commit 与 CHANGELOG（仓库用 conventional-changelog：`pnpm run changelog` +
-`scripts/version-hook.mjs`，历史自动成文）。
+`scripts/version-hook.mts`，历史自动成文）。
 
 - 不写日期栈记（“2026-xx-xx 定调”）、不写迁移步骤编号（“步骤 3 接线”）、不写“已退役/已删除”的注记。
 - 保留现状事实（依赖怎样装、路径在哪、失败向哪侧回落）、保留设计取舍的**理由**。
@@ -39,7 +39,7 @@ Hana 宿主进程（App 隔离进程内加载 dist/index.js）
 ```
 
 - **受管 runtime**：DSH 跑在 `ctx.runtime.start` 拉起的独立 Node 子进程中（不再是宿主进程内 boot）。App 侧与子进程分责：App 管启动/停止/状态，子进程管 DSH 的 cordis 生命周期；崩溃可被父侧识别并重起。
-- **依赖形态（自包含打包）**：DSH 及其依赖树由 `scripts/pack.mjs` 在构建时物化进**安装目录** `node_modules`，运行时**不再安装、不再 spawn pnpm**（v1 的 `ensure-deps` / `lib/pnpm.js` / `lib/bootstrap.js` / `lib/errclass.js` 已删除）。版本单一事实源 = 包内依赖树。
+- **依赖形态（自包含打包）**：DSH 及其依赖树由 `scripts/pack.mts` 在构建时物化进**安装目录** `node_modules`，运行时**不再安装、不再 spawn pnpm**（v1 的 `ensure-deps` / `lib/pnpm.js` / `lib/bootstrap.js` / `lib/errclass.js` 已删除）。版本单一事实源 = 包内依赖树。
 - **更新 = 装新 App 包 + 重启宿主**：无独立升级通道；升级后需重启宿主以清掉旧模块缓存。
 - **连接与鉴权交回官方**：`@dshana/bridge` 已退役；`dsh-web-app` 层的官方 connection（BrowserAuth token/cookie）与 frontend-static 各自负责其位，App 侧只经 runtime 中继补 cookie。
 - **DSH Web UI**：DSH 前端以**同文档注入**方式挂进壳页（`dsh-inject.js`：取 index → 搬 link/script → 装配 `__DSH_TRANSPORT__` + 流 mux），不再用 iframe 内嵌；到 runtime 的请求走宿主代理前缀 + 路径票据。
@@ -100,15 +100,15 @@ DSHana 以**单卡 + 自带功能面板**注册（manifest `contributes.cards[0]
 - 工具注册：`ctx.tools.register`，工具名保留 `dshana_session`（v2 无自动 `pluginId_` 前缀、全局唯一；决策与冲突面见 `src/tools/session.js` 头注释）。action 参数与返回语义不变；本步骤仅 `list`/`get` 可用（DSH 未启动仍离线可读），`create`/`send`/`cancel`/`approve` 返回明确「待迁移步骤 2 接线」错误。
 - 设置：`contributes.settings`（approvalTimeoutSec / defaultTimeoutSec），工具执行期经 `ctx.config.get`（apply 完成后才登记，apply 顶层不读）。原先的 nodejsPath 与 servicePort 已随 T5 裁撤（无消费方 / 端口不再暴露）。
 - 数据读路径迁到 `ctx.dataDir`（宿主 `app-data/<id>/`）：list/get 读当前源的 `<DSH_HOME>/...`（projcache + jsonl zstd）；旧插件数据迁移只留接缝（`lib/app-runtime.js appDataDir` 注释），本步骤不做迁移脚本。
-- 构建：`node src/build.js` 产物 `dist/` = App 安装目录形态（根 `manifest.json` + `index.js` + `assets/icon.png` + `skills/`）；v1 的 `dist/routes/` 壳不再生成。
+- 构建：`node src/build.ts` 产物 `dist/` = App 安装目录形态（根 `manifest.json` + `index.js` + `assets/icon.png` + `skills/`）；v1 的 `dist/routes/` 壳不再生成。
 
 **已落地（步骤 2：DSH 迁入 App 受管 Node runtime，local-machine/external + readyMarker 就绪门）：**
 
-- 受管 runtime 入口 `runtime/dsh-host.mjs`（源码 `src/runtime/`，rspack → `dist/runtime/dsh-host.mjs`，见 `src/runtime/rspack.config.mjs`）：App 自有配置解析（唯一 argv = 私有运行时配置文件路径，schema 见 `src/runtime/options.js`，与 `src/lib/managed-runtime.js buildRuntimeConfig()` 对偶）→ `connectAppRuntime()`（无父 IPC fd → 可操作报错 + 退出码 3，不假装能跑）→ 进程级 env（`DSH_HOME=<dataDir>/.dsh`、`DSHANA_ROOT=<dataDir>/runtime`、`DSHANA_HOME=<dataDir>`，不改宿主进程环境）→ 依赖 ensure → profile 种子化（`initProfile` + `node_modules/@dshana` scope 链接 → installDir `cordis/`，junction/拷贝回退）→ 动态定位 DSH（`locate.js`，profile-boot/app-boot，webpackIgnore 原生 import）→ `runProfile`（profile dshana、配置中的 dshPort、`--no-open`）→ **就绪门**（webServer 服务端口 === 期望端口 且 HTTP 探测成功）→ stdout 打 `readyMarker`（唯一出口；失败路径绝不打印 READY）→ SIGTERM/SIGINT/父断连有序释放（关 DSH fiber → 再 `hana.close()`；拿到流式响应不能立刻 close，本步未接流）。退出码契约：2=usage/3=IPC 不可用/4=deps/5=seed/6=boot/7=port。
+- 受管 runtime 入口 `runtime/dsh-host.mjs`（源码 `src/runtime/`，rspack → `dist/runtime/dsh-host.mjs`，见 `src/runtime/rspack.config.mts`）：App 自有配置解析（唯一 argv = 私有运行时配置文件路径，schema 见 `src/runtime/options.js`，与 `src/lib/managed-runtime.js buildRuntimeConfig()` 对偶）→ `connectAppRuntime()`（无父 IPC fd → 可操作报错 + 退出码 3，不假装能跑）→ 进程级 env（`DSH_HOME=<dataDir>/.dsh`、`DSHANA_ROOT=<dataDir>/runtime`、`DSHANA_HOME=<dataDir>`，不改宿主进程环境）→ 依赖 ensure → profile 种子化（`initProfile` + `node_modules/@dshana` scope 链接 → installDir `cordis/`，junction/拷贝回退）→ 动态定位 DSH（`locate.js`，profile-boot/app-boot，webpackIgnore 原生 import）→ `runProfile`（profile dshana、配置中的 dshPort、`--no-open`）→ **就绪门**（webServer 服务端口 === 期望端口 且 HTTP 探测成功）→ stdout 打 `readyMarker`（唯一出口；失败路径绝不打印 READY）→ SIGTERM/SIGINT/父断连有序释放（关 DSH fiber → 再 `hana.close()`；拿到流式响应不能立刻 close，本步未接流）。退出码契约：2=usage/3=IPC 不可用/4=deps/5=seed/6=boot/7=port。
 - App 侧封装 `src/lib/managed-runtime.js`：`ensureManagedRuntime()`（单例 single-flight：**一个 App runtime 服务多个 DSH 会话**，首次 create 触发启动——设计见模块头注释与 tools/session.js 接线桩）父进程随机选取中继端口与 DSH 内部端口（区间 38000..52000，见 `choosePort`/`pickPorts`；宿主 service 端口契约只收确定整数，故不能交给宿主分配）→ `ctx.runtime.start({ runtime:"node", entry:"runtime/dsh-host.mjs", profile:"local-machine", network:"external", cwd:dataDir, service:{ port:中继端口, readyMarker:带随机 opaque }, args:[私有配置文件路径] })`（契约禁止 readRoots/writeRoots/callToken/taskId，故一律不带） → `ctx.runtime.get` 轮询到 ready（不能把 runtimeId 当就绪；端口占用 port-busy 自动换随机端口重试，上限 3 次）→ 失败归类（`err.code`：port-busy/deps/seed/boot-failed/not-authorized/timeout/unknown，message 带用户指引）+ runtime watch 日志尽力镜像（src=dsht 进 App 会话日志）；每次命中 ready 缓存先经 runtime.get 探活，子进程崩溃/被宿主回收则清单例并重起；失败路径把端口与两把 key 归零（`bridgeAccess()` 不再放出死端口）；`disposeManagedRuntime()`/`stopManagedRuntime()`（App 卸载/更新前停 runtime，Windows .node 锁纪律）；`choosePort`/`pickPorts`/`makeReadyMarker`/`classifyRuntimeFailure` 纯函数可单测。
 - `src/tools/session.js`：create/send/cancel/approve 的「未接线」错误保留，分支前补步骤 3 接线桩注释（ensureManagedRuntime 调用形态 + taskId/映射/取消链落点）；list/get 仍离线可读。`src/index.js` disposer 接 disposeManagedRuntime。
-- `src/build.js` 增 runtime bundle 编译（先主 bundle 清 dist，再追加 runtime/，再做 URL 回写/terser/断言）。
-- 单测 `tests/*.test.mjs`（node --test）：child options parse、managed-runtime 端口/参数/错误归类、ensure-deps 声明/版本/marker 纯函数。本地验证：`node src/build.js` 通过；`node dist/runtime/dsh-host.mjs` 直跑给出清晰报错（无父 IPC / 缺参）。真机 AppHost 启动验证待装包后做（见交付物注释「已测/未测边界」）。
+- `src/build.ts` 增 runtime bundle 编译（先主 bundle 清 dist，再追加 runtime/，再做 URL 回写/terser/断言）。
+- 单测 `tests/*.test.mjs`（node --test）：child options parse、managed-runtime 端口/参数/错误归类、ensure-deps 声明/版本/marker 纯函数。本地验证：`node src/build.ts` 通过；`node dist/runtime/dsh-host.mjs` 直跑给出清晰报错（无父 IPC / 缺参）。真机 AppHost 启动验证待装包后做（见交付物注释「已测/未测边界」）。
 
 **依赖部署（v2）（决策，步骤 2 落定——「随包 vs dataDir 安装区 vs 混合」）**
 
@@ -132,7 +132,7 @@ DSHana 以**单卡 + 自带功能面板**注册（manifest `contributes.cards[0]
 - **决策 D（并发纪律）**：同 DSH session 的 create/send 由 App 进程内串行化（src/lib/session-serialize.js，与 v1 withSessionTurn 同语义；锁持有到任务终态——否则同一 session 两个任务会互吃对方的终态事件/映射）；不同 session 互不共享「当前任务」（task-map 按 sessionId 分文件）；一个 runtime 服务多会话时各请求自带 taskId（models.stream.taskId、task 记录 taskId、prompt 信封 rpcId 作 jsonl data.source.rpcId 关联键）。
 - **工具接线**：tools/session.js create/send 分支接 submitDshTask（返回语义与 v1 一致：fire 即回、终态投递来源会话、内容 action=get）；cancel/approve 保留步骤 4 明确「未接线」错误（含使用指引）。list/get 离线读不变（projcache + jsonl zstd）。
 - 端口不再有设置项：servicePort/nodejsPath 随 T5 裁撤（父进程区间随机选端口 38000..52000 + 占用换端口重试；用户不再需要配置端口）。
-- 单测新增（node --test 全绿 62 例）：rpc-envelope（信封/网关 method 斜杠/requestId 注入）、task-map（路径/读写删/TTL/不落 callToken）、session-serialize（同会话串行/跨会话并行/槽位）、provider-ndjson（跨 chunk 半行/flush/坏行）、provider-catalog（routes/efforts/元数据）、provider-messages（assistant 签名/tool-result 拆分/图片/UNSUPPORTED_CONTENT）、provider-stream（done→chunks/回放信封/EMPTY_RESPONSE/max-tokens）、task-bridge（事件归类）。构建：node src/build.js 与 node src-cordis/build.js 通过（dist 内含 taskmaps/task-bridge/__dshanaHana 标记）。
+- 单测新增（node --test 全绿 62 例）：rpc-envelope（信封/网关 method 斜杠/requestId 注入）、task-map（路径/读写删/TTL/不落 callToken）、session-serialize（同会话串行/跨会话并行/槽位）、provider-ndjson（跨 chunk 半行/flush/坏行）、provider-catalog（routes/efforts/元数据）、provider-messages（assistant 签名/tool-result 拆分/图片/UNSUPPORTED_CONTENT）、provider-stream（done→chunks/回放信封/EMPTY_RESPONSE/max-tokens）、task-bridge（事件归类）。构建：node src/build.ts 与 node src-cordis/build.ts 通过（dist 内含 taskmaps/task-bridge/__dshanaHana 标记）。
 - 已测/未测边界（步骤 3）：真机 AppHost 实跑 create/send 模型流未在本刀跑通（无宿主环境/网络），装包后由主上下文验收：① tasks 生命周期与结果投递；② task-bridge 终态对账；③ provider adapter 被 DSH agent 循环调用的消息/块序与跨 turn done.assistant 回放；④ 同会话两次 send 串行；⑤ DSH 图片附件 base64 路径；⑥ 两会话并发（宿主模型流并发上限 2）；⑦ runtime 中途重启后 send 的 resume 路径；⑧ 执行超时/取消（依赖步骤 4 session.cancel）。本步模型流不逐块实时打字（done 时一次性产块，功能等价；DSH Web UI 实时性属步骤 4/5 面）。
 
 **遗留（步骤 4b/5 收口已由本刀合入代码侧——见文末「步骤 4b/5 收口（代码侧）」；此处只剩真机/后续刀项）：**
@@ -218,7 +218,7 @@ DSHana 以**单卡 + 自带功能面板**注册（manifest `contributes.cards[0]
 - src/tools/session.js：cancel/approve 分支接线（移「未接线」）；manifest description 更新。
 - 单测新增 21 例（watch-sse 9 / task-map-ext 4 / cancel-chain 3 / approval-bridge 5）+
   src-cordis provider 注册表不新增测试面（纯注册）。既有 104 例 + 新增 21 例 = 125 全绿；
-  node src/build.js 与 node src-cordis/build.js 通过（dist 内含 approval-bridge/requestApproval/
+  node src/build.ts 与 node src-cordis/build.ts 通过（dist 内含 approval-bridge/requestApproval/
   cancel 链标记）。
 
 **真机/后续验收边界（本刀代码侧未跑通宿主，装包后由主上下文验收）：**
@@ -308,7 +308,7 @@ DSHana 以**单卡 + 自带功能面板**注册（manifest `contributes.cards[0]
 
 ### 交付 4：旧插件数据迁移（交付代码与 --check 路径，本刀不真跑）
 
-- src/lib/legacy-migrate.js（纯 node 内置）+ scripts/migrate-legacy.mjs CLI：
+- src/lib/legacy-migrate.js（纯 node 内置）+ scripts/migrate-legacy.mts CLI：
   `--check`（默认，只读计划）/`--apply`/`--force`/`--source|--hanako-home`/`--target`
   （缺省取 DSHANA_LEGACY_HOME/DSHANA_DATA_DIR）。流程 = 备份（目标数据区
   `migration-backup/`，**已存在不覆盖唯一备份**）→ 复制 dsh-home/{sessions,storages,
@@ -327,8 +327,8 @@ DSHana 以**单卡 + 自带功能面板**注册（manifest `contributes.cards[0]
 - 版本线为单一 1.x 线（开发期停在最后已发布基线、发版经 `pnpm version` 推进、DSH 跟随策略），
   细节与依据见 `specs/dshana-v2-定案与待议-2026-09-10.md` §5；cordis 包（roster + plugins，
   10 个 package.json）**等值跟随**主版本（无独立版本线）；build metadata（+dsh-<dsh 依赖>）由
-  version-hook 发版时统一拼回再同步。syncver.mjs 头注释记录版本线语义。
-- pack.mjs：静态项补 THIRD_PARTY_NOTICES.md；cordis dist 断言按清单校验（现 10 包）；
+  version-hook 发版时统一拼回再同步。syncver.mts 头注释记录版本线语义。
+- pack.mts：静态项补 THIRD_PARTY_NOTICES.md；cordis dist 断言按清单校验（现 10 包）；
   新增 dist/ui 断言（route 资源 fail-closed）；zip 形态不变（dist 根 manifest/index.js +
   三件套 + NOTICE/THIRD_PARTY_NOTICES + cordis + ui，无 node_modules）。
 
@@ -352,9 +352,9 @@ DSHana 以**单卡 + 自带功能面板**注册（manifest `contributes.cards[0]
 
 ### 已测/未测边界（本刀）
 
-- 已测：node src/build.js 与 node src-cordis/build.js 通过（dist 含 ui/ + manifest cards +
+- 已测：node src/build.ts 与 node src-cordis/build.ts 通过（dist 含 ui/ + manifest cards +
   dshana-routes 接线）；单测 143 例全绿（新增 boot-state 7 + dshana-routes 6 + legacy-migrate
-  5 = 18 例；既有 125 例保持）。pack.mjs 版本断言/静态清单逻辑改动后未实跑（留发版时验证）。
+  5 = 18 例；既有 125 例保持）。pack.mts 版本断言/静态清单逻辑改动后未实跑（留发版时验证）。
 - 未测（真机 AppHost 装包后由主上下文验收）：① ui/ 壳页 → /routes/dshana/* 的 surface
   授权形态（scoped uiBasePath/iframe ticket → cookie/hana.api，代码按同源相对 fetch 写，
   实证文件见 bundle iFt/eFt/uVe）；② DSH Web UI 在代理前缀下 SPA 资源/API/WS 的 base 适配

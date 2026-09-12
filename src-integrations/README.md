@@ -34,7 +34,7 @@ integrations/<短名>/
 
 ## 闸怎么响
 
-`node scripts/integrations.mjs verify`（已接进 `pnpm run build`，在 build:src 之前）：
+`node scripts/integrations.mts verify`（已接进 `pnpm run build`，在 build:src 之前）：
 
 1. **镜像版本一致**：`vendor/deepseek-harness` 必须含 tag `dsh-v<dependencies.@deepseek-ai/dsh>`；
 2. **overlay 未过期**：对每个 `files[].path`，重算**当前镜像该 tag 下同名文件**的 sha256，
@@ -47,7 +47,7 @@ integrations/<短名>/
 
 1. `integrations/<短名>/integration.json` 写好包名、上游目录；
 2. 把「上游该文件 + 我们的 delta」整文件拷进 `files/<相对路径>`；
-3. 记录上游同名文件的 sha256（`node scripts/integrations.mjs hash packages/client/ui-layout/src/client/index.ts` 打印）；
+3. 记录上游同名文件的 sha256（`node scripts/integrations.mts hash packages/client/ui-layout/src/client/index.ts` 打印）；
 4. `pnpm run build` —— 闸会替你验证镜像与哈希。
 
 ## 边界
@@ -56,6 +56,6 @@ integrations/<短名>/
 - **不改上游未涉及的包**。
 - 产物版本号带 `<上游版本>+dshana-<我们的干净版本>`（例 `0.1.5-rc.2+dshana-1.0.0-beta.5`）：
   安装树里一眼可见“这包被改过”、被哪个 dshana 版本改的。版本段只有一个来源——主
-  `package.json`（合成在 `scripts/version-common.mjs`，与 syncver/version-hook 同一份）；
+  `package.json`（合成在 `scripts/version-common.mts`，与 syncver/version-hook 同一份）；
   清单里不写任何手写版本字段。
 - 不做运行时 shim：与"贴上游 + 构建期有闸"的路线相悖。

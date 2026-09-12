@@ -1,6 +1,6 @@
 {
   // src 域（App 主 bundle + 受管 runtime + 壳页脚本）的类型检查配置。
-  // 与 tsconfig.cordis.json 同形；口径与失败清单见 scripts/ts-diagnostics.mjs。
+  // 与 tsconfig.cordis.json 同形；口径与失败清单见 scripts/ts-diagnostics.mts。
   // 路径相对本文件（仓库根）解析，不写绝对路径。
   "compilerOptions": {
     "noEmit": true,
