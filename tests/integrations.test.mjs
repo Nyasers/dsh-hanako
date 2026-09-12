@@ -116,11 +116,21 @@ test("仓库真实清单：能解析、字段齐（当前为批次①两枚、�
   const list = loadIntegrations(REPO_ROOT);
   assert.ok(list.length >= 2, "至少登记 ui-layout / ui-sidebar");
   for (const it of list) {
-    assert.ok(it.package && it.upstreamDir && typeof it.hana === "number", `${it.dir} 字段应齐`);
+    assert.ok(it.package && it.upstreamDir && Array.isArray(it.files), `${it.dir} 字段应齐`);
+    // 版本戳段不写在清单里：它只从主 package.json 派生（手写字段会被 loadIntegrations 拒）。
+    assert.equal(it.hana, undefined);
+    assert.equal(it.revision, undefined);
     assert.ok(Array.isArray(it.files));
   }
   const names = list.map((x) => x.dir);
   assert.ok(names.includes("ui-layout") && names.includes("ui-sidebar"));
+});
+
+test("patchVersion：补丁包版本戳只从主 package.json 派生（无手写修订号）", async () => {
+  const { patchVersion, readPkg } = await import("../scripts/version-common.mjs");
+  const clean = String(readPkg("package.json").version).split("+")[0];
+  assert.equal(patchVersion("0.1.5-rc.2"), `0.1.5-rc.2+dshana-${clean}`);
+  assert.equal(patchVersion("0.1.5-rc.2+whatever"), `0.1.5-rc.2+dshana-${clean}`);
 });
 
 test("extractRequires：认未压缩产物的字面 require()", () => {

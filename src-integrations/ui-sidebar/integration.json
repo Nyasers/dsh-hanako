@@ -2,7 +2,6 @@
   "package": "@deepseek-ai/dsh-client-ui-sidebar",
   "upstreamVersion": "0.1.5-rc.2",
   "upstreamDir": "packages/client/ui-sidebar",
-  "hana": 1,
   "files": [
     {
       "path": "src/client/SidebarRoot.tsx",

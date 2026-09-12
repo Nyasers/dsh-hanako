@@ -2,7 +2,6 @@
   "package": "@deepseek-ai/dsh-client-ui-layout",
   "upstreamVersion": "0.1.5-rc.2",
   "upstreamDir": "packages/client/ui-layout",
-  "hana": 1,
   "files": [
     {
       "path": "src/client/AppFrame.tsx",
