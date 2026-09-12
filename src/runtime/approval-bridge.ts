@@ -29,6 +29,7 @@
 // → 本桥 answerer 的 req.signal 中止 → 上面收尾路径），宿主审批由 approval 的 timeoutMs
 // 独立自动拒绝。
 import { readTaskMap, addApproval, settleApproval, isValidSessionId } from "../lib/task-map.ts";
+import { bindingStateOf } from "../lib/binding-slot.ts";
 import { approvalOutcomeOf, runWatchReconcile } from "../lib/watch-sse.ts";
 
 // 审批超时：**30s 是我们自己的策略，不是宿主默认**。APPS.md（0.951.4，后台任务与审批节）明写
@@ -158,11 +159,13 @@ export function startApprovalBridge({ ctx, hana, dataDir, log }) {
       // 未知/畸形会话：不认领（next 委托其他应答者；无应答者 DSH fail-closed）
       return next();
     }
-    const map = readTaskMap(dataDir, sessionId);
+    // 投影优先（同进程 stateOf，零文件读），取不到再回落私有映射文件——两条路同源，
+    // 回落只为绑定事件在投影落地之前建的老会话。
+    const map = bindingStateOf(ctx, sessionId, null, () => readTaskMap(dataDir, sessionId));
     if (!map || !map.taskId) {
       // 非 dshana_session 发起的会话（如 DSH Web UI 直开）：没有宿主 task scope，
       // 无法 requestApproval——委托（DSH 无应答者时 fail-closed，不隐式放行）
-      note("审批无 task-map（session=" + sessionId.slice(0, 12) + "）——委托，不认领");
+      note("审批无绑定（投影与映射都没有，session=" + sessionId.slice(0, 12) + "）——委托，不认领");
       return next();
     }
     const callId = (req && req.callId) || null;

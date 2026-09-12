@@ -340,6 +340,9 @@ export function submitDshTask({ action, input, callToken, log }) {
       const bind = await invokeControl(ctx, "bind-task", {
         sessionId,
         taskId,
+        // rpcId 也上投：approval-bridge 需要它（原先只存在映射文件里，读侧一旦改投影，
+        // 不投就会读成 null 把文件里正确的值静默盖掉）。
+        rpcId,
         timeoutSec,
         approvalTimeoutMs,
       });

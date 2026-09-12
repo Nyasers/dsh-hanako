@@ -26,7 +26,7 @@ import {
 } from "../src/lib/binding-slot.ts";
 
 test("两套构建树的版本与事件名逐字一致（跨 bundle 约定靠常量对齐）", () => {
-  assert.equal(BINDING_STATE_VERSION, 2);
+  assert.equal(BINDING_STATE_VERSION, 3);
   assert.equal(BINDING_STATE_VERSION, RUNTIME_STATE_VERSION);
   assert.equal(BINDING_CANCEL_EVENT, RUNTIME_CANCEL_EVENT);
   assert.equal(BINDING_CANCEL_EVENT, "dshana/task-cancel");
