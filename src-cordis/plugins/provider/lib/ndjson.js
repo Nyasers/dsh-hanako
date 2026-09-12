@@ -75,11 +75,25 @@ export function createNdjsonLineReader() {
 }
 
 /**
- * 从 fetch Response body 读取 NDJSON 事件（async generator）：body 缺失抛错；
- * 逐块 push 到 line reader，解析每行（空行跳过）；末尾 flush 兜底。任一行解析失败
- * 抛错（调用方按模型失败处理）。@returns AsyncGenerator<object>
+ * 从 fetch Response body 读取 NDJSON 事件（async generator）：HTTP 非 2xx 直接携状态与响应体
+ * 报错（能力未授权/参数被拒时宿主返回的错误体不会是 NDJSON，不先查 ok 只会得到含糊的
+ * STREAM_CLOSED）；body 缺失抛错；逐块 push 到 line reader，解析每行（空行跳过）；末尾 flush
+ * 兜底。任一行解析失败抛错（调用方按模型失败处理）。@returns AsyncGenerator<object>
  */
 export async function* readNdjsonEvents(response, { onLineError } = {}) {
+  if (response && response.ok === false) {
+    let detail = "";
+    try {
+      const body = await response.text();
+      detail = body ? "：" + body.slice(0, 300) : "";
+    } catch {
+      /* 错误体不可读时只报状态 */
+    }
+    const err = new Error("模型请求失败：HTTP " + String(response.status || 0) + detail);
+    err.code = "MODEL_HTTP_ERROR";
+    err.status = response.status;
+    throw err;
+  }
   if (!response || !response.body || typeof response.body.getReader !== "function") {
     throw new Error("模型响应无 body（hana.models.stream 未返回流式 Response）");
   }

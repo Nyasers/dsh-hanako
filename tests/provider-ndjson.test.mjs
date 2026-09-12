@@ -9,6 +9,7 @@ import {
   consumeTextChunk,
   parseNdjsonEvent,
   createNdjsonLineReader,
+  readNdjsonEvents,
 } from "../src-cordis/plugins/provider/lib/ndjson.js";
 
 test("consumeTextChunk: 整行/多行/半行余量", () => {
@@ -56,4 +57,45 @@ test("createNdjsonLineReader: 只按 \n 切行（\r 由 trim 容错）", () => {
   assert.equal(lines[0], '{"a":1}' + CR); // CR 保留，解析前 trim 容错
   assert.equal(JSON.parse(lines[0].trim()).a, 1);
   assert.equal(JSON.parse(lines[1]).b, 2);
+});
+
+// ---- readNdjsonEvents（Response 层）----
+// 能力未授权 / 参数被拒时宿主返回错误体（非 NDJSON），必须先看 ok：否则只会得到含糊的
+// "流未以 done 结束"，排查时看不到 HTTP 状态与宿主原话。
+test("readNdjsonEvents: 非 2xx 直接报 HTTP 状态 + 响应体，不吞成流结束", async () => {
+  const res = { ok: false, status: 403, text: async () => '{"error":"forbidden"}' };
+  await assert.rejects(
+    async () => {
+      for await (const _ev of readNdjsonEvents(res)) {
+        assert.fail("非 2xx 不应产出事件");
+      }
+    },
+    (e) =>
+      e.code === "MODEL_HTTP_ERROR" &&
+      e.status === 403 &&
+      /HTTP 403/.test(e.message) &&
+      /forbidden/.test(e.message),
+  );
+});
+
+test("readNdjsonEvents: 跨 chunk 半行拼接 + 末尾无换行的 flush 兜底", async () => {
+  const chunks = [
+    '{"type":"start"}\n{"type":"tex',
+    't-delta","delta":"hi"}\n',
+    '{"type":"done","requestId":"r1"}', // 无尾换行，靠 flush
+  ];
+  let i = 0;
+  const res = {
+    ok: true,
+    status: 200,
+    body: {
+      getReader: () => ({
+        read: async () => (i < chunks.length ? { done: false, value: new TextEncoder().encode(chunks[i++]) } : { done: true, value: undefined }),
+        cancel: async () => { /* 无需清理 */ },
+      }),
+    },
+  };
+  const seen = [];
+  for await (const ev of readNdjsonEvents(res)) seen.push(ev.type);
+  assert.deepEqual(seen, ["start", "text-delta", "done"]);
 });
