@@ -1,31 +1,24 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/lib/session-run.js — dshana_session create/send 提交链（App v2 步骤 3）
+// src/lib/session-run.js — dshana_session create/send 提交链
 //
 // 职责：execute（工具执行，App 主进程）内完成：
 //   ① ctx.tasks.create({ callToken, label, metadata }) —— callToken 只在这里消费，
-//      绝不落盘/落日志（迁移指南 §5 硬约束）；
+//      不落盘、不落日志；
 //   ② ensureManagedRuntime（未起则启动到 ready；单例，一个 runtime 服务多会话）；
-//   ③ 经 loopback HTTP Unary RPC（决策 A：复用 v1 信封协议，见 lib/rpc-envelope.js）
-//      把 session.create/list/selectModel/prompt 提交给受管 runtime 内的 DSH web 服务；
-//   ④ 写 <dataDir>/dshana/taskmaps/<sessionId>.json 映射（决策 C，见 lib/task-map.js）
-//      ——受管 runtime 的 task-bridge（src/runtime/task-bridge.js）凭它把 DSH 事件回投
+//   ③ 经 loopback HTTP Unary RPC（同一信封协议，见 lib/rpc-envelope.js）把
+//      session.create / selectModel / prompt 提交给受管 runtime 内的 DSH web 服务；
+//   ④ 写 <dataDir>/dshana/taskmaps/<sessionId>.json 映射（见 lib/task-map.js）——受管
+//      runtime 的 task-bridge（src/runtime/task-bridge.js）凭它把 DSH 事件回投
 //      ctx.tasks.update/complete/fail；
-//   ⑤ 同 DSH session 串行化（决策 D，lib/session-serialize.js）：**锁持有到任务终态**
-//      （v1 同款：队列槽位在 create/send 提交到 DSH turn 结束期间占用），不同 session
+//   ⑤ 同 DSH session 串行化（lib/session-serialize.js）：锁持有到任务终态，不同 session
 //      互不干扰——否则同一 session 的两个任务会互相消费对方的终态事件。
 //
-// 提交是 fire-and-forget（v1 语义）：本模块 submitDshTask 返回 { promise, ready }——
-// ready 在 prompt 被 DSH 接受（{ accepted:true }）后 resolve 定位键，execute 随即返回；
-// promise 在后台继续等到 Hana task 终态（child task-bridge complete/fail 后，宿主投递
-// 到来源会话，指南 §5）并释放串行化锁。本模块不把 DSH turn 的最终文本带回 execute——
-// 内容读取统一走 dshana_session action=get（v1 minimal 回调语义）。
-//
-// 与 v1 tools/subtool/run.js 的对应：v1 task:register/deferred 唤醒协议退役，v2 等价物
-// = Hana ctx.tasks + 宿主自动投递；v1 g.ops/审批/取消/超时执行是步骤 4 内容（本步不设
-// DSH 执行超时/取消——需要 session.cancel 链，见 DESIGN「遗留」；模型侧超时由宿主
-// models.stream 5 分钟/请求兜底）。
+// 提交是 fire-and-forget：submitDshTask 返回 { promise, ready }——ready 在 prompt 被 DSH
+// 接受（{ accepted:true }）后 resolve 定位键，execute 随即返回；promise 在后台继续等到
+// Hana task 终态（child task-bridge complete/fail 后，宿主投递到来源会话）并释放串行化锁。
+// 本模块不把 DSH turn 的最终文本带回 execute——内容读取统一走 dshana_session action=get。
 import { join } from "node:path";
 import { appCtx, appDataDir } from "./app-runtime.js";
 import { currentDshHome } from "./data-source.js";
@@ -50,12 +43,12 @@ export function normalizeCreateSend({ action, input } = {}) {
   const sessionId = String((input && input.sessionId) || "").trim();
   if (act === "create") {
     if (sessionId) throw new Error("create 不允许传 sessionId（新建会话；续会话用 send）");
-    if (!cwd) throw new Error("create 必须传 cwd（沙箱工作目录，defaultCwd 配置已删除无回退）");
+    if (!cwd) throw new Error("create 必须传 cwd（沙箱工作目录，无 defaultCwd 回退）");
   } else {
     if (!sessionId) throw new Error("send 必须传 sessionId（续已有会话；形如 session-<uuid>）");
     if (!isValidSessionId(sessionId)) throw new Error("sessionId 格式非法（应为 session-<UUID>）：" + sessionId);
   }
-  // agent 预设：code 已退役 → ptc（与 v1 语义一致）；空值不传（DSH 默认）
+  // agent 预设：code → ptc；空值不传（DSH 默认）
   let preset = String((input && input.agentPreset) || "").trim() || null;
   if (preset === "code") preset = "ptc";
   // 推理强度/模型：只取工具显式值（off/high/max 词汇不变）；空值不传（DSH 默认处理）
@@ -137,7 +130,7 @@ async function waitTaskTerminal(ctx, taskId, log, pollMs = 1200) {
 }
 
 /**
- * 带执行超时的终态等待（步骤 4a）：timeoutSec（秒）内未终态 → 走 cancel 链（指南 §9：
+ * 带执行超时的终态等待：timeoutSec（秒）内未终态 → 走 cancel 链（
  * 执行超时 = 取消，不是只标失败）；超时后仍继续等到任务终态（cancel 已确认/升级后宿主
  * 终态到达）。timeoutSec <= 0 时等价 waitTaskTerminal（无限等）。超时计时 unref（不阻断
  * App 进程退出）。
@@ -306,7 +299,7 @@ export function submitDshTask({ action, input, callToken, log }) {
       if (parsed.action === "create") releaseNewSessionTurn = enterSessionTurn(sessionId);
 
       // ④ 显式 provider/model/effort → selectModel（model-unavailable 降级不带 effort 重试）
-      // dshHome = 当前数据源（W3）：默认模型/预设从当前源的 settings.yaml 解析
+      // dshHome = 当前数据源：默认模型/预设从当前源的 settings.yaml 解析
       const selection = resolveModelSelection(parsed, await currentDshHome(dataDir));
       if (selection) {
         try {
@@ -326,7 +319,7 @@ export function submitDshTask({ action, input, callToken, log }) {
         }
       }
       // ⑤ 写映射（先于 prompt；rpcId = prompt requestId = jsonl data.source.rpcId 关联键）
-      //    步骤 4a：映射快照下传执行超时与审批超时（受管 runtime approval-bridge 读不到
+      //    映射快照下传执行超时与审批超时（受管 runtime approval-bridge 读不到
       //    App settings，经映射文件取 approvalTimeoutMs；0 = 宿主不自动拒绝）
       const rpcId = nextRpcId();
       const timeoutSec = resolveTaskTimeoutSec(parsed.timeoutSec);
@@ -378,7 +371,7 @@ export function submitDshTask({ action, input, callToken, log }) {
       };
       resolveReady(loc);
       // 后台等到终态（child task-bridge complete/fail/canceled → 宿主投递来源会话）。
-      // 步骤 4a 执行超时：超时走 cancel 链（不是只 fail task——指南 §9：超时/撤销不默认
+      // 执行超时：超时走 cancel 链（不是只 fail task——超时/撤销不默认
       // 批准、不给假成功）；超时确认也复用取消确认窗口（DSH 未确认时升级宿主 cancel）。
       const rec = await waitTaskTerminalWithTimeout(ctx, taskId, sessionId, timeoutSec, log);
       logLine(log, "[dsh-session] task 终态 " + ((rec && rec.status) || "?") + "（session=" + sessionId + "）");
@@ -409,7 +402,7 @@ export function submitDshTask({ action, input, callToken, log }) {
 
   const promise =
     parsed.action === "send"
-      ? withSessionTurn(parsed.sessionId, runTask) // 同会话 send 串行（决策 D）
+      ? withSessionTurn(parsed.sessionId, runTask) // 同会话 send 串行
       : runTask();
   // 后台 promise 兜底：ready reject 已同步抛给调用方；promise 自身拒绝只记日志
   promise.catch((e) => {

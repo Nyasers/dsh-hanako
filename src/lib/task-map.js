@@ -1,37 +1,32 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/lib/task-map.js — Hana taskId ↔ DSH session 运行映射（App v2 步骤 3，决策 C）
+// src/lib/task-map.js — Hana taskId ↔ DSH session 运行映射
 //
-// 六映射表（迁移指南 §5）的步骤 3 子集：taskId ↔ dshSessionId（↔ rpcId 定位键）。映射
-// 必须落「App 主进程与受管 runtime 子进程都能读」的位置——子进程（DSH 事件→Hana task
-// 回投的 task-bridge）只经 connectAppRuntime 拿到 tasks/models/network.fetch，**没有**
-// App ctx.storage；因此 dataDir 文件是跨进程关联的单一事实源：
+// 映射必须落在「App 主进程与受管 runtime 子进程都能读」的位置：子进程（task-bridge、
+// approval-bridge、provider）只经 connectAppRuntime 拿到 tasks/models/network.fetch，
+// **没有** App ctx.storage；因此 dataDir 文件是跨进程关联的事实源。
 //
-//   文件：<dataDir>/dshana/taskmaps/<dshSessionId>.json（sessionId 即文件名，天然隔离
-//         并发会话，不存在共享「全局当前任务」——决策 D）
-//   内容：{ taskId, dshSessionId, action: "create"|"send", rpcId, task?, at }
-//   生命周期：create/send 在 session.prompt 提交**前**写入（事件/模型流只会在 prompt 后
-//         发生，先写后跑无竞态）；终态（complete/fail/canceled）后**只标记 ended，不删除**。
-//         删除会把“用户自建会话（无映射）”与“我们建的会话但状态丢了”压成同一个信号，
-//         而这两者在模型请求身份上是两种判定（见 src-cordis/…/identity.js 三态）。
-//         删除只由 prune 按 TTL 做。
+//   文件：<dataDir>/dshana/taskmaps/<dshSessionId>.json（sessionId 即文件名，天然隔离并发
+//         会话，不存在共享的「全局当前任务」）
+//   内容：{ taskId, dshSessionId, action: "create"|"send", rpcId, task?, at, ...协调字段 }
+//   生命周期：create/send 在 session.prompt 提交**前**写入（事件/模型流只会在 prompt 之后
+//         发生，先写后跑无竞态）；终态后只标记 ended，不删文件——删除会把「用户自建会话
+//         （无映射）」与「我们建的会话但状态丢了」压成同一个信号，而这两者在模型请求身份
+//         上是两种判定（见 src-cordis/…/identity.js 三态）。删除只由 prune 按 TTL 做。
 //   清理：App 启动/写前对过期残留做 prune（崩溃残留不阻塞，旧条目按 TTL 清）。
 //
-// 取舍（决策 C，详见 DESIGN「步骤 3 架构决策」）：ctx.storage.agent 有 512KB 软限/16MB
-// 硬限，且子进程读不到，不能作为跨进程事实源；本刀不复刻「storage 镜像副本」——单一
-// 事实源只有 dataDir 文件，避免双写漂移。storage.agent 仅当未来 App 侧需要跨重启检索
-// 任务/会话关系时再补索引。callToken 硬约束（指南 §5）：本模块只落 taskId/sessionId 等
-// 定位键，**绝不落 callToken**。
+// 为什么是文件而不是 ctx.storage：storage 只有 global 与 agent 两个 scope（无会话级），
+// 且子进程读不到，不能作为跨进程事实源；storage.agent 留给「App 侧需要跨重启检索」的将来。
+// callToken 硬约束：本模块只落 taskId/sessionId 等定位键，**绝不落 callToken**。
 //
-// 步骤 4a 扩展（审批/取消/超时链，见 DESIGN「步骤 4a 架构决策」）——同一映射文件追加
-// 工作单元级协调字段（写方 = App 主进程 submitDshTask/取消与受管 runtime approval-bridge/
-// task-bridge；同 DSH 会话由 App 串行化 + DSH 侧事件单飞，写冲突窗口极小，仍一律原子
-// 写 + 读-改-写收敛，见 patchTaskMap/updateTaskMap）：
-//   timeoutSec / approvalTimeoutMs —— 提交期快照（DSH 子进程读不到 App settings，
-//     经映射文件下传；approvalTimeoutMs=0 禁用宿主自动拒绝，见 manifest 注释）
+// 同一文件还承载工作单元级协调字段（写方 = App 主进程 submitDshTask / 取消链；受管 runtime
+// 的 approval-bridge 与 task-bridge；同 DSH 会话由 App 串行化 + DSH 侧事件单飞，写冲突窗口
+// 极小，仍一律原子写 + 读-改-写收敛，见 patchTaskMap/updateTaskMap）：
+//   timeoutSec / approvalTimeoutMs —— 提交期快照（DSH 子进程读不到 App settings，经映射文件
+//     下传；approvalTimeoutMs = 0 表示宿主不自动拒绝）
 //   cancel: { at, reason }          —— 取消已请求标记（cancel 工具/执行超时写；task-bridge
-//     终态时据此把 aborted 判成 hana.tasks.cancel 而非 fail——取消确认 = DSH 真中止后）
+//     终态时据此把 aborted 判成 hana.tasks.cancel 而非 fail——取消确认 = DSH 真中止之后）
 //   approvals: [ ... ]              —— 本工作单元挂起的宿主审批（DSH approval/request →
 //     hana.tasks.requestApproval 后由 approval-bridge 追加；App approve 经它校验会话归属/
 //     去重并回填 answered；watch 对账以宿主审批记录为准，本表是定位与用户侧去重视图）
@@ -201,7 +196,7 @@ export function pruneTaskMaps(dataDir, olderThanMs = TASK_MAP_TTL_MS) {
   }
   return removed;
 }
-// ---- 步骤 4a：映射补丁 / 取消标记 / 审批协调（原子读-改-写；跨进程共享同一文件）----
+// ---- 映射补丁 / 取消标记 / 审批协调（原子读-改-写；跨进程共享同一文件）----
 
 /** 原子写一条映射记录（.tmp + rename；entry 须含合法 dshSessionId）。 */
 function atomicWriteEntry(dataDir, entry) {
