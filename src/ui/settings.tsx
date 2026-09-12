@@ -70,6 +70,26 @@ function applyTheme(snap: ThemeSnap | null | undefined) {
 
 // ---- 小工具 ----
 const START_TIMEOUT_MS = 120000;
+/** 源切换轮询上限：链上最慢的是“停旧 + 起新”（含 profile 种子化与 DSH boot）。 */
+const SWITCH_TIMEOUT_MS = 300000;
+
+/** 数据来源三档（内部只有 private/shared 两态，第三档靠 path 区分）。 */
+const SOURCE_CHOICES: SelectOption[] = [
+  { value: "private", label: "内置独立目录（本 App 自己一份）" },
+  { value: "shared-default", label: "DSH 默认目录（~/.dsh）" },
+  { value: "shared-custom", label: "共享已有目录（自己选）" },
+];
+
+/** 切换链步骤 → 人话（页面进度显示用）。 */
+const STEP_LABEL: Record<string, string> = {
+  preflight: "预检新目录",
+  freeze: "暂停在途请求",
+  stopping: "停旧 runtime",
+  starting: "按新源启动",
+  saving: "落盘新设置",
+  "rolling-back": "失败回滚中",
+  done: "完成",
+};
 const MODEL_KEY_SEP = "\u0000"; // provider 与 model id 之间（见 modelOptions）
 
 function errText(e: unknown) {
@@ -159,6 +179,14 @@ function App() {
   const [cfgSaved, setCfgSaved] = useState(false);
   // 自持设置的 revision（乐观并发：写回带上，落后就 409）
   const [cfgRevision, setCfgRevision] = useState<number | null>(null);
+  // 数据来源：当前源回显 + 三档选择 + 切换 operation（页面轮询）
+  const [sourceView, setSourceView] = useState<any>(null);
+  const [sourceChoice, setSourceChoice] = useState("private");
+  const [customPath, setCustomPath] = useState("");
+  const [sharedProfile, setSharedProfile] = useState("dshana");
+  const [defaultSharedHome, setDefaultSharedHome] = useState("");
+  const [switching, setSwitching] = useState(false);
+  const [switchOp, setSwitchOp] = useState<any>(null);
 
   const [model, setModel] = useState<any>(null); // 最近一次读回的整份状态（ready/current/revision/catalog）
   const [modelHint, setModelHint] = useState("");
@@ -183,6 +211,18 @@ function App() {
       if (!res.ok) throw new Error("HTTP " + res.status);
       setDraft(stringifySettings(data && data.settings));
       setCfgRevision(data && typeof data.revision === "number" ? data.revision : null);
+      // 来源回显：内置 / 默认目录 / 自选（第三档靠路径是不是默认目录区分）
+      const s = (data && data.settings) || {};
+      const sharedHome = data && data.defaults && typeof data.defaults.sharedHome === "string" ? data.defaults.sharedHome : "";
+      setDefaultSharedHome(sharedHome);
+      setSourceView(data && data.source ? data.source : null);
+      if (s.mode === "private") setSourceChoice("private");
+      else if (sharedHome && s.path === sharedHome) setSourceChoice("shared-default");
+      else {
+        setSourceChoice("shared-custom");
+        setCustomPath(typeof s.path === "string" ? s.path : "");
+      }
+      if (typeof s.profile === "string" && s.profile) setSharedProfile(s.profile);
       setCfgHint("");
       setCfgWarn(false);
     } catch (e) {
@@ -312,6 +352,98 @@ function App() {
     }
   };
 
+  /** 选目录：只经 picker（不提供手填），回来的路径交给路由再 stat 一次（不信任前端）。 */
+  const pickDirectory = async () => {
+    try {
+      const picked = await hana.resources.pick({ mode: "directory" });
+      const first = picked && Array.isArray(picked.resources) ? picked.resources[0] : null;
+      const path = first && typeof first.path === "string" ? first.path : "";
+      if (!path) {
+        setCfgWarn(true);
+        setCfgHint("没有选到目录。");
+        return;
+      }
+      setCustomPath(path);
+      setCfgWarn(false);
+      setCfgHint("");
+    } catch (e) {
+      setCfgWarn(true);
+      setCfgHint("选择目录失败：" + errText(e));
+    }
+  };
+
+  /** 应用数据来源：走切换链（不直接写设置），然后轮询 operation 看结局。 */
+  const applySource = async () => {
+    const next = sourceChoice === "private"
+      ? { mode: "private", profile: "dshana" }
+      : {
+          mode: "shared",
+          path: sourceChoice === "shared-default" ? defaultSharedHome : customPath,
+          profile: sharedProfile.trim() || "dshana",
+        };
+    if (next.mode === "shared" && !next.path) {
+      setCfgWarn(true);
+      setCfgHint("共享模式要先选一个目录。");
+      return;
+    }
+    setSwitching(true);
+    setCfgHint("");
+    setCfgWarn(false);
+    try {
+      const { res, data } = await readJson("dshana/settings/restart", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ settings: next, expectedRevision: cfgRevision ?? undefined }),
+      });
+      if (res.status === 409) {
+        setCfgWarn(true);
+        setCfgHint(data && data.code === "SWITCH_BUSY" ? "已有切换在进行中，稍后看结果。" : "设置已被别处改过，已刷新。");
+        await loadConfig();
+        setSwitching(false);
+        return;
+      }
+      if (!res.ok || !data || data.ok !== true) throw new Error((data && data.error) || "HTTP " + res.status);
+      if (data.noop) {
+        setCfgHint("数据来源已经是这一档，无需切换。");
+        setSwitching(false);
+        return;
+      }
+      setSwitchOp(data.operation || null);
+      const deadline = Date.now() + SWITCH_TIMEOUT_MS;
+      while (Date.now() < deadline) {
+        await sleep(1500);
+        if (!alive.current) return;
+        try {
+          const { data: now } = await readJson("dshana/settings");
+          const op = now && now.operation;
+          if (!op) continue;
+          setSwitchOp(op);
+          if (op.state === "succeeded") {
+            await loadConfig();
+            setCfgHint("数据来源已切换。");
+            setSwitching(false);
+            return;
+          }
+          if (op.state === "failed") {
+            setCfgWarn(true);
+            setCfgHint("切换失败：" + (op.error || "原因未知"));
+            setSwitching(false);
+            return;
+          }
+        } catch {
+          /* 切换中路由/中继可能短暂不可用，接着等 */
+        }
+      }
+      setCfgWarn(true);
+      setCfgHint("切换超时：请稍后刷新本页看结果。");
+      setSwitching(false);
+    } catch (e) {
+      setCfgWarn(true);
+      setCfgHint("切换请求失败：" + errText(e));
+      setSwitching(false);
+    }
+  };
+
   const startDsh = async () => {
     setStarting(true);
     setModelWarn(false);
@@ -404,6 +536,62 @@ function App() {
               onSavedFeedbackEnd={() => setCfgSaved(false)}
               onClick={() => void saveConfig()}
             />
+          }
+        />
+      </SettingsSection>
+
+      <SettingsSection
+        title="数据来源"
+        description="DSH 用哪份数据目录。切换会重启 DSH：先预检新目录，成功之后才落盘，失败自动回到原来的源。"
+      >
+        <SettingRow
+          label="来源"
+          hint={
+            sourceView && sourceView.home
+              ? "当前：" + sourceView.home + (sourceView.shared ? "（共享）" : "（内置）")
+              : undefined
+          }
+          layout="stacked"
+          control={<Select ariaLabel="数据来源" value={sourceChoice} options={SOURCE_CHOICES} onChange={setSourceChoice} />}
+        />
+        {sourceChoice === "shared-custom" && (
+          <SettingRow
+            label="目录"
+            hint={customPath || "选一个已有的 DSH 数据目录（不存在或不是目录会被拒）"}
+            layout="stacked"
+            control={
+              <Button variant="secondary" onClick={() => void pickDirectory()}>
+                选择目录
+              </Button>
+            }
+          />
+        )}
+        {sourceChoice !== "private" && (
+          <SettingRow
+            label="profile"
+            hint="该目录下的 profile 名（内置模式固定为 dshana）"
+            layout="stacked"
+            control={
+              <TextInput
+                ariaLabel="profile"
+                value={sharedProfile}
+                onChange={(e) => setSharedProfile(e.target.value)}
+              />
+            }
+          />
+        )}
+        <SettingRow
+          label="应用"
+          hint={
+            switching && switchOp && switchOp.state === "running"
+              ? "正在进行：" + (STEP_LABEL[switchOp.step] || switchOp.step || "切换中")
+              : cfgHint || undefined
+          }
+          hintVariant={cfgWarn ? "warn" : "default"}
+          control={
+            <Button variant="primary" loading={switching} onClick={() => void applySource()}>
+              应用并重启
+            </Button>
           }
         />
       </SettingsSection>

@@ -31,7 +31,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { managedRuntimeDetails, ensureManagedRuntime, stopManagedRuntime, bridgeAccess } from "../lib/managed-runtime.ts";
 import { buildBootSnapshot, APP_ID } from "../lib/boot-state.ts";
-import { dataSources, sourceOf } from "../lib/data-source.ts";
+import { dataSources, defaultDshHome, sourceOf } from "../lib/data-source.ts";
 import { sourceSwitcher } from "../lib/source-switch.ts";
 import { readDefaultModel, writeDefaultModel } from "../lib/model-settings.ts";
 export const DASHANA_ROUTE_PREFIX = "/dshana";
@@ -198,7 +198,14 @@ export function registerDshanaRoutes(app, deps) {
     app.get(DASHANA_ROUTE_PREFIX + "/settings", async (c) => {
       try {
         const view = await readSettings();
-        return json(c, 200, { ok: true, ready: true, operation: switchOperation(), ...view });
+        // 页面认不出 ~：DSH 默认目录由后端算好给它，“共享（默认）”那一档直接用
+        return json(c, 200, {
+          ok: true,
+          ready: true,
+          operation: switchOperation(),
+          defaults: { sharedHome: defaultDshHome() },
+          ...view,
+        });
       } catch (e) {
         log("warn", "/dshana/settings 读取失败：" + ((e && e.message) || e));
         return json(c, 500, { ok: false, error: (e && e.message) || String(e) });
