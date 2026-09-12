@@ -17,7 +17,10 @@
 <link rel="stylesheet" href="./settings.css">
 <style>
   html, body { height: 100%; margin: 0; }
-  html { color-scheme: light dark; }
+  /* 底色与文字色由本页自己画：这是一个独立文档，组件库的样式表不定义页面级 token，
+     值来自宿主主题（settings.js 注入的宿主主题 CSS 覆盖 --bg/--text）。
+     兜底色是被覆盖前的第一帧，与旧设置页一致。 */
+  html, body { background: var(--bg, #F5EFE4); color: var(--text, #2A2622); }
 </style>
 </head>
 <body>
