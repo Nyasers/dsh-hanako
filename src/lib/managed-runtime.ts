@@ -24,7 +24,7 @@
 //   唯一的子进程入参是私有运行时配置文件路径（argv[1]），由 writeRuntimeConfigFile 落盘、
 //   buildRuntimeConfig 生产 schema；不再有命令行明文参数（凭据/端口不进 argv）。
 import { join } from "node:path";
-import { mkdirSync, writeFileSync, chmodSync, rmSync } from "node:fs";
+import { mkdirSync, writeFileSync, chmodSync, rmSync, readFileSync } from "node:fs";
 import { randomInt, randomBytes } from "node:crypto";
 import { appDataDir, appLogger, getAppRuntime } from "./app-runtime.ts";
 import { currentSource } from "./data-source.ts";
@@ -290,6 +290,80 @@ function scheduleRuntimeAutoRetry(reason) {
   );
 }
 
+/** 预检超时：只做依赖就位 + 定位 DSH + profile 种子化，不 boot DSH，给 60s 足够。 */
+export const PREFLIGHT_TIMEOUT_MS = 60000;
+const PREFLIGHT_POLL_MS = 200;
+
+/**
+ * 新数据源可用性预检（切换链第 2 步，D-m）。
+ *
+ * 用同一个 runtime entry 另起一个子进程，配置带 preflight:true + resultPath：子进程只跑到
+ * 「依赖就位 + 定位 DSH + profile 种子化」就写结果并退出，**不 boot DSH、不动现有 runtime**。
+ * 父侧等结果文件或子进程终态；失败与超时都归 preflight 类错误（有界，不无限等）。
+ *
+ * 返回 { ok, error?, dshHome? }；不抛（除调用契约错误），失败是链上的一步可预期结果。
+ */
+export async function preflightSource({ dataDir, dshHome, profile }) {
+  const app = getAppRuntime();
+  const ctx = app && app.ctx;
+  if (!ctx || !ctx.runtime || typeof ctx.runtime.start !== "function") {
+    return { ok: false, error: "宿主 runtime 不可用，无法预检新数据源" };
+  }
+  const resultPath = join(dataDir, "integration", "preflight-" + randomBytes(9).toString("hex") + ".json");
+  // 预检形态不需要端口/凭据：只给目标 home 与结果路径（见 src/runtime/options.ts 的 preflight 支）
+  const configPath = writeRuntimeConfigFile(dataDir, { dataDir, dshHome, profile, preflight: true, resultPath });
+  const cleanup = () => {
+    try { rmSync(configPath, { force: true }); } catch { /* 忽略 */ }
+    try { rmSync(resultPath, { force: true }); } catch { /* 忽略 */ }
+  };
+  let runtimeId = null;
+  try {
+    const info = await ctx.runtime.start({
+      runtime: "node",
+      entry: RUNTIME_ENTRY,
+      profile: "local-machine",
+      network: "external",
+      cwd: dataDir,
+      args: [configPath],
+    });
+    runtimeId = info && info.runtimeId;
+  } catch (e) {
+    cleanup();
+    return { ok: false, error: "预检子进程启动被拒：" + ((e && e.message) || e) };
+  }
+  const deadline = Date.now() + PREFLIGHT_TIMEOUT_MS;
+  try {
+    while (Date.now() < deadline) {
+      try {
+        const raw = readFileSync(resultPath, "utf8");
+        const parsed = JSON.parse(raw);
+        return parsed && parsed.ok === true
+          ? { ok: true, dshHome: parsed.dshHome || dshHome }
+          : { ok: false, error: (parsed && parsed.error) || "预检未通过（无原因）" };
+      } catch (e) {
+        if (e && e.code !== "ENOENT") {
+          return { ok: false, error: "预检结果文件不可用：" + ((e && e.message) || e) };
+        }
+      }
+      const cur = await ctx.runtime.get(runtimeId).catch(() => null);
+      if (cur && TERMINAL_STATES.has(cur.state)) {
+        return { ok: false, error: "预检子进程未写出结果就结束（state=" + cur.state + "，详情见 runtime 日志）" };
+      }
+      await new Promise((r) => setTimeout(r, PREFLIGHT_POLL_MS));
+    }
+    return { ok: false, error: "预检超时（" + Math.round(PREFLIGHT_TIMEOUT_MS / 1000) + "s 内未出结果）" };
+  } finally {
+    // 无论如何不留残余：停掉预检子进程（幂等）+ 删配置与结果文件
+    try {
+      const cur = runtimeId ? await ctx.runtime.get(runtimeId).catch(() => null) : null;
+      if (cur && !TERMINAL_STATES.has(cur.state) && typeof ctx.runtime.stop === "function") {
+        await ctx.runtime.stop(runtimeId);
+      }
+    } catch { /* 停不掉不阻塞结果（超时也归 preflight 失败） */ }
+    cleanup();
+  }
+}
+
 /**
  * 每次命中 ready 缓存都先探活（runtime.get）；子进程崩溃/被回收则清单例并重起。
  */
@@ -355,7 +429,9 @@ async function doStartManaged(opts, attempt = 1) {
   if (!dataDir) throw new Error("managed-runtime: ctx.dataDir 缺失");
   // 数据源：DSH_HOME 由当前源决定（private = <dataDir>/.dsh；shared = 外部目录）。
   // 读设置失败即抛错（不得默认切错源）；设置文件不存在时回落 private 默认。
-  const source = await currentSource();
+  // 源默认取当前自持设置；带 dshHome 覆盖时用它（切换链要能在落盘之前先按新源启动）
+  const base = await currentSource();
+  const source = typeof opts.dshHome === "string" && opts.dshHome ? { ...base, home: opts.dshHome } : base;
   const { bridgePort, dshPort } = pickPorts();
   const bridgeKey = randomBytes(24).toString("base64url");
   const controlKey = randomBytes(24).toString("base64url");

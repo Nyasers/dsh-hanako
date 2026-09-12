@@ -56,6 +56,7 @@ test("挂载清单：GET boot-state/health/settings/model + POST start/stop/sett
     "GET /dshana/settings",
     "POST /dshana/model",
     "POST /dshana/settings",
+    "POST /dshana/settings/restart",
     "POST /dshana/start",
     "POST /dshana/stop",
   ]);
@@ -360,4 +361,71 @@ test("POST /dshana/model: 非冲突失败 → 200/ok=false + error（不是 409�
   assert.equal(ctx.status, 200);
   assert.equal(ctx.body.ok, false);
   assert.match(ctx.body.error, /HTTP 500/);
+});
+
+// ---- 数据源切换（路由只做形状与状态码，链的语义在 source-switch 的单测里）----
+
+test("POST /dshana/settings/restart: 接受 → 202 + operation（不阻塞请求）", async () => {
+  const { app, routes } = makeFakeApp();
+  const operation = { id: "switch-1", state: "running", step: "preflight", error: null };
+  registerDshanaRoutes(app, makeFakeDeps({
+    switchSource: async (settings, expectedRevision) => {
+      assert.equal(settings.mode, "shared");
+      assert.equal(expectedRevision, 3);
+      return { ok: true, operation };
+    },
+  }));
+  const [,, handler] = routes.find(([m, p]) => m === "POST" && p === "/dshana/settings/restart");
+  const ctx = makeFakeCtx();
+  ctx.req = { json: async () => ({ settings: { mode: "shared", path: "D:/dsh" }, expectedRevision: 3 }) };
+  await handler(ctx);
+  assert.equal(ctx.status, 202);
+  assert.equal(ctx.body.accepted, true);
+  assert.equal(ctx.body.operation.id, "switch-1");
+});
+
+test("POST /dshana/settings/restart: 进行中 → 409 SWITCH_BUSY；revision 落后 → 409 SETTINGS_CONFLICT", async () => {
+  const cases = [
+    [{ ok: false, busy: true, operation: { id: "x" } }, "SWITCH_BUSY"],
+    [{ ok: false, conflict: true, revision: 9 }, "SETTINGS_CONFLICT"],
+  ];
+  for (const [reply, code] of cases) {
+    const { app, routes } = makeFakeApp();
+    registerDshanaRoutes(app, makeFakeDeps({ switchSource: async () => reply }));
+    const [,, handler] = routes.find(([m, p]) => m === "POST" && p === "/dshana/settings/restart");
+    const ctx = makeFakeCtx();
+    ctx.req = { json: async () => ({ settings: { mode: "shared", path: "D:/dsh" }, expectedRevision: 3 }) };
+    await handler(ctx);
+    assert.equal(ctx.status, 409);
+    assert.equal(ctx.body.code, code);
+  }
+});
+
+test("POST /dshana/settings/restart: 形状不对 → 400（不触发切换）", async () => {
+  const { app, routes } = makeFakeApp();
+  let called = 0;
+  registerDshanaRoutes(app, makeFakeDeps({ switchSource: async () => { called += 1; return { ok: true }; } }));
+  const [,, handler] = routes.find(([m, p]) => m === "POST" && p === "/dshana/settings/restart");
+  const ctx = makeFakeCtx();
+  ctx.req = { json: async () => ({ mode: "shared" }) };
+  await handler(ctx);
+  assert.equal(ctx.status, 400);
+  assert.equal(called, 0);
+});
+
+test("GET /dshana/settings: 带当前切换 operation（供轮询）", async () => {
+  const { app, routes } = makeFakeApp();
+  registerDshanaRoutes(app, makeFakeDeps({
+    readSettings: async () => ({
+      revision: 1,
+      settings: { mode: "private", path: null, profile: "dshana", approvalTimeoutSec: 30, defaultTimeoutSec: 1800 },
+      source: { sourceId: "private" },
+      lastShared: null,
+    }),
+    switchOperation: () => ({ id: "switch-1", state: "failed", error: "预检未通过" }),
+  }));
+  const [,, handler] = routes.find(([m, p]) => m === "GET" && p === "/dshana/settings");
+  const ctx = makeFakeCtx();
+  await handler(ctx);
+  assert.equal(ctx.body.operation.state, "failed");
 });
