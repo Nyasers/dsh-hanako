@@ -41,6 +41,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
+          # vendor/deepseek-harness 是 submodule，镜像校验要读它的 tag（dsh-v<版本>）。
+          submodules: recursive
           fetch-depth: 0
 
       # 建 draft + pre-release：上传完并校验通过后才由 publish job 去掉 draft。
@@ -75,6 +77,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          # package 链会跑 prepackage（derive + build），同样要读 submodule 的 tag。
+          submodules: recursive
+          fetch-depth: 0
 
       # 显式装 pnpm（读 package.json packageManager 钉版本），不依赖 runner 预装 corepack
       - uses: pnpm/action-setup@v4
@@ -111,6 +117,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          fetch-depth: 0
 
       - name: Download all package artifacts
         uses: actions/download-artifact@v4
