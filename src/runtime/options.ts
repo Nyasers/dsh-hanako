@@ -104,10 +104,10 @@ export function normalizeRuntimeConfig(input) {
 
 /**
  * 解析入口参数：argv[0] === "--help" 返回 { help:true }；否则视 argv[0] 为配置文件路径。
- * @param {string[]} argv 纯参数数组（不含 node/script）
- * @param {(path:string)=>string} readFile 读取注入（默认 node 同步读；便于单测）
+ * @param argv 纯参数数组（不含 node/script）
+ * @param readFile 读取注入（默认 node 同步读；便于单测）
  */
-export function parseRuntimeConfig(argv, readFile) {
+export function parseRuntimeConfig(argv: string[], readFile: (path: string) => string) {
   const raw = Array.isArray(argv) ? argv : [];
   if (raw[0] === "--help" || raw[0] === "-h") return { help: true };
   const configPath = raw[0];

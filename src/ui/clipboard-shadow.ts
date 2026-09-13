@@ -34,13 +34,35 @@
 /** 已安装标记（幂等：重复安装只返回一个空 disposer，不重建、不接管别人的清理）。 */
 const MARK = "__DSHANA_CLIPBOARD_SHADOW__";
 
+/** 上报口：影子写失败/降级时上报（stage 供定位）。 */
+export type ClipboardReport = (stage: string, error: unknown) => void;
+
+/** createClipboardShadow / installClipboardShadow 的依赖（缺省取全局）。 */
+export interface ClipboardShadowDeps {
+  /** 要接管剪贴板写的对象（默认 navigator.clipboard）。 */
+  clipboard?: any;
+  /** 壳页桥（读它的 clipboardWrite）。 */
+  bridge?: any;
+  report?: ClipboardReport;
+}
+
+/** 剪贴板影子：被替掉的原始实现 + 影子写入口。 */
+export interface ClipboardShadow {
+  /** 安装/卸载影子对象。 */
+  shadow: any;
+  writeShadow: (text: string) => unknown;
+  original: any;
+  originalWrite: any;
+  extractText: (data: unknown) => string;
+}
+
 /**
  * 造剪贴板影子（导出以便单测）。
  * @param {{clipboard?: any, bridge?: any, report?: (stage: string, error: unknown) => void}} deps
  *   clipboard 为 navigator.clipboard；bridge 为 window.__DSHANA__（读它的 clipboardWrite）
  * @returns {{shadow, writeShadow, original, originalWrite, extractText}}
  */
-export function createClipboardShadow({ clipboard, bridge, report } = {}) {
+export function createClipboardShadow({ clipboard, bridge, report }: ClipboardShadowDeps = {}): ClipboardShadow {
   const original = clipboard && typeof clipboard.writeText === "function" ? clipboard.writeText.bind(clipboard) : null;
   const originalWrite = clipboard && typeof clipboard.write === "function" ? clipboard.write.bind(clipboard) : null;
   const note = typeof report === "function" ? report : () => {};
@@ -133,7 +155,9 @@ export function createClipboardShadow({ clipboard, bridge, report } = {}) {
  * @param {{target?: any, bridge?: any, report?: (stage: string, error: unknown) => void}} [options]
  * @returns {() => void} disposer（重复安装返回空函数，不会拆掉先装的那次）
  */
-export function installClipboardShadow(options = {}) {
+export function installClipboardShadow(
+  options: ClipboardShadowDeps & { target?: any } = {},
+): () => void {
   const target = options.target || (typeof globalThis === "undefined" ? null : globalThis);
   if (!target || target[MARK]) return () => {};
   const nav = target.navigator;
