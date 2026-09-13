@@ -1,0 +1,19 @@
+{
+  // 覆盖层是「盖进上游包里」才成立的：相对 import 指向上游文件，上游包也只住在依赖/镜像里。
+  // 这份 tsconfig 只服务编辑器（rootDirs 让覆盖目录与上游镜像的 src 视作同一个根）；
+  // 判定口径以 scripts/overlay-typecheck.mts 为准，它不参与 typecheck / build。
+  "extends": ["../../tsconfig.json", "../tsconfig.paths.json"],
+  "compilerOptions": {
+    "rootDirs": [
+      "files/src",
+      "../../vendor/deepseek-harness/packages/client/ui-conversation/src"
+    ]
+  },
+  "include": [
+    "files/src/**/*.ts",
+    "files/src/**/*.tsx",
+    // 上游整包源都纳入：模块增强与全局声明要“在程序里”才生效。
+    "../../vendor/deepseek-harness/packages/client/ui-conversation/src/**/*.ts",
+    "../../vendor/deepseek-harness/packages/client/ui-conversation/src/**/*.tsx"
+  ]
+}
