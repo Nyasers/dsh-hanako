@@ -151,6 +151,12 @@ export async function buildClientBundle({ id, pkgDir, outDir, externals = ["reac
     sourcemap: false,
     minify: true, // 与 rspack 链 minimize 对齐：产物即时压缩（pack terser 二次压缩兜底）
     define: { ...envDefines, ...defines }, // 包级 defines 覆盖环境默认（如 DSH_CLIENT_TITLE）
+    // 解析条件：产物跑在浏览器，**不能带 node 条件**。lexical 系包的 exports 把 `node` 排在
+    // `default` 之前，命中它会换成带 top-level await 的 .node.mjs（CJS 产物不支持）。
+    // production 与上面的 define（NODE_ENV=production）对齐，让有该条件的包也取生产入口。
+    inputOptions: {
+      resolve: { conditionNames: ["browser", "import", "production", "default"] },
+    },
     // 待内联库的解析别名（specifier → 绝对文件路径）。为什么需要：pnpm 在 Windows 长路径
     // 下把实体放进带哈希的 .pnpm 目录，而根级链接指向一个不存在的名字（dangling）——
     // 从 stages 目录向上走到的 <repo>/node_modules/<pkg> 因此解不开。调用侧（integrations.mts）
