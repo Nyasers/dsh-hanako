@@ -3,12 +3,14 @@
 //
 // src/tools/actions/list.ts — dshana list：DSH 子代理会话清单
 //
-// 只读查询（官方 session/list，需受管 runtime 就绪）；本项目特色。
+// 只读查询（官方 session/list，需受管 runtime 就绪）。
 //
-// 状态：**源码保留，但暂不注册到工具面**（2026-09-13）。任务绑定语义下会话靠句柄定位，
-// 不需要 list 发现路径；此文件保留以备将来需要“跨对话找回旧会话”时再导入（见
-// specs/current/sample-align W4 的收缩口径）。要重新启用：在 src/tools/index.ts 的 ACTIONS
-// 与 description 里加回本模块即可。
+// 状态：**冻结禁用（2026-09-13）**。源码保留，但不注册到工具面，也不做 cursor / sourceId
+// 那套“先 list 发现再操作”的配套语义（见 specs/current/sample-align 裁决 2c）。
+// 任务绑定语义下会话靠句柄定位；即便需要“列会话”，也改走**宿主内置的 `ctx.tasks.list` 通道**：
+// 按任务记录的 `metadata.dsh` 反查本 App 发起的实例（`parentSessionPath` 天然带会话归属），
+// 不再向 DSH 问 session/list。要重新启用本模块：在 src/tools/index.ts 的 import、ACTIONS
+// 与 description 里加回即可。
 import { execute as queryExecute } from "../shared/query.ts";
 
 export const command = "list";

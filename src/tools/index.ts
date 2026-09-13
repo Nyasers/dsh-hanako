@@ -28,8 +28,9 @@ import * as replyAction from "./actions/reply.ts";
 import * as closeAction from "./actions/close.ts";
 import * as getAction from "./actions/get.ts";
 import * as approveAction from "./actions/approve.ts";
-// actions/list.ts（会话清单）：**源码保留，暂不注册**——任务绑定语义下会话靠句柄定位，不需要
-// list 发现路径（理由见该文件头注释与 specs/current/sample-align 的 W4 收缩口径）。
+// actions/list.ts（会话清单）：**冻结禁用**（2026-09-13）——不注册到工具面；任务绑定语义下
+// 会话靠句柄定位，需要“列会话”时改走宿主内置的 `ctx.tasks.list`（读任务记录的 metadata.dsh，
+// parentSessionPath 天然带会话归属）。理由见该文件头注释与 specs/current/sample-align 裁决 2c。
 // 要重新启用：把 list 的 import、ACTIONS 里的条目、description 的列举一并加回。
 
 /** subcommand 注册表（顺序即 description 的列举顺序）。 */
