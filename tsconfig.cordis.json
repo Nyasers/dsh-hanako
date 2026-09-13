@@ -13,7 +13,7 @@
     // 本仓的直接依赖住在 pnpm 的隐藏目录：不指这里的话，cordis / dsh 那批包解析不到，
     // 报错会落在"包没装"而不是我们的代码上。
     "paths": { "*": ["./node_modules/.pnpm/node_modules/*"] },
-    "typeRoots": ["./node_modules/.pnpm/node_modules/@types"],
+    "typeRoots": ["./node_modules/@types", "./node_modules/.pnpm/node_modules/@types"],
     "strict": true,
     "noImplicitAny": false,
     "noUnusedLocals": false,
