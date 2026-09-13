@@ -36,6 +36,18 @@ export default {
   },
   experiments: { outputModule: true },
   externalsPresets: { node: true },
+  // .ts 交给内置 swc 转译（同主 bundle 配置）：runtime 域也是正式 TypeScript，无 JSX。
+  module: {
+    rules: [
+      {
+        test: /\.ts$/,
+        use: {
+          loader: "builtin:swc-loader",
+          options: { jsc: { parser: { syntax: "typescript" }, target: "es2022" } },
+        },
+      },
+    ],
+  },
   optimization: { minimize: true, usedExports: false, sideEffects: false },
   devtool: false,
   node: false,
