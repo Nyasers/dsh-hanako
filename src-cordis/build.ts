@@ -13,8 +13,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 
 import fs from "fs-extra";
-import { serviceBundle } from "./build/service-config.mts"; // preset 层（src-cordis/build/）
-import { buildClientBundle } from "./build/client-config.mts";
+import { serviceBundle } from "#/build/service-config.mts"; // preset 层（src-cordis/build/）
+import { buildClientBundle } from "#/build/client-config.mts";
 import { collectSource, makeUrlRewriter, assertNoStaticFileUrl } from "../scripts/build-common.mts"; // 根级共享
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), ".."); // src-cordis/ → 仓库根
