@@ -24,7 +24,7 @@
 //
 // 职责（version 钩子内按序）：
 //   1. 读 package.json version（pnpm 已写裸号）+ dsh 依赖声明 → 拼回完整版写主
-//   2. syncver 派生同步（manifest + cordis 包 = 主，幂等）
+//   2. derive 派生同步（manifest + cordis 包 + vendor 的 checkout，幂等）
 //   3. changelog 增量生成（conventional-changelog，标题带完整版）
 //   4. HEAD 版本门禁（完整版相对 HEAD 未变化 → 拒绝，防 --allow-same-version 空转/误跑）
 //   5. tag preflight（v<完整版> 已存在 → 拒绝重复发版）
@@ -68,8 +68,8 @@ function main() {
   pkg.version = full;
   writePkg("package.json", pkg);
   console.log("[version-hook] 主版本拼回完整版: " + bare + " -> " + full);
-  // 2) 派生同步（manifest + cordis 包）
-  run("node scripts/syncver.mts", "syncver 派生同步");
+  // 2) 派生同步（manifest + cordis 包 + vendor 的 checkout：见 scripts/derive.mts）
+  run("node scripts/derive.mts", "derive 派生同步");
   // 3) changelog 增量生成（读主 version = 完整版）
   run("node scripts/changelog.mts", "changelog 增量生成");
   // 4) HEAD 门禁：完整版相对 HEAD 未变化（未真实 bump / 同版本重跑）→ 拒绝提交

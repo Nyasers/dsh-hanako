@@ -379,7 +379,7 @@ export async function buildIntegrations(integrations, { tag, mirrorDir = MIRROR,
     cpSync(join(template, "lib"), join(out, "lib"), { recursive: true });
     cpSync(join(stage, "lib", "client.js"), join(out, "lib", "client.js"));
     const manifest = JSON.parse(readFileSync(join(template, "package.json"), "utf8"));
-    // 版本戳：<上游版本>+dshana-<我们的干净版本>（合成在 scripts/version-common.mts，与 syncver 同一份）。
+    // 版本戳：<上游版本>+dshana-<我们的干净版本>（合成在 scripts/version-common.mts，与 derive 同一份）。
     // 上游段原样保留：一眼看出改的是哪个上游包。
     manifest.version = patchVersion(manifest.version);
     writeFileSync(join(out, "package.json"), JSON.stringify(manifest, null, 2));

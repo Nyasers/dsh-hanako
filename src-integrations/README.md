@@ -56,6 +56,6 @@ integrations/<短名>/
 - **不改上游未涉及的包**。
 - 产物版本号带 `<上游版本>+dshana-<我们的干净版本>`（例 `0.1.5-rc.2+dshana-1.0.0-beta.5`）：
   安装树里一眼可见“这包被改过”、被哪个 dshana 版本改的。版本段只有一个来源——主
-  `package.json`（合成在 `scripts/version-common.mts`，与 syncver/version-hook 同一份）；
+  `package.json`（合成在 `scripts/version-common.mts`，与 derive/version-hook 同一份）；
   清单里不写任何手写版本字段。
 - 不做运行时 shim：与"贴上游 + 构建期有闸"的路线相悖。

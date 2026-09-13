@@ -39,7 +39,7 @@ if (!version) throw new Error("package.json version 缺失");
 const manifestVersion = fs.readJsonSync(join(ROOT, "src", "manifest.json")).version;
 if (version !== manifestVersion)
   throw new Error(
-    `版本不一致：package.json ${version} ≠ manifest.json ${manifestVersion}（manifest 未同步，跑 node scripts/syncver.mts 同步后再打包）`,
+    `版本不一致：package.json ${version} ≠ manifest.json ${manifestVersion}（manifest 未同步，跑 node scripts/derive.mts 同步后再打包）`,
   );
 
 // 1. 静态项复制进 dist —— dist 即完整交付目录（bundle + manifest + skills + cordis 插件），
@@ -74,7 +74,7 @@ for (const item of staticItems) {
 }
 
 // 1.5) cordis 包 version 一致性校验（防回归，与 manifest 校验对称）：cordis 包（roster
-//   bundle dshana + 10 子插件）version 与主 package.json 同批由 syncver/version-hook（pnpm
+//   bundle dshana + 10 子插件）version 与主 package.json 同批由 derive/version-hook（pnpm
 //   version 发版流程）同步（单一事实源 = 主 package.json，cordis 包跟随等值，无独立版本线；
 //   build metadata +dsh-<dsh 依赖> 由 version-hook 在发版时统一拼回），
 //   pack 时读 dist 产物校验一致——手改/漏同步即出包版本漂移。
@@ -103,7 +103,7 @@ function assertCordisDistVersions(outDir) {
     const j = fs.readJsonSync(pj);
     if (j.version !== version) {
       throw new Error(
-        `版本不一致：cordis 包 ${join("cordis", name, "package.json")} version ${j.version} ≠ package.json ${version}（跑 node scripts/syncver.mts 同步后再打包）`,
+        `版本不一致：cordis 包 ${join("cordis", name, "package.json")} version ${j.version} ≠ package.json ${version}（跑 node scripts/derive.mts 同步后再打包）`,
       );
     }
     count += 1;

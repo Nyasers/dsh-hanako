@@ -2,7 +2,7 @@
   // 覆盖层是「盖进上游包里」才成立的：相对 import（./OpenInAppAction.tsx 等）指向上游文件，
   // 上游包（@deepseek-ai/dsh-client-*）也只住在依赖/镜像里。这份 tsconfig 只服务编辑器：
   //   · rootDirs 把覆盖目录与上游镜像的 src 视作同一个根，相对 import 便能找到邻位；
-  //   · tsconfig.paths.json（node scripts/ide-tsconfig.mts 生成）给出 @deepseek-ai/* → 镜像源映射。
+  //   · tsconfig.paths.json（node scripts/derive.mts paths 生成）给出 @deepseek-ai/* → 镜像源映射。
   // 判定口径仍以 scripts/overlay-typecheck.mts 为准（它在暂存树里跑）；这里只服务编辑器。
   "extends": ["../../tsconfig.json", "../tsconfig.paths.json"],
   "compilerOptions": {

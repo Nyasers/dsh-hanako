@@ -31,12 +31,12 @@ const TSC_REL = ["node_modules", "typescript", "bin", "tsc"];
  * 反过来报我们的文件“属性不存在”。所以口径定死：**一律以上游源为准**（我们改的就是那份
  * 源），也即镜像优先，本仓产物只当兵底。
  */
-const mirrorCache = new Map();
-export function mirrorPathEntries(mirrorDir, hiddenDir) {
+const mirrorCache = new Map<string, Record<string, string[]>>();
+export function mirrorPathEntries(mirrorDir, hiddenDir): Record<string, string[]> {
   const key = `${mirrorDir}|${hiddenDir}`;
   const hit = mirrorCache.get(key);
   if (hit) return hit;
-  const out = {};
+  const out: Record<string, string[]> = {};
   const groupsDir = join(mirrorDir, "packages");
   if (existsSync(groupsDir)) {
     for (const group of readdirSync(groupsDir, { withFileTypes: true })) {

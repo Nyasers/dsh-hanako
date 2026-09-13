@@ -87,7 +87,7 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # prepackage 钩子自动前置 syncver + build；pack 按目标做干净安装并断言该平台的预编译资产
+      # prepackage 钩子自动前置 derive + build；pack 按目标做干净安装并断言该平台的预编译资产
       - name: Package ${{ matrix.target }}
         run: pnpm run package --target=${{ matrix.target }}
 
