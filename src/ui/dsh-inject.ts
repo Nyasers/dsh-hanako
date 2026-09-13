@@ -87,10 +87,10 @@ export const HOST_PATH_PREFIXES = ["/api/apps/"];
 
 /**
  * 判定 + 重写：返回应发出的 URL；返回 null 表示按原生放行。
- * @param {string|URL} input
- * @param {URL} privateBase 中继前缀绝对 URL（尾带 /）
- * @param {{pageOrigin?: string, hostPrefixes?: string[]}} [opts]
- * @returns {URL|null}
+ * @param input 目标 URL（字符串或 URL 均可）
+ * @param privateBase 中继前缀绝对 URL（尾带 /）
+ * @param [opts]
+ * @returns 应发出的 URL；null = 按原生放行
  */
 export function resolveRelayUrl(
   input: string | URL,
@@ -134,9 +134,9 @@ function inheritStatics(Wrapped, Native) {
  * 只做一件事——把「发给本页 origin、且不属于宿主前缀」的 URL 改指中继前缀。
  * 覆盖不到的载体（Blob Worker 内部的 fetch、CSS url()、动态 import 之外的 DOM 资源）由
  * `<base>` 与各自钩子负责：见下面 installTransport 的覆盖边界说明。
- * @param {URL} privateBase
- * @param {{target?: any, navigator?: any, pageOrigin?: string, hostPrefixes?: string[]}} [opts]
- * @returns {() => void} disposer（逐个还原原生接口）
+ * @param privateBase 中继前缀绝对 URL（尾带 /）
+ * @param [opts]
+ * @returns disposer（逐个还原原生接口）
  */
 export function installRequestTakeover(
   privateBase: URL,
@@ -344,9 +344,9 @@ function appendScript(source, module = false) {
 /**
  * 把 DSH 的 index.html 注入当前文档：设 <base>，搬 head 里的 stylesheet/modulepreload/
  * 内联与外部 script，最后加载 module entry；卸载壳页自举 UI，准备 #root 容器。
- * @param {string} indexHtml DSH index 原文（经中继取回）
- * @param {URL} privateBase 中继前缀绝对 URL（尾带 /）
- * @param {{containerId?: string}} [opts]
+ * @param indexHtml DSH index 原文（经中继取回）
+ * @param privateBase 中继前缀绝对 URL（尾带 /）
+ * @param [opts] 形如 { containerId }（缺省 "root"）
  */
 export async function injectDshIndex(
   indexHtml: string,

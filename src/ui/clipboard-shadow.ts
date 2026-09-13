@@ -58,9 +58,9 @@ export interface ClipboardShadow {
 
 /**
  * 造剪贴板影子（导出以便单测）。
- * @param {{clipboard?: any, bridge?: any, report?: (stage: string, error: unknown) => void}} deps
+ * @param deps
  *   clipboard 为 navigator.clipboard；bridge 为 window.__DSHANA__（读它的 clipboardWrite）
- * @returns {{shadow, writeShadow, original, originalWrite, extractText}}
+ * @returns 影子与写入口
  */
 export function createClipboardShadow({ clipboard, bridge, report }: ClipboardShadowDeps = {}): ClipboardShadow {
   const original = clipboard && typeof clipboard.writeText === "function" ? clipboard.writeText.bind(clipboard) : null;
@@ -152,8 +152,8 @@ export function createClipboardShadow({ clipboard, bridge, report }: ClipboardSh
 
 /**
  * 全局安装：实例方法与原型方法都换成影子（幂等）。
- * @param {{target?: any, bridge?: any, report?: (stage: string, error: unknown) => void}} [options]
- * @returns {() => void} disposer（重复安装返回空函数，不会拆掉先装的那次）
+ * @param [options] 形如 { target, bridge, report }
+ * @returns disposer（重复安装返回空函数，不会拆掉先装的那次）
  */
 export function installClipboardShadow(
   options: ClipboardShadowDeps & { target?: any } = {},
