@@ -55,7 +55,7 @@ Hana 宿主进程（App 隔离进程内加载 dist/index.js）
 | `close` | 取消正在跑的任务（taskId 句柄或 sessionId 凭证） | `tools/actions/close.ts` → `lib/cancel-chain.js` |
 | `approve` | 应答挂起审批（allowed-once/rejected，决策看 args） | `tools/actions/approve.ts` → `lib/approve-respond.js` |
 
-> `list`（会话清单）的实现保留在 `tools/actions/list.ts`，但**暂未注册到工具面**（2026-09-13）：任务绑定语义下会话靠句柄定位，不需要 list 发现路径；`sourceId` / `cursor` 这类为其配套的字段一并搁置。
+> `list`（会话清单）的实现保留在 `tools/actions/list.ts`，但**冻结禁用**（2026-09-13）：任务绑定语义下会话靠句柄定位；需要“列会话”时改走宿主内置的 `ctx.tasks.list`（读 `metadata.dsh`，`parentSessionPath` 天然带会话归属）；`sourceId` / `cursor` 这类为其配套的字段一并搁置。
 
 调用模型：句柄默认（taskId/approvalId，按宿主记录的来源会话校验归属）、凭证显式（sessionId = 我要跨对话）。每个子命令的参数在 `parameters.oneOf` 里单独成支（`additionalProperties:false`）。
 

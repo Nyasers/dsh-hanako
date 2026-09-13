@@ -55,9 +55,11 @@ description: "dshana 工具手册（DSH 子代理：一个插件一个同名工�
 - **决策看 args（具体要执行什么），不听 reason（模型自述不可尽信）**：合理放行，危险拒绝
 - 审批超时未应答按 `approvalTimeoutSec` 自动拒绝（本 App 缺省 30 秒；显式设 0 则禁用自动拒绝）。注意宿主自身的 `timeoutMs` 默认是 0（不禁用即不超时）—— 30 秒是 App 侧策略
 
-## list（会话清单，暂未注册）
+## list（会话清单，冻结禁用）
 
-`actions/list.ts` 是官方 `session/list` 的只读封装（带 `title`/`cwd`/`updatedAt`/`lastPromptAt`/turns/usage 等字段），**源码保留但不注册**（2026-09-13）：任务绑定语义下会话靠句柄定位，不需要 list 发现路径；`sourceId` / `cursor` 这类为“先 list 发现再操作”配套的字段一并撑置。要重新启用：在 `src/tools/index.ts` 的 import、ACTIONS 与 description 里加回本模块即可。
+`actions/list.ts` 是官方 `session/list` 的只读封装（带 `title`/`cwd`/`updatedAt`/`lastPromptAt`/turns/usage 等字段），**冻结禁用**（2026-09-13）：任务绑定语义下会话靠句柄定位，不做 cursor / sourceId 那套“先 list 发现再操作”的配套（sourceId 还另有一层理由：它本来只为“防源漂移”，而数据源切换入口已暂撤回 503）。需要“列会话”时改走宿主内置的 `ctx.tasks.list` 通道，按任务记录的 `metadata.dsh` 反查本 App 发起的实例（`parentSessionPath` 天然带会话归属），不再向 DSH 问 `session/list`。
+
+要重新启用本模块：在 `src/tools/index.ts` 的 import、ACTIONS 与 description 里加回即可。
 
 ## action=get：回看某一轮最终结论
 
