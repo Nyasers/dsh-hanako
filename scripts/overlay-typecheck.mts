@@ -47,12 +47,13 @@ export function mirrorPathEntries(mirrorDir, hiddenDir) {
         const dir = join(gDir, pkg.name);
         const pj = join(dir, "package.json");
         if (!existsSync(pj)) continue;
-        let name = "";
+        let meta: Record<string, any> | null = null;
         try {
-          name = String(JSON.parse(readFileSync(pj, "utf8")).name || "");
+          meta = JSON.parse(readFileSync(pj, "utf8"));
         } catch {
           continue;
         }
+        const name = String((meta && meta.name) || "");
         if (!name) continue;
         const installed = join(hiddenDir, name);
         const fallback = existsSync(installed) ? [installed] : [];
@@ -60,6 +61,23 @@ export function mirrorPathEntries(mirrorDir, hiddenDir) {
         if (existsSync(entry)) out[name] = [entry, ...fallback];
         const clientEntry = join(dir, "src", "client", "index.ts");
         if (existsSync(clientEntry)) out[`${name}/client`] = [clientEntry, ...fallback];
+        // 子路径导出（pkg/types、pkg/remote、pkg/surface…）：按 package.json exports 的
+        // types 字段反推源文件（lib/types/<x>.d.ts → src/<x>.ts）。缺这条时这类 import
+        // 在暂存树里解析不到（TS2307），覆盖层文件与上游 contract 会连片报红。
+        const exportsMap = meta && meta.exports && typeof meta.exports === "object" ? meta.exports : {};
+        for (const [subKey, val] of Object.entries(exportsMap)) {
+          if (subKey === "." || subKey === "./package.json" || subKey.startsWith("./src/")) continue;
+          const sub = subKey.replace(/^\.\//, "");
+          if (!sub || sub.includes("*")) continue;
+          const v: any = val;
+          const spec = typeof v === "string" ? v : String((v && (v.types || v.default)) || "");
+          const m = spec.match(/lib\/types\/(.+)\.d\.ts$/) || spec.match(/lib\/(.+)\.js$/);
+          if (!m) continue;
+          const srcFile = join(dir, "src", m[1] + ".ts");
+          if (existsSync(srcFile) && out[`${name}/${sub}`] === undefined) {
+            out[`${name}/${sub}`] = [srcFile, ...fallback];
+          }
+        }
       }
     }
   }
@@ -84,6 +102,10 @@ export function overlayTsconfig(repoRoot, mirrorDir) {
       moduleResolution: "bundler",
       jsx: "react-jsx",
       lib: ["ES2022", "DOM", "DOM.Iterable"],
+      // 与域 tsconfig 同口径：上游 / 覆盖层代码普遍用 node 全局（process、node:*、
+      // NodeJS 命名空间），不显式带上就一片 TS2591（假阳性）。typeRoots 指向本仓
+      // .pnpm 的 @types（node 就在那里），不写 types 时 TS 不再自动全量加载。
+      types: ["node"],
       skipLibCheck: true,
       esModuleInterop: true,
       allowSyntheticDefaultImports: true,
