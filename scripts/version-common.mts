@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// scripts/version-common.mts — 版本域共享模块（根级通用：version-hook/syncver/changelog 复用）
+// scripts/version-common.mts — 版本域共享模块（根级通用：version-hook/derive/changelog 复用）
 // 布局原则：跨脚本共享/流程性构件放根级（scripts/），领域特有随源码（src-cordis/build）。
 // 提供 cordis 包清单（src-cordis 顶层 roster bundle + plugins/*）与派生同步目标
 // （manifest + cordis 包）——版本单一事实源 = 主 package.json（pnpm version 是改版本唯一入口，
-// 派生同步见 scripts/syncver.mts，git 收口见 scripts/version-hook.mts）。
+// 派生同步见 scripts/derive.mts，git 收口见 scripts/version-hook.mts）。
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -42,14 +42,14 @@ export const writePkg = (p, data) => {
 };
 
 // 干净号（去 build metadata）：1.0.0-beta.5+dsh-0.1.5-rc.2 → 1.0.0-beta.5。
-// 补丁包版本戳要用它（版本串里不能再嵌一个 "+"），所以与 syncver/version-hook 同处一份实现。
+// 补丁包版本戳要用它（版本串里不能再嵌一个 "+"），所以与 derive/version-hook 同处一份实现。
 export function cleanVersion(version) {
   return String(version).split("+")[0];
 }
 
 // 补丁包（集成覆盖产物）版本戳：<上游版本>+dshana-<主干净版本>。
 // 形状与主版本互镜：主版本带上游 DSH 版本，补丁包带我们的版本，两侧互相点名。
-// 版本段只有一个来源——主 package.json（与 syncver/version-hook 同一份实现）；
+// 版本段只有一个来源——主 package.json（与 derive/version-hook 同一份实现）；
 // 不另设修订号：同一版本里改两次覆盖层应当由发版流程 bump 版本，而不是在这里编计数。
 export function patchVersion(upstreamVersion) {
   return `${cleanVersion(upstreamVersion)}+dshana-${cleanVersion(readPkg("package.json").version)}`;

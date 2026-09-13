@@ -326,12 +326,12 @@ DSHana 以**单卡 + 自带功能面板**注册（manifest `contributes.cards[0]
   （先停旧插件写入，主上下文与姐姐协调）。Windows：path.join 原生分隔符、junction 在跳过
   列表、reparse 不入复制。
 
-### 交付 5：pack/syncver 收口（版本线）
+### 交付 5：pack 与派生同步收口（版本线）
 
 - 版本线为单一 1.x 线（开发期停在最后已发布基线、发版经 `pnpm version` 推进、DSH 跟随策略），
   细节与依据见 `specs/dshana-v2-定案与待议-2026-09-10.md` §5；cordis 包（roster + plugins，
   10 个 package.json）**等值跟随**主版本（无独立版本线）；build metadata（+dsh-<dsh 依赖>）由
-  version-hook 发版时统一拼回再同步。syncver.mts 头注释记录版本线语义。
+  version-hook 发版时统一拼回再同步。版本线语义见 scripts/version-common.mts 头注释。
 - pack.mts：静态项补 THIRD_PARTY_NOTICES.md；cordis dist 断言按清单校验（现 10 包）；
   新增 dist/ui 断言（route 资源 fail-closed）；zip 形态不变（dist 根 manifest/index.js +
   三件套 + NOTICE/THIRD_PARTY_NOTICES + cordis + ui，无 node_modules）。

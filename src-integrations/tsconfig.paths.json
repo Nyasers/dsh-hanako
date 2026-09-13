@@ -1,5 +1,5 @@
 {
-  "//": "由 node scripts/ide-tsconfig.mts 生成，勿手改（vendor 更新后重跑）。供 src-integrations/<集成>/tsconfig.json 继承。",
+  "//": "由 node scripts/derive.mts paths 生成，勿手改。供 src-integrations/<集成>/tsconfig.json 继承。",
   "compilerOptions": {
     "paths": {
       "*": [
