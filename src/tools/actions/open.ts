@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/tools/open.ts — dshana open：开一个 DSH 子代理并交首件活
+// src/tools/actions/open.ts — dshana open：开一个 DSH 子代理并交首件活
 //
 // 语义对齐 subagent 的「创建即带任务」：新建 DSH 会话 + 立即提交首条 prompt（task/cwd 必填），
 // 固定异步，结果作为后台结果回投来源会话。提交链见 lib/session-run.ts
@@ -9,8 +9,8 @@
 //
 // 模块契约（六个 action 模块共用，见 tools/index.ts）：导出 command / summary / fields /
 // required / readOnly / run；run(input, ctx, deps) 中 deps 仅单测注入提交链。
-import { submitDshTask } from "../lib/session-run.ts";
-import { sessionCard } from "./shared/card.ts";
+import { submitDshTask } from "../../lib/session-run.ts";
+import { sessionCard } from "../shared/card.ts";
 
 export const command = "open";
 export const summary = "开一个 DSH 子代理并交首件活（task/cwd 必填；后台执行，结果回到本会话）";

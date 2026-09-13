@@ -20,9 +20,9 @@
 // Hana task 终态（child task-bridge complete/fail 后，宿主投递到来源会话）并释放串行化锁。
 // 本模块不把 DSH turn 的最终文本带回 execute——内容读取统一走 dshana action=get。
 //
-// 词汇映射：工具面动作是 open/reply（见 tools/open.ts、tools/reply.ts），本模块内部沿用
-// create/send 描述「新建会话 / 续已有会话」这两个动作，映射在 tools/open.ts 与 tools/reply.ts
-// 的 submit 调用处完成。
+// 词汇映射：工具面动作是 open/reply（见 tools/actions/open.ts、tools/actions/reply.ts），本模块内部沿用
+// create/send 描述「新建会话 / 续已有会话」这两个动作，映射在 tools/actions/open.ts 与
+// tools/actions/reply.ts 的 submit 调用处完成。
 import { join } from "node:path";
 import { appCtx, appDataDir } from "./app-runtime.ts";
 import { currentDshHome } from "./data-source.ts";
@@ -215,7 +215,7 @@ function logLine(log, msg) {
 }
 
 /**
- * create/send 提交入口（tools/open.ts / tools/reply.ts 调用）。返回 { promise, ready }：
+ * create/send 提交入口（tools/actions/open.ts / tools/actions/reply.ts 调用）。返回 { promise, ready }：
  *   ready  —— prompt 被 DSH 接受后 resolve loc { action, sessionId, rpcId, taskId, cwd }；
  *             提交阶段失败（runtime 起不来/会话建立失败/selectModel 失败/prompt 拒绝）
  *             时 reject（任务已 fail 标记，错误直接抛给 execute）。

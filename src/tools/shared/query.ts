@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/tools/subtool/query.ts — dshana 的 list/get 只读查询（官方会话查询面）
+// src/tools/shared/query.ts — dshana 的 list/get 只读查询实现（官方会话查询面）
+//
+// 注意：这是共享**实现**，不是操作模块（actions/ 里每个文件 = 一个同名 subcommand）。
+// 消费方：actions/get.ts（已注册）、actions/list.ts（暂未注册）。
 //
 // 取数走官方查询面：不读 <DSH_HOME>/storages/session_projcache.json，也不解
 // <DSH_HOME>/sessions/**/session.jsonl.zstd（日志已到 V3，projcache 行结构与 zstd 多帧容器

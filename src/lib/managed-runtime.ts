@@ -13,7 +13,7 @@
 //     端口不再暴露给用户：区间随机 + 占用自动换端口重试；就绪缓存每次经
 //     runtime.get 探活，子进程崩溃可被父侧识别并重起（对齐样例 controller 边界）。
 //   单例语义：一个 App runtime 服务多个 DSH 会话（每会话的 taskId 经任务桥各自携带，
-//     不把单次启动任务绑成全局焦点）；首次 create 时启动（tools/open.ts 接线点），
+//     不把单次启动任务绑成全局焦点）；首次 create 时启动（tools/actions/open.ts 接线点），
 //     ready 后所有 action 复用。runtime 终止后清除单例，下次调用重启。App 卸载/重载经
 //     disposeManagedRuntime 收尾（apply disposer）。
 //   日志：一律走宿主 ctx.logger（`logApp`），App 侧不写文件日志；受管子进程的

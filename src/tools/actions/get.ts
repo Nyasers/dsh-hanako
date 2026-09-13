@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/tools/get.ts — dshana get：回看某个子代理最近一轮的最终结论
+// src/tools/actions/get.ts — dshana get：回看某个子代理最近一轮的最终结论
 //
-// 只读查询，取数走官方查询面（subtool/query.ts：session/list 定 asOfSeq → session/page
+// 只读查询，取数走官方查询面（shared/query.ts：session/list 定 asOfSeq → session/page
 // 取尾部一窗）；本项目特色——subagent 只能等结果回投，回看不到过程与结论。
-import { execute as queryExecute } from "./subtool/query.ts";
-import { resolveTarget } from "./shared/target.ts";
+import { execute as queryExecute } from "../shared/query.ts";
+import { resolveTarget } from "../shared/target.ts";
 
 export const command = "get";
 export const summary = "回看某个 DSH 子代理最近一轮的最终结论（taskId 句柄或 sessionId 凭证）";

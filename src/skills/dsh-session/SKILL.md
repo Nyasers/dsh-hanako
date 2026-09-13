@@ -1,11 +1,11 @@
 ---
 name: dsh-session
-description: "dshana 工具手册（DSH 子代理：一个插件一个同名工具，CLI subcommand 式调用——action=open 开子代理并交首件活（task/cwd 必填，后台执行、结果回本会话）/ reply 续（task 必填，taskId 句柄或 sessionId 凭证）/ close 取消正在跑的 / get 回看某一轮最终结论 / list 会话清单 / approve 应答挂起审批（approvalId 必填））。用法心智同 subagent：开、续、关；另有 get/list/approve 三个特色动作。调用模型：句柄默认（taskId/approvalId，按宿主记录的来源会话校验归属）、凭证显式（sessionId = 我要跨对话）。需要提交/查询/取消 DSH 任务或应答审批前先读本技能。"
+description: "dshana 工具手册（DSH 子代理：一个插件一个同名工具，CLI subcommand 式调用——action=open 开子代理并交首件活（task/cwd 必填，后台执行、结果回本会话）/ reply 续（task 必填，taskId 句柄或 sessionId 凭证）/ close 取消正在跑的 / get 回看某一轮最终结论 / approve 应答挂起审批（approvalId 必填））。用法心智同 subagent：开、续、关；另有 get/approve 两个特色动作。调用模型：句柄默认（taskId/approvalId，按宿主记录的来源会话校验归属）、凭证显式（sessionId = 我要跨对话）。需要提交/查询/取消 DSH 任务或应答审批前先读本技能。"
 ---
 
 # dshana 工具手册
 
-一个插件一个同名工具（`dshana`），动作以顶层 `action`（subcommand）区分。宿主 Agent 面**仅此一个**工具，六个动作全在这一处（装配见 `src/tools/index.ts`，各动作见 `src/tools/<action>.ts`）。
+一个插件一个同名工具（`dshana`），动作以顶层 `action`（subcommand）区分。宿主 Agent 面**仅此一个**工具，所有动作都在这处（装配见 `src/tools/index.ts`，各动作见 `src/tools/actions/<action>.ts`，每个文件 = 一个同名操作）。
 
 语义对齐 subagent：`open` ≈ `subagent`（创建即带任务）、`reply` ≈ `subagent_reply`（按句柄续同一个）、`close` ≈ `subagent_close`（收工）；`get` / `list` / `approve` 是本项目特色（subagent 没有）。
 
@@ -21,8 +21,9 @@ description: "dshana 工具手册（DSH 子代理：一个插件一个同名工�
 | `reply` | task | taskId 或 sessionId（二选一）, timeout, agentPreset, reasoningEffort, provider, model | 往同一个子代理续发消息 |
 | `close` | 无 | taskId 或 sessionId（至少一个） | 取消正在跑的任务 |
 | `get` | 无 | taskId 或 sessionId（至少一个） | 回看该会话最近一轮的最终结论 |
-| `list` | 无 | limit | 会话清单（默认 10，有效 1~100） |
 | `approve` | approvalId | outcome, taskId 或 sessionId | 应答挂起审批 |
+
+> `list`（会话清单）的实现保留在 `actions/list.ts`，但**暂未注册到工具面**（2026-09-13）：任务绑定语义下会话靠句柄定位，不需要 list 发现路径。
 
 **句柄与凭证**：`taskId`（open/reply 返回）与 `approvalId` 是**句柄路径**，工具自己解析会话并按宿主记录的来源会话校验归属；`sessionId`（形如 `session-<uuid>`）是**凭证路径**，显式传入即视为“我要跨对话操作”，跳过归属校验。
 
@@ -54,12 +55,9 @@ description: "dshana 工具手册（DSH 子代理：一个插件一个同名工�
 - **决策看 args（具体要执行什么），不听 reason（模型自述不可尽信）**：合理放行，危险拒绝
 - 审批超时未应答按 `approvalTimeoutSec` 自动拒绝（本 App 缺省 30 秒；显式设 0 则禁用自动拒绝）。注意宿主自身的 `timeoutMs` 默认是 0（不禁用即不超时）—— 30 秒是 App 侧策略
 
-## action=list：会话清单
+## list（会话清单，暂未注册）
 
-官方 `session/list` 取数（**需 DSH 运行时在线**，未就绪会先拉起）：`{ sessionId, title, cwd?, updatedAt, lastPromptAt?, turns?, steps?, llmMs?, usage? }`，按 `lastPromptAt`（缺失则 `updatedAt`）降序取最近 N 条。
-
-- `title` 来自会话投影 `projections.values.title`（自动生成或用户改名；未命名的会话为空）
-- DSH 侧摘要**没有 `createdAt`**，所以这里给的是 `updatedAt`（与原口径的差异）
+`actions/list.ts` 是官方 `session/list` 的只读封装（带 `title`/`cwd`/`updatedAt`/`lastPromptAt`/turns/usage 等字段），**源码保留但不注册**（2026-09-13）：任务绑定语义下会话靠句柄定位，不需要 list 发现路径；`sourceId` / `cursor` 这类为“先 list 发现再操作”配套的字段一并撑置。要重新启用：在 `src/tools/index.ts` 的 import、ACTIONS 与 description 里加回本模块即可。
 
 ## action=get：回看某一轮最终结论
 
