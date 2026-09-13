@@ -17,7 +17,7 @@
 //   ctx.registerTool（宿主自动加 pluginId_ 前缀）  ctx.tools.register（v2 无自动前缀，
 //                                                 工具名全局唯一，见 tools/session.js）
 //   task handler 注册（task:abort → session.cancel） 迁移步骤 4（Hana ctx.tasks 取消链）
-//   DSH web host 启动自动链（ensure-deps→booting→ready） 迁移步骤 2（ctx.runtime.start
+//   受管 DSH runtime 启动（迁移步骤 2：ctx.runtime.start
 //     受管 Node 进程 + connectAppRuntime；自动链状态机按受管进程语义重设计）
 //   路由注册（v1 routes/webui.js + card.js）       迁移步骤 4b/5（ctx.routes.register 单
 //     registrar：routes/dshana-routes.js 壳页诊断面；到受管 runtime 的浏览器通道由宿主
@@ -35,12 +35,12 @@
 // 顶层不得依赖 ctx.config.get 已可读；工具执行期（apply 已返回）经运行包 readConfig
 // 安全读取（ctx.config.get + schema 默认值回填，失败返回 undefined）。
 //
-// 依赖部署策略（迁移步骤 2 定案，见 DESIGN「依赖部署（v2）」）：DSH 依赖（@deepseek-ai/dsh
-// + cordis + dsh-* 官方插件树 + 平台原生产物）装在 App dataDir 安装区 <dataDir>/runtime/
-// （首启 pnpm install，installDir 只读不可写），版本随 App 声明（package.json dependencies
-// 单一事实源，无独立升级通道）；cordis 产物（@dsh-hanako/*）随包在安装目录 cordis/，
-// profile 经 junction 链接（见 src/runtime/seed.js）。本刀受管子进程入口 = runtime/
-// dsh-host.mjs（dist 构建产物，见 src/build.js 与 src/runtime/）。
+// 依赖部署策略（2026-09-10 改为自包含打包）：DSH 依赖（@deepseek-ai/dsh + cordis + dsh-*
+// 官方插件树 + 多平台原生产物）由 pack.mjs 在构建时物化进包（安装目录 node_modules，
+// hoisted 布局；见 scripts/pack.mjs 1.7），安装即用、无运行时安装。版本随 App 声明
+// （package.json dependencies 单一事实源，无独立升级通道）；cordis 产物（@dsh-hanako/*）
+// 随包在安装目录 cordis/，profile 经 junction 链接（见 src/runtime/seed.js）。受管子进程
+// 入口 = runtime/dsh-host.mjs（dist 构建产物，见 src/build.js 与 src/runtime/）。
 import { mkdirSync, appendFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 // 日志生命周期（v1 同源复用：旧日志 zstd 压缩归档 + 时间戳日志文件命名）
@@ -187,15 +187,15 @@ export function apply(ctx) {
   // 语义回归 v1「插件加载即自动 boot」（v1 activationEvents onStartup → webui 自动链）。
   // v2 无 activationEvents，apply 即宿主加载本 App 的时机：注册完工具/路由后触发一次
   // ensureManagedRuntime（single-flight 幂等：已 starting/ready 时 no-op 共享同一启动）。
-  // 首次启动含依赖安装（pnpm install 到 dataDir/runtime）可能耗时数分钟——fire-and-forget，
+  // 依赖随包物化（安装目录 node_modules），启动只做 runtime boot（秒级）——fire-and-forget，
   // 状态经 boot-state 由壳页轮询展示（starting 日志滚动）；失败不 crash apply，落在 runtime
   // 状态机（phase=error + userText），壳页展示重试指引，dsh_session 首调仍可再触发。
-  // ⚠️ 依赖 app/process.spawn capability（宿主 ledger 授予后 App/受管 runtime 进程才带
-  // --allow-child-process，pnpm install 才能 spawn node）；未授予时 ensure 报 deps-io。
+  // 注（2026-09-10）：依赖随包物化，app/process.spawn 能力与 ensure 链已退役，不再需要
+  // --allow-child-process。
   {
     // 宿主 bootstrap 窗口实证（0.930.1 plugin-loader-v2）：App 加载对 apply 有 60s RPC
     // bootstrap 超时（beta.3 在 apply 同步栈内 fire ensure 两次均 60s 整被杀）。规避 =
-    // 自动链不占 apply 同步栈：Promise.resolve().then 微任务链移出栈（ensureDeps 的首个
+    // 自动链不占 apply 同步栈：Promise.resolve().then 微任务链移出栈（启动的首个
     // await 即让出事件循环，宿主 bootstrap 应答可正常处理；无需 setTimeout 宏任务延迟）。
     try {
       Promise.resolve()

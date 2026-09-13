@@ -9,3 +9,18 @@ allowBuilds:
   protobufjs: true
 minimumReleaseAgeExclude:
   - "@deepseek-ai/*"
+
+# >>> pack-targets
+# 打包目标设置（pack.mjs 会按目标替换标记块内的 supportedArchitectures；勿在标记外重复定义）。
+# 这一份服务**本地开发安装**：默认全叉乘（win32/darwin/linux × x64/arm64），便于本地随时重打包；
+# 出包时由 pack.mjs 按目标窄化到宿主支持矩阵，或保留全叉乘出通用兜底包。
+# 注：pnpm 11+ 不再读 package.json 的 pnpm 字段（会打印 ignored 警告），该设置只能放这里。
+supportedArchitectures:
+  os:
+    - win32
+    - darwin
+    - linux
+  cpu:
+    - x64
+    - arm64
+# <<< pack-targets

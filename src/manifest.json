@@ -2,24 +2,33 @@
   "manifestVersion": 2,
   "id": "dsh-hanako",
   "name": "DSHana",
-  "version": "2.0.0-beta.6",
-  "description": "DSHana: DeepSeek Harness as a subagent for HanaAgent (App v2, migration step 4b/5: routes shell (boot-state/health/start/stop) + cards/ui shell pages over host runtime-service proxy prefix + legacy data migration tooling; step 4a cancel/approve; step 3 provider over ctx.models; list/get offline)",
+  "version": "1.0.0-beta.5+dsh-0.1.2-rc.1",
+  "description": "DSHana：把 DeepSeek Harness 作为 Hana 的子代理运行。会话、审批与取消经 Hana 任务面（ctx.tasks），模型经 Hana 模型桥（ctx.models），DSH 跑在受管本机运行时里，Web UI 内嵌于 DSHana 卡片。工具面为单工具 dsh_session（list/get 离线可读，create/send/cancel/approve）。",
   "entry": "index.js",
   "icon": "assets/icon.png",
-  "minAppVersion": "0.930.1",
+  "minAppVersion": "0.946.2",
   "capabilities": [
     "app/tools.expose-to-model",
     "app/tasks.manage",
     "app/session.start-turn",
     "app/models.infer",
     "app/runtime.execute",
-    "app/runtime.native",
+    "app/runtime.local-machine",
     "app/runtime.network",
-    "app/process.spawn"
+    "app/ui.clipboard-write"
   ],
   "network": {
-    "allowedHosts": ["127.0.0.1"],
-    "methods": ["GET", "POST"],
+    "allowedHosts": [
+      "127.0.0.1",
+      "registry.npmjs.org",
+      "registry.npmmirror.com",
+      "mirrors.cloud.tencent.com",
+      "mirrors.huaweicloud.com"
+    ],
+    "methods": [
+      "GET",
+      "POST"
+    ],
     "allowLocalhost": true,
     "defaultTimeoutMs": 60000,
     "maxResponseBytes": 8388608
@@ -42,7 +51,10 @@
         "route": "/dshana/sidebar.html",
         "cardForm": "flush",
         "pageOf": "dshana",
-        "functionPanel": { "id": "dshana-sidebar-panel", "label": "DSHana 状态" }
+        "functionPanel": {
+          "id": "dshana-sidebar-panel",
+          "label": "DSHana 状态"
+        }
       }
     ],
     "settings": {

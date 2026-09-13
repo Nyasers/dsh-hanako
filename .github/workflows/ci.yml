@@ -16,4 +16,6 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm run build
+      # 单测：139 例（node --test tests/，含 provider/task-bridge/watch-sse/cancel-chain/approval-bridge 等）
+      - run: pnpm run test
       - run: pnpm audit --audit-level=high

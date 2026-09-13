@@ -11,8 +11,10 @@
 //   node scripts/syncver.mjs            # 同步（manifest + cordis 源 = 主，幂等）
 //   node scripts/syncver.mjs --check    # 只校验不一致即 exit 1（CI/门禁用）
 //
-// v2 版本域（迁移步骤 4b/5 收口定案）：
-//   · 主 package.json / src/manifest.json 使用 App 版本域 2.0.0-beta.x（迁移起即 2.0.0-beta.1）；
+// 版本线（2026-09-10 修订，撤销迁移期临时的 App 域 2.0.0-beta.x）：
+//   · 单一 1.x 版本线：主 package.json / src/manifest.json 沿用 DSHana 既有版本序列，开发期
+//     版本号**停在最后一个已发布基线**（当前 1.0.0-beta.5+dsh-0.1.2-rc.1），不随每刀滚动；
+//     发版时经 pnpm version 推进（版本号 = 最后已发布版本，直至下次发版）；
 //   · cordis 子包（roster dshana + plugins/* 共 11 个 package.json）**联动跟随主版本等值**
 //     （无独立版本线；单一事实源 = 主）。理由：cordis 产物随 App 安装目录整体发版、不独立
 //     发布，任何独立版本只会引入漂移面——pack.mjs 的 assertCordisDistVersions 同样断言等值；

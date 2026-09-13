@@ -8,7 +8,7 @@
 // 职责：
 //   managedStart/ensureManagedRuntime：解析 servicePort（App 设置，见 manifest
 //     contributes.settings.servicePort）→ ctx.runtime.start({ runtime:"node",
-//     entry:"runtime/dsh-host.mjs", profile:"native", network:"external", service:{
+//     entry:"runtime/dsh-host.mjs", profile:"local-machine", network:"external", service:{
 //     port, readyMarker:"DSH_READY" }, ... }) → 状态轮询等到 ready / failed / exited。
 //     绝不把 runtimeId 当就绪（指南 §6）：starting 只是宿主已拉起进程，DSH 真就绪 = 子
 //     进程真实监听后打印的 readyMarker → host 侧 service.state=ready。
@@ -20,16 +20,13 @@
 //     会话日志（dataDir/logs/*.log，appendLog 同款行式）；镜像失败只 warn 不阻断。
 //
 // 参数契约（与 src/runtime/options.js 对偶；增删需两处同步 + tests/）：
-//   --hana-task-id/--port/--data-dir/--cordis-src/--deps-root/--ready-marker/--no-ensure
+//   --hana-task-id/--port/--data-dir/--cordis-src/--deps-root/--ready-marker
 //   buildRuntimeArgs() 是本模块对子进程唯一的参数来源。
 import { join } from "node:path";
 import { appConfig, appDataDir, appLogger, getAppRuntime } from "./app-runtime.js";
-import { PLUGIN_ROOT } from "./state.js";
-// App 进程侧依赖 ensure（v2 架构实证：受管 runtime 进程在宿主 win32-restricted-token
-// 沙箱内无法 spawn（deps-io EPERM exit=4）；App 进程经 app/process.spawn 授权带
-// --allow-child-process 是唯一可 spawn 的进程——依赖安装在此执行）。ensure-deps.js
-// 只依赖 node 内置 + lib/pnpm.js + lib/state.js，可安全进主 bundle。
-import { ensureDeps } from "../runtime/ensure-deps.js";
+// 依赖就位（自包含打包，2026-09-10）：依赖随包物化在安装目录 <installRoot>/node_modules，
+// 运行时不再安装、不再 spawn（原 ensure-deps.js 与 lib/pnpm.js 已删除；app/process.spawn
+// 能力随之退役）。
 
 export const READY_MARKER = "DSH_READY";
 export const RUNTIME_ENTRY = "runtime/dsh-host.mjs"; // 相对 App 安装目录（宿主校验在安装/数据目录内）
@@ -40,9 +37,9 @@ export const START_ERROR_HINTS = {
   "port-busy": "端口被占用或 DSH 无法监听（服务代理未就绪）。改 App 设置 servicePort 为未占用端口后重试，或释放占用端口的进程。",
   "port-unreachable": "DSH 已在期望端口监听失败（webServer 服务端口与期望不符或探测失败）。查看 runtime 日志定位，必要时换 servicePort。",
   "boot-failed": "DSH runProfile 启动失败（见 runtime 日志）。若依赖刚变更，可尝试重装依赖（删除 dataDir/runtime/.runtime-ok 后重启）。",
-  deps: "DSH 依赖未就绪或安装失败（首次使用需要网络以 pnpm 安装 DSH 依赖到 dataDir/runtime）。检查网络后重试；离线预置见 DESIGN「依赖部署（v2）」。",
+  deps: "DSH 依赖缺失：包内 node_modules 不完整（依赖应随包物化）。请重新安装本 App。",
   seed: "dshana profile 初始化失败（见 runtime 日志；profile 迁移拒绝/scope 链接失败由种子化引导）。",
-  "not-authorized": "宿主未授权受管 runtime 写入 App 数据目录（writeRoots 未放行）。检查 App 能力与授权状态。",
+  "not-authorized": "宿主未授权本 App 启动受管 runtime（local-machine 能力未授予或已撤销）。检查 App 能力与授权状态。",
   unknown: "受管 runtime 启动失败（见 runtime 日志与状态）。",
 };
 
@@ -85,10 +82,10 @@ export function parseServicePort(raw, fallback = DEFAULT_SERVICE_PORT) {
 
 /**
  * 子进程参数构造（与 src/runtime/options.js parseArgs 对偶）。opts:
- * { taskId?, port, dataDir, cordisSrc?, depsRoot?, readyMarker?, noEnsure? }
+ * { taskId?, port, dataDir, cordisSrc?, depsRoot?, readyMarker? }
  */
 export function buildRuntimeArgs(opts) {
-  const { taskId, port, dataDir, cordisSrc, depsRoot, readyMarker = READY_MARKER, noEnsure = false } = opts || {};
+  const { taskId, port, dataDir, cordisSrc, depsRoot, readyMarker = READY_MARKER } = opts || {};
   const args = [];
   if (typeof port === "number") args.push("--port", String(port));
   else throw new Error("buildRuntimeArgs: port 必填（1..65535 显式端口）");
@@ -98,7 +95,6 @@ export function buildRuntimeArgs(opts) {
   if (typeof cordisSrc === "string" && cordisSrc) args.push("--cordis-src", cordisSrc);
   if (typeof depsRoot === "string" && depsRoot) args.push("--deps-root", depsRoot);
   args.push("--ready-marker", readyMarker);
-  if (noEnsure) args.push("--no-ensure");
   return args;
 }
 
@@ -191,7 +187,7 @@ async function mirrorRuntimeLogs(ctx, runtimeId) {
 }
 
 /**
- * 启动 + 等到就绪（single-flight 单例）。opts: { taskId?, cordisSrc?, depsRoot?, noEnsure? }。
+ * 启动 + 等到就绪（single-flight 单例）。opts: { taskId?, cordisSrc?, depsRoot? }。
  * 成功返回 { runtimeId, info }（state=ready）；失败抛 Error（message 含归类与用户指引），
  * 单例清空以便下次调用重试。首次调用 = 依赖 ensure + DSH boot（可能数分钟，日志可见）。
  */
@@ -232,67 +228,30 @@ async function doStartManaged(opts) {
   const port = parseServicePort(appConfig("servicePort"));
   logApp("info", "[managed-runtime] 启动 DSH 受管 runtime（entry=runtime/dsh-host.mjs port=" + port + "）");
 
-  // ---- App 进程侧依赖 ensure（runtime 沙箱无法 spawn，见模块头）----
-  // opts.noEnsure = 跳过（预置 depsRoot 调试/离线场景，直接 start）；默认在此 ensure：
-  // pnpm install 到 dataDir/runtime（App 进程有 --allow-child-process，唯一可 spawn 者）。
-  // runtime 进程恒以 --no-ensure 启动（只 boot 不 spawn——沙箱内 ensure 必 EPERM）。
-  if (!opts.noEnsure) {
-    const runtimeDir = join(dataDir, "runtime");
-    const depsRoot = typeof opts.depsRoot === "string" && opts.depsRoot ? opts.depsRoot : join(runtimeDir, "node_modules");
-    logApp("info", "[managed-runtime] deps ensure（App 进程，spawn 授权面）：installRoot=" + PLUGIN_ROOT);
-    let ensured;
-    try {
-      ensured = await ensureDeps({
-        dataDir,
-        installRoot: PLUGIN_ROOT, // App 安装根（只读，含 runtime 三件套声明）
-        runtimeDir,
-        depsRoot,
-        noEnsure: false,
-        log: (s) => logApp("info", "[managed-runtime] " + s),
-      });
-    } catch (e) {
-      const text = (e && e.message) || String(e);
-      logApp("error", "[managed-runtime] deps ensure 异常：" + text);
-      const err = new Error("DSH 依赖 ensure 异常：" + text);
-      err.code = "deps-unknown";
-      throw err;
-    }
-    if (ensured.status === "error") {
-      const text = ensured.message || "";
-      const hint = ensured.kind === "io"
-        ? " 依赖安装无法启动子进程：请确认宿主已授予本 App app/process.spawn 能力（Settings → Security → App capabilities，授予后需重载 App 生效）。"
-        : ensured.kind === "network"
-          ? " 首次安装需要网络（registry.npmjs.org）。"
-          : "";
-      const err = new Error("DSH 依赖 ensure 失败（kind=" + ensured.kind + "）：" + text + hint);
-      err.code = "deps-" + ensured.kind;
-      logApp("error", "[managed-runtime] deps ensure 失败 kind=" + ensured.kind);
-      throw err;
-    }
-    logApp("info", "[managed-runtime] deps 就绪：" + (ensured.status === "present" ? "幂等命中（dsh@" + ensured.dsh + "）" : "本次安装完成（dsh@" + ensured.dsh + "）"));
-  }
+  // ---- 依赖就位（自包含打包）----
+  // 依赖随包在 <installRoot>/node_modules；App 侧不再做任何安装（原 ensure 块与 app/process.spawn
+  // 能力已退役）。子进程按自身入口位置推导 installRoot，无需 App 传入路径。
 
-  // cordisSrc 默认不传：子进程按自身入口位置推导 <installRoot>/cordis（App 安装只读，
-  // 从 App 侧算 installRoot 反而脆弱）。调试/预置场景可显式传 depsRoot/cordisSrc 覆盖。
+  // cordisSrc 默认不传：子进程按自身入口位置推导 <installRoot>/cordis；depsRoot 默认
+  // <installRoot>/node_modules（随包物化）。两者均可在调试/预置场景显式覆盖。
   const args = buildRuntimeArgs({
     taskId: opts.taskId || null,
     port,
     dataDir,
     cordisSrc: typeof opts.cordisSrc === "string" && opts.cordisSrc ? opts.cordisSrc : undefined,
     depsRoot: typeof opts.depsRoot === "string" && opts.depsRoot ? opts.depsRoot : undefined,
-    noEnsure: true, // runtime 进程恒不 ensure（沙箱无法 spawn；依赖由 App 进程 ensure 保证）
   });
+  // 权限档 = local-machine（定案 2026-09-10，见 specs/dshana-v2-定案与待议-2026-09-10.md §1）：
+  // 明确不是沙箱——受管程序自持工作区与命令策略，可读写当前用户可及的一切文件（含其他应用
+  // 数据与磁盘凭据），仅保留 stop / 撤销 / 进程树回收的托管语义。宿主契约**禁止**传
+  // readRoots / writeRoots / callToken / taskId，故本调用一律不带（文件边界归零，换来 DSH 能
+  // 写进用户项目工作区）。护栏 = DSH 自身权限模式与审批策略 + 已接上的 Hana 审批面。
   const input = {
     runtime: "node",
     entry: RUNTIME_ENTRY,
-    profile: "native", // 全平台统一（native + external；指南 §6）
+    profile: "local-machine",
     network: "external",
     args,
-    taskId: opts.taskId || undefined,
-    // 授权写根：App 自身数据区（runtime 安装区 / dsh-home 会话数据 / logs）。宿主只放行
-    // 已授权根；会话工作区（用户项目）的写授权在后续步骤按 task/session scope 解析。
-    writeRoots: [dataDir],
-    readRoots: [dataDir],
     service: { port, readyMarker: READY_MARKER },
   };
   let info;

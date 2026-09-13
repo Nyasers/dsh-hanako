@@ -1,17 +1,27 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// scripts/pack.mjs — dsh-hanako 轻量化打包（适配单 bundle 收敛架构；构建脚本不随源码编译）
-// 交付物 = 代码 bundle（dist/）+ 配置 + 技能 + cordis 插件 + lockfile，零依赖（Agent pnpm i 装，
-// pnpm 运行时引导：tools/lib/pnpm.js ensurePnpm 下载单文件 pnpm.mjs 到数据目录 pnpm-dist/，
-// 供 tools/lib/install.js 部署 @deepseek-ai/dsh）。
-// 流程：复制交付清单（prepack 钩子已先行 build）→ zip → SHA256。
-// 用法：pnpm run pack（prepack 自动前置 build；单独 node scripts/pack.mjs 要求 dist/ 已构建）
-// 产出：releases/dsh-hanako-v<version>.zip + .sha256；铺平目录 _tmp/pkg/（zip 中间原料，可清空）
+// scripts/pack.mjs — dsh-hanako 自包含打包（适配单 bundle 收敛架构；构建脚本不随源码编译）
+// 交付物 = 代码 bundle（dist/）+ cordis 插件 + ui/ 静态树 + **物化后的生产依赖树**
+// （含 win32/darwin/linux × x64/arm64 预编译资产），安装即用、无需 npm install。
+// 依赖物化形态对齐样例 hana-dsh：hoisted 布局（顶层真实目录、无软链接——软链进 zip 跨机
+// 解压即断）。物化在 _tmp/pkg-root/ 隔离进行，不触碰仓库 node_modules。
+// 流程：复制交付清单（prepack 钩子已先行 build）→ 物化生产依赖 → 断言多平台资产 → zip → SHA256。
+// 用法：pnpm run pack --target <名字>（prepack 自动前置 build；单独 node scripts/pack.mjs 要求 dist/ 已构建）
+// 产出：releases/dsh-hanako-v<version>[-<target>].zip + .sha256。**zip 根 = 包根**：manifest.json、
+//   index.js、node_modules/、ui/ 等全部在 zip 根级，不得套一层目录（宿主安装时在包根读 manifest.json）。
+// 两个临时目录的分工（都在 _tmp/ 下，起手清残留、用完即清、收尾由 postpack 钩子清）：
+//   · _tmp/pkg-root/<target>：依赖物化**工位**。要跑一次真 install，就得有个像独立项目的目录
+//     ——package.json + pnpm-lock.yaml + 为该目标生成的 pnpm-workspace.yaml（supportedArchitectures）
+//     三件套放进去跑 pnpm install --prod。隔离在 _tmp 下，仓库自身的 node_modules 与锁文件不被污染。
+//   · _tmp/pkg：交付**组装台**。只放要进包的东西（dist/ + 物化依赖树 + cordis + ui + manifest），
+//     不带 pnpm 的中间物（lockfile、workspace yaml、.modules.yaml 这些是构建输入，不是交付物）。
+//     把「工位」与「组装台」分开，就是不让构建输入混进安装包；组装出包后立即删。
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { createHash } from "node:crypto";
+import { parseArgs } from "node:util";
 import { ZipArchive } from "archiver";
 
 import fs from "fs-extra";
@@ -40,8 +50,8 @@ const staticItems = [
   "package.json",
   // manifest.json 与 skills 已随 src 域（src/manifest.json、src/skills/，build:src 产出
   // dist 副本），不再经根级静态复制
-  "pnpm-workspace.yaml",
-  "pnpm-lock.yaml",
+  // 注（自包含打包后）：pnpm-workspace.yaml / pnpm-lock.yaml 不再随包——安装侧不再执行任何
+  // pnpm install（依赖已物化进包），两份文件的唯一消费方（旧 ensure 链）已退役
 ];
 const distDir = join(ROOT, "dist");
 for (const item of staticItems) {
@@ -64,8 +74,8 @@ for (const item of staticItems) {
 
 // 1.5) cordis 包 version 一致性校验（防回归，与 manifest 校验对称）：cordis 包（roster
 //   bundle dshana + 10 子插件）version 与主 package.json 同批由 syncver/version-hook（pnpm
-//   version 发版流程）同步（v2 域：单一事实源 = 主 package.json 2.0.0-beta.x，cordis 包跟随
-//   等值，无独立版本线；build metadata +dsh-<dsh 依赖> 由 version-hook 在发版时统一拼回），
+//   version 发版流程）同步（单一事实源 = 主 package.json，cordis 包跟随等值，无独立版本线；
+//   build metadata +dsh-<dsh 依赖> 由 version-hook 在发版时统一拼回），
 //   pack 时读 dist 产物校验一致——手改/漏同步即出包版本漂移。
 function assertCordisDistVersions(outDir) {
   const cordisRoot = join(outDir, "cordis");
@@ -73,12 +83,12 @@ function assertCordisDistVersions(outDir) {
   if (!fs.pathExistsSync(cordisRoot)) {
     throw new Error("cordis 产物缺失（dist/cordis 不存在）：先跑 pnpm run build 再打包");
   }
-  // 完整性：必需 11 包（roster bundle dshana + 10 子插件，含 acp-assist）全部存在且
+  // 完整性：必需 10 包（roster bundle dshana + 9 子插件）全部存在且
   // package.json 版本一致——缺失/部分产物（含 count=0）一律拒包，防 build 失败后残留部分
   // dist 被误打包
   const required = [
     "dshana",
-    "acp-assist", "app", "bridge", "bus", "clipboard", "logger", "provider", "settings", "theme", "view",
+    "app", "bridge", "bus", "clipboard", "logger", "provider", "settings", "theme", "view",
   ];
   let count = 0;
   for (const name of required) {
@@ -115,6 +125,141 @@ function assertUiTree(outDir) {
   console.log("[pack] ui/ 静态树完整（main/sidebar 壳页 + app-shell.js）");
 }
 assertUiTree(distDir);
+
+// 1.7) 生产依赖物化（自包含打包）：逐目标在各自的隔离暂存目录里做**干净安装**，得到只含该
+//   平台资产的 node_modules（hoisted 布局：顶层真实目录、无软链接——软链进 zip 跨机解压即断）。
+//   实测（Windows + 热缓存）：单目标安装 8.4s / 210 MB，且不含其他平台的边角；而「通用树裁剪
+//   派生」会留残留且更大（见 specs §11）。
+//   目标集对着**宿主支持矩阵**写，不对着「我们顺带能装出来的东西」写：macOS arm64 / macOS x64 /
+//   Windows x64 / Linux x86_64（glibc），外加通用兜底包。
+//   · 为什么隔离目录：不触碰仓库 node_modules（dev+prod 混合树，且动它会触发 pnpm 重建——
+//     Windows 上曾遇清理被拒导致树损坏）。
+//   用法：node scripts/pack.mjs [--target universal|darwin-arm64|darwin-x64|linux-x64|win32-x64|
+//   linux-arm64|win32-arm64]；默认 universal（单一目标，不接 `all`）。多目标 = 多次调用
+//   （包别名 `pack:<target>`）或 CI 的并发矩阵。
+//   别名约定：所有 `pack:<target>` 都必须**委派给 pack**（`pnpm run pack --target=…`），
+//   不能直接写 `node scripts/pack.mjs --target=…`：pnpm 的 pre/post 钩子是按脚本名精确匹配的，
+//   `pack:linux-x64` 只会去找 `prepack:linux-x64` / `postpack:linux-x64`（实测确认），直接调脚本
+//   会同时跳过 prepack（build）与 postpack（清临时目录）。
+const stagingRoot = join(ROOT, "_tmp", "pkg-root");
+
+const HOST_TARGETS = [
+  // 注：darwin / linux 的 libvips 单独分包（@img/sharp-libvips-*），Windows 则内联在
+  // @img/sharp-win32-x64 里、无独立 libvips 包——断言清单按平台实际形态写（实测得出）。
+  { name: "darwin-arm64", os: ["darwin"], cpu: ["arm64"], assets: ["@koromix/koffi-darwin-arm64", "node-addon-require-builtin-darwin-arm64", "@img/sharp-darwin-arm64", "@img/sharp-libvips-darwin-arm64"] },
+  { name: "darwin-x64", os: ["darwin"], cpu: ["x64"], assets: ["@koromix/koffi-darwin-x64", "node-addon-require-builtin-darwin-x64", "@img/sharp-darwin-x64", "@img/sharp-libvips-darwin-x64"] },
+  { name: "linux-x64", os: ["linux"], cpu: ["x64"], libc: ["glibc"], assets: ["@koromix/koffi-linux-x64", "node-addon-require-builtin-linux-x64-gnu", "@img/sharp-linux-x64", "@img/sharp-libvips-linux-x64"] },
+  { name: "win32-x64", os: ["win32"], cpu: ["x64"], assets: ["@koromix/koffi-win32-x64", "node-addon-require-builtin-win32-x64-msvc", "@img/sharp-win32-x64"] },
+];
+// 通用兜底包：os × cpu 全叉乘（比宿主矩阵多出 win32-arm64 / linux-arm64 等）；体量更大，
+// 用于兜底（用户在宿主矩阵外也能跑，代价是下载大）。
+const UNIVERSAL_TARGET = {
+  name: "universal",
+  os: ["win32", "darwin", "linux"],
+  cpu: ["x64", "arm64"],
+  assets: HOST_TARGETS.flatMap((t) => t.assets),
+};
+
+// 非宿主矩阵、**仅手动编译**的目标（不进 CI 主线）：宿主未承诺这些平台，但预编译资产实测存在，
+// 需要时点名出包（`pack:<target>` 别名已备）。资产清单同样按实测形态写。
+// 注：这些目标不进 `--targets=all`，只能点名；否则 CI 会产出宿主不支持的包。
+const EXTRA_TARGETS = [
+  { name: "linux-arm64", os: ["linux"], cpu: ["arm64"], libc: ["glibc"], assets: ["@koromix/koffi-linux-arm64", "node-addon-require-builtin-linux-arm64-gnu", "@img/sharp-linux-arm64", "@img/sharp-libvips-linux-arm64"] },
+  { name: "win32-arm64", os: ["win32"], cpu: ["arm64"], assets: ["@koromix/koffi-win32-arm64", "node-addon-require-builtin-win32-arm64-msvc", "@img/sharp-win32-arm64"] },
+];
+
+function targetSpec(name) {
+  if (name === "universal") return UNIVERSAL_TARGET;
+  return HOST_TARGETS.find((t) => t.name === name) || EXTRA_TARGETS.find((t) => t.name === name) || null;
+}
+
+// 仓库 pnpm-workspace.yaml 中的 supportedArchitectures 由本脚本按目标替换（标记块内）
+const PT_START = "# >>> pack-targets";
+const PT_END = "# <<< pack-targets";
+function stagingWorkspaceYaml(spec) {
+  const repoWs = fs.readFileSync(join(ROOT, "pnpm-workspace.yaml"), "utf8");
+  const block = [
+    "supportedArchitectures:",
+    "  os:",
+    ...spec.os.map((v) => `    - ${v}`),
+    "  cpu:",
+    ...spec.cpu.map((v) => `    - ${v}`),
+    ...(spec.libc ? ["  libc:", ...spec.libc.map((v) => `    - ${v}`)] : []),
+    "",
+  ].join("\n");
+  const i = repoWs.indexOf(PT_START);
+  const j = repoWs.indexOf(PT_END);
+  const body = i >= 0 && j > i
+    ? repoWs.slice(0, i + PT_START.length) + "\n" + block + repoWs.slice(j)
+    : repoWs + "\n" + block;
+  // nodeLinker 必须在工作区文件里（CLI 传参形式实测不生效）
+  return "# pack.mjs 生成（每次打包重建，勿手改）\nnodeLinker: hoisted\n\n" + body;
+}
+
+/** 逐目标干净安装（各自暂存目录 + 各自 supportedArchitectures）；返回该目标的 node_modules 路径。 */
+function materializeProdDeps(spec) {
+  const { spawnSync } = require("node:child_process");
+  const dir = join(stagingRoot, spec.name);
+  const modules = join(dir, "node_modules");
+  fs.removeSync(dir);
+  fs.ensureDirSync(dir);
+  fs.copySync(join(ROOT, "package.json"), join(dir, "package.json"));
+  fs.copySync(join(ROOT, "pnpm-lock.yaml"), join(dir, "pnpm-lock.yaml"));
+  fs.writeFileSync(join(dir, "pnpm-workspace.yaml"), stagingWorkspaceYaml(spec), "utf8");
+  console.log(`[pack] 物化 ${spec.name}（干净安装，隔离目录 _tmp/pkg-root/${spec.name}）...`);
+  const res = spawnSync("pnpm", ["install", "--prod", "--frozen-lockfile"], {
+    cwd: dir,
+    stdio: "inherit",
+    shell: process.platform === "win32",
+  });
+  if (res.status !== 0) throw new Error(`生产依赖物化失败（${spec.name}，pnpm install --prod 退出码 ${res.status}）`);
+  if (!fs.pathExistsSync(modules)) throw new Error(`生产依赖物化失败（${spec.name}）：node_modules 未生成`);
+  const missing = spec.assets.filter((a) => !fs.pathExistsSync(join(modules, a, "package.json")));
+  if (missing.length) {
+    throw new Error(`${spec.name} 缺少平台资产（该平台的包会跑不起来）：\n  - ${missing.join("\n  - ")}`);
+  }
+  console.log(`[pack] ${spec.name} 物化完成（平台资产 ${spec.assets.length} 项齐备）`);
+  return modules;
+}
+
+// 目标选择：`--target <名字>` / `--target=<名字>`（必须显式给，无默认）。
+// 用 node:util 的 parseArgs 结构化解析（strict + 禁位置参数）：未知选项、缺值、多余位置参数
+// 由它直接报错，不再手写字符串扫描——上一版手扫以 startsWith("--target") 判「认识的参数」，
+// 把 `--targets=x` 漏成了合法值，静默回落跑了一整次通用包。
+// 未指定 / 不支持的目标 / 解析失败三种情况一律 failUsage：打印支持目标列表并退出码 2。
+// 多目标由 CI 并行矩阵各自跑一次，或本地逐个跑 `pnpm run pack:<target>`；不支持 `all`。
+function supportedTargetNames() {
+  return ["universal", ...HOST_TARGETS.map((t) => t.name), ...EXTRA_TARGETS.map((t) => t.name)];
+}
+function failUsage(detail) {
+  console.error(`[pack] ${detail}`);
+  console.error("[pack] 支持的目标：");
+  for (const n of supportedTargetNames()) {
+    const s = targetSpec(n);
+    console.error(`  ${n.padEnd(14)} os=[${s.os.join(",")}] cpu=[${s.cpu.join(",")}]${s.libc ? " libc=[" + s.libc.join(",") + "]" : ""}`);
+  }
+  console.error("[pack] 用法：node scripts/pack.mjs --target <名字>（或 pnpm run pack --target=<名字>）");
+  process.exit(2);
+}
+const spec = (() => {
+  let parsed;
+  try {
+    parsed = parseArgs({
+      args: process.argv.slice(2),
+      options: { target: { type: "string" } },
+      strict: true,
+      allowPositionals: false,
+    });
+  } catch (e) {
+    failUsage(`参数解析失败：${(e && e.message) || e}`);
+  }
+  const raw = parsed.values.target;
+  if (raw === undefined) failUsage("未指定 --target");
+  const name = String(raw).trim();
+  const found = targetSpec(name);
+  if (!found) failUsage(`未知打包目标：${name}`);
+  return found;
+})();
 
 // 2. 静态资产压缩（terser JS 纯语法级 + clean-css CSS 压缩，覆盖写回 dist 副本）
 //     cordis 插件（dist/cordis/*/index.js，由 build 从
@@ -179,34 +324,55 @@ function isEsm(code) {
   }
 }
 
-// 3. dist → 铺平目录（zip 中间原料，放 _tmp 可随时清空）
-const pkgDir = join(ROOT, "_tmp", "pkg", `dsh-hanako-v${version}`);
-fs.removeSync(pkgDir);
-fs.copySync(distDir, pkgDir);
-
-// 4. zip + SHA256（发布产物归档 releases/，与项目群惯例一致）
+// 3+4) 组装 → zip → SHA256（单目标；发布产物归档 releases/）
 //    archiver 纯 Node 跨平台 zip（对齐 hana-remote-dev）：不用 tar -a -cf——
 //    GNU tar（Linux）不认 .zip 后缀会静默产出 tar 伪 zip（CI ubuntu 踩坑 2026-08-14）
 const relDir = join(ROOT, "releases");
 fs.ensureDirSync(relDir);
-const zipPath = join(relDir, `dsh-hanako-v${version}.zip`);
-fs.removeSync(zipPath);
-const tmpZip = join(relDir, `.dsh-hanako-v${version}.zip.tmp`); // 先写临时文件，rename 原子落位
-const output = fs.createWriteStream(tmpZip);
-const archive = new ZipArchive({ zlib: { level: 9 } });
-const done = new Promise((resolve, reject) => {
-  output.on("close", resolve);
-  output.on("error", reject);
-  archive.on("error", reject);
-});
-archive.pipe(output);
-archive.directory(pkgDir, `dsh-hanako-v${version}`);
-await archive.finalize();
-await done;
-fs.moveSync(tmpZip, zipPath, { overwrite: true });
-const buf = fs.readFileSync(zipPath);
-const sha = createHash("sha256").update(buf).digest("hex").toUpperCase();
-const sizeMB = (buf.length / 1048576).toFixed(1);
-console.log(`\n[pack] ${zipPath}`);
-console.log(`[pack] zip ${sizeMB} MB · SHA256 ${sha}`);
-fs.writeFileSync(`${zipPath}.sha256`, sha, "utf8");
+// 临时目录纪律（曾因多目标连跑堆积 2.2 GB 把宿主压崩）：
+//   · 起手清残留（上次运行/中途崩溃留下的）；
+//   · 用完即清（暂存树 + 铺平目录）；
+//   · 收尾全清由 package.json 的 postpack 钩子承担（scripts/clean-tmp.mjs），CI 里也可单独调。
+// 中间原料与暂存树都可再生，真正的产物只有 releases/ 下的 zip + sha256。
+const pkgRoot = join(ROOT, "_tmp", "pkg");
+for (const stale of [pkgRoot, stagingRoot]) fs.removeSync(stale);
+{
+  const modules = materializeProdDeps(spec);
+  // 命名：通用包无后缀（既有 CI/脚本按 dsh-hanako-v<ver>.zip 取件），平台包带目标后缀
+  const base = spec.name === "universal" ? `dsh-hanako-v${version}` : `dsh-hanako-v${version}-${spec.name}`;
+  const pkgDir = join(pkgRoot, base); // 组装暂存目录（内容原样进 zip 根，此目录名不出现在包里）
+  fs.removeSync(pkgDir);
+  fs.copySync(distDir, pkgDir);
+  fs.copySync(modules, join(pkgDir, "node_modules"));
+  // 暂存树用完即删
+  fs.removeSync(join(stagingRoot, spec.name));
+  console.log(`[pack] ${spec.name}：代码 + 依赖树已就位（${base}），暂存树已清理`);
+  const zipPath = join(relDir, `${base}.zip`);
+  fs.removeSync(zipPath);
+  const tmpZip = join(relDir, `.${base}.zip.tmp`); // 先写临时文件，rename 原子落位
+  const output = fs.createWriteStream(tmpZip);
+  const archive = new ZipArchive({ zlib: { level: 9 } });
+  const done = new Promise((resolve, reject) => {
+    output.on("close", resolve);
+    output.on("error", reject);
+    archive.on("error", reject);
+  });
+  archive.pipe(output);
+  // 第二参数必须为 false：把 pkgDir 的**内容**放在 zip 根。
+  // 曾写成 archive.directory(pkgDir, base)，于是整包被套进一层 `<base>/`，宿主安装时在包根读
+  // manifest.json 读不到（manifest.json 落在 `<base>/manifest.json`），报 INVALID_MANIFEST 拒绝安装：
+  //   宿主校验器 `validate-app.mjs --archive <zip>` 会明确判 "ENOENT ... '<app>\\manifest.json'"。
+  // 参照物：装得上的样例包 zip 根级就是 manifest.json / node_modules / ui / dist。
+  archive.directory(pkgDir, false);
+  await archive.finalize();
+  await done;
+  fs.moveSync(tmpZip, zipPath, { overwrite: true });
+  const buf = fs.readFileSync(zipPath);
+  const sha = createHash("sha256").update(buf).digest("hex").toUpperCase();
+  console.log(`[pack] ${zipPath}`);
+  console.log(`[pack] zip ${(buf.length / 1048576).toFixed(1)} MB · SHA256 ${sha}`);
+  fs.writeFileSync(`${zipPath}.sha256`, sha, "utf8");
+  // 铺平目录已入包，即用即清
+  fs.removeSync(pkgDir);
+}
+// 收尾全清 → postpack 钩子（scripts/clean-tmp.mjs）

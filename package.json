@@ -1,18 +1,26 @@
 {
   "name": "dsh-hanako",
-  "version": "2.0.0-beta.6",
+  "version": "1.0.0-beta.5+dsh-0.1.2-rc.1",
   "private": true,
-  "packageManager": "pnpm@11.25.0+sha512.5cde925b4f075f725eb71fbae18a42ffe784524789f19b61c731cb8721ec28aaee160e01a8d5af4fedb2a42cdbf300efe23db356b0d4a17b4d63e11f8ab7c956",
+  "packageManager": "pnpm@12.3.4+sha512.961aa41fb077da3a04a441d9f8e15ebc0c96da8ef710b2eb67bf9ee7cb0610eabd48f1fd85f51cffe73846785fa0f87c56a3a872a1d893f8446741b5cce45457",
   "type": "module",
   "scripts": {
     "build": "pnpm run build:src && pnpm run build:cordis",
-    "test": "node --test-isolation=none tests/options.test.mjs tests/managed-runtime.test.mjs tests/ensure-deps.test.mjs tests/rpc-envelope.test.mjs tests/task-map.test.mjs tests/session-serialize.test.mjs tests/provider-ndjson.test.mjs tests/provider-catalog.test.mjs tests/provider-messages.test.mjs tests/provider-stream.test.mjs tests/task-bridge.test.mjs tests/task-map-ext.test.mjs tests/watch-sse.test.mjs tests/cancel-chain.test.mjs tests/approval-bridge.test.mjs tests/boot-state.test.mjs tests/dshana-routes.test.mjs tests/legacy-migrate.test.mjs",
+    "test": "node --test tests/",
     "build:src": "node src/build.js",
     "build:cordis": "node src-cordis/build.js",
     "syncver": "node scripts/syncver.mjs",
     "changelog": "node scripts/changelog.mjs",
     "prepack": "pnpm run syncver && pnpm run build",
     "pack": "node scripts/pack.mjs",
+    "postpack": "node scripts/clean-tmp.mjs",
+    "pack:linux-x64": "pnpm run pack --target=linux-x64",
+    "pack:darwin-arm64": "pnpm run pack --target=darwin-arm64",
+    "pack:darwin-x64": "pnpm run pack --target=darwin-x64",
+    "pack:win32-x64": "pnpm run pack --target=win32-x64",
+    "pack:universal": "pnpm run pack --target=universal",
+    "pack:linux-arm64": "pnpm run pack --target=linux-arm64",
+    "pack:win32-arm64": "pnpm run pack --target=win32-arm64",
     "preversion": "pnpm run build",
     "version": "node scripts/version-hook.mjs"
   },
@@ -21,8 +29,8 @@
     "@deepseek-ai/dsh": "0.1.2-rc.1"
   },
   "devDependencies": {
-    "@hana/app-sdk": "file:sdk\\hana-app-sdk.tgz",
-    "@rspack/core": "^2.2.1",
+    "@hana/app-sdk": "file:vendor/hana-app-sdk/hana-app-sdk.tgz",
+    "@rspack/core": "^2.2.2",
     "archiver": "^8.0.0",
     "clean-css": "^5.3.3",
     "conventional-changelog": "^8.1.3",
@@ -32,6 +40,6 @@
     "fs-extra": "^11.4.0",
     "html-minifier-terser": "^7.2.0",
     "terser": "^5.51.2",
-    "tsdown": "^0.22.14"
+    "tsdown": "^0.23.0"
   }
 }
