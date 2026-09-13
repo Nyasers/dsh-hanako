@@ -60,6 +60,12 @@ export const READY_TIMEOUT_MS = 60000;
 const DISPOSE_TIMEOUT_MS = 4000;
 const PROFILE_NAME = "dshana";
 
+/** 取错误的可读文本。catch 到的值类型未知，字段访问一律经这里。 */
+const errText = (e: unknown): string => ((e as any)?.message as string) || String(e);
+
+/** 中继句柄（startDshBridge 的产物）。 */
+type BridgeHandle = Awaited<ReturnType<typeof startDshBridge>>;
+
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -144,7 +150,7 @@ function makeShutdown(state, exitCodeLog) {
         try {
           fn();
         } catch (e) {
-          warn(key + " 退订异常（继续退出）：" + ((e && e.message) || e));
+          warn(key + " 退订异常（继续退出）：" + errText(e));
         }
         state[key] = null;
       }
@@ -154,7 +160,7 @@ function makeShutdown(state, exitCodeLog) {
       try {
         await state.bridge.close();
       } catch (e) {
-        warn("中继关闭异常（继续退出）：" + ((e && e.message) || e));
+        warn("中继关闭异常（继续退出）：" + errText(e));
       }
       state.bridge = null;
     }
@@ -170,7 +176,7 @@ function makeShutdown(state, exitCodeLog) {
         ]);
       }
     } catch (e) {
-      warn("ctx dispose 异常（继续退出）：" + ((e && e.message) || e));
+      warn("ctx dispose 异常（继续退出）：" + errText(e));
     }
     // 流纪律：拿到流式 Response 后不能立刻 close。本步不消费宿主流；
     // 接入模型/任务流后，此处必须先结束/取消活动流再 close。
@@ -191,7 +197,7 @@ function makeShutdown(state, exitCodeLog) {
  * 结果写 resultPath（{ok:true} 或 {ok:false,error}，0600）后立即退出——父侧等终态读结果。
  * 退出码对齐 classify：0 = 预检通过；4 = deps/locate；5 = profile 种子化未完成。
  */
-async function runPreflight({ opts, dataDir, dshHome, runtimeDir, depsRoot, cordisSrc }) {
+async function runPreflight({ opts, dataDir, dshHome, runtimeDir, depsRoot, cordisSrc }): Promise<never> {
   const write = (payload) => writeFileSync(opts.resultPath, JSON.stringify(payload), { mode: 0o600 });
   try {
     process.env.DSH_HOME = dshHome;
@@ -216,12 +222,12 @@ async function runPreflight({ opts, dataDir, dshHome, runtimeDir, depsRoot, cord
     write({ ok: true, dshHome });
     process.exit(EXIT.OK);
   } catch (e) {
-    const text = (e && e.message) || String(e);
+    const text = errText(e);
     err("preflight", "预检失败：" + text);
     try {
       write({ ok: false, error: text });
     } catch (writeErr) {
-      err("preflight", "结果文件写入失败（由父侧超时兜底）：" + ((writeErr && writeErr.message) || writeErr));
+      err("preflight", "结果文件写入失败（由父侧超时兜底）：" + errText(writeErr));
     }
     process.exit(EXIT.DEPS);
   }
@@ -255,7 +261,7 @@ export async function main(argv: string[]): Promise<number> {
   try {
     installRoot = resolveInstallRoot(entryFile);
   } catch (e) {
-    err("install-root", (e && e.message) || e);
+    err("install-root", errText(e));
     return EXIT.INTERNAL;
   }
   const dataDir = resolve(opts.dataDir);
@@ -268,17 +274,23 @@ export async function main(argv: string[]): Promise<number> {
   if (opts.preflight) {
     return await runPreflight({ opts, dataDir, dshHome, runtimeDir, depsRoot, cordisSrc });
   }
-  const state = { hana: null, ctx: null, stopBridge: null, stopApproval: null, bridge: null };
+  const state: {
+    hana: any;
+    ctx: any;
+    stopBridge: (() => void) | null;
+    stopApproval: (() => void) | null;
+    bridge: BridgeHandle | null;
+  } = { hana: null, ctx: null, stopBridge: null, stopApproval: null, bridge: null };
   const shutdown = makeShutdown(state, info);
 
   // ---- 1) 宿主 IPC（先于一切：非受管运行时立刻给出可操作报错，不输出 READY）----
-  let hana = null;
+  let hana: ReturnType<typeof connectAppRuntime> | null = null;
   try {
     hana = connectAppRuntime();
   } catch (e) {
     err(
       "ipc",
-      "connectAppRuntime() 失败：" + ((e && e.message) || e) +
+      "connectAppRuntime() 失败：" + errText(e) +
       "。本入口只能由 Hana ctx.runtime.start({ runtime: \"node\" }) 启动——宿主在启动该" +
       " Node 进程时经父进程 IPC fd 注入受管通道。直接 node 运行无父 IPC，无法" +
       " 连接宿主 tasks/models/network，退出。",
@@ -320,7 +332,7 @@ export async function main(argv: string[]): Promise<number> {
   try {
     located = await locateDsh({ depsRoot, log: (s) => info("locate", s) });
   } catch (e) {
-    err("locate", (e && e.message) || e);
+    err("locate", errText(e));
     err("exit", "exit=" + EXIT.DEPS + " kind=locate");
     return EXIT.DEPS;
   }
@@ -334,7 +346,7 @@ export async function main(argv: string[]): Promise<number> {
     });
     info(`profile 种子化结果：${seedOutcome}（${cordisSrc}）`);
   } catch (e) {
-    err("seed", "profile 种子化异常：" + ((e && e.message) || e));
+    err("seed", "profile 种子化异常：" + errText(e));
     err("exit", "exit=" + EXIT.SEED + " kind=seed-error");
     return EXIT.SEED;
   }
@@ -356,7 +368,7 @@ export async function main(argv: string[]): Promise<number> {
       args: ["--port", String(opts.dshPort), "--no-open"],
     });
   } catch (e) {
-    const text = (e && e.message) || String(e);
+    const text = errText(e);
     const kind = /EADDRINUSE|address already in use/i.test(text) ? "port-busy" : "boot-failed";
     err("boot", `runProfile 失败（${kind}）：${text}`);
     err("exit", "exit=" + EXIT.PORT + " kind=" + kind);
@@ -369,7 +381,7 @@ export async function main(argv: string[]): Promise<number> {
   try {
     await waitWebReady({ ctx: boot.ctx, expectedPort: opts.dshPort, log: info });
   } catch (e) {
-    const text = (e && e.message) || String(e);
+    const text = errText(e);
     const kind = /未在期望端口/.test(text) ? "port-unreachable" : "boot-failed";
     err("ready", `就绪等待失败（${kind}）：${text}`);
     err("exit", "exit=" + EXIT.PORT + " kind=" + kind);
@@ -402,7 +414,7 @@ export async function main(argv: string[]): Promise<number> {
     dshCookie = String(setCookie).split(";", 1)[0];
     info("DSH 凭据已交换（BrowserAuth cookie 就绪）");
   } catch (e) {
-    err("auth", "DSH 凭据交换失败（中继无法通过 DSH 鉴权）：" + ((e && e.message) || e));
+    err("auth", "DSH 凭据交换失败（中继无法通过 DSH 鉴权）：" + errText(e));
     err("exit", "exit=" + EXIT.PORT + " kind=auth-exchange");
     await shutdown("auth-failed", EXIT.PORT);
     return EXIT.PORT;
@@ -434,7 +446,7 @@ export async function main(argv: string[]): Promise<number> {
               ))
             ));
           } catch (e) {
-            err("switch-gate", "agents 忙判定不可用（放行）：" + ((e && e.message) || e));
+            err("switch-gate", "agents 忙判定不可用（放行）：" + errText(e));
           }
           if (busy) throw new Error("DSH 仍有运行中/排队中的任务，先结束或停止它们再切换数据源。");
           info("switch-gate：无在途工作，允许切换数据源（prepare-switch）");
@@ -459,7 +471,7 @@ export async function main(argv: string[]): Promise<number> {
       log: (s) => info("dshbridge", s),
     });
   } catch (e) {
-    err("dshbridge", "中继启动失败：" + ((e && e.message) || e));
+    err("dshbridge", "中继启动失败：" + errText(e));
     err("exit", "exit=" + EXIT.PORT + " kind=bridge-bind");
     await shutdown("bridge-failed", EXIT.PORT);
     return EXIT.PORT;
@@ -476,7 +488,7 @@ export async function main(argv: string[]): Promise<number> {
       log: (s) => info("bridge", s),
     });
   } catch (e) {
-    err("bridge", "task-bridge 挂载失败（任务终态将无回投）：" + ((e && e.message) || e));
+    err("bridge", "task-bridge 挂载失败（任务终态将无回投）：" + errText(e));
   }
   try {
     state.stopApproval = startApprovalBridge({
@@ -486,7 +498,7 @@ export async function main(argv: string[]): Promise<number> {
       log: (s) => info("approval", s),
     });
   } catch (e) {
-    err("approval", "approval-bridge 挂载失败（DSH 越界审批将 fail-closed）：" + ((e && e.message) || e));
+    err("approval", "approval-bridge 挂载失败（DSH 越界审批将 fail-closed）：" + errText(e));
   }
   process.stdout.write(opts.readyMarker + "\n");
   return EXIT.OK;
