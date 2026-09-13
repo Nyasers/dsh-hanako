@@ -34,6 +34,7 @@ import { readTaskMap, markTaskMapEnded, markCancelRequested } from "#/lib/task-m
 import { runWatchReconcile } from "#/lib/watch-sse.ts";
 import { rpcSessionCancel } from "#/lib/dsh-rpc.ts";
 import { cancelSessionModelRequests } from "#/lib/model-requests.ts";
+import { errText } from "#/lib/err-text.ts";
 
 // 事件白名单（与 v1 dsh-events 的会话事件子集一致；其余事件不订阅）
 export const BRIDGE_EVENTS = [
@@ -406,7 +407,7 @@ export function startTaskBridge({
   };
   for (const event of BRIDGE_EVENTS) {
     onEvent(event, (...args) => {
-      let frame = null;
+      let frame: DshEventFrame | null = null;
       try {
         frame = classifyDshEvent(event, args);
       } catch {
@@ -423,12 +424,12 @@ export function startTaskBridge({
         }
         void b.onFrame(frame).catch((e) => {
           try {
-            log && log("[task-bridge] 帧处理失败：" + ((e && e.message) || e));
+            log && log("[task-bridge] 帧处理失败：" + errText(e));
           } catch { /* 忽略 */ }
         });
       } catch (e) {
         try {
-          log && log("[task-bridge] 事件分发异常：" + ((e && e.message) || e));
+          log && log("[task-bridge] 事件分发异常：" + errText(e));
         } catch { /* 忽略 */ }
       }
     });

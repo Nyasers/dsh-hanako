@@ -10,6 +10,7 @@ import { readFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { minifyJs, minifyHtml } from "./minify-assets.mts";
+import { errText } from "./err-text.mts";
 
 // 收集目录下全部 .js 的 file:// URL（rspack 会把 import.meta.url 静态化为构建机源码
 // 绝对路径；构建后产物出现这些字面量一律替换回 import.meta.url——分发路径失效根因）。
@@ -77,7 +78,7 @@ export async function extraMinify(root) {
       // .html 是静态壳页（React 不参与，它们是原样拷进 dist 的）：只去注释与收空白。
       out = file.endsWith(".html") ? await minifyHtml(code) : await minifyJs(code);
     } catch (err) {
-      throw new Error("extra minify 失败（" + file + "）：" + err.message);
+      throw new Error("extra minify 失败（" + file + "）：" + errText(err));
     }
     writeFileSync(file, out, "utf8");
     const after = Buffer.byteLength(out, "utf8");

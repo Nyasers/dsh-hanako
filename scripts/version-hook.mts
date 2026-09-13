@@ -40,14 +40,17 @@ import path from "node:path";
 import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { versionCommitFiles, readPkg, writePkg } from "./version-common.mts";
+import { errText } from "./err-text.mts";
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const run = (cmd, desc) => {
   console.log("[version-hook] " + desc + "...");
   try {
-    execSync(cmd, { stdio: "inherit", cwd: ROOT, shell: true });
+    // 不传 shell：execSync 本就走系统 shell（默认 shell=true），@types/node 把这里
+    // ExecSyncOptions.shell 限定为 string，显式 shell:true 反而报布尔不可赋给 string。
+    execSync(cmd, { stdio: "inherit", cwd: ROOT });
   } catch (e) {
-    console.error("[version-hook] " + desc + " 失败: " + e.message);
+    console.error("[version-hook] " + desc + " 失败: " + errText(e));
     process.exit(1);
   }
 };
@@ -113,7 +116,7 @@ function main() {
         process.exit(1);
       }
     } catch (e) {
-      console.error("[version-hook] 无法查询远程 origin tags（网络不可达？）" + e.message.trim() + "——发版前必须确认远端 tag 状态，中止");
+      console.error("[version-hook] 无法查询远程 origin tags（网络不可达？）" + errText(e).trim() + "——发版前必须确认远端 tag 状态，中止");
       process.exit(1);
     }
   }

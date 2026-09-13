@@ -6,11 +6,11 @@
 // （含 win32/darwin/linux × x64/arm64 预编译资产），安装即用、无需 npm install。
 // 依赖物化形态对齐样例 hana-dsh：hoisted 布局（顶层真实目录、无软链接——软链进 zip 跨机
 // 解压即断）。物化在 _tmp/pkg-root/ 隔离进行，不触碰仓库 node_modules。
-// 流程：复制交付清单（prepack 钩子已先行 build）→ 物化生产依赖 → 断言多平台资产 → zip → SHA256。
-// 用法：pnpm run pack --target <名字>（prepack 自动前置 build；单独 node scripts/pack.mts 要求 dist/ 已构建）
+// 流程：复制交付清单（prepackage 钩子已先行 build）→ 物化生产依赖 → 断言多平台资产 → zip → SHA256。
+// 用法：pnpm run package --target <名字>（prepackage 自动前置 build；单独 node scripts/pack.mts 要求 dist/ 已构建）
 // 产出：releases/dshana-v<version>[-<target>].zip + .sha256。**zip 根 = 包根**：manifest.json、
 //   index.js、node_modules/、ui/ 等全部在 zip 根级，不得套一层目录（宿主安装时在包根读 manifest.json）。
-// 两个临时目录的分工（都在 _tmp/ 下，起手清残留、用完即清、收尾由 postpack 钩子清）：
+// 两个临时目录的分工（都在 _tmp/ 下，起手清残留、用完即清、收尾由 postpackage 钩子清）：
 //   · _tmp/pkg-root/<target>：依赖物化**工位**。要跑一次真 install，就得有个像独立项目的目录
 //     ——package.json + pnpm-lock.yaml + 为该目标生成的 pnpm-workspace.yaml（supportedArchitectures）
 //     三件套放进去跑 pnpm install --prod。隔离在 _tmp 下，仓库自身的 node_modules 与锁文件不被污染。
@@ -25,6 +25,7 @@ import { parseArgs } from "node:util";
 import { ZipArchive } from "archiver";
 
 import fs from "fs-extra";
+import { errText } from "./err-text.mts";
 
 const require = createRequire(import.meta.url);
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -137,14 +138,27 @@ assertUiTree(distDir);
 //     Windows 上曾遇清理被拒导致树损坏）。
 //   用法：node scripts/pack.mts [--target universal|darwin-arm64|darwin-x64|linux-x64|win32-x64|
 //   linux-arm64|win32-arm64]；默认 universal（单一目标，不接 `all`）。多目标 = 多次调用
-//   （包别名 `pack:<target>`）或 CI 的并发矩阵。
-//   别名约定：所有 `pack:<target>` 都必须**委派给 pack**（`pnpm run pack --target=…`），
+//   （包别名 `package:<os>:<cpu>`）或 CI 的并发矩阵。
+//   别名约定：所有 `package:<os>:<cpu>` 都必须**委派给 package**（`pnpm run package --target=…`），
 //   不能直接写 `node scripts/pack.mts --target=…`：pnpm 的 pre/post 钩子是按脚本名精确匹配的，
-//   `pack:linux-x64` 只会去找 `prepack:linux-x64` / `postpack:linux-x64`（实测确认），直接调脚本
-//   会同时跳过 prepack（build）与 postpack（清临时目录）。
+//   别名 `package:linux:x64` 自身找不到 `prepackage:linux:x64` / `postpackage:linux:x64`（都跳过），
+//   真正挂上前后置的是它委派的 `package`（实测确认），直接调脚本会同时跳过 prepackage（build）
+//   与 postpackage（清临时目录）。
 const stagingRoot = join(ROOT, "_tmp", "pkg-root");
 
-const HOST_TARGETS = [
+/**
+ * 打包目标描述。libc 仅 linux 目标声明（用于 supportedArchitectures.libc）；显式给出形状，
+ * 否则数组字面量会推成"部分成员含 libc"的联合，访问 s.libc 报 TS2339。
+ */
+interface TargetSpec {
+  name: string;
+  os: string[];
+  cpu: string[];
+  libc?: string[];
+  assets: string[];
+}
+
+const HOST_TARGETS: TargetSpec[] = [
   // 注：darwin / linux 的 libvips 单独分包（@img/sharp-libvips-*），Windows 则内联在
   // @img/sharp-win32-x64 里、无独立 libvips 包——断言清单按平台实际形态写（实测得出）。
   { name: "darwin-arm64", os: ["darwin"], cpu: ["arm64"], assets: ["@koromix/koffi-darwin-arm64", "node-addon-require-builtin-darwin-arm64", "@img/sharp-darwin-arm64", "@img/sharp-libvips-darwin-arm64"] },
@@ -154,7 +168,7 @@ const HOST_TARGETS = [
 ];
 // 通用兜底包：os × cpu 全叉乘（比宿主矩阵多出 win32-arm64 / linux-arm64 等）；体量更大，
 // 用于兜底（用户在宿主矩阵外也能跑，代价是下载大）。
-const UNIVERSAL_TARGET = {
+const UNIVERSAL_TARGET: TargetSpec = {
   name: "universal",
   os: ["win32", "darwin", "linux"],
   cpu: ["x64", "arm64"],
@@ -162,14 +176,14 @@ const UNIVERSAL_TARGET = {
 };
 
 // 非宿主矩阵、**仅手动编译**的目标（不进 CI 主线）：宿主未承诺这些平台，但预编译资产实测存在，
-// 需要时点名出包（`pack:<target>` 别名已备）。资产清单同样按实测形态写。
+// 需要时点名出包（`package:<os>:<cpu>` 别名已备）。资产清单同样按实测形态写。
 // 注：这些目标不进 `--targets=all`，只能点名；否则 CI 会产出宿主不支持的包。
-const EXTRA_TARGETS = [
+const EXTRA_TARGETS: TargetSpec[] = [
   { name: "linux-arm64", os: ["linux"], cpu: ["arm64"], libc: ["glibc"], assets: ["@koromix/koffi-linux-arm64", "node-addon-require-builtin-linux-arm64-gnu", "@img/sharp-linux-arm64", "@img/sharp-libvips-linux-arm64"] },
   { name: "win32-arm64", os: ["win32"], cpu: ["arm64"], assets: ["@koromix/koffi-win32-arm64", "node-addon-require-builtin-win32-arm64-msvc", "@img/sharp-win32-arm64"] },
 ];
 
-function targetSpec(name) {
+function targetSpec(name: string): TargetSpec | null {
   if (name === "universal") return UNIVERSAL_TARGET;
   return HOST_TARGETS.find((t) => t.name === name) || EXTRA_TARGETS.find((t) => t.name === name) || null;
 }
@@ -387,18 +401,20 @@ function dirSize(dir) {
 // 由它直接报错，不再手写字符串扫描——上一版手扫以 startsWith("--target") 判「认识的参数」，
 // 把 `--targets=x` 漏成了合法值，静默回落跑了一整次通用包。
 // 未指定 / 不支持的目标 / 解析失败三种情况一律 failUsage：打印支持目标列表并退出码 2。
-// 多目标由 CI 并行矩阵各自跑一次，或本地逐个跑 `pnpm run pack:<target>`；不支持 `all`。
+// 多目标由 CI 并行矩阵各自跑一次，或本地逐个跑 `pnpm run package:<os>:<cpu>`；不支持 `all`。
 function supportedTargetNames() {
   return ["universal", ...HOST_TARGETS.map((t) => t.name), ...EXTRA_TARGETS.map((t) => t.name)];
 }
-function failUsage(detail) {
+function failUsage(detail: string): never {
   console.error(`[pack] ${detail}`);
   console.error("[pack] 支持的目标：");
   for (const n of supportedTargetNames()) {
     const s = targetSpec(n);
+    // supportedTargetNames() 由同一张目标表派生，理论上必能解析；此守卫只为收窄类型
+    if (!s) continue;
     console.error(`  ${n.padEnd(14)} os=[${s.os.join(",")}] cpu=[${s.cpu.join(",")}]${s.libc ? " libc=[" + s.libc.join(",") + "]" : ""}`);
   }
-  console.error("[pack] 用法：node scripts/pack.mts --target <名字>（或 pnpm run pack --target=<名字>）");
+  console.error("[pack] 用法：node scripts/pack.mts --target <名字>（或 pnpm run package --target=<名字>）");
   process.exit(2);
 }
 const spec = (() => {
@@ -411,7 +427,7 @@ const spec = (() => {
       allowPositionals: false,
     });
   } catch (e) {
-    failUsage(`参数解析失败：${(e && e.message) || e}`);
+    failUsage(`参数解析失败：${errText(e)}`);
   }
   const raw = parsed.values.target;
   if (raw === undefined) failUsage("未指定 --target");
@@ -477,7 +493,7 @@ function isEsm(code) {
         module: isEsm(code),
         format: { comments: false },
       });
-    } catch (err) { throw new Error(`terser 压缩失败（${file}）：${err.message}`); }
+    } catch (err) { throw new Error(`terser 压缩失败（${file}）：${errText(err)}`); }
     if (!result?.code) throw new Error(`terser 压缩失败（${file}）：无输出`);
     fs.writeFileSync(file, result.code, "utf8");
     console.log(`[pack]   ${file}: ${before} -> ${Buffer.byteLength(result.code, "utf8")} bytes`);
@@ -492,7 +508,7 @@ fs.ensureDirSync(relDir);
 // 临时目录纪律（曾因多目标连跑堆积 2.2 GB 把宿主压崩）：
 //   · 起手清残留（上次运行/中途崩溃留下的）；
 //   · 用完即清（暂存树 + 铺平目录）；
-//   · 收尾全清由 package.json 的 postpack 钩子承担（scripts/clean-tmp.mts），CI 里也可单独调。
+//   · 收尾全清由 package.json 的 postpackage 钩子承担（scripts/clean-tmp.mts），CI 里也可单独调。
 // 中间原料与暂存树都可再生，真正的产物只有 releases/ 下的 zip + sha256。
 /**
  * 集成层覆盖：把 src-integrations 编译出的补丁包盖回物化树（单副本；机制见 src-integrations/README.md）。
@@ -581,4 +597,4 @@ for (const stale of [pkgRoot, stagingRoot]) fs.removeSync(stale);
   // 铺平目录已入包，即用即清
   fs.removeSync(pkgDir);
 }
-// 收尾全清 → postpack 钩子（scripts/clean-tmp.mts）
+// 收尾全清 → postpackage 钩子（scripts/clean-tmp.mts）

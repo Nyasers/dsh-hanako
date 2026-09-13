@@ -24,12 +24,14 @@
 //
 // 仍接受 --help（无配置文件时打印用法）。
 import { isAbsolute } from "node:path";
+import { errText } from "#/lib/err-text.ts";
 
 export class UsageError extends Error {
+  /** 进程退出码（入口据此区分用法错与运行错）。 */
+  exitCode = 2;
   constructor(message) {
     super(message);
     this.name = "UsageError";
-    this.exitCode = 2;
   }
 }
 
@@ -119,13 +121,13 @@ export function parseRuntimeConfig(argv: string[], readFile: (path: string) => s
   try {
     text = readFile(configPath);
   } catch (e) {
-    throw new UsageError("读取私有运行时配置失败：" + ((e && e.message) || e));
+    throw new UsageError("读取私有运行时配置失败：" + errText(e));
   }
   let parsed;
   try {
     parsed = JSON.parse(text);
   } catch (e) {
-    throw new UsageError("私有运行时配置不是合法 JSON：" + ((e && e.message) || e));
+    throw new UsageError("私有运行时配置不是合法 JSON：" + errText(e));
   }
   return normalizeRuntimeConfig(parsed);
 }

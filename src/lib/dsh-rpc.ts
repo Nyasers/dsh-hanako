@@ -14,8 +14,29 @@
 // session.* 的 request/_request 包装 + requestId 注入；响应 rpcId 回显 + result.ok）。
 import { buildClientRequest, parseServerResponse, defaultRpcTimeoutMs } from "#/lib/rpc-envelope.ts";
 
+/** 一元 RPC 的公共入参（信封字段 + 超时/中止；bare = 不走 session 信封）。 */
+interface RpcCallInput {
+  method: string;
+  payload?: unknown;
+  /** 幂等键（响应回显校验用）；缺省由信封生成。 */
+  rpcId?: string;
+  /** 调用方的中止信号（与内建超时合并）。 */
+  signal?: AbortSignal | null;
+  /** 超时毫秒（>0 采用；否则用默认）。 */
+  timeoutMs?: number;
+  /** true = 顶层方法（不包 session 信封）。 */
+  bare?: boolean;
+}
+
+/** 各封装传给 rpcCallWithFetch 的公共可选项。 */
+interface RpcOpts {
+  rpcId?: string;
+  signal?: AbortSignal | null;
+  timeoutMs?: number;
+}
+
 /** 注入式 RPC 调用：fetchFn(url, init) => Promise<Response>；超时/中止经 AbortSignal。 */
-export async function rpcCallWithFetch(fetchFn, base, { method, payload, rpcId, signal, timeoutMs, bare }) {
+export async function rpcCallWithFetch(fetchFn, base, { method, payload, rpcId, signal, timeoutMs, bare }: RpcCallInput) {
   if (typeof fetchFn !== "function") throw new Error("dsh-rpc: 需要 fetch 注入（ctx.network.fetch / 全局 fetch）");
   const { body } = buildClientRequest({ method, payload, rpcId, bare });
   const deadline = Number(timeoutMs) > 0 ? Number(timeoutMs) : defaultRpcTimeoutMs();
@@ -36,7 +57,7 @@ export async function rpcCallWithFetch(fetchFn, base, { method, payload, rpcId, 
 }
 
 /** session 工作取消（DSH 侧中止当前回合/工具/模型/终端；幂等——空闲会话 no-op）。 */
-export function rpcSessionCancel(fetchFn, base, sessionId, opts = {}) {
+export function rpcSessionCancel(fetchFn, base, sessionId, opts: RpcOpts = {}) {
   return rpcCallWithFetch(fetchFn, base, {
     method: "session/cancel",
     payload: { sessionId: String(sessionId || "") },
@@ -60,7 +81,7 @@ export function cancelAccepted(value) {
 export const AGENT_DEFAULT_MODEL_NS = "agent-default-model";
 
 /** settings/describe：各段视图（value + revision）。无参方法。 */
-export function rpcSettingsDescribe(fetchFn, base, opts = {}) {
+export function rpcSettingsDescribe(fetchFn, base, opts: RpcOpts = {}) {
   return rpcCallWithFetch(fetchFn, base, {
     method: "settings/describe",
     payload: {},
@@ -74,8 +95,13 @@ export function rpcSettingsDescribe(fetchFn, base, opts = {}) {
  * settings/replace：整段替换（`replace(ns, section, expectedRevision)`，args 按参数名给）。
  * expectedRevision 只在是有限数时才带上——不带 = 不校验版本（DSH 只在带版本时判冲突）。
  */
-export function rpcSettingsReplace(fetchFn, base, { ns, section, expectedRevision }, opts = {}) {
-  const args = { ns: String(ns), section };
+export function rpcSettingsReplace(
+  fetchFn,
+  base,
+  { ns, section, expectedRevision }: { ns: string; section: unknown; expectedRevision?: number },
+  opts: RpcOpts = {},
+) {
+  const args: { ns: string; section: unknown; expectedRevision?: number } = { ns: String(ns), section };
   if (typeof expectedRevision === "number" && Number.isFinite(expectedRevision)) {
     args.expectedRevision = expectedRevision;
   }
@@ -89,7 +115,7 @@ export function rpcSettingsReplace(fetchFn, base, { ns, section, expectedRevisio
 }
 
 /** session/modelCatalog：候选模型（按 provider 分组）。无参方法——不走 session 信封（bare）。 */
-export function rpcModelCatalog(fetchFn, base, opts = {}) {
+export function rpcModelCatalog(fetchFn, base, opts: RpcOpts = {}) {
   return rpcCallWithFetch(fetchFn, base, {
     method: "session/modelCatalog",
     payload: {},

@@ -60,14 +60,16 @@ const PROFILE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
  * 两个超时（秒）：整数 ≥ 0（0 = 显式禁用自动拒绝 / 交给调用方默认）；缺省填默认值。
  * 与数据模式同栈：一份设置、一个 revision（想改就带 expectedRevision，冲突就得 409）。
  */
-function normalizeTimeouts(input) {
-  const out = {};
-  for (const key of ["approvalTimeoutSec", "defaultTimeoutSec"]) {
+function normalizeTimeouts(input): { approvalTimeoutSec: number; defaultTimeoutSec: number } {
+  // 初值即默认（APP_SETTING_DEFAULTS 是常量）；循环只处理显式传入的值，避免 `out = {}`
+  // 把返回类型推成 `{}`（spread 进 validateSettings 后两键在调用侧就消失了）。
+  const out = {
+    approvalTimeoutSec: APP_SETTING_DEFAULTS.approvalTimeoutSec,
+    defaultTimeoutSec: APP_SETTING_DEFAULTS.defaultTimeoutSec,
+  };
+  for (const key of ["approvalTimeoutSec", "defaultTimeoutSec"] as const) {
     const raw = input[key];
-    if (raw === undefined || raw === null) {
-      out[key] = APP_SETTING_DEFAULTS[key];
-      continue;
-    }
+    if (raw === undefined || raw === null) continue;
     // 只接受 number 类型：不当成字符串解析（Number([]) 是 0、Number("") 是 0，宽松转换会让脏值混进来）
     if (typeof raw !== "number" || !Number.isSafeInteger(raw) || raw < 0) {
       throw new Error(key + " 必须是不小于 0 的整数秒（收到 " + JSON.stringify(raw) + "）");

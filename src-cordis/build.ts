@@ -24,11 +24,10 @@ const SRC_ROOT = join(ROOT, "src-cordis");
 function resolveRspackEntry(coreDir) {
   const pkg = JSON.parse(fs.readFileSync(join(coreDir, "package.json"), "utf8"));
   const dot = pkg.exports?.["."];
-  let entry = null;
+  let entry: string | null = null;
   if (typeof dot === "string") entry = dot;
-  else if (dot && typeof dot === "object") entry = dot.default ?? dot.import ?? dot.require;
-  if (!entry) entry = pkg.main ?? "dist/index.js";
-  return join(coreDir, entry);
+  else if (dot && typeof dot === "object") entry = dot.default ?? dot.import ?? dot.require ?? null;
+  return join(coreDir, entry || pkg.main || "dist/index.js");
 }
 let rspackPkg;
 const envDir = process.env.RSPACK_ENV;
@@ -95,7 +94,7 @@ async function buildServiceHalves(packages, outRoot) {
   let count = 0;
   for (const { name, pkgDir } of packages) {
     const cfg = serviceBundle({ name, pkgDir, outDir: join(outRoot, name) });
-    await new Promise((resolvePromise, reject) => {
+    await new Promise<void>((resolvePromise, reject) => {
       const compiler = rspack(cfg);
       compiler.run((err, stats) => {
         compiler.close(() => { });

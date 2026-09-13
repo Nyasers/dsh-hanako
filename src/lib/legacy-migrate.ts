@@ -36,6 +36,7 @@ import { readFileSync, writeFileSync, renameSync, existsSync, statSync, mkdirSyn
 import path from "node:path";
 // 目标私有源目录名与运行时实际读取处同源（data-source.js）；本模块不再自带一份字面值
 import { PRIVATE_HOME_NAME } from "#/lib/data-source.ts";
+import { errText } from "#/lib/err-text.ts";
 
 export const LEGACY_SUBDIR = "dsh-hanako"; // plugin-data 下的旧插件数据目录名
 export const LEGACY_PLUGIN_DATA_REL = path.join("plugin-data", LEGACY_SUBDIR);
@@ -109,7 +110,7 @@ export function checkSessionStoreFiles(dshHome) {
       const j = JSON.parse(readFileSync(p, "utf8"));
       out.push({ file: name, ok: true, keys: Object.keys(j).slice(0, 8) });
     } catch (e) {
-      out.push({ file: name, ok: false, error: String((e && e.message) || e).slice(0, 160) });
+      out.push({ file: name, ok: false, error: errText(e).slice(0, 160) });
     }
   }
   return out;

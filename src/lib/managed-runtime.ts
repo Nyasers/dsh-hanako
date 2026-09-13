@@ -28,6 +28,7 @@ import { mkdirSync, writeFileSync, chmodSync, rmSync, readFileSync } from "node:
 import { randomInt, randomBytes } from "node:crypto";
 import { appDataDir, appLogger, getAppRuntime } from "#/lib/app-runtime.ts";
 import { currentSource } from "#/lib/data-source.ts";
+import type { HanaPluginContextV2 } from "#/types/host.ts";
 // 依赖随包物化在安装目录 <installRoot>/node_modules，
 // 无运行时安装与 spawn。
 
@@ -51,16 +52,61 @@ export const START_ERROR_HINTS = {
   unknown: "受管 runtime 启动失败（见 runtime 日志与状态）。",
 };
 
+/** 取错误的可读文本。catch 到的值类型未知，字段访问一律经这里。 */
+const errText = (e: unknown): string => ((e as any)?.message as string) || String(e);
+
+/**
+ * 带 code 的错误（调用方按 code 归类：port-busy / not-authorized / timeout…）。
+ * 与「new Error 后挂 code」等价：内置 Error 类型上没有 code，直接赋值会被判「属性不存在」，
+ * 故在这里一次给出带 code 的形状。
+ */
+function codedError(message: string, code: string): Error & { code: string } {
+  const err = new Error(message) as Error & { code: string };
+  err.code = code;
+  return err;
+}
+
+// ---- 宿主契约形状 ----
+// 经 host.ts 的 ctx 类型下钻取 runtime 面的形状：host.ts 只 re-export 了 ctx 本身，
+// runtime 记录/入参没有单独出口。下钻比手抄一份（抄漏一处就是静默降级）稳，也不必往
+// types/host.ts 加行。
+/** ctx.runtime 面（HanaPluginContextV2.runtime）。 */
+type HostRuntime = HanaPluginContextV2["runtime"];
+/** ctx.runtime.start 的入参形状：字面量入参靠它收窄 runtime/profile/network。 */
+type RuntimeStartInput = Parameters<HostRuntime["start"]>[0];
+/** ctx.runtime.get/start 返回的 runtime 记录（状态相）。 */
+type RuntimeRecord = NonNullable<Awaited<ReturnType<HostRuntime["get"]>>>;
+
+/** 单例阶段（managed.phase）。 */
+type ManagedPhase = "idle" | "starting" | "ready" | "error" | "stopped";
+
 /** 模块级单例状态（一个 App 进程一个 DSH runtime；apply 卸载/失败会清）。 */
-let managed = {
+interface ManagedRuntime {
+  runtimeId: string | null;
+  phase: ManagedPhase;
+  /** starting 阶段共享 promise（并发首启 single-flight）。 */
+  promise: Promise<{ runtimeId: string; info: RuntimeRecord | null }> | null;
+  /** 最近一次 runtime.get 轮询记录（就绪/终态判定与诊断面用）。 */
+  lastInfo: RuntimeRecord | null;
+  /** 最近一次启动失败/查询异常（Error 或其它抛出值）。 */
+  lastError: unknown;
+  /** 中继端口（= 注册给宿主的 service.port；浏览器侧访问）。 */
+  bridgePort: number | null;
+  /** 中继鉴权 key（header x-hana-dsh-bridge / _hana 路径；绝不落盘/落日志）。 */
+  bridgeKey: string | null;
+  /** 控制面 key（/_control；App 工具经 controller.invoke 使用）。 */
+  controlKey: string | null;
+}
+
+let managed: ManagedRuntime = {
   runtimeId: null,
-  phase: "idle", // idle | starting | ready | error | stopped
-  promise: null, // starting 阶段共享 promise（并发首启 single-flight）
+  phase: "idle",
+  promise: null,
   lastInfo: null,
   lastError: null,
-  bridgePort: null, // 中继端口（= 注册给宿主的 service.port；浏览器侧访问）
-  bridgeKey: null, // 中继鉴权 key（header x-hana-dsh-bridge / _hana 路径；绝不落盘/落日志）
-  controlKey: null, // 控制面 key（/_control；App 工具经 controller.invoke 使用）
+  bridgePort: null,
+  bridgeKey: null,
+  controlKey: null,
 };
 
 /** 复位单例（外部测试/重建用）。 */
@@ -112,6 +158,22 @@ export function makeReadyMarker() {
 }
 
 /**
+ * 私有运行时配置（写盘给子进程；与子进程侧 normalizeRuntimeConfig 对偶）。
+ * 可选项只在显式传入时出现，故为 optional（子进程按缺失回落自己的默认）。
+ */
+interface RuntimeConfig {
+  dataDir: string;
+  dshPort: number;
+  bridgePort: number;
+  bridgeKey: string;
+  controlKey: string;
+  readyMarker: string;
+  dshHome?: string;
+  cordisSrc?: string;
+  depsRoot?: string;
+}
+
+/**
  * 私有运行时配置构造（与 src/runtime/options.js normalizeRuntimeConfig 对偶）。opts:
  * { dataDir, dshHome?, dshPort, bridgePort, bridgeKey, controlKey, cordisSrc?, depsRoot?, readyMarker? }
  * dshHome = 当前数据源的 DSH_HOME；缺省时子进程回落 dataDir/.dsh。
@@ -124,7 +186,7 @@ export function buildRuntimeConfig(opts) {
   if (!Number.isInteger(bridgePort) || bridgePort < 1 || bridgePort > 65535) throw new Error("buildRuntimeConfig: bridgePort 必填（1..65535）");
   if (typeof bridgeKey !== "string" || bridgeKey.length < 16) throw new Error("buildRuntimeConfig: bridgeKey 必填（≥16 字符）");
   if (typeof controlKey !== "string" || controlKey.length < 16) throw new Error("buildRuntimeConfig: controlKey 必填（≥16 字符）");
-  const config = { dataDir, dshPort, bridgePort, bridgeKey, controlKey, readyMarker };
+  const config: RuntimeConfig = { dataDir, dshPort, bridgePort, bridgeKey, controlKey, readyMarker };
   if (typeof dshHome === "string" && dshHome) config.dshHome = dshHome;
   if (typeof cordisSrc === "string" && cordisSrc) config.cordisSrc = cordisSrc;
   if (typeof depsRoot === "string" && depsRoot) config.depsRoot = depsRoot;
@@ -213,7 +275,7 @@ async function probeLiveRuntime() {
   try {
     cur = await app.ctx.runtime.get(runtimeId);
   } catch (e) {
-    logApp("warn", "[managed-runtime] runtime.get 探活失败（保守视为仍就绪）：" + ((e && e.message) || e));
+    logApp("warn", "[managed-runtime] runtime.get 探活失败（保守视为仍就绪）：" + errText(e));
     return managed.lastInfo;
   }
   if (cur && (cur.state === "ready" || (cur.service && cur.service.state === "ready"))) {
@@ -238,7 +300,7 @@ async function reapFailedRuntime(ctx) {
       await waitTerminal(ctx, runtimeId);
     }
   } catch (e) {
-    logApp("warn", "[managed-runtime] 失败 runtime 收尾异常（宿主可能已回收）：" + ((e && e.message) || e));
+    logApp("warn", "[managed-runtime] 失败 runtime 收尾异常（宿主可能已回收）：" + errText(e));
   }
 }
 
@@ -254,7 +316,7 @@ async function reapFailedRuntime(ctx) {
 // 被手动停止（stopManagedRuntime 冻结）或 App 卸载（dispose 走 stop）。任何显式启动请求
 // （apply 自动链 / dshana 首调 / /dshana/start）都会重新武装。
 const AUTO_RETRY_SCHEDULE_MS = [5000, 15000, 30000, 60000, 120000, 300000]; // 5s → 5min，之后停在 5min
-let autoRetryTimer = null;
+let autoRetryTimer: ReturnType<typeof setTimeout> | null = null;
 let autoRetryAttempt = 0;
 let autoRetryFrozen = false;
 
@@ -316,7 +378,7 @@ export async function preflightSource({ dataDir, dshHome, profile }) {
     try { rmSync(configPath, { force: true }); } catch { /* 忽略 */ }
     try { rmSync(resultPath, { force: true }); } catch { /* 忽略 */ }
   };
-  let runtimeId = null;
+  let runtimeId: string | null = null;
   try {
     const info = await ctx.runtime.start({
       runtime: "node",
@@ -326,10 +388,10 @@ export async function preflightSource({ dataDir, dshHome, profile }) {
       cwd: dataDir,
       args: [configPath],
     });
-    runtimeId = info && info.runtimeId;
+    runtimeId = info.runtimeId;
   } catch (e) {
     cleanup();
-    return { ok: false, error: "预检子进程启动被拒：" + ((e && e.message) || e) };
+    return { ok: false, error: "预检子进程启动被拒：" + errText(e) };
   }
   const deadline = Date.now() + PREFLIGHT_TIMEOUT_MS;
   try {
@@ -341,11 +403,12 @@ export async function preflightSource({ dataDir, dshHome, profile }) {
           ? { ok: true, dshHome: parsed.dshHome || dshHome }
           : { ok: false, error: (parsed && parsed.error) || "预检未通过（无原因）" };
       } catch (e) {
-        if (e && e.code !== "ENOENT") {
-          return { ok: false, error: "预检结果文件不可用：" + ((e && e.message) || e) };
+        if ((e as any)?.code !== "ENOENT") {
+          return { ok: false, error: "预检结果文件不可用：" + errText(e) };
         }
       }
-      const cur = await ctx.runtime.get(runtimeId).catch(() => null);
+      // runtimeId 为 null（start 未回 runtimeId）时无 runtime 可查，当轮空转、由超时兜底
+      const cur = runtimeId ? await ctx.runtime.get(runtimeId).catch(() => null) : null;
       if (cur && TERMINAL_STATES.has(cur.state)) {
         return { ok: false, error: "预检子进程未写出结果就结束（state=" + cur.state + "，详情见 runtime 日志）" };
       }
@@ -354,12 +417,14 @@ export async function preflightSource({ dataDir, dshHome, profile }) {
     return { ok: false, error: "预检超时（" + Math.round(PREFLIGHT_TIMEOUT_MS / 1000) + "s 内未出结果）" };
   } finally {
     // 无论如何不留残余：停掉预检子进程（幂等）+ 删配置与结果文件
-    try {
-      const cur = runtimeId ? await ctx.runtime.get(runtimeId).catch(() => null) : null;
-      if (cur && !TERMINAL_STATES.has(cur.state) && typeof ctx.runtime.stop === "function") {
-        await ctx.runtime.stop(runtimeId);
-      }
-    } catch { /* 停不掉不阻塞结果（超时也归 preflight 失败） */ }
+    if (runtimeId) {
+      try {
+        const cur = await ctx.runtime.get(runtimeId).catch(() => null);
+        if (cur && !TERMINAL_STATES.has(cur.state) && typeof ctx.runtime.stop === "function") {
+          await ctx.runtime.stop(runtimeId);
+        }
+      } catch { /* 停不掉不阻塞结果（超时也归 preflight 失败） */ }
+    }
     cleanup();
   }
 }
@@ -396,7 +461,7 @@ export async function ensureManagedRuntime(opts = {}) {
     managed.lastError = e;
     clearRuntimeIdentity(); // 失败不留死端口/死 key（bridgeAccess 不得再发出去）
     // 失败不等于等人来救：按退避自动重试（首次安装「权限尚未授予」这类必失败就靠它自愈）
-    scheduleRuntimeAutoRetry((e && e.message) || String(e));
+    scheduleRuntimeAutoRetry(errText(e));
     throw e;
   } finally {
     managed.promise = null;
@@ -405,14 +470,14 @@ export async function ensureManagedRuntime(opts = {}) {
 
 /** 端口占用（本机随机撞车）自动换随机端口重试；其他失败直接上抛。 */
 async function startWithPortRetry(opts) {
-  let lastError = null;
+  let lastError: unknown = null;
   for (let attempt = 1; attempt <= MAX_START_ATTEMPTS; attempt++) {
     try {
       return await doStartManaged(opts, attempt);
     } catch (e) {
       lastError = e;
       await reapFailedRuntime(getAppRuntime()?.ctx);
-      if (!(e && e.code === "port-busy") || attempt >= MAX_START_ATTEMPTS) throw e;
+      if ((e as any)?.code !== "port-busy" || attempt >= MAX_START_ATTEMPTS) throw e;
       logApp("warn", "[managed-runtime] 端口占用（第 " + attempt + " 次尝试）——换随机端口重试");
     }
   }
@@ -454,7 +519,7 @@ async function doStartManaged(opts, attempt = 1) {
   // 数据与磁盘凭据），仅保留 stop / 撤销 / 进程树回收的托管语义。宿主契约**禁止**传
   // readRoots / writeRoots / callToken / taskId，故本调用一律不带（文件边界归零，换来 DSH 能
   // 写进用户项目工作区）。护栏 = DSH 自身权限模式与审批策略 + 已接上的 Hana 审批面。
-  const input = {
+  const input: RuntimeStartInput = {
     runtime: "node",
     entry: RUNTIME_ENTRY,
     profile: "local-machine",
@@ -463,19 +528,17 @@ async function doStartManaged(opts, attempt = 1) {
     args: [configPath],
     service: { port: bridgePort, readyMarker },
   };
-  let info;
+  let info: RuntimeRecord;
   try {
     info = await ctx.runtime.start(input);
   } catch (e) {
     // 启动失败：配置文件中含 bridgeKey，立即删除（不残留凭据）
     try { rmSync(configPath, { force: true }); } catch { /* 忽略 */ }
     // 宿主侧 start 拒绝（能力/授权/校验失败）：归类上报
-    const text = (e && e.message) || String(e);
+    const text = errText(e);
     logApp("error", "[managed-runtime] ctx.runtime.start 被宿主拒绝：" + text);
     const kind = /not authorized|authoriz|DENIED|declined/i.test(text) ? "not-authorized" : "unknown";
-    const err = new Error((START_ERROR_HINTS[kind] || START_ERROR_HINTS.unknown) + "（宿主：" + text + "）");
-    err.code = kind;
-    throw err;
+    throw codedError((START_ERROR_HINTS[kind] || START_ERROR_HINTS.unknown) + "（宿主：" + text + "）", kind);
   }
   // 子进程已启动：配置已读入（首件事），延迟清理文件；同时记录中继访问面供 App 侧 RPC。
   managed.bridgePort = bridgePort;
@@ -491,11 +554,11 @@ async function doStartManaged(opts, attempt = 1) {
   // 轮询等到 ready / failed / exited / stopped（起始 starting；不能把 runtimeId 当就绪）
   const deadline = Date.now() + READY_TIMEOUT_MS;
   for (;;) {
-    let cur = null;
+    let cur: RuntimeRecord | null = null;
     try {
       cur = await ctx.runtime.get(runtimeId);
     } catch (e) {
-      logApp("warn", "[managed-runtime] runtime.get 查询失败：" + ((e && e.message) || e));
+      logApp("warn", "[managed-runtime] runtime.get 查询失败：" + errText(e));
     }
     const state = cur && cur.state;
     const service = cur && cur.service;
@@ -507,18 +570,15 @@ async function doStartManaged(opts, attempt = 1) {
     if (state === "failed" || state === "exited" || state === "stopped") {
       const cls = classifyRuntimeFailure(cur);
       managed.lastInfo = cur;
-      const err = new Error(cls.userText + "（runtime state=" + state + " exitCode=" + (cur && cur.exitCode) + "）");
-      err.code = cls.kind;
       logApp("error", "[managed-runtime] DSH runtime 终态异常：" + state + " exit=" + (cur && cur.exitCode));
-      throw err;
+      throw codedError(cls.userText + "（runtime state=" + state + " exitCode=" + (cur && cur.exitCode) + "）", cls.kind);
     }
     if (Date.now() >= deadline) {
-      const err = new Error(
+      throw codedError(
         "DSH 受管 runtime 启动超时（" + Math.round(READY_TIMEOUT_MS / 1000) + "s 内未就绪）。" +
-        "首次启动含 profile 种子化与 DSH boot，若仍在进行请稍候；查看 App 日志/runtime 日志。",
+          "首次启动含 profile 种子化与 DSH boot，若仍在进行请稍候；查看 App 日志/runtime 日志。",
+        "timeout",
       );
-      err.code = "timeout";
-      throw err;
     }
     await new Promise((r) => setTimeout(r, READY_POLL_MS));
   }
@@ -539,7 +599,7 @@ export async function stopManagedRuntime() {
       await app.ctx.runtime.stop(runtimeId);
       logApp("info", "[managed-runtime] runtime 已停止：" + runtimeId);
     } catch (e) {
-      logApp("warn", "[managed-runtime] runtime.stop 失败（宿主可能已回收）：" + ((e && e.message) || e));
+      logApp("warn", "[managed-runtime] runtime.stop 失败（宿主可能已回收）：" + errText(e));
     }
   }
 }
@@ -555,7 +615,7 @@ export function managedRuntimeState() {
   return {
     runtimeId: managed.runtimeId,
     phase: managed.phase,
-    lastError: managed.lastError ? String((managed.lastError && managed.lastError.message) || managed.lastError) : null,
+    lastError: managed.lastError ? errText(managed.lastError) : null,
   };
 }
 

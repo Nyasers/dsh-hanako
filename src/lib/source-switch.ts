@@ -19,6 +19,7 @@ import { appDataDir, appLogger, getAppRuntime } from "#/lib/app-runtime.ts";
 import { dataSources, sourceOf } from "#/lib/data-source.ts";
 import { ensureManagedRuntime, preflightSource, stopManagedRuntime } from "#/lib/managed-runtime.ts";
 import { invokeControl } from "#/lib/controller.ts";
+import { errText } from "#/lib/err-text.ts";
 
 /** 步骤名（页面可直接显示；rolling-back 只在失败时出现）。 */
 export const SWITCH_STEPS = ["preflight", "freeze", "stopping", "starting", "saving", "rolling-back"];
@@ -31,8 +32,8 @@ export function controlAccepted(reply) {
   return { ok: false, error: (inner.error && String(inner.error)) || "控制面拒绝" };
 }
 
-function stepError(step, message) {
-  const e = new Error(message);
+function stepError(step: string, message: string): Error & { step: string } {
+  const e = new Error(message) as Error & { step: string };
   e.step = step;
   return e;
 }
@@ -42,6 +43,18 @@ const sameSource = (a, b) =>
   String(a.profile) === String(b.profile) &&
   String(a.path === null || a.path === undefined ? "" : a.path) ===
     String(b.path === null || b.path === undefined ? "" : b.path);
+
+/** 切换操作记录（终态保留，供页面轮询看结果；字段随步进增补）。 */
+interface SwitchOperation {
+  id?: string;
+  state?: string;
+  step?: string;
+  error?: string | null;
+  revision?: number;
+  at?: number;
+  from?: { mode: string; path: string | null; profile: string };
+  to?: { mode: string; path: string | null; profile: string };
+}
 
 /**
  * 切换编排器。deps:
@@ -54,11 +67,11 @@ const sameSource = (a, b) =>
  *   log(level, message)
  */
 export function createSourceSwitcher(deps) {
-  let current = null; // 最近一次 operation（终态保留，供页面轮询看结果）
+  let current: SwitchOperation | null = null; // 最近一次 operation（终态保留，供页面轮询看结果）
   let running = false;
 
   const state = () => (current ? { ...current } : null);
-  const setOp = (patch) => {
+  const setOp = (patch: Partial<SwitchOperation>) => {
     current = { ...current, ...patch, at: Date.now() };
   };
 
@@ -68,7 +81,7 @@ export function createSourceSwitcher(deps) {
         await deps.stopRuntime();
         notes.push("已停半成品");
       } catch (e) {
-        notes.push("停半成品失败：" + ((e && e.message) || e));
+        notes.push("停半成品失败：" + errText(e));
       }
     }
     if (stopAttempted) {
@@ -76,7 +89,7 @@ export function createSourceSwitcher(deps) {
         await deps.startRuntime(prevSettings);
         notes.push("已按旧源重起");
       } catch (e) {
-        notes.push("按旧源重起失败：" + ((e && e.message) || e));
+        notes.push("按旧源重起失败：" + errText(e));
       }
     } else if (froze) {
       // 只冻过、没停过：解冻即可（preflight 就失败的情形根本没冻，不需要也无从解冻）
@@ -84,7 +97,7 @@ export function createSourceSwitcher(deps) {
         const r = await deps.resume();
         notes.push(r && r.ok === true ? "已解冻（未停旧）" : "解冻未确认：" + ((r && r.error) || "无回执"));
       } catch (e) {
-        notes.push("解冻失败：" + ((e && e.message) || e));
+        notes.push("解冻失败：" + errText(e));
       }
     }
   }
@@ -120,7 +133,7 @@ export function createSourceSwitcher(deps) {
       deps.log("info", "数据源切换成功：" + next.mode + " revision=" + saved.revision);
       setOp({ state: "succeeded", step: "done", error: null, revision: saved.revision });
     } catch (e) {
-      const text = (e && e.message) || String(e);
+      const text = errText(e);
       setOp({ step: "rolling-back" });
       await rollback(prevSettings, stopAttempted, startedNew, froze, notes);
       const detail = text + (notes.length ? "（回滚：" + notes.join("；") + "）" : "");
@@ -164,7 +177,7 @@ export function createSourceSwitcher(deps) {
   };
 }
 
-let singleton = null;
+let singleton: ReturnType<typeof createSourceSwitcher> | null = null;
 
 /** 默认接线：自持存储 + 受管 runtime 启停 + 中继控制面冻结 + preflight 子进程。 */
 export function sourceSwitcher() {

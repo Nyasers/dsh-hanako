@@ -27,7 +27,7 @@
 /** hana usage → llm TokenUsage（映射直通；输入侧 uncached 语义由宿主投影保证）。 */
 export function usageToTokenUsage(usage) {
   if (!usage || typeof usage !== "object") return undefined;
-  const out = {};
+  const out: Record<string, number> = {};
   if (typeof usage.input === "number") out.inputTokens = usage.input;
   if (typeof usage.output === "number") out.outputTokens = usage.output;
   if (typeof usage.totalTokens === "number") out.totalTokens = usage.totalTokens;
@@ -81,13 +81,13 @@ function deltaOfItem(index, item) {
 function blockMetaOfItem(item) {
   if (item.type === "text") return typeof item.textSignature === "string" && item.textSignature ? { textSignature: item.textSignature } : null;
   if (item.type === "reasoning") {
-    const m = {};
+    const m: { signature?: string; redacted?: boolean } = {};
     if (typeof item.signature === "string" && item.signature) m.signature = item.signature;
     if (item.redacted === true) m.redacted = true;
     return Object.keys(m).length ? m : null;
   }
   if (item.type === "toolCall") {
-    const m = { id: String(item.id ?? "") };
+    const m: { id: string; thoughtSignature?: string } = { id: String(item.id ?? "") };
     if (typeof item.thoughtSignature === "string" && item.thoughtSignature) m.thoughtSignature = item.thoughtSignature;
     return m;
   }
@@ -103,7 +103,7 @@ function blockMetaOfItem(item) {
  */
 export function createHanaStreamState() {
   const started = new Set<number>();
-  let current = null;
+  let current: { index: number; type: string } | null = null;
   let nextIndex = 0;
   return {
     get startedIndexes() {
@@ -142,7 +142,7 @@ export function buildDoneChunks({ doneEvent, provider, model, requestId, started
   const content = assistant && Array.isArray(assistant.content) ? assistant.content : [];
   const stopReason = doneEvent && doneEvent.stopReason;
   if (content.length === 0 && stopReason === "stop") {
-    const err = new Error("模型返回空响应（EMPTY_RESPONSE）");
+    const err = new Error("模型返回空响应（EMPTY_RESPONSE）") as Error & { code: string };
     err.code = "EMPTY_RESPONSE";
     throw err;
   }
@@ -172,7 +172,7 @@ export function buildDoneChunks({ doneEvent, provider, model, requestId, started
     stopReason === "toolUse" ? "tool-calls" : stopReason === "length" ? "max-tokens" : stopReason === "stop" ? "stop" : null;
   if (reasonKind === null) {
     // deferred 等非标准终态：宿主模型不应产出；交给调用方按失败处理
-    const err = new Error("模型返回非标准终态（stopReason=" + String(stopReason) + "）");
+    const err = new Error("模型返回非标准终态（stopReason=" + String(stopReason) + "）") as Error & { code: string };
     err.code = "MODEL_DEFERRED";
     throw err;
   }

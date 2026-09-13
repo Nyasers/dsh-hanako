@@ -23,9 +23,10 @@
 //
 // 上游恒为 127.0.0.1 回环 HTTP。
 
-import { createServer } from "node:http";
+import { createServer, type IncomingHttpHeaders } from "node:http";
 import { connect as netConnect } from "node:net";
 import { timingSafeEqual } from "node:crypto";
+import { errText } from "#/lib/err-text.ts";
 
 const MAX_WS_BUFFER = 1024 * 1024;
 const FREEZE_CLOSE_CODE = 1013; // 数据源切换中：请稍后重连
@@ -49,7 +50,7 @@ export function matchesKey(actual, expected) {
  * @returns 归一后的上游相对路径；null = 未通过
  */
 export function authorizeBridgeRequest(
-  requestUrl: string,
+  requestUrl: string | undefined,
   headerKey: any,
   bridgeKey: string,
 ): { path: string; search: string } | null {
@@ -64,7 +65,7 @@ export function authorizeBridgeRequest(
 }
 
 /** 上游请求头构造：剥跳头/凭据/宿主头，补上游 host/origin 与 DSH cookie。 */
-export function upstreamRequestHeaders(headers, upstream, cookie) {
+export function upstreamRequestHeaders(headers: IncomingHttpHeaders, upstream, cookie) {
   const result: Record<string, string> = {};
   for (const [name, value] of Object.entries(headers)) {
     if (value === undefined) continue;
@@ -73,7 +74,9 @@ export function upstreamRequestHeaders(headers, upstream, cookie) {
     if (lower.startsWith("sec-websocket-")) continue;
     if (lower === "authorization" || lower === "cookie" || lower === "host" || lower === "origin") continue;
     if (lower === "x-hana-dsh-bridge") continue;
-    result[name] = value;
+    // 请求头值 node 已把同名头合并为单个字符串（数组形态只出现在响应头 set-cookie）；
+    // 这里按字符串取；fetch（undici）本身也接受数组，断言不改变运行时行为。
+    result[name] = value as string;
   }
   result.host = upstream.host;
   result.origin = upstream.origin;
@@ -86,14 +89,15 @@ export function upstreamRequestHeaders(headers, upstream, cookie) {
  * sec-websocket-*（那是握手语义本身，裸管道转发时必须原样过给上游；剥了上游就不认握手，
  * 浏览器侧事件流必连不上）。只换掉凭据与宿主头，并注入上游 host/origin 与 DSH cookie。
  */
-export function upgradeRequestHeaders(headers, upstream, cookie) {
+export function upgradeRequestHeaders(headers: IncomingHttpHeaders, upstream, cookie) {
   const result: Record<string, string> = {};
   for (const [name, value] of Object.entries(headers)) {
     if (value === undefined) continue;
     const lower = name.toLowerCase();
     if (lower === "authorization" || lower === "cookie" || lower === "host" || lower === "origin") continue;
     if (lower === "x-hana-dsh-bridge") continue;
-    result[name] = value;
+    // 同上：请求头值为字符串；数组形态属响应头范畴。
+    result[name] = value as string;
   }
   result.host = upstream.host;
   result.origin = upstream.origin;
@@ -144,7 +148,7 @@ export function wsCloseFrame(code, reason = "") {
 /** 等待 drain 或中止（背压）。 */
 function waitForDrain(response, signal) {
   if (signal.aborted) return Promise.resolve();
-  return new Promise((resolve) => {
+  return new Promise<void>((resolve) => {
     const done = () => {
       response.off("drain", done);
       signal.removeEventListener("abort", done);
@@ -183,8 +187,8 @@ export async function startDshBridge(opts: DshBridgeOptions): Promise<DshBridgeH
   }
   if (!bridgeKey) throw new Error("dshana bridge：bridgeKey 必填");
 
-  const activeRequests = new Set<string>();
-  const upstreamSockets = new Set<string>();
+  const activeRequests = new Set<AbortController>();
+  const upstreamSockets = new Set<ReturnType<typeof netConnect>>();
   const clientSockets = new Set<any>(); // 已升级的浏览器 WS 客户端（冻结时发 1013 关闭帧）
   let frozen = false; // 数据源切换冻结态（prepare-switch 置位，resume/守门失败解除）
   let activeCalls = 0; // 在途普通调用数（冻结前须归零；控制面调用不计）
@@ -258,7 +262,7 @@ export async function startDshBridge(opts: DshBridgeOptions): Promise<DshBridgeH
       } catch (e) {
         // 守门失败 → 不半冻（冻结标志回退，切换方读到 409）
         frozen = false;
-        rejectJson(res, 409, (e && e.message) || String(e));
+        rejectJson(res, 409, errText(e));
       } finally {
         // 控制面调用计数在 try 内配平（成功/失败路径一致）
         if (counted) activeCalls--;
@@ -287,7 +291,9 @@ export async function startDshBridge(opts: DshBridgeOptions): Promise<DshBridgeH
         headers: upstreamRequestHeaders(req.headers, upstream, upstreamCookie),
         redirect: "manual",
         signal: controller.signal,
-        ...(req.method === "GET" || req.method === "HEAD" ? {} : { body: req, duplex: "half" }),
+        // 流式转发请求体：Node（undici）接受可读流 + duplex:"half"，DOM 的 BodyInit 未含流类型；
+        // 本中继跑在 node 里，fetch 就是 undici，故按它实际接受的契约断言。
+        ...(req.method === "GET" || req.method === "HEAD" ? {} : { body: req as unknown as BodyInit, duplex: "half" }),
       });
       const headers = new Headers(response.headers);
       headers.delete("set-cookie");
@@ -369,17 +375,23 @@ export async function startDshBridge(opts: DshBridgeOptions): Promise<DshBridgeH
     clientSocket.pipe(upstreamSocket);
   });
 
-  await new Promise((resolve, reject) => {
+  /** 已监听端口（listen 成功后 address() 才返回 AddressInfo；未就绪时回落请求端口）。 */
+  const listenedPort = () => {
+    const address = server.address();
+    return address && typeof address !== "string" ? address.port : port;
+  };
+
+  await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(port, "127.0.0.1", () => {
       server.off("error", reject);
-      log(`bridge 监听 127.0.0.1:${server.address().port} → ${upstream.origin}`);
+      log(`bridge 监听 127.0.0.1:${listenedPort()} → ${upstream.origin}`);
       resolve();
     });
   });
 
   return {
-    port: server.address().port,
+    port: listenedPort(),
     close: () =>
       new Promise((resolve) => {
         for (const controller of activeRequests) controller.abort();

@@ -15,7 +15,7 @@ import { bridgeAccess } from "#/lib/managed-runtime.ts";
 import { buildClientRequest, parseServerResponse } from "#/lib/rpc-envelope.ts";
 
 /** 低层控制面调用：invoke("rpc", { body }) → runtime 转发 → DSH 的 server-response 原文。 */
-export async function invokeControl(ctx, action, args, opts = {}) {
+export async function invokeControl(ctx, action, args, opts: { timeoutMs?: number } = {}) {
   const access = bridgeAccess();
   if (!access || !access.runtimeId) throw new Error("受管 runtime 未就绪：无可用控制面（先 ensureManagedRuntime）");
   if (!ctx || !ctx.runtime || typeof ctx.runtime.fetch !== "function") {
@@ -39,7 +39,10 @@ export async function invokeControl(ctx, action, args, opts = {}) {
  * 一元 RPC（经控制面）：{ method, payload, rpcId? } → DSH 的 result（parseServerResponse 解包）。
  * 与 lib/dsh-rpc.js 的 rpcCallWithFetch 同信封，但载体改为控制面。
  */
-export async function rpcViaControl(ctx, { method, payload, rpcId, timeoutMs } = {}) {
+export async function rpcViaControl(
+  ctx,
+  { method, payload, rpcId, timeoutMs }: { method: string; payload?: unknown; rpcId?: string; timeoutMs?: number },
+) {
   const { body } = buildClientRequest({ method, payload, rpcId });
   const full = await invokeControl(ctx, "rpc", { body }, { timeoutMs });
   return parseServerResponse(full, body.rpcId);

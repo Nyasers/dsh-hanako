@@ -48,6 +48,7 @@ export const name = "@dshana/theme";
 // 映射表在 ./token-map.js（纯数据零依赖，可被 node --test 直接 import；本文件顶部那句
 // assets/theme-bridge.js 的默认导出由打包器注入，普通 node import 会直接 SyntaxError）。
 import { TOKEN_MAP } from "./token-map.ts";
+import { errText } from "./err-text.ts";
 
 // 动态脚本：宿主声明（壳桥 vars + preference）直接应用。正文在
 // assets/theme-bridge.js（自包含浏览器 JS），唯一动态点 = TOKEN_MAP 数据表注入
@@ -66,7 +67,7 @@ export function apply(ctx, config) {
         });
         try { ctx.logger?.info?.("[theme] 主题注入 tapIndex 已注册"); } catch { /* 忽略 */ }
       } catch (e) {
-        try { ctx.logger?.warn?.("[theme] 主题注入注册失败：" + (e?.message || e)); } catch { /* 忽略 */ }
+        try { ctx.logger?.warn?.("[theme] 主题注入注册失败：" + errText(e)); } catch { /* 忽略 */ }
       }
     });
   });

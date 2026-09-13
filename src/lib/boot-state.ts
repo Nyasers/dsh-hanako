@@ -24,7 +24,9 @@ export const APP_ID = "dshana";
 /** 宿主受管服务代理前缀（u1e 同形；appId/runtimeId 空值返回 null）。
  * 支持 bridgeKey：中继作为唯一服务面后，路径需带 `_hana/<key>/` 段（浏览器
  * iframe 无法自定 header，只能走路径票据）——中继据此注入 DSH cookie。 */
-export function runtimeProxyPrefix({ appId = APP_ID, runtimeId, bridgeKey } = {}) {
+export function runtimeProxyPrefix(
+  { appId = APP_ID, runtimeId, bridgeKey }: { appId?: string; runtimeId?: string | null; bridgeKey?: string | null } = {},
+) {
   if (!appId || !runtimeId) return null;
   const base = `/api/apps/${encodeURIComponent(appId)}/routes/_runtime/${encodeURIComponent(runtimeId)}/`;
   return bridgeKey ? `${base}_hana/${encodeURIComponent(bridgeKey)}/` : base;
@@ -46,7 +48,7 @@ export function parseRuntimeProxyPrefix(path) {
  * phase 人话文案（壳页展示 + 诊断）。reason/errText 为调用方传入的补充。
  * errText 已含用户可读指引（managed-runtime 的 START_ERROR_HINTS 经 Error.message 携带）。
  */
-export function phaseCopy(phase, { ready = false, errText = null } = {}) {
+export function phaseCopy(phase: string, { ready = false, errText = null }: { ready?: boolean; errText?: string | null } = {}) {
   switch (phase) {
     case "ready":
       return ready
@@ -78,7 +80,7 @@ export function phaseCopy(phase, { ready = false, errText = null } = {}) {
  * 注：快照不携带 logPath/logTail（诊断看宿主日志 +
  * 受管 runtime 状态：phase/error/userText）。
  */
-export function buildBootSnapshot(details, { bridgeKey = null } = {}) {
+export function buildBootSnapshot(details: any, { bridgeKey = null }: { bridgeKey?: string | null } = {}) {
   const d = details && typeof details === "object" ? details : {};
   const phase = typeof d.phase === "string" ? d.phase : "idle";
   const runtimeId = typeof d.runtimeId === "string" && d.runtimeId ? d.runtimeId : null;
@@ -86,7 +88,7 @@ export function buildBootSnapshot(details, { bridgeKey = null } = {}) {
   const service = info && info.service && typeof info.service === "object" ? info.service : null;
   const serviceReady = Boolean(service && service.state === "ready");
   const ready = phase === "ready" && Boolean(runtimeId) && serviceReady;
-  let error = null;
+  let error: { code: string; userText: string } | null = null;
   const rawErr = d.lastError;
   if (rawErr) {
     const errObj = rawErr instanceof Error ? rawErr : rawErr && typeof rawErr === "object" ? rawErr : null;

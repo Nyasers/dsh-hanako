@@ -67,12 +67,12 @@ const textInlinePlugin = {
 // 本链无哈希——前缀同样规避与全局/dsw 类名撞名）。注入点 = 模块 materialization
 // （factory 执行）——官方 css-modules 同款时机（claimStyles 记账 style[data-plugin]）。
 function cssModuleSource(id, fileId, css) {
-  const locals = new Set();
-  const prefixed = {};
+  const locals = new Set<string>();
+  const prefixed: Record<string, string> = {};
   const tokenRe = /\.([A-Za-z_][A-Za-z0-9_-]*)/g;
   let m;
   while ((m = tokenRe.exec(css)) !== null) locals.add(m[1]);
-  const classMap = {};
+  const classMap: Record<string, string> = {};
   for (const local of locals) {
     const pname = "dv_" + local;
     classMap[local] = pname;

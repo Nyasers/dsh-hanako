@@ -16,6 +16,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { classifyDiagnostics, formatDiagnostics, parseTsDiagnostics } from "./ts-diagnostics.mts";
+import { errText } from "./err-text.mts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -89,7 +90,7 @@ function main() {
   try {
     for (const domain of list) typecheckDomain(domain, { log: (m) => console.log(m) });
   } catch (e) {
-    console.error(`[types] 失败：${(e && e.message) || e}`);
+    console.error(`[types] 失败：${errText(e)}`);
     process.exit(1);
   }
 }

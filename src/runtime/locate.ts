@@ -14,6 +14,7 @@ import { createRequire } from "node:module";
 import { readdirSync, existsSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { pathToFileURL } from "node:url";
+import { errText } from "#/lib/err-text.ts";
 
 /** 读一个包目录的 package.json version；不存在/解析失败 → null。 */
 export function readPkgVersion(pkgDir) {
@@ -45,7 +46,7 @@ export async function locateDsh({ depsRoot, log = (..._args) => {} }) {
   const libDir = join(dshPkg, "lib");
   // ① profile-boot：枚举 lib 下 profile-boot-*.js，逐个 import 试 runProfile（v1 同款）
   let profileBoot = null;
-  let bootEntry = null;
+  let bootEntry: string | null = null;
   let tried = 0;
   try {
     for (const f of readdirSync(libDir)) {
@@ -63,13 +64,13 @@ export async function locateDsh({ depsRoot, log = (..._args) => {} }) {
       }
     }
   } catch (e) {
-    throw new Error(`无法枚举 dsh profile-boot 模块（${libDir}）：${(e && e.message) || e}`);
+    throw new Error(`无法枚举 dsh profile-boot 模块（${libDir}）：${errText(e)}`);
   }
   if (!profileBoot) {
     throw new Error(`dsh 包无可用 profile-boot 模块（lib 下已检查 ${tried} 个 profile-boot-*.js）`);
   }
   // ② app-boot 定位（双保险：createRequire 沿 dsh 包 → .pnpm 枚举）
-  let appBootEntry = null;
+  let appBootEntry: string | null = null;
   try {
     const dshRequire = createRequire(join(dshPkg, "package.json"));
     appBootEntry = dshRequire.resolve("@deepseek-ai/dsh-app-boot");

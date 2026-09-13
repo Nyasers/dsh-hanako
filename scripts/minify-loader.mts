@@ -8,8 +8,19 @@
 //   *.css → clean-css
 //   ＊其余（*.html 等）→ 原样放行
 import { minifyJs, minifyCss } from "./minify-assets.mts";
+import { errText } from "./err-text.mts";
 
-export default async function minifyLoader(content) {
+/**
+ * rspack loader 上下文里本 loader 用到的字段（不 import @rspack/core：本仓根级 node_modules
+ * 下没有它，types 解析不到会多出一条 Cannot find module）。用注解代替隐式 this，
+ * 同时把这个窄形状写清楚。
+ */
+interface MinifyLoaderContext {
+  resourcePath: string;
+  async(): (err: Error | null, content?: string) => void;
+}
+
+export default async function minifyLoader(this: MinifyLoaderContext, content) {
   const callback = this.async();
   try {
     const p = this.resourcePath;
@@ -23,6 +34,7 @@ export default async function minifyLoader(content) {
     }
     callback(null, out);
   } catch (err) {
-    callback(err);
+    // rspack 的 async 回调只认 Error | null，而 catch 到的值类型未知：非 Error 就包一层
+    callback(err instanceof Error ? err : new Error(errText(err)));
   }
 }
