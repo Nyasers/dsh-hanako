@@ -46,7 +46,7 @@ Hana 宿主进程（App 隔离进程内加载 dist/index.js）
 
 ## 工具
 
-宿主 Agent 工具面为**单工具 `dshana`**（一个插件一个同名工具 + CLI subcommand：装配 `tools/index.ts`，各动作 `tools/actions/<action>.ts`，只读查询 `tools/shared/query.ts`，提交链 `lib/session-run.js`，取消/审批编排 `lib/cancel-chain.js` / `lib/approve-respond.js`）。语义对齐 subagent（open/reply/close），另有 get/approve 两个特色动作。**完整调用手册见 [dsh-session](src/skills/dsh-session/SKILL.md)**：
+宿主 Agent 工具面为**单工具 `dshana`**（一个插件一个同名工具 + CLI subcommand：装配 `tools/index.ts`，各动作 `tools/actions/<action>.ts`，只读查询 `tools/shared/query.ts`，提交链 `lib/session-run.js`，取消/审批编排 `lib/cancel-chain.js` / `lib/approve-respond.js`）。语义对齐 subagent（open/reply/close），另有 get/approve 两个特色动作。**完整调用手册见 [dshana skill](src/skills/dshana/SKILL.md)**：
 
 | action | 用途 | 实现 |
 | --- | --- | --- |

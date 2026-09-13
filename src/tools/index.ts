@@ -48,7 +48,7 @@ export const description =
   "get=回看某一轮最终结论；approve=应答挂起审批（approvalId 必填）。" +
   "用法心智同 subagent：开、续、关；本项目另有 get/approve 两个特色动作。" +
   "调用模型：句柄默认（taskId/approvalId，按宿主记录的来源会话校验归属）、凭证显式（sessionId = 我要跨对话）。" +
-  "完整调用手册见 SKILL: skills/dsh-session/SKILL.md";
+  "完整调用手册见 SKILL: skills/dshana/SKILL.md";
 
 /** 参数 Schema：顶层 action + oneOf 分支（每个子命令独立的参数字段集）。 */
 export const parameters = {
