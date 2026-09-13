@@ -43,7 +43,8 @@ test("TOKEN_MAP：LHS 均为 --dsw-* 且不重复", () => {
     assert.equal(seen.has(token), false, "LHS 重复：" + token);
     seen.add(token);
   }
-  assert.equal(TOKEN_MAP.length >= 100, true, "映射表条目过少（疑似被删）：" + TOKEN_MAP.length);
+  // 下限是防误删的护栏（按当前规模校准，留出正常增删余量；当前 96 条）。
+  assert.equal(TOKEN_MAP.length >= 90, true, "映射表条目过少（疑似被删）：" + TOKEN_MAP.length);
 });
 
 test("TOKEN_MAP：RHS 是宿主主题变量或 ~ 字面量，且变量名在允许清单内", () => {
@@ -70,8 +71,6 @@ test("TOKEN_MAP：alias 语义层的补漏条目在位", () => {
     "--dsw-alias-link": "--accent",
     "--dsw-alias-interactive-bg-hover-danger": "--overlay-medium",
     "--dsw-alias-label-error": "--danger",
-    "--dsw-alias-tooltip-bg": "--bg-card",
-    "--dsw-alias-toast-bg": "--bg-card",
     "--dsw-alias-bg-skeleton": "--overlay-medium",
     "--dsw-alias-separator-primary": "--border",
     "--dsw-alias-label-quaternary": "--text-muted",
@@ -82,8 +81,27 @@ test("TOKEN_MAP：alias 语义层的补漏条目在位", () => {
   }
 });
 
-test("TOKEN_MAP：字体/静态调色板/阴影/几何不参与映射（不随主题走）", () => {
+test("TOKEN_MAP：字体/静态调色板/阴影/几何/结构性深浅不参与映射（不随主题走）", () => {
   for (const [token] of TOKEN_MAP) {
-    assert.equal(/^--dsw-(font|static|elevation|shadow|corner|mask-blur|linear)/.test(token), false, token + " 不该在映射表里");
+    // alias-border-l* 是 elevation 的描边色来源（结构性：浅色主题黑、深色主题白，随明暗翻转），
+    // tooltip/toast-bg 是"深底 + 硬编码反白字"的功能性配对——都不该由 Hana 的主题色接管。
+    assert.equal(
+      /^--dsw-(font|static|elevation|shadow|corner|mask-blur|linear|alias-tooltip-bg|alias-toast-bg|alias-border-l)/.test(token),
+      false,
+      token + " 不该在映射表里",
+    );
+  }
+});
+
+test("TOKEN_MAP：层次位用叠色而非拿面去顶", () => {
+  const map = new Map(TOKEN_MAP);
+  // 这几个是"比底略深"的表面。Hana 只有一层 --bg-card，直接接上去差为 0（悬停与静止同色、
+  // 按钮与输入框融为一体）；叠色（半透明，叠在卡片上）才能还原 dsh 的 5% 级明度差。
+  for (const token of [
+    "--dsw-specific-selector",
+    "--dsw-alias-interactive-bg-hover-solid",
+    "--dsw-alias-bg-skeleton",
+  ]) {
+    assert.equal(map.get(token), "--overlay-medium", token + " 应为叠色");
   }
 });

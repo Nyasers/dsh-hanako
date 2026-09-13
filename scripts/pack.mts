@@ -575,7 +575,7 @@ for (const stale of [pkgRoot, stagingRoot]) fs.removeSync(stale);
   const output = fs.createWriteStream(tmpZip);
   const archive = new ZipArchive({ zlib: { level: 9 } });
   // resolve 要包一层：它带 (value) 参数，而 'close' 的 listener 签名是 () => void，
-  // 直接传在 @types/node 26 下会被判「目标签名参数太少」（补类型后暴露出来的一条）。
+  // 直接传在 @types/node 26 下会被判「目标签名参数太少」。
   const done = new Promise<void>((resolve, reject) => {
     output.on("close", () => resolve());
     output.on("error", reject);
