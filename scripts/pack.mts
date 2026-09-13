@@ -564,7 +564,15 @@ for (const stale of [pkgRoot, stagingRoot]) fs.removeSync(stale);
   const pkgDir = join(pkgRoot, base); // 组装暂存目录（内容原样进 zip 根，此目录名不出现在包里）
   fs.removeSync(pkgDir);
   fs.copySync(distDir, pkgDir);
-  fs.copySync(modules, join(pkgDir, "node_modules"));
+  // 依赖树拷贝排除两处：
+  //  · node_modules/.bin —— 内容全为可执行入口软链，进 zip 跨机解压即断，宿主装机时
+  //    以 INSTALL_ARCHIVE_SYMLINK 直接拒收；仓库内无消费方（runtime 经 createRequire 解析包，
+  //    不经 .bin）。
+  //  · node_modules/.pnpm —— hoisted 布局下不生成虚拟存储，仅剩 lock.yaml 残留；
+  //    @deepseek-ai/dsh-app-boot 在顶层 node_modules，createRequire 直接命中，不触发 .pnpm 回退。
+  fs.copySync(modules, join(pkgDir, "node_modules"), {
+    filter: (srcPath) => !/[\/\\]node_modules[\/\\]\.(bin|pnpm)([\/\\]|$)/.test(srcPath),
+  });
   applyIntegrations(join(pkgDir, "node_modules"));
   // 暂存树用完即删
   fs.removeSync(join(stagingRoot, spec.name));
