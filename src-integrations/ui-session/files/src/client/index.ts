@@ -7,7 +7,7 @@ import type {
   SessionSnapshot,
   UseProjection,
 } from '@deepseek-ai/dsh-api-session-controller/client'
-import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import { SessionId } from '@deepseek-ai/dsh-session/types'
 import { notifySubscribers } from '@deepseek-ai/dsh-client-store'
 import { standardHookPropName } from '@deepseek-ai/dsh-client-ui-slots'
 import type {
@@ -572,7 +572,7 @@ function installCrossSurfaceSelection(ctx: Context): void {
       if (at <= localAt) return
       if (id === (list.getSnapshot().current ?? null)) return
       applying = true
-      const applied = id === null ? ctx.sessions.clear() : ctx.sessions.open(id)
+      const applied = id === null ? ctx.sessions.clear() : ctx.sessions.open(SessionId(id))
       void Promise.resolve(applied)
         .catch(() => { /* 会话可能已不存在，忽略 */ })
         .then(() => { applying = false })
