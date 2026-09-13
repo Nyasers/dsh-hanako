@@ -3,9 +3,9 @@
 //
 // scripts/syncver.mts — 版本派生同步（manifest + cordis 包 = 主 package.json）
 // 独立命令，由 package.json scripts 编排在关键点引用（单一实现，无脚本互调内联）：
-//   prepack     → syncver（出包前强制：dist 复制源前源已与主一致，pack 产物自带正确版本）
+//   prepackage  → syncver（出包前强制：dist 复制源前源已与主一致，pack 产物自带正确版本）
 //   version 钩子 → syncver（version-hook.mts：pnpm version 算号后拼回完整版，同步派生随 bump 提交）
-// 语义：pnpm version 是改版本号唯一入口（version-hook 收口）；prepack 兜底任何直 pack
+// 语义：pnpm version 是改版本号唯一入口（version-hook 收口）；prepackage 兜底任何直 pack
 // 场景（绕过 version 流程的手改主版本也在出包前被同步/校验）。幂等：已一致零写入。
 // 用法：
 //   node scripts/syncver.mts            # 同步（manifest + cordis 源 = 主，幂等）

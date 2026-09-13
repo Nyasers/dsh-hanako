@@ -18,7 +18,7 @@
 #     本就逐目标不同，不适用，故每 job 自包含，省掉 artifact 分发的接线。
 #   - 目标集对着宿主支持矩阵写：macOS arm64/x64、Windows x64、Linux x86_64（glibc）；
 #     另有 universal 兜底包（os × cpu 全叉乘）。宿主矩阵外的平台（linux-arm64 / win32-arm64）
-#     不进矩阵，需要时本地点名 `pnpm run pack --target=<名字>`（见 package.json 的 pack:* 别名）。
+#     不进矩阵，需要时本地点名 `pnpm run package --target=<名字>`（见 package.json 的 package:* 别名）。
 #
 # 产物命名与单一事实源：`dsh-hanako-v<version>[-<target>].zip`；version 取自 package.json，
 # pack.mts 会断言 manifest 与 cordis 包版本一致，不一致直接拒包（fail-closed）。
@@ -87,9 +87,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # prepack 钩子自动前置 syncver + build；pack 按目标做干净安装并断言该平台的预编译资产
+      # prepackage 钩子自动前置 syncver + build；pack 按目标做干净安装并断言该平台的预编译资产
       - name: Package ${{ matrix.target }}
-        run: pnpm run pack --target=${{ matrix.target }}
+        run: pnpm run package --target=${{ matrix.target }}
 
       - name: Upload package artifacts
         uses: actions/upload-artifact@v6
