@@ -76,8 +76,8 @@ export function classifyDshEvent(event: string, args: unknown[]): DshEventFrame 
     return { kind: "activity", sessionId: sid };
   }
   if (event === "session/event") {
-    const session = list[0];
-    const ev = list[1];
+    const session = list[0] as { id?: unknown } | null;
+    const ev = list[1] as { type?: unknown; data?: any } | null;
     const sid = session && typeof session.id === "string" ? session.id : null;
     if (!sid || !ev || typeof ev.type !== "string") return null;
     if (ev.type === "turn/end") {
@@ -110,6 +110,21 @@ export function classifyDshEvent(event: string, args: unknown[]): DshEventFrame 
  */
 class SessionBridge {
   settled = false; // 已 complete/fail/cancel（幂等）
+  // ---- 注入面与状态（构造期写入）----
+  hana: any;
+  dataDir: string;
+  log?: (msg: string) => void;
+  serviceBaseUrl: string | null;
+  bridgeKey: string | null;
+  cancelModelRequests?: (sessionId: string) => unknown;
+  map: any; // task-map 记录（进入首个事件时载入）
+  taskId: string | null;
+  sessionId: string | null;
+  pendingFailure: string | null; // api-session/error 记录（终态时判失败）
+  started: boolean; // 已推 running 进度
+  hostWatchStarted: boolean; // 宿主任务 watch 已启动
+  hostWatchStopped: boolean; // watch 停止标记
+  hostCancelDone: boolean; // 宿主取消反向触发只做一次
   constructor({ hana, dataDir, log, serviceBaseUrl, bridgeKey, cancelModelRequests }) {
     this.hana = hana;
     this.dataDir = dataDir;
@@ -189,7 +204,7 @@ class SessionBridge {
         });
       }
     } catch (e) {
-      this.note("tasks.update(running) 失败：" + ((e && e.message) || e));
+      this.note("tasks.update(running) 失败：" + ((e as any)?.message || e));
     }
   }
 
@@ -212,7 +227,7 @@ class SessionBridge {
           get: () => this.hana.tasks.get(taskId),
           onFrame: async (rec) => {
             if (this.settled || this.hostWatchStopped) return false;
-            const st = rec && String(rec.status || "");
+            const st = rec && String((rec as any).status || "");
             if (st === "canceled" || st === "aborted") {
               await this.onHostCancel(rec);
               return false; // 本 watcher 使命完成（settle 会停桥/清映射）
@@ -225,7 +240,7 @@ class SessionBridge {
           log: (m) => this.note(m),
         });
       } catch (e) {
-        this.note("宿主任务 watch 异常（反向取消不可用）：" + ((e && e.message) || e));
+        this.note("宿主任务 watch 异常（反向取消不可用）：" + ((e as any)?.message || e));
       }
     })();
   }
@@ -248,7 +263,7 @@ class SessionBridge {
     try {
       markCancelRequested(this.dataDir, this.sessionId, "user");
     } catch (e) {
-      this.note("取消标记写入映射失败（继续收尾）：" + ((e && e.message) || e));
+      this.note("取消标记写入映射失败（继续收尾）：" + ((e as any)?.message || e));
     }
     // ② 通知 DSH session.cancel（本机回环 RPC）；失败记录（DSH 可能已自行中止）
     try {
@@ -261,15 +276,15 @@ class SessionBridge {
       });
       await rpcSessionCancel(fetchImpl, this.serviceBaseUrl, this.sessionId, { timeoutMs: 10000 });
     } catch (e) {
-      this.note("反向 session.cancel 失败（继续收尾）：" + ((e && e.message) || e));
+      this.note("反向 session.cancel 失败（继续收尾）：" + ((e as any)?.message || e));
     }
     // ③ 定向中止该会话的活动模型流（只停本工作，不误停他人会话）
     try {
       if (typeof this.cancelModelRequests === "function") {
-        await this.cancelModelRequests(this.sessionId);
+        await this.cancelModelRequests(this.sessionId as string);
       }
     } catch (e) {
-      this.note("定向模型取消失败（继续收尾）：" + ((e && e.message) || e));
+      this.note("定向模型取消失败（继续收尾）：" + ((e as any)?.message || e));
     }
     // ④ 结算：宿主任务已是终态，标记 cancelOverride 走 cancel/fail 幂等收尾 + 清映射
     await this.settle({ ok: false, aborted: true, cancelOverride: true, message: "宿主任务已取消/中止" });
@@ -314,7 +329,7 @@ class SessionBridge {
       }
     } catch (e) {
       // 终态回投失败：任务可能已被他方终态（App 卸载/取消/宿主已终态）——幂等语义，忽略并清映射
-      this.note("任务终态回投失败（task=" + this.taskId + "）：" + ((e && e.message) || e));
+      this.note("任务终态回投失败（task=" + this.taskId + "）：" + ((e as any)?.message || e));
     } finally {
       try {
         // 终态只标记 ended，**不删文件**：删了就分不出“用户自建会话”与“我们建的但状态丢了”，
