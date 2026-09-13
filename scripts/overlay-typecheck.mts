@@ -124,14 +124,23 @@ export function overlayTsconfig(repoRoot, mirrorDir) {
       ...(repoRoot
         ? {
             paths: {
-              // 本仓装的包（含 react / @types/node）都在 pnpm 的隐藏目录里。
-              "*": [join(repoRoot, "node_modules", ".pnpm", "node_modules", "*")],
+              // 本仓装的包（含 react / @types/node）都在 pnpm 的隐藏目录里；
+              // 直接依赖另有一份顶层软链（清环境里 hoist 未必有），两处都列。
+              "*": [
+                join(repoRoot, "node_modules", ".pnpm", "node_modules", "*"),
+                join(repoRoot, "node_modules", "*"),
+              ],
               // 再把镜像里那些“本仓没装”的 DSH 包补上（已装的不接管）。
               ...(mirrorDir
                 ? mirrorPathEntries(mirrorDir, join(repoRoot, "node_modules", ".pnpm", "node_modules"))
                 : {}),
             },
-            typeRoots: [join(repoRoot, "node_modules", ".pnpm", "node_modules", "@types")],
+            // 两处都列：直接依赖的 @types（@types/node 等）在顶层，上游顺路带的在 hoist。
+            // 只指 hoist 时，干净环境（CI）里 @types/node 找不到 → TS2688。
+            typeRoots: [
+              join(repoRoot, "node_modules", "@types"),
+              join(repoRoot, "node_modules", ".pnpm", "node_modules", "@types"),
+            ],
           }
         : {}),
     },
