@@ -1,35 +1,27 @@
-# Release — Linux 单平台构建 + 直传 release 资产
-# 骨架对齐 hana-remote-dev .github/workflows/release.yml（三段式：create-release → build → verify），
-# 按 dsh-hanako 交付物本质裁剪，差异见下。
+# Release — 并发矩阵出包（4 平台 + 通用兜底）+ 单点发布
 #
-# 触发: push tag v*（发版打 tag 后自动触发）或手动 workflow_dispatch
+# 触发：push tag v*（发版）/ workflow_dispatch（手动，仅出 artifact 不建 release）
 #
-# 三段式设计（继承 hana-remote-dev 骨架）:
-#   - create-release（仅 tag 场景）: 先建 pre-release（已存在则跳过，--generate-notes）
-#   - build（needs create-release）: ubuntu 单平台 pnpm install --frozen-lockfile + pack，tag 场景直传 zip + sha256
-#     （--clobber 幂等）；dispatch 手动场景无 tag 无 release，
-#     产物走 upload-artifact 3 天窗口给人下载
-#   - verify（仅 tag 场景, needs build）: 单点收尾查 release 资产 zip + sha256 齐全，
-#     缺则删 release 并 fail（公开 release 不留残缺）
+# 三段式（骨架对齐宿主 openhanako build.yml，按本项目交付物裁剪）：
+#   create-release：先建 draft pre-release（已存在则跳过）——保证后续上传目标必然存在
+#   package：矩阵并发，每目标一个 runner（公开仓库分钟数免费，用并发换时间）。每 job 自包含
+#            （安装 + 构建 + 出包），产物名带目标后缀，zip + sha256 上传为 artifact。
+#   publish：needs package。下载全部 artifact → **单点上传**（--clobber；多 job 并发写同一
+#            release 有互相覆盖的窗口，宿主 workflow 特意注明过）→ 硬校验必需资产（缺一即
+#            fail，release 留 draft 供人工检查）→ **全部成功才去掉 draft、保留 prerelease**
+#            （不自动标 latest，稳定版由人工标记）。
 #
-# 与 hana-remote-dev 的差异（裁剪依据）:
-#   - hana-remote-dev 交付物带平台 .node 二进制（node-gyp 本机编译、copy-native 打包），
-#     必须三平台各产各的，资产名带平台后缀并发上传（防同名覆盖竞态）。
-#   - dsh-hanako 交付物是纯 JS bundle + 静态资源，pack.mjs 不打包 node_modules
-#     （安装方 pnpm i 时本机编译 dsh 的 native 子依赖），zip 内容平台无关 →
-#     单平台（ubuntu）构建即可：无平台矩阵、无平台后缀资产（与本地 releases/ 命名一致），
-#     省 CI 用量；安装方的 native 依赖由 Agent 侧 pnpm i 本机编译，不归发布 CI 管
-#   - 无 native 交付物 → 无 verify-native 环节（pack 失败即无 zip，构建天然 fail-closed）
-#   - 依赖类型划分（dsh → peerDependencies）：构建仅需 @rspack/core（devDependencies），
-#     dsh 是安装方运行时依赖、构建不引用 → CI 用 pnpm install --frozen-lockfile 装 dev 树
-#     （原 npm ci --omit=peer 的跳过 peer 优化在 pnpm 11 无对应 --omit=peer CLI 旗标，
-#     改用全量 frozen 安装，构建产物一致）；安装方 pnpm i 默认自动装 peer，
-#     dsh 行为不变。不用 optionalDependencies：rspack 的 native binding 自身是 optional
-#     依赖，--omit=optional 会误伤它（npm/cli#4828 同源）
-#   - 资产名版本段带 v 前缀（pack.mjs 产 dsh-hanako-v<ver>.zip），与 tag 名格式一致 →
-#     verify 用 tag 精确匹配资产名，顺带焊死版本单一事实源（package.json 版本与 tag
-#     不一致即 fail；hana-remote-dev 资产名版本段无 v 前缀拼不了 tag，只能通配）
-
+# 与宿主 workflow 的关键差异：
+#   - 宿主需要 mac/win/linux 三平台 runner（要编译原生 helper、签名、公证）；本项目交付物是纯 JS +
+#     预编译依赖，各平台包都能在 ubuntu 上产出，矩阵不必跨 OS。
+#   - 宿主单建 renderer box 再分发给各平台（解决 tar mtime 导致"内容相同、字节不同"）；我们的包
+#     本就逐目标不同，不适用，故每 job 自包含，省掉 artifact 分发的接线。
+#   - 目标集对着宿主支持矩阵写：macOS arm64/x64、Windows x64、Linux x86_64（glibc）；
+#     另有 universal 兜底包（os × cpu 全叉乘）。宿主矩阵外的平台（linux-arm64 / win32-arm64）
+#     不进矩阵，需要时本地点名 `pnpm run package --target=<名字>`（见 package.json 的 package:* 别名）。
+#
+# 产物命名与单一事实源：`dshana-v<version>[-<target>].zip`；version 取自 package.json，
+# pack.mts 会断言 manifest 与 cordis 包版本一致，不一致直接拒包（fail-closed）。
 name: Release
 
 on:
@@ -38,8 +30,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  # 先建 release（仅 tag 场景）: build needs 它，保证上传时 release 必已存在。
-  # dispatch 手动场景无 tag，本 job 被 if 跳过，build 照常跑（只产 artifact）。
+  # 先建 release（仅 tag 场景）：package/publish 都 needs 它，保证上传时 release 必已存在。
+  # dispatch 手动场景无 tag，本 job 被 if 跳过，package 照常跑（只产 artifact）。
   create-release:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
@@ -49,10 +41,12 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
+          # vendor/deepseek-harness 是 submodule，镜像校验要读它的 tag（dsh-v<版本>）。
+          submodules: recursive
           fetch-depth: 0
 
-      # 自动发布为 pre-release（不占 latest 标记，稳定版本手动标记）；已存在则跳过
-      - name: Create pre-release
+      # 建 draft + pre-release：上传完并校验通过后才由 publish job 去掉 draft。
+      - name: Create draft pre-release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -60,64 +54,124 @@ jobs:
             echo "Release ${{ github.ref_name }} already exists, skipping create"
           else
             gh release create "${{ github.ref_name }}" \
+              --draft \
               --prerelease \
               --title "${{ github.ref_name }}" \
               --generate-notes
           fi
 
-  build:
+  # 并发矩阵：每个目标一个 runner。fail-fast: false —— 一个目标失败不影响其余目标跑完，
+  # 便于一次看到全部失败面。
+  package:
     needs: create-release
-    # create-release 仅在 tag 场景运行，dispatch 场景会被 skip；被 needs 的 job skip 会让
-    # 下游默认 if(success()) 一起 skip → 这里显式放行「非 failure」结果：
-    # success（tag）/ skipped（dispatch）都继续构建，create-release 真失败则不浪费构建
+    # create-release 仅在 tag 场景运行，dispatch 场景会被 skip；被 needs 的 job skip 会让下游
+    # 默认 if(success()) 一起 skip → 这里显式放行「非 failure」结果（success/skipped 都继续）。
     if: ${{ needs.create-release.result != 'failure' }}
     runs-on: ubuntu-latest
-    # tag 场景 gh release upload 需要写权限
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [linux-x64, darwin-arm64, darwin-x64, win32-x64, universal]
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # package 链会跑 prepackage（derive + build），同样要读 submodule 的 tag。
+          submodules: recursive
+          fetch-depth: 0
+
+      # 显式装 pnpm（读 package.json packageManager 钉版本），不依赖 runner 预装 corepack
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # prepackage 钩子自动前置 derive + build；pack 按目标做干净安装并断言该平台的预编译资产
+      - name: Package ${{ matrix.target }}
+        run: pnpm run package --target=${{ matrix.target }}
+
+      - name: Upload package artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: pkg-${{ matrix.target }}
+          retention-days: 3
+          path: |
+            releases/*.zip
+            releases/*.zip.sha256
+          if-no-files-found: error
+
+  # 单点发布：所有出包成功后才跑到这里；任一出包失败则本 job 不执行，release 留在 draft。
+  publish:
+    needs: package
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
     permissions:
       contents: write
 
     steps:
       - uses: actions/checkout@v5
-
-      # 显式装 pnpm（读 package.json packageManager 字段钉版本），不依赖 runner 预装 corepack
-      - uses: pnpm/action-setup@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v5
         with:
-          node-version-file: .nvmrc
-          cache: pnpm
+          submodules: recursive
+          fetch-depth: 0
 
-      # 依赖安装（装 dev 构建树）：dsh 声明为 peerDependencies（安装方 pnpm i 自动装；
-      # 构建期不必装 dsh 树，只需 @rspack/core + binding）。pnpm 11 不支持「--omit=peer」
-      # 这个 CLI 写法（报 Unknown option: 'omit'），故改用 pnpm install --frozen-lockfile
-      # 装全量 dev 树（构建产物与 npm ci --omit=peer 时一致）。不用 optionalDependencies：
-      # rspack 的 native binding 本身就是 optional 依赖，--omit=optional 会误伤它（npm/cli#4828 同源）
-      - name: Install dev dependencies
-        run: pnpm install --frozen-lockfile
+      - name: Download all package artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
 
-      # pack 经 prepack 钩子自动前置 build（rspack）+ 复制交付清单 + zip + sha256
-      - name: Package
-        run: pnpm run pack
-
-      # tag 场景直传 zip + sha256 到 release（--clobber 幂等，重复推送/补传不报错）。
-      # dispatch 手动场景无 tag 无 release，本步跳过，产物仍走下方 artifact 3 天窗口
-      - name: Upload release assets (tag)
-        if: startsWith(github.ref, 'refs/tags/v')
-        shell: bash
+      # 单点上传：把 5 个 zip + 5 个 sha256 一起传上去（--clobber 幂等，补传不报错）
+      - name: Upload release assets (single writer)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
-          cd releases
-          ZIP=$(ls dsh-hanako-*.zip | head -1)
-          [ -n "$ZIP" ] || { echo "::error::no package zip found in releases/"; exit 1; }
-          gh release upload "${{ github.ref_name }}" "$ZIP" "$ZIP.sha256" --clobber
+          found=0
+          while IFS= read -r -d '' f; do
+            echo "  uploading $f"
+            gh release upload "${{ github.ref_name }}" "$f" --clobber
+            found=$((found+1))
+          done < <(find artifacts -type f \( -name '*.zip' -o -name '*.zip.sha256' \) -print0)
+          [ "$found" -gt 0 ] || { echo "::error::no package assets found in artifacts/"; exit 1; }
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v6
-        with:
-          name: dsh-linux
-          retention-days: 3
-          path: releases/dsh-hanako-*.zip*
-          if-no-files-found: error
+      # 硬校验：必需资产缺一个就 fail，release 停在 draft 供人工检查（不出现"残缺发布"）
+      - name: Verify required assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          TAG="${{ github.ref_name }}"
+          VER="${TAG#v}"
+          ASSETS=$(gh release view "$TAG" --json assets --jq '.assets[].name')
+          echo "=== release assets ==="; echo "$ASSETS"; echo ""
+
+          REQUIRED=""
+          for t in linux-x64 darwin-arm64 darwin-x64 win32-x64; do
+            REQUIRED="$REQUIRED dshana-v${VER}-${t}.zip dshana-v${VER}-${t}.zip.sha256"
+          done
+          REQUIRED="$REQUIRED dshana-v${VER}.zip dshana-v${VER}.zip.sha256"
+
+          MISSING=()
+          for f in $REQUIRED; do
+            echo "$ASSETS" | grep -qx "$f" || MISSING+=("$f")
+          done
+
+          if [ ${#MISSING[@]} -gt 0 ]; then
+            echo ""
+            echo "::error::缺少必需资产：${MISSING[*]}"
+            echo "release 保持 draft 供人工检查"
+            exit 1
+          fi
+          echo "✓ 全部必需资产齐备（4 平台包 + 通用包，各带 sha256）"
+
+      # 全部构建成功且资产齐备 → 去掉 draft、保留 prerelease（稳定版由人工标 latest）
+      - name: Un-draft (keep prerelease)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "${{ github.ref_name }}" --prerelease --draft=false

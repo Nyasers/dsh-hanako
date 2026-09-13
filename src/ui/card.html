@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DSHana 会话</title>
+<style>
+  /* src/ui/card.html — dshana 会话流卡页（工具返回值 details.card 指向的 ui/ 文档）。
+     宿主把流内卡的 route 解析成 /api/apps/<appId>/ui<route>（App ui/ 静态树，非
+     ctx.routes 的 /routes/ 命名空间），页面因此是静态文档：内容全部来自自身 URL 的
+     查询串快照（工具调用时写下的 action/sid/status/cwd/at），只在加载后一次性
+     取一次 App 后端的状态面（GET .../routes/dshana/card-state，无 SSE、无轮询）。
+     宿主主题经 hana-css 查询参数注入（该 stylesheet 已由宿主 root 化），变量缺失时
+     用纸张色兜底；明暗随宿主主题，本页不自建主题。
+     宿主把 iframe 的 opacity 压到握手完成之后（hana.ready），故脚本第一时间握手。 */
+  * { box-sizing: border-box; }
+  html { color-scheme: light dark; }
+  body {
+    margin: 0;
+    padding: 12px 14px 10px;
+    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--text, #2A2622);
+    background: var(--bg, #F5EFE4);
+  }
+  .head { display: flex; align-items: baseline; gap: 8px; margin: 0 0 8px; }
+  .mark { font-size: 12px; font-weight: 600; letter-spacing: .22em; text-indent: .22em; color: var(--text-muted, #6B6158); }
+  .what { font-size: 13px; font-weight: 600; }
+  .meta { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 0 0 8px; }
+  .meta dt { color: var(--text-muted, #6B6158); font-size: 12px; }
+  .meta dd {
+    margin: 0; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-family: ui-monospace, SFMono-Regular, Consolas, "Courier New", monospace;
+    font-size: 12px; color: var(--text-light, #4A433C);
+  }
+  .state { display: flex; align-items: center; gap: 6px; margin: 0 0 10px; font-size: 12.5px; }
+  .dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--accent, #537D96); }
+  .state[data-state="ended"] .dot { background: var(--text-muted, #6B6158); }
+  .state[data-state="cancelling"] .dot { background: var(--danger, #B0453E); }
+  .state[data-state="unknown"] .dot { background: var(--border, #D8CFBE); }
+  .detail { color: var(--text-muted, #6B6158); }
+  .acts { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  button {
+    font: inherit; font-size: 12.5px;
+    padding: 6px 14px; border-radius: 7px; cursor: pointer;
+    border: 1px solid var(--border, #D8CFBE);
+    background: var(--bg-card, #FBF7EE);
+    color: var(--text, #2A2622);
+  }
+  button:hover:not(:disabled) { filter: brightness(0.97); }
+  button:disabled { opacity: .7; cursor: default; }
+  .note { font-size: 12px; color: var(--text-muted, #6B6158); }
+  .empty { color: var(--text-muted, #6B6158); font-size: 12.5px; }
+</style>
+</head>
+<body>
+<div id="dsh-card-root"></div>
+<script>
+(function () {
+  "use strict";
+  var PROTOCOL = "hana.plugin.ui";
+  var VERSION = 1;
+  var APP_CARD_ID = "dshana";           // manifest contributes.cards 里那张卡（hana.cards.open 的 cardId）
+  var HOST_ORIGIN = new URLSearchParams(location.search).get("hana-host-origin") || "*";
+  var PARENT = window.parent;
+  var root = document.getElementById("dsh-card-root");
+
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+  function post(message) {
+    try { PARENT.postMessage(message, HOST_ORIGIN); } catch (e) { /* 宿主不在时忽略 */ }
+  }
+  function postEvent(type, payload) {
+    var m = { protocol: PROTOCOL, version: VERSION, kind: "event", type: type };
+    if (payload !== undefined) m.payload = payload;
+    post(m);
+  }
+  // 握手：宿主把卡 iframe 压到 opacity 0 直到收到它；也是 hana.cards.open 这类能力请求的前置。
+  function handshake() { postEvent("hana.ready"); }
+  // 报高：流内卡高度是 flexible，上报值经宿主 clamp 后落框（不做则只有 aspectRatio 占位）。
+  function reportSize() {
+    var h = Math.ceil(document.body ? document.body.scrollHeight : 0) + 16;
+    if (!h || h < 40) h = 40;
+    postEvent("ui.resize", { height: h });
+  }
+
+  // 宿主经 hana-css 注入主题 stylesheet（该文件由 /api/apps/theme.css 服务，已 root 化）。
+  var themeCss = new URLSearchParams(location.search).get("hana-css");
+  if (themeCss) {
+    var link = document.createElement("link");
+    link.rel = "stylesheet";
+    link.href = themeCss;
+    document.head.appendChild(link);
+  }
+
+  var q = new URLSearchParams(location.search);
+  var sid = q.get("sid") || "";
+  var action = q.get("action") === "reply" ? "reply" : "open";
+  var status = q.get("status") || "running";
+  var cwd = q.get("cwd") || "";
+  var at = Number(q.get("at") || 0);
+  var WHAT = { open: "子代理已开启", reply: "续发消息已提交" };
+  var STATE = { running: "运行中" };
+
+  function serverState() {
+    // 后端路由基址从自身路径推出（App ui 文档总在 /api/apps/<appId>/ui/... 下）：
+    // 页面内不写根绝对 URL 与硬编码 appId，宿主换前缀/换 id 都不影响。
+    var m = /^(\/api\/apps\/[^/]+\/)ui(?:\/|$)/.exec(location.pathname || "");
+    var base = m ? m[1] + "routes/dshana/" : null;
+    if (!base || !/^session-[0-9a-f-]{36}$/i.test(sid)) return;
+    var ss = q.get("appSurfaceSession");
+    var url = base + "card-state?sessionId=" + encodeURIComponent(sid) + "&ts=" + Date.now() +
+      (ss ? "&appSurfaceSession=" + encodeURIComponent(ss) : "");
+    fetch(url, { cache: "no-store", credentials: "same-origin", headers: { Accept: "text/html" } })
+      .then(function (res) {
+        if (!res.ok) throw new Error("card-state HTTP " + res.status);
+        return res.text();
+      })
+      .then(function (html) {
+        var box = document.getElementById("dsh-state");
+        if (!box || !html) return;
+        // 服务端返回的就是这一段状态行（data-state + 文案）；取不到就保持提交时快照。
+        box.outerHTML = html;
+        reportSize();
+      })
+      .catch(function () { /* 状态面取不到不动快照文案：卡的主体信息不依赖它 */ });
+  }
+
+  function openBlocked(msg) {
+    var out = document.getElementById("dsh-open-note");
+    if (out) out.textContent = msg;
+  }
+  // 「在 DSHana 卡里打开」：走宿主能力 hana.cards.open（card 槽在允许列内，
+  // 宿主按当前表面归属定位本 App 声明的那张卡；已有实例会被定位、拆窗实例置前）。
+  function openAppCard() {
+    var btn = document.getElementById("dsh-open");
+    if (!btn || btn.disabled) return;
+    var id = "req_" + Math.random().toString(36).slice(2) + Date.now();
+    var settled = false;
+    function finish(text) {
+      if (settled) return;
+      settled = true;
+      window.removeEventListener("message", onMsg);
+      clearTimeout(timer);
+      btn.disabled = false;
+      openBlocked(text);
+    }
+    function onMsg(e) {
+      var d = e && e.data;
+      if (!d || d.protocol !== PROTOCOL || d.id !== id) return;
+      if (d.kind === "response") {
+        var p = d.payload || {};
+        finish(p.existing ? "已定位到已打开的 DSHana 卡" : "已在 DSHana 卡中打开");
+      } else if (d.kind === "error") {
+        finish("宿主拒绝了开卡请求：" + ((d.error && (d.error.message || d.error.code)) || "未给出原因"));
+      }
+    }
+    var timer = setTimeout(function () { finish("宿主未回应（本页可能不在 Hana 卡片里）"); }, 6000);
+    window.addEventListener("message", onMsg);
+    btn.disabled = true;
+    handshake();
+    post({ protocol: PROTOCOL, version: VERSION, id: id, kind: "request", type: "hana.cards.open", payload: { cardId: APP_CARD_ID } });
+  }
+
+  if (!sid) {
+    root.innerHTML = '<p class="empty">缺少卡片参数（本页由 dshana 的 open/reply 出卡时打开）。</p>';
+  } else {
+    var when = at > 0 ? new Date(at) : new Date();
+    var short = sid ? sid.slice(0, 12) + "…" : "";
+    root.innerHTML =
+      '<div class="head"><span class="mark">DSHANA</span><span class="what">' + esc(WHAT[action]) + '</span></div>' +
+      '<dl class="meta">' +
+        '<dt>会话</dt><dd title="' + esc(sid) + '">' + esc(short || "—") + '</dd>' +
+        '<dt>工作目录</dt><dd title="' + esc(cwd) + '">' + esc(cwd || "—") + '</dd>' +
+        '<dt>提交时间</dt><dd>' + esc(when.toLocaleString()) + '</dd>' +
+      '</dl>' +
+      '<div class="state" id="dsh-state" data-state="tracked">' +
+        '<span class="dot"></span><span>' + esc(STATE[status] || status) + '</span>' +
+        '<span class="detail">任务在后台执行，完成/失败会作为后台结果投递回会话</span>' +
+      '</div>' +
+      '<div class="acts">' +
+        '<button type="button" id="dsh-open">在 DSHana 卡里打开</button>' +
+        '<span class="note" id="dsh-open-note"></span>' +
+      '</div>';
+    var btn = document.getElementById("dsh-open");
+    if (btn) btn.addEventListener("click", openAppCard);
+    serverState();
+  }
+
+  handshake();
+  window.addEventListener("load", function () { setTimeout(reportSize, 80); });
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { setTimeout(reportSize, 60); });
+  setTimeout(reportSize, 30);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,40 @@
+{
+  "package": "@deepseek-ai/dsh-client-ui-layout",
+  "upstreamVersion": "0.1.5-rc.2",
+  "upstreamDir": "packages/client/ui-layout",
+  "files": [
+    {
+      "path": "src/client/AppFrame.tsx",
+      "upstreamSha256": "69f66f2c725120000014c7fc25b66f79632b3b4bb6899b1b81b0678819158841"
+    },
+    {
+      "path": "src/client/columns.ts",
+      "upstreamSha256": "c08a7a77874b4a8d1d963da05362886dd7e9d756c24d5d0c4b7919d8472cc1c9"
+    },
+    {
+      "path": "src/client/AppFrame.module.css",
+      "upstreamSha256": "3ea2d3c3035a26484ee5e7760f5f6d53719b5a665cac1e09dca96bf88e8e44ec"
+    }
+  ],
+  "notes": [
+    "批次①：解黑屏 + FP 面。官方 client entry 在 0.1.5 仅 171 行：export inject = ['slots','theme','locale']、",
+    "provideRoot({hooks:{panelInfo}})（usePanelInfo 的来源）、reflect.provide('layout')、slots.register({name:'root',",
+    "children:{sidebar, main(keyed), rightbar, 'shell.overlay'}})。",
+    "逐字照样例（0.7.0 的 ui-layout 补丁）的四分支：role∈{workspace,navigation,settings,standalone}；workspace 是「其余」那一支而非「未知」，只有 role 缺失或不是角色词时才回落到 standalone（上游整幅 UI）。",
+    "  主卡 workspace   ：中列 + 右列；侧栏槽位挂成绝对定位的 settingsShell（主卡内设置浮层）",
+    "  FP   navigation  ：纯侧栏单列，轨道整幅 minmax(0,1fr)，侧栏宽度取整框宽",
+    "  设置 settings    ：侧栏槽位横跨全轨（settingsCol）",
+    "  拆窗 standalone  ：侧栏 + 中列 + 右列，带拖柄",
+    "轨道模板固定三条、列各自认领 grid-column（CSS overlay），不看渲染集拼模板——按渲染集拼轨曾把",
+    "centerCol 落进 56px 侧栏轨（真机 56px 挤压）。",
+    "columns.ts 第四参 sidebarPresent：false → 侧栏宽 0（区分「本面没有侧栏」与「侧栏被折叠」；上游三参版",
+    "把 0 当折叠 → 回落 56px）。",
+    "拆窗面（standalone）不再套用「收起」机制：独立窗口的侧栏始终在。上游 stores.ts 初值是 SIDEBAR_DEFAULT(280)，",
+    "所以 sidebar===0 只可能来自别处的旧状态；宽度取持久值（>0 尊重用户拖过的宽度，≤0 用默认），narrow 自动",
+    "收起一并去掉，frameSidebarPreference 取 0 只表示「本面无侧栏轨道」。",
+    "全局名用我们自己的 __DSHANA__（样例叫 __HANA_DSH__）。",
+    "productTitle 仍走上游 process.env.DSH_CLIENT_TITLE ?? t('brand.localBuild')（样例硬编码成产品名），属最小 delta。",
+    "index.ts / stores.ts / DocumentTitle.tsx 不改；样例对 index 的改动是主题 token 映射与 inject 列表，属后续批次。",
+    "发布侧：壳页 src/ui/app-shell.js 在注入 DSH 前写 window.__DSHANA__（当前只有 role）。"
+  ]
+}

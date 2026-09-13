@@ -1,45 +1,66 @@
 {
   "manifestVersion": 2,
-  "id": "dsh-hanako",
+  "id": "dshana",
   "name": "DSHana",
-  "version": "2.0.0-beta.1",
-  "description": "DSHana: DeepSeek Harness as a subagent for HanaAgent (App v2, migration step 1: dsh_session list/get offline; DSH managed runtime wiring in later steps)",
+  "version": "1.0.0-beta.5+dsh-0.1.5-rc.2",
+  "description": "把 DeepSeek Harness 变成 HanaAgent 的子代理",
   "entry": "index.js",
   "icon": "assets/icon.png",
-  "minAppVersion": "0.930.1",
+  "minAppVersion": "0.951.4",
   "capabilities": [
     "app/tools.expose-to-model",
     "app/tasks.manage",
     "app/session.start-turn",
     "app/models.infer",
+    "app/resources.read",
     "app/runtime.execute",
-    "app/runtime.native",
-    "app/runtime.network"
+    "app/runtime.local-machine",
+    "app/runtime.network",
+    "app/ui.clipboard-write",
+    "app/ui.open-external"
   ],
+  "network": {
+    "allowedHosts": [
+      "127.0.0.1"
+    ],
+    "methods": [
+      "GET",
+      "POST"
+    ],
+    "allowLocalhost": true,
+    "defaultTimeoutMs": 60000,
+    "maxResponseBytes": 8388608
+  },
   "contributes": {
+    "cards": [
+      {
+        "id": "dshana",
+        "title": "DSHana",
+        "description": "DSHana bootstrap and workspace",
+        "route": "/main.html",
+        "realization": "page",
+        "functionPanel": {
+          "id": "sidebar",
+          "label": "DSHana",
+          "route": "/sidebar.html"
+        },
+        "siteNavEntry": true,
+        "fpFullPanel": true,
+        "closable": false,
+        "detached": {
+          "route": "/default.html"
+        },
+        "cardForm": "flush",
+        "titlebar": "solid",
+        "face": {
+          "image": "assets/cover.png"
+        }
+      }
+    ],
     "settings": {
       "title": "DSHana",
-      "schema": {
-        "properties": {
-          "approvalTimeoutSec": {
-            "type": "number",
-            "default": 30,
-            "title": "审批超时（秒）",
-            "description": "审批超时自动拒绝（单位：秒）；显式设 0 禁用自动拒绝"
-          },
-          "defaultTimeoutSec": {
-            "type": "number",
-            "default": 1800,
-            "title": "任务默认超时（秒）",
-            "description": "单次任务默认超时（单位：秒）；0 或缺失回落 600 秒"
-          },
-          "nodejsPath": {
-            "type": "string",
-            "default": "",
-            "title": "自定义 NodeJS 路径",
-            "description": "可选：DSH 受管运行时使用的 NodeJS 可执行文件绝对路径；留空使用宿主 Node；修改后需重启 DSH 生效"
-          }
-        }
+      "ui": {
+        "route": "/settings.html"
       }
     }
   }

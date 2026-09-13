@@ -9,7 +9,7 @@
 // node_modules + profile cordis.patch.yml insert + 重启 web host 后 apply 可见/服务可
 // 调用）是主上下文验收动作（T3/T5），本文件只做代码准备，不入 build/测试运行链。
 //
-// 形态对齐 @dsh-hanako/* 子插件：package.json { name, version, private, type: module,
+// 形态对齐 @dshana/* 子插件：package.json { name, version, private, type: module,
 // main: index.js, cordis: { name } } + index.js export name/provide/apply。cordis 插件
 // 风格：中文注释 / 单引号 / 无分号。服务注册 = ctx.provide（effect 内注册带 disposer，
 // 卸载/HMR 自动注销，防重复注册）。

@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- 本页的面（role）的事实源：静态声明，和样例 hana-dsh 的 <meta name="hana-dsh-role"> 同一姿势。
+     宿主把本页挂进 FP 时用的是 functionPanel.routeUrl，不带任何我们的参数——"我是侧栏"只能写在这里。 -->
+<meta name="hana-dshana-role" content="sidebar">
+<title>DSHana · DSH 侧栏</title>
+<!-- src/ui/sidebar.html — dshana App v2 功能面板页（contributes.cards dshana 的
+     functionPanel.route，单主卡形态；宿主在切到 DSHana 页时把本页挂在主窗口 FP 里，
+     与本卡同一 cardInstanceId）。本页不是“状态页”，它就是 **DSH Web UI 的 sidebar 本体**：
+     就绪后同文档注入 DSH 侧栏（data-dshana-view="sidebar" → app-shell.js 取它 → role=navigation），
+     同时收起本页自带的标题/状态/按钮 chrome（[data-dsh-chrome]），整块让给侧栏（DSH sidebar
+     自带 brand 行，叠一层会重复）；未就绪时才露 chrome 充当占位（启动按钮 + 日志尾）。
+     旧 iframe 壳（#frame-wrap / [data-dsh-frame]）已删除：同文档注入取代了它。 -->
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; }
+  html { color-scheme: light dark; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    font-size: 13px;
+    color: var(--text, #2A2622);
+    background: var(--bg, #F5EFE4);
+  }
+  .panel { padding: 12px 14px; box-sizing: border-box; height: 100%; display: flex; flex-direction: column; }
+  /* 注入模式就绪：本页整块让给注入的 DSH 侧栏（#root 占满，无内边距/分隔线） */
+  .panel[data-dsh-ready="1"] { display: none; }
+  .h { display: flex; align-items: center; gap: 8px; }
+  .h h1 { font-size: 13.5px; margin: 0; font-weight: 600; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--border, #8a93a3); flex: none; }
+  .panel[data-phase="ready"] .dot { background: var(--green, #2e9e5b); }
+  .panel[data-phase="starting"] .dot { background: #c98a10; }
+  .panel[data-phase="error"] .dot { background: var(--danger, #c0392b); }
+  .chip { margin-left: auto; font-size: 11px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border, #D8CFBE); color: var(--text-muted, #6B6158); }
+  .detail { margin-top: 8px; font-size: 12.5px; line-height: 1.6; color: var(--text-light, #4A433C); white-space: pre-wrap; word-break: break-word; }
+  .meta { margin-top: 6px; font-size: 11.5px; color: var(--text-muted, #6B6158); font-variant-numeric: tabular-nums; }
+  .err { color: var(--danger, #8B2C1F); }
+  .row { display: flex; gap: 8px; margin-top: 10px; align-items: center; flex-wrap: wrap; }
+  /* 只打自己 panel 里的按钮：DSH 前端注入同一文档，裸 button 会撑坏它的圆形控件
+     （2026-09-12 真机：输入栏 28×28 / border-radius:999px 的按钮被 padding 拉成椭圆）。 */
+  .panel button {
+    font: inherit; font-size: 12.5px; padding: 5px 14px; border-radius: 6px; cursor: pointer;
+    border: 1px solid var(--border, #D8CFBE); background: var(--bg-card, #FBF7EE); color: var(--text, #2A2622);
+  }
+  .panel button.primary { background: var(--accent, #537D96); border-color: var(--accent, #537D96); color: #fff; }
+  .log {
+    margin-top: 8px; padding: 6px 8px; border-radius: 4px;
+    background: var(--accent-light, rgba(83,125,150,.08));
+    font-family: ui-monospace, Consolas, monospace; font-size: 11px; line-height: 1.5;
+    color: var(--text-light, #4A433C); white-space: pre-wrap; word-break: break-all;
+    max-height: 96px; overflow-y: auto; scrollbar-width: none;
+  }
+  .log::-webkit-scrollbar { display: none; }
+</style>
+</head>
+<body>
+<div class="panel" data-dshana-shell data-dshana-view="sidebar" data-phase="idle">
+  <div class="h" data-dsh-chrome>
+    <span class="dot"></span><h1>DSHana</h1>
+    <span class="chip" data-dsh-phase>未启动</span>
+  </div>
+  <div class="detail" data-dsh-detail data-dsh-chrome>未启动。</div>
+  <div class="meta" data-dsh-meta data-dsh-chrome hidden></div>
+  <div class="row" data-dsh-chrome>
+    <button data-dsh-stop hidden>停止</button>
+  </div>
+  <div class="log" data-dsh-log hidden></div>
+</div>
+<script type="module" src="./app-shell.js"></script>
+</body>
+</html>

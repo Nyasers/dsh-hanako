@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- 本页的面（role）的事实源：静态声明，和样例 hana-dsh 的 <meta name="hana-dsh-role"> 同一姿势。
+     宿主加载本页时不会带我们的任何参数（FP 走 functionPanel.routeUrl），所以"我是谁"只能写在页面自己身上。 -->
+<meta name="hana-dshana-role" content="main">
+<title>DSHana</title>
+<!-- src/ui/main.html — dshana App v2 主壳页（contributes.cards dshana route，单卡）。
+     视觉沿袭纸张风（宿主主题变量 + 纸张 fallback，明暗随主题），数据语义 v2（boot-state 快照
+     phase idle/starting/ready/error/stopped）。台面只有一副：DSHANA 字标 + 细圆环 + 一行状态
+     小字，报错时下方直接一块 <pre>（唯一保留的诊断面）。ready 后整块让给注入的 DSH Web UI
+     （同文档注入，不是 iframe）。无 emoji、无渐变/阴影光效。
+     到本 App 后端路由一律 hana.api.fetch（surface session 凭据，见 app-shell.js）。
+     body 上的 data-dshana-shell 是壳脚本的根锚（app-shell.js boot() 取它，缺失则不轮询）；
+     data-dshana-view="main" 决定 role（workspace）。侧栏归本卡的功能面板 /sidebar.html。 -->
+<style>
+  html, body { height: 100%; margin: 0; }
+  html { color-scheme: light dark; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    font-size: 14px;
+    color: var(--text, #2A2622);
+    background: var(--bg, #F5EFE4);
+  }
+  /* 自举舞台（非 ready 全屏覆盖，booting / idle / action 共用）：对齐官方 loading 的形态——
+     字标 + 细圆环 + 一行小字。时间线/日志/错误详情全部降级进 #boot-panel（真出问题时才露面）。
+     #frame-wrap / #dsh-frame（旧 iframe 壳）已整块删除：同文档注入之后它们是死件。 */
+  #dsh-stage {
+    position: fixed; inset: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 20px;
+    padding: 24px; box-sizing: border-box; overflow: auto;
+  }
+  body[data-view="ready"] #dsh-stage { display: none; }
+  .loader { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+  .wordmark {
+    font-size: 21px; font-weight: 600;
+    letter-spacing: .34em; text-indent: .34em;
+    color: var(--text, #2A2622);
+  }
+  .ring {
+    width: 22px; height: 22px; flex: none;
+    border: 2px solid var(--border, #D8CFBE);
+    border-top-color: var(--accent, #537D96);
+    border-radius: 50%;
+    animation: dsh-spin 0.9s linear infinite;
+  }
+  @keyframes dsh-spin { to { transform: rotate(360deg); } }
+  #dsh-status { font-size: 12.5px; color: var(--text-muted, #6B6158); margin: 0; }
+  /* 诊断容器：空则完全不占版面；有内容时就是一块 <pre> */
+  #boot-panel { width: 100%; max-width: 620px; text-align: left; }
+  #boot-panel:empty { display: none; }
+
+  /* 实时日志滚动区（隐藏滚动条 + 内容置底跟随） */
+  .diag-progress {
+    white-space: pre-wrap; word-break: break-all;
+    font-family: ui-monospace, SFMono-Regular, Consolas, "Courier New", monospace;
+    font-size: 12px; line-height: 1.6;
+    color: var(--text-light, #4A433C);
+    background: var(--accent-light, rgba(83,125,150,0.08));
+    border-radius: 4px; padding: 8px 10px; margin: 10px 0 0;
+    max-height: 200px; overflow-y: auto;
+    scrollbar-width: none; -ms-overflow-style: none;
+  }
+  .diag-progress::-webkit-scrollbar { display: none; width: 0; height: 0; }
+
+  /* 动作区 */
+  .actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 12px 0 0; }
+  /* 只打自己的按钮：DSH 前端是**注入同一文档**的，裸 button 选择器会把 padding / border-radius
+     泼到 DSH 的控件上（2026-09-12 真机：输入栏那颗 28×28、border-radius:999px 的圆形"+"
+     被 padding:8px 20px 撑成椭圆——`.add` 只压得住自己声明过的属性，padding 不在其中）。
+     壳页此后所有 tag 选择器都必须先落到自己的容器上。 */
+  #dsh-stage button {
+    font: inherit; font-size: 13.5px;
+    padding: 8px 20px; border-radius: 7px; cursor: pointer;
+    border: 1px solid var(--border, #D8CFBE);
+    background: var(--bg-card, #FBF7EE);
+    color: var(--text, #2A2622);
+  }
+  #dsh-stage button.primary { background: var(--accent, #537D96); border-color: var(--accent, #537D96); color: #fff; }
+  #dsh-stage button:hover { filter: brightness(0.97); }
+  #dsh-stage button.ghost { background: transparent; }
+</style>
+</head>
+<body data-view="idle" data-dshana-shell data-dshana-view="main">
+  <div id="dsh-stage">
+    <div class="loader">
+      <span class="wordmark">DSHANA</span>
+      <span class="ring" id="dsh-spin" hidden></span>
+      <p id="dsh-status">正在读取状态…</p>
+    </div>
+    <div id="boot-panel"></div>
+  </div>
+  <script type="module" src="./app-shell.js"></script>
+</body>
+</html>

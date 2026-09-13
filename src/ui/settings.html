@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- 本页的面（role）的事实源：静态声明（与卡壳页同一姿势）。设置页没有 DSH 前端要注入，
+     所以它只有这一个身份标记，不带 data-dshana-shell（那是壳脚本 app-shell.js 的根锚）。 -->
+<meta name="hana-dshana-role" content="settings">
+<title>DSHana 设置</title>
+<!-- src/ui/settings.html — DSHana App 自己的设置页（contributes.settings.ui.route）。
+     宿主设置区左侧的「DSHana」标签页直接渲染本页，配置经 App 后端读写
+     （GET/POST /dshana/settings → dataDir/config.json 的 global.*，即运行时优先直读的那份值），
+     所以改完立刻生效、不需要重启，也不存在"宿主表单 + 我们表单两份值"的分叉。
+     界面是宿主自己的设置组件（@hana/plugin-components/settings），样式随 settings.css 分发；
+     所以这里只留一个挂载点，排版与留白交给宿主口径（宿主设置容器已在管外边距，本页再加一层
+     就重复了）。主题由脚本跟随宿主（settings.js 注入宿主主题 CSS，变量覆盖顺序在 settings.css 之后）。 -->
+<link rel="stylesheet" href="./settings.css">
+<style>
+  html, body { height: 100%; margin: 0; }
+  /* 底色与文字色由本页自己画：这是一个独立文档，组件库的样式表不定义页面级 token，
+     值来自宿主主题（settings.js 注入的宿主主题 CSS 覆盖 --bg/--text）。
+     兜底色是被覆盖前的第一帧，与旧设置页一致。 */
+  html, body { background: var(--bg, #F5EFE4); color: var(--text, #2A2622); }
+</style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module" src="./settings.js"></script>
+</body>
+</html>

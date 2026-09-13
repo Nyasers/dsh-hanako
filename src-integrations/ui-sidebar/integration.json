@@ -1,0 +1,26 @@
+{
+  "package": "@deepseek-ai/dsh-client-ui-sidebar",
+  "upstreamVersion": "0.1.5-rc.2",
+  "upstreamDir": "packages/client/ui-sidebar",
+  "files": [
+    {
+      "path": "src/client/SidebarRoot.tsx",
+      "upstreamSha256": "9b9df86191667670fcbe81d9d8d23f654e01e83cec8571b36edcd55842a96f2b"
+    },
+    {
+      "path": "src/client/SidebarRoot.module.css",
+      "upstreamSha256": "aa6b29bceab34a49e00c7c10c0448eaab288acedc1adedf27b96235db4e6265e"
+    }
+  ],
+  "notes": [
+    "批次①后半：侧栏槽位按「面」渲染（逐字照样例 0.7.0 的 ui-sidebar 补丁）。",
+    "  settings / workspace → 早退，只渲染 renderSlot('sidebar.settings', {wide:true})；外层是 AppFrame",
+    "    的 settingsShell（绝对定位、pointer-events:none），面板未打开时槽位为空 → 主卡上不会多出 DSH 侧栏。",
+    "  navigation（FP）     → 正常 DSH 侧栏，不渲染折叠钮（FP 与拆窗面都不渲染：独立窗口的侧栏始终在，留一个按不动的钮会误导）。",
+    "  navigation（FP）     → 不渲染品牌行（logoRow）：宿主 FP 自己就写着 DSHana，再叠一行品牌+字标是重复。",
+    "认面放在所有 hook 之后（React 规则），用 window.__DSHANA__.role（样例叫 __HANA_DSH__）。",
+    "CSS 增加 .surfaceSettings { width/height 100%; pointer-events:none }（样例同名规则）。",
+    "index.ts / locales.ts / contract/ 不改：sidebar.settings 槽位声明上游已有；样例 index 若有改动",
+    "（主题 token 映射、inject 列表）属后续批次，届时单独取。"
+  ]
+}

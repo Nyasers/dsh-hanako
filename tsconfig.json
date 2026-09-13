@@ -1,0 +1,42 @@
+{
+  // 编辑器入口：IDE 从"打开的文件"向上找 tsconfig，根上缺这份时它会按默认口径猜
+  // （moduleResolution 不读 package.json imports ⇒ `#/` 报找不到；noImplicitAny 打开 ⇒
+  // 第三方无类型包报隐式 any）。这份配置让编辑器看到与构建一致的口径。
+  //
+  // 与逐域配置的关系：**判定仍以 tsconfig.{src,cordis,scripts}.json 为准**（那是
+  // scripts/typecheck.mts 的口径，决定拦不拦）；本文件只负责让编辑器少报假红，不参与
+  // 构建，也不改变任何域的实际检查范围。
+  "compilerOptions": {
+    "noEmit": true,
+    "target": "ES2022",
+    "module": "ESNext",
+    // bundler：认 package.json imports（`#/` 别名）、认 ESM 的 `.js` → `.ts` 映射。
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["node"],
+    // 直接依赖住在 pnpm 隐藏目录：不指这里，cordis / dsh / hana 那批包在编辑器里一律报红。
+    "paths": { "*": ["./node_modules/.pnpm/node_modules/*"] },
+    "typeRoots": ["./node_modules/@types", "./node_modules/.pnpm/node_modules/@types"],
+    "strict": true,
+    // 与域配置同口径：纯 JS 内容挂 .ts 的存量还没补完类型，严格隐式 any 会淹掉真问题。
+    "noImplicitAny": false,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    // 相对 import 显式写 .ts（Node ESM 可直跑、bundler 能解、官方 DSH 源码同款）。
+    "allowImportingTsExtensions": true,
+    "jsx": "react-jsx"
+  },
+  // 覆盖我们有源码的三个域；src-integrations/ 是覆盖层补丁（引上游包源码，走
+  // scripts/overlay-typecheck.mts 那条专门通道），不在这里，免得编辑期噪声压住真问题。
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "src-cordis/**/*.ts",
+    "src-cordis/**/*.tsx",
+    "scripts/**/*.mts"
+  ]
+}

@@ -1,5 +1,37 @@
 # Changelog
 
+## [1.0.0-beta.5+dsh-0.1.5-rc.2](https://github.com/Nyasers/dsh-hanako/compare/v1.0.0-beta.5%2Bdsh-0.1.2-rc.1...v1.0.0-beta.5%2Bdsh-0.1.5-rc.2) (2026-09-11)
+
+### Features
+
+* **app-v2:** 壳页 UI 升级——复刻 v1 webui-shell 纸张风三态壳（时间线 + 实时日志 + 错误折叠 + 主题桥） ([997ea50](https://github.com/Nyasers/dsh-hanako/commit/997ea504506d722614e17aa94869911c78b5a227)), references [#dsh-stage](https://github.com/Nyasers/dsh-hanako/issues/dsh-stage)
+* **app-v2:** 迁移步骤 1 骨架——v2 manifest / apply 入口 / 设置 / 工具注册（dsh_session list/get 离线可读） ([011abe0](https://github.com/Nyasers/dsh-hanako/commit/011abe0722b5979d6f81897ea92f54885bc4405e))
+* **app-v2:** 迁移步骤 2 受管运行时——DSH 迁入 App 受管 Node 子进程 ([a69bd35](https://github.com/Nyasers/dsh-hanako/commit/a69bd350e46b16e00d2139a9b94dcff20a024deb))
+* **app-v2:** 迁移步骤 3 provider adapter 与 create/send 业务链——DSH 推理改走受管 hana.models（NDJSON+done.assistant 签名回放），create/send 经 ctx.tasks.create + task-map 映射 + task-bridge 回投（决策 A-D 见 DESIGN） ([7c1d583](https://github.com/Nyasers/dsh-hanako/commit/7c1d583c1adcdac26515f72766dc3b749e47556c))
+* **app-v2:** 迁移步骤 4a 审批/取消/超时链——approval-bridge 经 hana.tasks.requestApproval + watch(approvalId) SSE 对账把 outcome 只投给正确 DSH 等待者（rejected/allowed-once 原样，超时/父任务结束/撤销 fail-closed）；cancel 经映射 cancel 标记 + DSH session.cancel、DSH 真中止后宿主才 canceled，宿主 task canceled/aborted 反向触发（task-bridge watch 反向 session.cancel + 定向 models.cancel）；执行超时走 cancel 链；watch SSE 解析/对账（snapshot/app-task/reset、断线 get 对账）与 NDJSON 分侧；task-map 扩展 approvals/cancel 协调字段（决策 E-J 见 DESIGN）；单测 21 例新增（watch-sse/task-map-ext/cancel-chain/approval-bridge），既有 104 例保持全绿 ([1469105](https://github.com/Nyasers/dsh-hanako/commit/146910536a543a7ae1484c61030824d004a7463f))
+* **app-v2:** 迁移步骤 4b/5 代码收口——ctx.routes 壳页诊断 registrar + contributes.cards/ui 回归 + 旧数据迁移 + pack/syncver v2 版本域 ([4f12c52](https://github.com/Nyasers/dsh-hanako/commit/4f12c52e13e943ae334c48a78ef2df915e7acd43))
+* **data-source:** 数据来源设置与身份解析 + DSH_HOME 不再硬编码（T3.1） ([d5bec5a](https://github.com/Nyasers/dsh-hanako/commit/d5bec5aed8550807153cb8768767b96b841901bb))
+* **pack:** 逐目标出包（4 平台包 + 通用兜底）+ 暂存树即用即清 ([4ec9f85](https://github.com/Nyasers/dsh-hanako/commit/4ec9f853e5f94cfb974ecb316c38d1eacf395e62))
+* **runtime:** 端口随机化与启动契约对齐（T5.1） ([5969585](https://github.com/Nyasers/dsh-hanako/commit/59695856057f6c9e46ebbd9f42afda121e211a4f))
+* **runtime:** preflight 预检模式（数据源切换探针）+ e2e 冒烟回到配置契约（T3.2a） ([c8c635a](https://github.com/Nyasers/dsh-hanako/commit/c8c635a13896515b139214e1d5aa13332d22cfea))
+* **ui:** 壳页改同文档注入 DSH 前端 + __DSH_TRANSPORT__（bootstrap 向样例看齐） ([cee4e66](https://github.com/Nyasers/dsh-hanako/commit/cee4e667673ef23e70cbe56af3a93feaa918a67e)), references [#root](https://github.com/Nyasers/dsh-hanako/issues/root)
+* **v2:** IPC 向官方样例对齐——connection 交回官方 + runtime 中继补 cookie ([ab23e16](https://github.com/Nyasers/dsh-hanako/commit/ab23e169227128dac21b2c7b609a9222564e5ac1))
+
+### Bug Fixes
+
+* **app-v2:** 恢复 app/ui.clipboard-write 并接上宿主剪贴板能力 ([cc41f88](https://github.com/Nyasers/dsh-hanako/commit/cc41f882599bccd839668ef4726a99745f791b40))
+* **app-v2:** 壳页 iframe 预种 hana_app_runtime cookie（warm）+ ready 清残留 error（beta.6） ([083d417](https://github.com/Nyasers/dsh-hanako/commit/083d417480710b18403ef31dccaf988bc0f65704))
+* **app-v2:** 受管运行时权限档切 local-machine（刀 1/3） ([bc10d66](https://github.com/Nyasers/dsh-hanako/commit/bc10d66b469321e64de1478261c60265f0e92fe4))
+* **app-v2:** 依赖 ensure 移到 App 进程（runtime 沙箱 spawn 硬限制）+ 自动链 Promise 化（beta.5） ([e4f1e74](https://github.com/Nyasers/dsh-hanako/commit/e4f1e74b1bd1d9563245fee577e36fda9df53476))
+* **app-v2:** 依赖安装 spawn 授权 + apply 级自动链 + sidebar functionPanel 声明（beta.3） ([33e8c25](https://github.com/Nyasers/dsh-hanako/commit/33e8c25affc17abe82e35e053382ea4b84ced94b))
+* **app-v2:** apply 自动链避让宿主 bootstrap 60s 窗口（延迟 5s 触发，beta.4） ([4f25310](https://github.com/Nyasers/dsh-hanako/commit/4f25310cdec891e0ce0ff557231ecafcec78bfec))
+* **app-v2:** DSHana 卡片 403 missing_credential——壳页后端路由改走浏览器 SDK hana.api.fetch + vendor @hana/plugin-sdk + bump 2.0.0-beta.2 ([753c429](https://github.com/Nyasers/dsh-hanako/commit/753c42970cd8cf38c8102591de8f489b69c96f9e))
+* **pack:** --target 单数取值、必须显式给出；三种失败路径打印支持目标列表 ([da38fdf](https://github.com/Nyasers/dsh-hanako/commit/da38fdf57fb18638ee724faa448af4bc9ba6b405))
+* **pack:** zip 根 = 包根，不再套一层目录（装不上的根因） ([3151308](https://github.com/Nyasers/dsh-hanako/commit/3151308f16a0262337ba97c106753823604a0b83))
+* **relay:** WS 升级握手头被剥离致浏览器事件流连不上 + 补齐数据源切换冻结（T5.2） ([d6cb43f](https://github.com/Nyasers/dsh-hanako/commit/d6cb43f81af9c0bfc818a4ad49fe0bc11c724bb3))
+* **tools:** 修 create/send 定位键丢失与 App 进程崩溃；DSH 访问收进 runtime 控制面 ([624886e](https://github.com/Nyasers/dsh-hanako/commit/624886e611211f7765ca05848a48f1364bb97f50))
+* **ui:** ready 态顶上白占一整屏——遗留壳容器盖过了 [hidden]（真机反馈） ([af8655d](https://github.com/Nyasers/dsh-hanako/commit/af8655dcddfce9e73ff38360c7f79f971cce4afa)), references [#frame-wrap](https://github.com/Nyasers/dsh-hanako/issues/frame-wrap) [#frame-wrap](https://github.com/Nyasers/dsh-hanako/issues/frame-wrap)
+
 ## [1.0.0-beta.5+dsh-0.1.2-rc.1](https://github.com/Nyasers/dsh-hanako/compare/v1.0.0-beta.4%2Bdsh-0.1.2-rc.1...v1.0.0-beta.5%2Bdsh-0.1.2-rc.1) (2026-09-06)
 
 ### Features
@@ -218,4 +250,5 @@
 ### Bug Fixes
 
 * CodeRabbit review 修复——install/update 互斥、spec 注入校验、SemVer prerelease 比较、version.mjs 严格化与毕业逻辑、文档同步 ([7eba3be](https://github.com/Nyasers/dsh-hanako/commit/7eba3bee448748c1959922092abcb49fee1e0d7b))
+
 
