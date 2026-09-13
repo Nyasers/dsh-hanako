@@ -16,7 +16,7 @@
     "types": ["node"],
     // 直接依赖住在 pnpm 隐藏目录：不指这里，cordis / dsh / hana 那批包在编辑器里一律报红。
     "paths": { "*": ["./node_modules/.pnpm/node_modules/*"] },
-    "typeRoots": ["./node_modules/.pnpm/node_modules/@types"],
+    "typeRoots": ["./node_modules/@types", "./node_modules/.pnpm/node_modules/@types"],
     "strict": true,
     // 与域配置同口径：纯 JS 内容挂 .ts 的存量还没补完类型，严格隐式 any 会淹掉真问题。
     "noImplicitAny": false,
