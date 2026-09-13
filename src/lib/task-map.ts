@@ -38,7 +38,7 @@ export const TASK_MAP_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 崩溃残留清理 TT
 export const APPROVAL_STATUS_PENDING = "pending";
 export const APPROVAL_STATUS_ANSWERED = "answered";
 
-/** dshSessionId 形态校验（与 tools/subtool/query.js 同正则，防路径穿越/畸形名）。 */
+/** dshSessionId 形态校验（与 tools/shared/query.js 同正则，防路径穿越/畸形名）。 */
 const SESSION_ID_RE = /^session-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export function isValidSessionId(sessionId) {
   return typeof sessionId === "string" && SESSION_ID_RE.test(sessionId);

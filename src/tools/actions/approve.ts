@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/tools/approve.ts — dshana approve：应答子代理挂起的审批
+// src/tools/actions/approve.ts — dshana approve：应答子代理挂起的审批
 //
 // 本项目特色（subagent 没有审批面）。approvalId 是唯一句柄——会话由工具解析（句柄路径校验
 // 归属），sessionId 仅在“我要跨对话”时显式传。应答编排见 lib/approve-respond.ts
 // （校验审批归属 → ctx.tasks.respondApproval → runtime approval-bridge 把 outcome 只投给
 // 该 approvalId 对应的 DSH 等待者）。
-import { respondApprovalAction } from "../lib/approve-respond.ts";
-import { resolveTarget } from "./shared/target.ts";
+import { respondApprovalAction } from "../../lib/approve-respond.ts";
+import { resolveTarget } from "../shared/target.ts";
 
 export const command = "approve";
 export const summary = "应答子代理挂起的审批（approvalId 必填；决策看 args 不听 reason）";

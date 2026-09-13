@@ -46,14 +46,16 @@ Hana 宿主进程（App 隔离进程内加载 dist/index.js）
 
 ## 工具
 
-宿主 Agent 工具面为**单工具 `dshana`**（一个插件一个同名工具 + CLI subcommand：装配 `tools/index.ts`，各动作 `tools/<action>.ts`，只读查询 `tools/subtool/query.ts`，提交链 `lib/session-run.js`，取消/审批编排 `lib/cancel-chain.js` / `lib/approve-respond.js`）。语义对齐 subagent（open/reply/close），另有 get/list/approve 三个特色动作。**完整调用手册见 [dsh-session](src/skills/dsh-session/SKILL.md)**：
+宿主 Agent 工具面为**单工具 `dshana`**（一个插件一个同名工具 + CLI subcommand：装配 `tools/index.ts`，各动作 `tools/actions/<action>.ts`，只读查询 `tools/shared/query.ts`，提交链 `lib/session-run.js`，取消/审批编排 `lib/cancel-chain.js` / `lib/approve-respond.js`）。语义对齐 subagent（open/reply/close），另有 get/approve 两个特色动作。**完整调用手册见 [dsh-session](src/skills/dsh-session/SKILL.md)**：
 
 | action | 用途 | 实现 |
 | --- | --- | --- |
-| `open` / `reply` | 开子代理+交首件活 / 续已有子代理（task 必填；open 另需 cwd） | `tools/open.ts` / `tools/reply.ts` → `lib/session-run.js` |
-| `list` / `get` | 会话清单 / 回看某一轮最终结论（官方 `session/list` + `session/page`） | `tools/list.ts` / `tools/get.ts` → `tools/subtool/query.ts` |
-| `close` | 取消正在跑的任务（taskId 句柄或 sessionId 凭证） | `tools/close.ts` → `lib/cancel-chain.js` |
-| `approve` | 应答挂起审批（allowed-once/rejected，决策看 args） | `tools/approve.ts` → `lib/approve-respond.js` |
+| `open` / `reply` | 开子代理+交首件活 / 续已有子代理（task 必填；open 另需 cwd） | `tools/actions/open.ts` / `tools/actions/reply.ts` → `lib/session-run.js` |
+| `get` | 回看某一轮最终结论（官方 `session/list` + `session/page`） | `tools/actions/get.ts` → `tools/actions/query.ts` |
+| `close` | 取消正在跑的任务（taskId 句柄或 sessionId 凭证） | `tools/actions/close.ts` → `lib/cancel-chain.js` |
+| `approve` | 应答挂起审批（allowed-once/rejected，决策看 args） | `tools/actions/approve.ts` → `lib/approve-respond.js` |
+
+> `list`（会话清单）的实现保留在 `tools/actions/list.ts`，但**暂未注册到工具面**（2026-09-13）：任务绑定语义下会话靠句柄定位，不需要 list 发现路径；`sourceId` / `cursor` 这类为其配套的字段一并搁置。
 
 调用模型：句柄默认（taskId/approvalId，按宿主记录的来源会话校验归属）、凭证显式（sessionId = 我要跨对话）。每个子命令的参数在 `parameters.oneOf` 里单独成支（`additionalProperties:false`）。
 
@@ -148,7 +150,7 @@ DSHana 以**单卡 + 自带功能面板**注册（manifest `contributes.cards[0]
 决策是「当前实现按宿主 0.930.1 d.ts 契约写、真实宿主形态待装包对账」的依据。
 
 - **决策 E（取消链分侧与顺序 = App 发起 RPC、DSH 真中止后宿主才 canceled）**：
-  App 主进程（tools/close.ts / session-run 超时看门狗）经 loopback HTTP RPC 直调
+  App 主进程（tools/actions/close.ts / session-run 超时看门狗）经 loopback HTTP RPC 直调
   DSH web /api/session/cancel（lib/dsh-rpc.js rpcSessionCancel + rpc-envelope 复用——与
   create/send 同一条指令面），并先写映射 cancel 标记（markCancelRequested）。受管 runtime
   task-bridge 在 DSH turn/end(aborted)（或自然终态但已有 cancel 标记，v1 cancelledRequested
