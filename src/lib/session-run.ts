@@ -35,8 +35,11 @@ import { serviceBase } from "#/lib/service-base.ts";
 import { rpcViaControl } from "#/lib/controller.ts";
 import { resolveTaskTimeoutSec, resolveApprovalTimeoutMs, cancelSessionWork } from "#/lib/cancel-chain.ts";
 
+/** 取错误的可读文本。catch 到的值类型未知，字段访问一律经这里。 */
+const errText = (e: unknown): string => ((e as any)?.message as string) || String(e);
+
 // ---- 归一/校验（纯函数面，便于单测）----
-export function normalizeCreateSend({ action, input } = {}) {
+export function normalizeCreateSend({ action, input }: { action?: unknown; input?: any } = {}) {
   const act = action === "send" ? "send" : action === "create" ? "create" : "";
   if (!act) throw new Error("session-run: action 必须是 create / send");
   const taskText = String((input && input.task) || "").trim();
@@ -121,11 +124,11 @@ async function failTask(ctx, taskId, message) {
 /** 后台等到 Hana task 终态（complete/failed/canceled/aborted；轮询 get，无 SSE 复杂度）。 */
 async function waitTaskTerminal(ctx, taskId, log, pollMs = 1200) {
   for (;;) {
-    let rec = null;
+    let rec: any = null;
     try {
       rec = await ctx.tasks.get(taskId);
     } catch (e) {
-      log?.warn?.("[dsh-session] tasks.get 查询失败：" + ((e && e.message) || e));
+      log?.warn?.("[dsh-session] tasks.get 查询失败：" + errText(e));
     }
     const st = rec && rec.status;
     if (st && ["completed", "failed", "canceled", "aborted"].includes(String(st))) {
@@ -144,7 +147,7 @@ async function waitTaskTerminal(ctx, taskId, log, pollMs = 1200) {
 async function waitTaskTerminalWithTimeout(ctx, taskId, sessionId, timeoutSec, log, pollMs = 1200) {
   const ms = Number(timeoutSec) > 0 ? Math.round(Number(timeoutSec)) * 1000 : 0;
   let fired = false;
-  let timer = null;
+  let timer: ReturnType<typeof setTimeout> | null = null;
   const fire = async () => {
     if (fired) return;
     fired = true;
@@ -152,7 +155,7 @@ async function waitTaskTerminalWithTimeout(ctx, taskId, sessionId, timeoutSec, l
     try {
       await cancelSessionWork({ sessionId, reason: "timeout", log });
     } catch (e) {
-      log?.warn?.("[dsh-session] 超时 cancel 链失败：" + ((e && e.message) || e));
+      log?.warn?.("[dsh-session] 超时 cancel 链失败：" + errText(e));
     }
   };
   if (ms > 0) {
@@ -183,14 +186,14 @@ async function establishSession(ctx, base, parsed, log) {
     if (!sessionId) throw new Error("session.create 未返回 sessionId：" + JSON.stringify(value || null));
     return { sessionId, resumed: false, effectiveCwd: parsed.cwd };
   }
-  let listed = null;
+  let listed: { sessionId?: string; cwd?: string } | null = null;
   try {
     const listValue = await rpcCall(ctx, base, { method: "session/list", payload: {} });
     const items = (listValue && Array.isArray(listValue.items) && listValue.items) || [];
     listed = items.find((it) => it && it.sessionId === parsed.sessionId) || null;
   } catch (e) {
     // list 失败不阻断（活跃 Map 会话路径照常）；回落直接 prompt
-    log?.warn?.("[dsh-session] session.list 查询失败，回落直接 prompt：" + ((e && e.message) || e));
+    log?.warn?.("[dsh-session] session.list 查询失败，回落直接 prompt：" + errText(e));
   }
   if (listed && typeof listed.cwd === "string" && listed.cwd) {
     await rpcCall(ctx, base, {
@@ -268,14 +271,14 @@ export function submitDshTask({ action, input, callToken, log }: DshSubmitInput)
     resolveReady = res;
     rejectReady = rej;
   });
-  let releaseNewSessionTurn = null; // create：会话槽位（占用到终态）
+  let releaseNewSessionTurn: (() => void) | null = null; // create：会话槽位（占用到终态）
   // 显示名：显式 label 优先，否则按动作给默认前缀（宿主任务列表与结果通知里可见）
   const taskLabel =
     parsed.label || ((parsed.action === "send" ? "DSH 续会话" : "DSH 新任务") + "：" + parsed.taskText.slice(0, 30));
 
   const runTask = async () => {
-    let taskId = null;
-    let sessionId = null;
+    let taskId: string | null = null;
+    let sessionId: string | null = null;
     try {
       // ① Hana task 创建（callToken 专用一次；taskId 是稳定句柄）
       let task;
@@ -301,7 +304,7 @@ export function submitDshTask({ action, input, callToken, log }: DshSubmitInput)
           },
         });
       } catch (e) {
-        throw new Error("Hana task 创建失败：" + ((e && e.message) || e));
+        throw new Error("Hana task 创建失败：" + errText(e));
       }
       taskId = task && task.taskId;
       if (!taskId) throw new Error("ctx.tasks.create 未返回 taskId（宿主契约异常）");
@@ -312,17 +315,17 @@ export function submitDshTask({ action, input, callToken, log }: DshSubmitInput)
         const rt = await ensureManagedRuntime({ taskId });
         logLine(log, "[dsh-session] runtime 就绪 runtimeId=" + (rt && rt.runtimeId) + "（task=" + taskId + "）");
       } catch (e) {
-        await failTask(ctx, taskId, "DSH 受管运行时启动失败：" + ((e && e.message) || e));
+        await failTask(ctx, taskId, "DSH 受管运行时启动失败：" + errText(e));
         throw e;
       }
       const base = serviceBase();
 
       // ③ 会话建立（create 新建 / send 沿用）
-      let established;
+      let established: { sessionId: string; effectiveCwd?: string | null } | null = null;
       try {
         established = await establishSession(ctx, base, parsed, log);
       } catch (e) {
-        await failTask(ctx, taskId, "DSH 会话建立失败：" + ((e && e.message) || e));
+        await failTask(ctx, taskId, "DSH 会话建立失败：" + errText(e));
         throw e;
       }
       sessionId = established.sessionId;
@@ -338,7 +341,7 @@ export function submitDshTask({ action, input, callToken, log }: DshSubmitInput)
         } catch (e) {
           if (
             parsed.reasoningEffort &&
-            String((e && e.message) || "").includes("model-unavailable")
+            String((e as any)?.message || "").includes("model-unavailable")
           ) {
             await rpcCall(ctx, base, {
               method: "session/selectModel",
@@ -383,7 +386,7 @@ export function submitDshTask({ action, input, callToken, log }: DshSubmitInput)
           logLine(log, "[dsh-session][warn] 宿主任务元数据回写未确认（task=" + taskId + "）");
         }
       } catch (e) {
-        logLine(log, "[dsh-session][error] 宿主任务元数据回写失败（task=" + taskId + "）：" + ((e && e.message) || e));
+        logLine(log, "[dsh-session][error] 宿主任务元数据回写失败（task=" + taskId + "）：" + errText(e));
       }
       // ⑥ prompt（fire：{ accepted:true } 立即返回）
       await rpcCall(ctx, base, {
@@ -414,9 +417,9 @@ export function submitDshTask({ action, input, callToken, log }: DshSubmitInput)
         try { markTaskMapEnded(dataDir, sessionId, "submit-failed"); } catch { /* 忽略 */ }
       }
       if (taskId) {
-        const msg = "DSH 任务提交失败（" + parsed.action + "）：" + ((e && e.message) || e);
+        const msg = "DSH 任务提交失败（" + parsed.action + "）：" + errText(e);
         await failTask(ctx, taskId, msg);
-        const err = new Error(msg);
+        const err = new Error(msg) as Error & { sessionId?: string };
         if (sessionId) err.sessionId = sessionId;
         rejectReady(err);
       } else {
@@ -438,7 +441,7 @@ export function submitDshTask({ action, input, callToken, log }: DshSubmitInput)
   // 后台 promise 兜底：ready reject 已同步抛给调用方；promise 自身拒绝只记日志
   promise.catch((e) => {
     try {
-      logLine(log, "[dsh-session] 后台任务异常：" + ((e && e.message) || e));
+      logLine(log, "[dsh-session] 后台任务异常：" + errText(e));
     } catch { /* 忽略 */ }
   });
   return { promise, ready };
