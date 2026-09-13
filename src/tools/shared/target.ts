@@ -8,11 +8,11 @@
 //   · taskId / approvalId ⇒ 句柄路径：App 侧反查私有映射（DSH 会话坐标不进 agent 面），
 //     再以宿主任务记录的 parentSessionPath 校验归属（lib/task-ownership.ts）；
 // 解析不出来一律显式失败：不猜、不降级。
-import { findTaskMapByTaskId, findTaskMapByApprovalId, isValidSessionId } from "../../lib/task-map.ts";
-import { taskOwnership, ownershipRefusalText } from "../../lib/task-ownership.ts";
-import type { OwnershipReason } from "../../lib/task-ownership.ts";
-import type { ToolCtx } from "../../types/host.ts";
-import type { ToolInputBase } from "./types.ts";
+import { findTaskMapByTaskId, findTaskMapByApprovalId, isValidSessionId } from "#/lib/task-map.ts";
+import { taskOwnership, ownershipRefusalText } from "#/lib/task-ownership.ts";
+import type { OwnershipReason } from "#/lib/task-ownership.ts";
+import type { ToolCtx } from "#/types/host.ts";
+import type { ToolInputBase } from "#/tools/shared/types.ts";
 
 /** 解析出的调用目标（reply/close/get/approve 共用）。 */
 export interface ResolvedTarget {

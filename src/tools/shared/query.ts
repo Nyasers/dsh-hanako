@@ -28,9 +28,9 @@
 // 不再有"离线直读文件"这条路。换来的是格式演进由官方承担。
 //
 // 权限模型：sessionId 即访问凭证——拿得到 id 就能读，拿不到天然无所有权，无需注册表。
-import { ensureManagedRuntime } from "../../lib/managed-runtime.ts";
-import { rpcViaControl } from "../../lib/controller.ts";
-import type { ToolResult } from "../../types/tool.ts";
+import { ensureManagedRuntime } from "#/lib/managed-runtime.ts";
+import { rpcViaControl } from "#/lib/controller.ts";
+import type { ToolResult } from "#/types/tool.ts";
 
 const DEFAULT_LIMIT = 10;
 const MAX_LIMIT = 100;

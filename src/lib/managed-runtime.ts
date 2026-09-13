@@ -26,8 +26,8 @@
 import { join } from "node:path";
 import { mkdirSync, writeFileSync, chmodSync, rmSync, readFileSync } from "node:fs";
 import { randomInt, randomBytes } from "node:crypto";
-import { appDataDir, appLogger, getAppRuntime } from "./app-runtime.ts";
-import { currentSource } from "./data-source.ts";
+import { appDataDir, appLogger, getAppRuntime } from "#/lib/app-runtime.ts";
+import { currentSource } from "#/lib/data-source.ts";
 // 依赖随包物化在安装目录 <installRoot>/node_modules，
 // 无运行时安装与 spawn。
 

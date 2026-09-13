@@ -27,19 +27,19 @@ import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import http from "node:http";
-import { parseRuntimeConfig, UsageError, USAGE } from "./options.ts";
-import { startDshBridge } from "./bridge.ts";
-import { info, warn, err } from "./log.ts";
+import { parseRuntimeConfig, UsageError, USAGE } from "#/runtime/options.ts";
+import { startDshBridge } from "#/runtime/bridge.ts";
+import { info, warn, err } from "#/runtime/log.ts";
 // @hana/app-sdk 为 devDependencies（file:vendor/hana-app-sdk/hana-app-sdk.tgz，版本随宿主
 // 0.946.2 App 契约）；connectAppRuntime 运行时实现经 rspack 构建时静态内联进本 bundle（只
 // 依赖 node:crypto，无运行时包解析——见 rspack.config.mts 打包纪律注释）。升级 = 换 vendor
 // 里的 sdk tgz + pnpm install + 重建。
 import { connectAppRuntime } from "@hana/app-sdk";
-import { startTaskBridge } from "./task-bridge.ts"; // DSH 事件 → Hana task 回投
-import { startApprovalBridge } from "./approval-bridge.ts"; // DSH 审批 → Hana requestApproval / watch 对账
-import { resolveInstallRoot, locateDsh } from "./locate.ts";
+import { startTaskBridge } from "#/runtime/task-bridge.ts"; // DSH 事件 → Hana task 回投
+import { startApprovalBridge } from "#/runtime/approval-bridge.ts"; // DSH 审批 → Hana requestApproval / watch 对账
+import { resolveInstallRoot, locateDsh } from "#/runtime/locate.ts";
 // 依赖随包物化在安装目录 node_modules（无运行时 ensure）。
-import { seedDshanaProfile } from "./seed.ts";
+import { seedDshanaProfile } from "#/runtime/seed.ts";
 
 /** 退出码约定（App 主进程 managed-runtime.js classify 读 exitCode 归类；勿随意改）。 */
 export const EXIT = {

@@ -31,12 +31,12 @@
 // 默认实现经 src/lib/managed-runtime.ts 读取真实单例；测试注入 fake。
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { managedRuntimeDetails, ensureManagedRuntime, stopManagedRuntime, bridgeAccess } from "../lib/managed-runtime.ts";
-import { buildBootSnapshot, APP_ID } from "../lib/boot-state.ts";
-import { dataSources, sourceOf } from "../lib/data-source.ts";
+import { managedRuntimeDetails, ensureManagedRuntime, stopManagedRuntime, bridgeAccess } from "#/lib/managed-runtime.ts";
+import { buildBootSnapshot, APP_ID } from "#/lib/boot-state.ts";
+import { dataSources, sourceOf } from "#/lib/data-source.ts";
 // 数据源切换（lib/source-switch.ts）的入口暂时撤下：链未在真机验证过，见 POST /dshana/settings/restart。
-import { readDefaultModel, writeDefaultModel } from "../lib/model-settings.ts";
-import { readTaskMap, isValidSessionId } from "../lib/task-map.ts";
+import { readDefaultModel, writeDefaultModel } from "#/lib/model-settings.ts";
+import { readTaskMap, isValidSessionId } from "#/lib/task-map.ts";
 export const DASHANA_ROUTE_PREFIX = "/dshana";
 
 // ---- 应用设置（GET/POST /dshana/settings）----

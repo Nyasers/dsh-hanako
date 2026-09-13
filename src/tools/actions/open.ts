@@ -9,10 +9,10 @@
 //
 // 模块契约（六个 action 模块共用，见 tools/index.ts）：导出 command / summary / fields /
 // required / readOnly / run；run(input, ctx, deps) 中 deps 仅单测注入提交链。
-import { submitDshTask } from "../../lib/session-run.ts";
-import { sessionCard } from "../shared/card.ts";
-import type { ToolCtx } from "../../types/host.ts";
-import type { ToolInputBase, ToolResult } from "../shared/types.ts";
+import { submitDshTask } from "#/lib/session-run.ts";
+import { sessionCard } from "#/tools/shared/card.ts";
+import type { ToolCtx } from "#/types/host.ts";
+import type { ToolInputBase, ToolResult } from "#/tools/shared/types.ts";
 
 /** open 入参：task/cwd 必填（语义对齐 subagent 的“创建即带任务”）。 */
 export interface OpenInput extends ToolInputBase {

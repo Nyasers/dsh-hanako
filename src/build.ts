@@ -22,9 +22,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { basename, dirname, join } from "node:path";
 
 import fs from "fs-extra";
-import config from "./rspack.config.mts"; // 同目录（src 域配置随源码）
-import runtimeConfig from "./runtime/rspack.config.mts"; // runtime/ 域（受管 runtime 入口）
-import uiConfig from "./ui/rspack.config.mts"; // ui/ 域（壳页脚本 bundle；浏览器 SDK 构建期内联）
+import config from "#/rspack.config.mts"; // 同目录（src 域配置随源码）
+import runtimeConfig from "#/runtime/rspack.config.mts"; // runtime/ 域（受管 runtime 入口）
+import uiConfig from "#/ui/rspack.config.mts"; // ui/ 域（壳页脚本 bundle；浏览器 SDK 构建期内联）
 import {
   collectSource,
   makeUrlRewriter,

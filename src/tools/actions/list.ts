@@ -13,9 +13,9 @@
 // 就是本会话的后台任务，本来就出现在那份清单里，不需要本工具再开一扇只读门。
 //
 // 要重新启用本模块：在 src/tools/index.ts 的 import、ACTIONS 与 description 里加回即可。
-import { execute as queryExecute } from "../shared/query.ts";
-import type { ToolCtx } from "../../types/host.ts";
-import type { ToolInputBase, ToolResult } from "../shared/types.ts";
+import { execute as queryExecute } from "#/tools/shared/query.ts";
+import type { ToolCtx } from "#/types/host.ts";
+import type { ToolInputBase, ToolResult } from "#/tools/shared/types.ts";
 
 /** list 入参（冻结期保留形状，重新启用时直接可用）。 */
 export interface ListInput extends ToolInputBase {

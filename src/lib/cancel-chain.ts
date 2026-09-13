@@ -18,11 +18,11 @@
 //
 // 与宿主「取消 UI」的反向触发（host task canceled/aborted → DSH cancel）在受管 runtime
 // 的 task-bridge 侧实现（watch 宿主任务 SSE），不在此模块（App 进程内看不到 DSH 事件）。
-import { appCtx, appDataDir, appConfig } from "./app-runtime.ts";
-import { readTaskMap, markCancelRequested } from "./task-map.ts";
-import { rpcSessionCancel, cancelAccepted } from "./dsh-rpc.ts";
-import { rpcViaControl } from "./controller.ts";
-import { readSettingsSync } from "./data-source.ts";
+import { appCtx, appDataDir, appConfig } from "#/lib/app-runtime.ts";
+import { readTaskMap, markCancelRequested } from "#/lib/task-map.ts";
+import { rpcSessionCancel, cancelAccepted } from "#/lib/dsh-rpc.ts";
+import { rpcViaControl } from "#/lib/controller.ts";
+import { readSettingsSync } from "#/lib/data-source.ts";
 
 export const CANCEL_CONFIRM_MS = 15000; // DSH 中止确认窗口（超窗升级宿主 cancel）
 export const CANCEL_ESCALATE_REASON = "cancel-confirm-timeout";

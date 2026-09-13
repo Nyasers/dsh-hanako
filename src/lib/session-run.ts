@@ -24,16 +24,16 @@
 // create/send 描述「新建会话 / 续已有会话」这两个动作，映射在 tools/actions/open.ts 与
 // tools/actions/reply.ts 的 submit 调用处完成。
 import { join } from "node:path";
-import { appCtx, appDataDir } from "./app-runtime.ts";
-import { currentDshHome } from "./data-source.ts";
-import { ensureManagedRuntime } from "./managed-runtime.ts";
-import { nextRpcId } from "./rpc-envelope.ts";
-import { writeTaskMap, markTaskMapEnded, isValidSessionId, pruneTaskMaps } from "./task-map.ts";
-import { withSessionTurn, enterSessionTurn } from "./session-serialize.ts";
-import { readDshDefaultModel } from "./config.ts";
-import { serviceBase } from "./service-base.ts";
-import { rpcViaControl } from "./controller.ts";
-import { resolveTaskTimeoutSec, resolveApprovalTimeoutMs, cancelSessionWork } from "./cancel-chain.ts";
+import { appCtx, appDataDir } from "#/lib/app-runtime.ts";
+import { currentDshHome } from "#/lib/data-source.ts";
+import { ensureManagedRuntime } from "#/lib/managed-runtime.ts";
+import { nextRpcId } from "#/lib/rpc-envelope.ts";
+import { writeTaskMap, markTaskMapEnded, isValidSessionId, pruneTaskMaps } from "#/lib/task-map.ts";
+import { withSessionTurn, enterSessionTurn } from "#/lib/session-serialize.ts";
+import { readDshDefaultModel } from "#/lib/config.ts";
+import { serviceBase } from "#/lib/service-base.ts";
+import { rpcViaControl } from "#/lib/controller.ts";
+import { resolveTaskTimeoutSec, resolveApprovalTimeoutMs, cancelSessionWork } from "#/lib/cancel-chain.ts";
 
 // ---- 归一/校验（纯函数面，便于单测）----
 export function normalizeCreateSend({ action, input } = {}) {

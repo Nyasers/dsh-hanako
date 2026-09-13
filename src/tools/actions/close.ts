@@ -7,10 +7,10 @@
 // 随时可 resume，没有实例槽位这回事，所以这里不假装释放实例。只停本工作，不影响共享
 // runtime 上的其他会话。取消编排见 lib/cancel-chain.ts（写 cancel 标记 → DSH session.cancel
 // → 等 DSH 真中止后宿主任务 canceled；未确认则升级宿主 cancel 并如实告知）。
-import { cancelSessionWork } from "../../lib/cancel-chain.ts";
-import { resolveTarget } from "../shared/target.ts";
-import type { ToolCtx } from "../../types/host.ts";
-import type { ToolInputBase, ToolResult } from "../shared/types.ts";
+import { cancelSessionWork } from "#/lib/cancel-chain.ts";
+import { resolveTarget } from "#/tools/shared/target.ts";
+import type { ToolCtx } from "#/types/host.ts";
+import type { ToolInputBase, ToolResult } from "#/tools/shared/types.ts";
 
 export const command = "close";
 export const summary = "取消这个 DSH 子代理正在跑的任务（只停本工作，不影响共享 runtime 上的其他会话）";

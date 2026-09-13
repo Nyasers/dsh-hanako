@@ -13,7 +13,7 @@
 // initProfile（dsh-app-boot）由调用方（main.ts 经 locateDsh 取 appBoot.initProfile）注入；
 // profile 名门控（dshana）在调用方完成。
 import { join } from "node:path";
-import { ensureProfileSeeded, PROFILE_BUNDLES, PROFILE_PATCH_RELOAD } from "../lib/profile-seed.ts";
+import { ensureProfileSeeded, PROFILE_BUNDLES, PROFILE_PATCH_RELOAD } from "#/lib/profile-seed.ts";
 
 /**
  * dshana profile 种子化（幂等）。返回 ensureProfileSeeded 的 outcome（字符串），或抛错

@@ -14,7 +14,7 @@
 // 授权并种 hana_app_runtime cookie）。视觉沿袭 v1 webui-shell 纸张风（CSS 变量 +
 // fallback 纸张色），数据语义 v2 boot-state（phase idle/starting/ready/error/stopped）。
 import { hana } from "@hana/plugin-sdk";
-import { injectDshIndex, installTransport } from "./dsh-inject.ts";
+import { injectDshIndex, installTransport } from "#/ui/dsh-inject.ts";
 
 (function () {
   "use strict";

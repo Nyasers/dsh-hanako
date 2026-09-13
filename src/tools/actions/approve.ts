@@ -7,10 +7,10 @@
 // 归属），sessionId 仅在“我要跨对话”时显式传。应答编排见 lib/approve-respond.ts
 // （校验审批归属 → ctx.tasks.respondApproval → runtime approval-bridge 把 outcome 只投给
 // 该 approvalId 对应的 DSH 等待者）。
-import { respondApprovalAction } from "../../lib/approve-respond.ts";
-import { resolveTarget } from "../shared/target.ts";
-import type { ToolCtx } from "../../types/host.ts";
-import type { ToolInputBase, ToolResult } from "../shared/types.ts";
+import { respondApprovalAction } from "#/lib/approve-respond.ts";
+import { resolveTarget } from "#/tools/shared/target.ts";
+import type { ToolCtx } from "#/types/host.ts";
+import type { ToolInputBase, ToolResult } from "#/tools/shared/types.ts";
 
 /** approve 入参：approvalId 是唯一句柄（必填），outcome 缺省按 DSH 侧语义处理。 */
 export interface ApproveInput extends ToolInputBase {
