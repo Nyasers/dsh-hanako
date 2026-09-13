@@ -160,7 +160,7 @@ export function startApprovalBridge({ ctx, hana, dataDir, log }) {
     }
     const map = readTaskMap(dataDir, sessionId);
     if (!map || !map.taskId) {
-      // 非 dshana_session 发起的会话（如 DSH Web UI 直开）：没有宿主 task scope，
+      // 非 dshana 工具发起的会话（如 DSH Web UI 直开）：没有宿主 task scope，
       // 无法 requestApproval——委托（DSH 无应答者时 fail-closed，不隐式放行）
       note("审批无 task-map（session=" + sessionId.slice(0, 12) + "）——委托，不认领");
       return next();

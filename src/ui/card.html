@@ -100,11 +100,11 @@
 
   var q = new URLSearchParams(location.search);
   var sid = q.get("sid") || "";
-  var action = q.get("action") === "send" ? "send" : "create";
+  var action = q.get("action") === "reply" ? "reply" : "open";
   var status = q.get("status") || "running";
   var cwd = q.get("cwd") || "";
   var at = Number(q.get("at") || 0);
-  var WHAT = { create: "新建会话已提交", send: "续发消息已提交" };
+  var WHAT = { open: "子代理已开启", reply: "续发消息已提交" };
   var STATE = { running: "运行中" };
 
   function serverState() {
@@ -168,7 +168,7 @@
   }
 
   if (!sid) {
-    root.innerHTML = '<p class="empty">缺少卡片参数（本页由 dshana_session 的 create/send 出卡时打开）。</p>';
+    root.innerHTML = '<p class="empty">缺少卡片参数（本页由 dshana 的 open/reply 出卡时打开）。</p>';
   } else {
     var when = at > 0 ? new Date(at) : new Date();
     var short = sid ? sid.slice(0, 12) + "…" : "";

@@ -1,6 +1,6 @@
 ---
 name: dshana
-description: "dshana App（把 DeepSeek Harness 接进 Hana 的受管子代理执行器）的使用与排错指南。触发场景：DSHana 卡显示未启动/启动中/需要处理（三态自举页）、DSH 起不来或启动超时、DSH 任务失败排查、审批怎么应答（dshana_session action=approve）、默认模型怎么配、DSH Web UI 打不开、主题跟随宿主、DeepSeek Harness 相关。遇到 dshana 相关需求优先读本技能再动手。"
+description: "dshana App（把 DeepSeek Harness 接进 Hana 的受管子代理执行器）的使用与排错指南。触发场景：DSHana 卡显示未启动/启动中/需要处理（三态自举页）、DSH 起不来或启动超时、DSH 任务失败排查、审批怎么应答（dshana action=approve）、默认模型怎么配、DSH Web UI 打不开、主题跟随宿主、DeepSeek Harness 相关。遇到 dshana 相关需求优先读本技能再动手。"
 ---
 
 # dshana 使用与排错指南
@@ -17,7 +17,7 @@ DSHana 把 DeepSeek Harness（DSH）作为**受管子代理执行器**接进 Han
 - **无需配 API Key / 模型**：推理经受管 runtime 内 `hana.models` 发起，provider 凭据留在宿主。
 - **默认模型**：读 DSH 自身配置（`DSH_HOME/settings.yaml` 的 `agent-default-model`）。
 - **数据目录**：固定用 App 内置独立目录（App 数据目录下的 `.dsh`），开箱即用；共享已有目录 / 切换数据源暂不提供。
-- `dshana_session(action="create")` 每次调用**必须显式传 `cwd`**。
+- `dshana(action="open")` 每次调用**必须显式传 `cwd`**。
 
 ## DSHana 卡三态
 
@@ -36,7 +36,7 @@ DSHana 把 DeepSeek Harness（DSH）作为**受管子代理执行器**接进 Han
 
 | 工具 | 用途 | 关键点 |
 |---|---|---|
-| `dshana_session(action, task?, cwd?, …)` | 会话全生命周期（宿主 Agent 面唯一工具） | action ∈ create（提交，task+cwd 必填，异步提交后主动结束回合）/ send（续会话）/ cancel（取消）/ list/get（回看）/ approve（应答审批：sessionId+approvalId，决策看 args 不听 reason） |
+| `dshana(action, …)` | DSH 子代理全生命周期（宿主 Agent 面唯一工具；一个插件一个同名工具 + CLI subcommand） | action ∈ open（开子代理+交首件活，task+cwd 必填，异步提交后主动结束回合）/ reply（续，task 必填，taskId 或 sessionId）/ close（取消正在跑的）/ get、list（回看）/ approve（应答审批：approvalId 必填，决策看 args 不听 reason） |
 
 `sessionId` 即访问凭证；`list`/`get` 纯本地读会话文件，DSH 未启动也可用。
 
@@ -52,7 +52,7 @@ DSHana 把 DeepSeek Harness（DSH）作为**受管子代理执行器**接进 Han
 | 状态转「需要处理」 | runtime 启动失败 | 看 `error.userText` 与原始错误；日志定位 |
 | 提示端口被占用 | 端口竞争 | 会自动换随机端口重试；持续失败看日志 |
 | DSH Web UI 打不开但状态就绪 | 注入失败 / surface 票据缺失 | 重开卡；反复出现查中继前缀与 surface 授权 |
-| `dshana_session` 报 runtime 未就绪 | DSH 还没起来 | 等就绪或点「启动 DSH」；持续失败看 boot 状态 |
+| `dshana` 报 runtime 未就绪 | DSH 还没起来 | 等就绪或点「启动 DSH」；持续失败看 boot 状态 |
 | 默认模型改了不生效 | DSH 内存态与文件不一致 | 重启 DSH（停止后重新启动）再确认 |
 | 主题没跟随宿主 | DSH 主题偏好是 light/dark 而非 system | 在 DSH 设置里改回 system |
 | bash 报 `E_ACCESSDENIED` | DSH bash 沙箱 Windows 限制 | 改用文件系统工具（write/read/edit） |
@@ -61,5 +61,5 @@ DSHana 把 DeepSeek Harness（DSH）作为**受管子代理执行器**接进 Han
 
 - **升级 DSH = 装新 App 包 + 重启宿主**：DSH 版本随 App 声明，无独立升级通道。
 - 拆窗、钉回、切页面都不停 DSH 后台；停 App 或退出 Hana 才由宿主回收进程。
-- 越界权限默认走审批：deferred 通知 → `dshana_session(action="approve", …)` 应答；`approvalTimeoutSec` 内无人应答自动拒绝（缺省 30 秒；仅显式设 0 禁用）。
-- 任务默认新建会话；传 sessionId 复用（resume）；会话与账本在 App 数据目录内。
+- 越界权限默认走审批：deferred 通知 → `dshana(action="approve", …)` 应答；`approvalTimeoutSec` 内无人应答自动拒绝（缺省 30 秒；仅显式设 0 禁用）。
+- 任务默认新建会话；`reply` 传 taskId 句柄或 sessionId 凭证续用（resume）；会话与账本在 App 数据目录内。

@@ -50,7 +50,7 @@ export function phaseCopy(phase, { ready = false, errText = null } = {}) {
   switch (phase) {
     case "ready":
       return ready
-        ? "DSH 已就绪：Web 服务可访问（可通过本页 iframe 或直接在会话中使用 dshana_session）。"
+        ? "DSH 已就绪：Web 服务可访问（可通过本页 iframe 或直接在会话中使用 dshana 工具）。"
         : "DSH runtime 进程已存在，但服务尚未报告就绪，正在确认监听状态……";
     case "starting":
       return "DSH 正在启动（受管 runtime 拉起、profile 种子化、服务监听）……";

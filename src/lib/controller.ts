@@ -3,7 +3,7 @@
 //
 // src/lib/controller.ts — DSH 控制面客户端（App 侧；对齐官方样例 hana-dsh 的 controller.invoke）
 //
-// 落点：App 工具（dshana_session）**不直接访问 DSH HTTP**，而是经宿主 `ctx.runtime.fetch(runtimeId,
+// 落点：App 工具（dshana）**不直接访问 DSH HTTP**，而是经宿主 `ctx.runtime.fetch(runtimeId,
 // "/_control")` 打到 runtime 内中继的控制面（src/runtime/bridge.ts 的 /_control，controlKey 鉴权），
 // 由 runtime 进程带 DSH cookie 转发到 DSH /api。好处：
 //   · App 侧不需要 network 授权到 DSH/中继（宿主代发受管服务请求）；

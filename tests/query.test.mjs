@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// tests/query.test.mjs — dshana_session 的 list/get 取数纯函数单测
+// tests/query.test.mjs — dshana 的 list/get 取数纯函数单测
 // 重点：轮次边界（最后一次 user/message）→ 本轮最后一次 assistant 输出的挑选规则，
 // 以及"本轮未产出 → 退更早并标出 / 不静默冒充"的行为；另覆盖官方摘要映射与标题形状识别。
 import { test } from "node:test";

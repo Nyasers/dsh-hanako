@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/tools/subtool/query.ts — dshana_session 的 query 操作（list/get 只读会话查询）
+// src/tools/subtool/query.ts — dshana 的 list/get 只读查询（官方会话查询面）
 //
 // 取数走官方查询面：不读 <DSH_HOME>/storages/session_projcache.json，也不解
 // <DSH_HOME>/sessions/**/session.jsonl.zstd（日志已到 V3，projcache 行结构与 zstd 多帧容器
@@ -268,7 +268,7 @@ async function doGet(input, ctx) {
     content: [
       {
         type: "text",
-        text: "找不到会话 " + sessionId + " 的内容（" + extra + "）。可用 dshana_session action=list 查会话清单。",
+        text: "找不到会话 " + sessionId + " 的内容（" + extra + "）。可用 dshana action=list 查会话清单。",
       },
     ],
     details: { dsh: { action: "get", sessionId, ok: false } },
@@ -295,7 +295,7 @@ async function doGet(input, ctx) {
       content: [
         {
           type: "text",
-          text: "会话 " + sessionId + " 查询失败（" + msg + "）。可用 dshana_session action=list 确认会话仍在，或稍后重试。",
+          text: "会话 " + sessionId + " 查询失败（" + msg + "）。可用 dshana action=list 确认会话仍在，或稍后重试。",
         },
       ],
       details: { dsh: { action: "get", sessionId, ok: false } },
