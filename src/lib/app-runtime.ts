@@ -19,16 +19,31 @@
 //              （运行里不带 logPath/logTail 字段）
 //   readConfig (key) => unknown     ctx.config.get 的安全包装（apply 完成后才可读，
 //              工具执行期调用；设置贡献未登记/读取失败返回 undefined，不抛）
-let runtime = null;
+
+import type { HanaPluginContextV2, HanaPluginLoggerV2 } from "#/types/host.ts";
+
+/** apply(ctx) 捕获进模块的运行包（字段见文件头；App 进程内唯一）。 */
+export interface AppRuntime {
+  /** apply(ctx) 收到的宿主 ctx。 */
+  ctx: HanaPluginContextV2;
+  /** ctx.dataDir（App dataDir = 宿主 app-data/<id>/）。 */
+  dataDir: string;
+  /** 宿主日志器（App 侧唯一日志出口）。 */
+  logger: HanaPluginLoggerV2;
+  /** ctx.config.get 的安全包装，读取失败返回 undefined。 */
+  readConfig: (key: string) => unknown;
+}
+
+let runtime: AppRuntime | null = null;
 
 /** apply(ctx) 完成初始化后写入运行包；重复调用以后一次为准（测试/重载用）。 */
-export function initAppRuntime(v) {
+export function initAppRuntime(v: AppRuntime | null): AppRuntime | null {
   runtime = v || null;
   return runtime;
 }
 
 /** 读取当前 App 进程运行包；apply 尚未运行（不应发生）或已卸载时返回 null。 */
-export function getAppRuntime() {
+export function getAppRuntime(): AppRuntime | null {
   return runtime;
 }
 
@@ -41,20 +56,20 @@ export function getAppRuntime() {
  * 所需 DSH_HOME 且 legacy 数据存在时，经此处返回 legacy dataDir 或做导入，勿在各
  * 调用点重复拼路径。
  */
-export function appDataDir() {
+export function appDataDir(): string | null {
   const app = getAppRuntime();
   return app && typeof app.dataDir === "string" && app.dataDir ? app.dataDir : null;
 }
 
 /** 读取 App 自身 settings 的一个键（contributes.settings 声明；见文件头 readConfig）。 */
-export function appConfig(key) {
+export function appConfig(key: string) {
   const app = getAppRuntime();
   if (!app || typeof app.readConfig !== "function") return undefined;
   return app.readConfig(key);
 }
 
 /** 安全取宿主日志器（app 进程内未初始化时返回 null，调用方自行忽略）。 */
-export function appLogger() {
+export function appLogger(): HanaPluginLoggerV2 | null {
   const app = getAppRuntime();
   return app && app.logger ? app.logger : null;
 }
@@ -62,7 +77,7 @@ export function appLogger() {
 /** 取 apply(ctx) 收到的宿主 ctx（HanaPluginContextV2；apply 未运行/已卸载返回 null）。
  * 业务模块（tools/<action>.ts → lib/session-run.js 等）需要 ctx.tasks/ctx.network/
  * ctx.storage 等宿主能力时统一经此取，避免直接 import 业务模块形成环。 */
-export function appCtx() {
+export function appCtx(): HanaPluginContextV2 | null {
   const app = getAppRuntime();
   return app && app.ctx ? app.ctx : null;
 }
