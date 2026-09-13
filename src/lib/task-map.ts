@@ -132,13 +132,13 @@ export function markTaskMapEnded(dataDir, dshSessionId, status) {
 /** 列出全部映射（诊断/恢复用；按 at 降序）。 */
 export function listTaskMaps(dataDir) {
   const dir = taskMapDir(dataDir);
-  let names = [];
+  let names: string[] = [];
   try {
     names = existsSync(dir) ? readdirSync(dir) : [];
   } catch {
     return [];
   }
-  const out = [];
+  const out: any[] = [];
   for (const n of names) {
     if (!n.endsWith(".json")) continue;
     const j = readTaskMap(dataDir, n.slice(0, -".json".length));
@@ -174,7 +174,7 @@ export function findTaskMapByApprovalId(dataDir, approvalId) {
 export function pruneTaskMaps(dataDir, olderThanMs = TASK_MAP_TTL_MS) {
   let removed = 0;
   const dir = taskMapDir(dataDir);
-  let names = [];
+  let names: string[] = [];
   try {
     names = existsSync(dir) ? readdirSync(dir) : [];
   } catch {

@@ -102,7 +102,7 @@ function blockMetaOfItem(item) {
  * @returns {{startedIndexes: Set<number>, push: (ev: object) => object[]}}
  */
 export function createHanaStreamState() {
-  const started = new Set();
+  const started = new Set<number>();
   let current = null;
   let nextIndex = 0;
   return {
@@ -116,7 +116,7 @@ export function createHanaStreamState() {
       const delta = typeof ev.delta === "string" ? ev.delta : "";
       if (delta === "") return [];
       const blockType = ev.type === "text-delta" ? "text" : "reasoning";
-      const out = [];
+      const out: any[] = [];
       if (current === null || current.type !== blockType) {
         current = { index: nextIndex, type: blockType };
         nextIndex += 1;
@@ -146,8 +146,8 @@ export function buildDoneChunks({ doneEvent, provider, model, requestId, started
     err.code = "EMPTY_RESPONSE";
     throw err;
   }
-  const chunks = [];
-  const blocks = [];
+  const chunks: any[] = [];
+  const blocks: any[] = [];
   let index = 0;
   for (const item of content) {
     if (!item || typeof item !== "object") continue;

@@ -94,7 +94,7 @@ export function createSourceSwitcher(deps) {
     let stopAttempted = false;
     let startedNew = false;
     let froze = false;
-    const notes = [];
+    const notes: any[] = [];
     try {
       setOp({ step: "preflight" });
       const pf = await deps.preflight(next);

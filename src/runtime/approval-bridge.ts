@@ -77,7 +77,7 @@ export function collectToolCallsFromEvent(sessionId, ev) {
   const data = ev.data && typeof ev.data === "object" ? ev.data : {};
   const message = data.message && typeof data.message === "object" ? data.message : {};
   const content = Array.isArray(message.content) ? message.content : [];
-  const out = [];
+  const out: any[] = [];
   for (const block of content) {
     if (!block || typeof block !== "object" || block.type !== "tool-call") continue;
     const callId = typeof block.id === "string" && block.id ? block.id : typeof block.callId === "string" ? block.callId : "";
@@ -127,7 +127,7 @@ export class ToolCallCache {
  * 挂载失败抛错由 main.js 决定（不阻断 ready——审批不可用时 DSH 等待者 fail-closed）。
  */
 export function startApprovalBridge({ ctx, hana, dataDir, log }: { ctx: any; hana: any; dataDir: string; log?: (msg: string) => void }): () => void {
-  const offs = [];
+  const offs: Array<() => void> = [];
   const pendings = new Set(); // 未结算审批的取消器（stop 时统一中止）
   const cache = new ToolCallCache({ log });
   const note = (msg) => {

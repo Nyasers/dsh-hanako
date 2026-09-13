@@ -178,7 +178,7 @@ export function installClipboardShadow(
   const { shadow, writeShadow } = createClipboardShadow({ clipboard, bridge, report });
   // 还原用「原值」，不是 createClipboardShadow 里那份 bound（bound 是给调用用的，写回去等于换属性）。
   const nativeInstance = { writeText: clipboard.writeText, write: clipboard.write };
-  const undo = [];
+  const undo: Array<() => void> = [];
 
   /** 换实例方法 + 原型方法（只为传进来的这两个名字，read 一概不碰）。 */
   const patch = (name, replacement) => {

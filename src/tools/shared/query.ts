@@ -87,8 +87,8 @@ export function textFromMessageBlocks(content) {
  */
 export function lastRoundOutput(records) {
   const list = Array.isArray(records) ? records : [];
-  const assistant = [];
-  const turnErrors = new Map(); // turn → { message, code }（只记 reason.kind==='error'）
+  const assistant: Array<{ index: number; text: string; turn: number; interrupted: boolean }> = [];
+  const turnErrors = new Map<number, any>(); // turn → { message, code }（只记 reason.kind==='error'）
   let lastUserIndex = -1;
   list.forEach((rec, i) => {
     const ev = eventOf(rec);
@@ -327,7 +327,7 @@ async function doGet(input, ctx) {
   if (error) meta.error = error;
 
   // 口径提示：不让"更早的结论"冒充本轮结果；被中断的轮次、以错误结束的轮次都标出来。
-  const notes = [];
+  const notes: string[] = [];
   if (scope === "earlier") notes.push("最后一次 user 消息之后暂无 assistant 输出，以下为更早的最近结论");
   if (scope === "window") notes.push("窗口内未出现 user 消息，以下为窗口内最后的 assistant 输出");
   if (interrupted) notes.push("该轮被中断，以上是中断前已产出的文本");

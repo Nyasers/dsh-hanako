@@ -101,7 +101,7 @@ export function countSessions(dshHome) {
 
 /** 校验会话存储 JSON（workspace.json/session_projcache.json 若存在且可解析）。 */
 export function checkSessionStoreFiles(dshHome) {
-  const out = [];
+  const out: any[] = [];
   for (const name of ["workspace.json", "session_projcache.json"]) {
     const p = path.join(dshHome, "storages", name);
     if (!existsSync(p)) continue;
@@ -121,7 +121,7 @@ export function checkSessionStoreFiles(dshHome) {
  * state: 'no-source' | 'already-migrated' | 'target-present' | 'plan'
  */
 export function planLegacyMigration({ legacyRoot, dataDir, force = false }) {
-  const warnings = [];
+  const warnings: string[] = [];
   if (!legacyRoot || !dataDir) {
     return { state: "no-source", reason: "legacyRoot/dataDir 必填", warnings };
   }
@@ -160,7 +160,7 @@ export function planLegacyMigration({ legacyRoot, dataDir, force = false }) {
       return false;
     }
   });
-  const steps = [];
+  const steps: any[] = [];
   if (targetHas) {
     if (!force) {
       return {
@@ -211,7 +211,7 @@ export function planLegacyMigration({ legacyRoot, dataDir, force = false }) {
 /** v1 config.json 全局键 → v2 contributes.settings 建议（只读映射；webPort/nodejsPath/servicePort 在新契约下无落点，不映射）。 */
 export function legacySettingsSuggestions(configJson) {
   const g = configJson && configJson.global && typeof configJson.global === "object" ? configJson.global : {};
-  const out = [];
+  const out: any[] = [];
   for (const key of ["approvalTimeoutSec", "defaultTimeoutSec"]) {
     const val = g[key];
     if (val !== undefined && val !== null && val !== "") out.push({ key, value: val, source: "config.json.global." + key });
@@ -221,7 +221,7 @@ export function legacySettingsSuggestions(configJson) {
 
 /** 迁移后验证（只读）：目标会话数 ≥ 期望、stores 可解析、marker 落位。 */
 export function verifyMigration({ dataDir, sourceInfo }) {
-  const out = { ok: true, checks: [] };
+  const out = { ok: true, checks: [] as any[] };
   const targetDshHome = targetDshHomeOf(dataDir);
   const t = countSessions(targetDshHome);
   const exp = sourceInfo && typeof sourceInfo.sessions?.sessionFiles === "number" ? sourceInfo.sessions.sessionFiles : null;

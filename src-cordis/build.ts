@@ -50,7 +50,7 @@ function buildCordisStatic(outRoot) {
   fs.ensureDirSync(outRoot);
   const pluginsRoot = join(SRC_ROOT, "plugins");
   if (!fs.pathExistsSync(pluginsRoot)) throw new Error("src-cordis/plugins 缺失");
-  const pkgNames = [];
+  const pkgNames: any[] = [];
   for (const name of fs.readdirSync(pluginsRoot)) {
     if (name.startsWith(".")) continue;
     const pkgSrc = join(pluginsRoot, name);
@@ -78,7 +78,7 @@ function buildCordisStatic(outRoot) {
 // 每包构建描述加载
 async function loadCordisPackageConfigs() {
   const pluginsRoot = join(SRC_ROOT, "plugins");
-  const list = [];
+  const list: any[] = [];
   for (const name of fs.readdirSync(pluginsRoot)) {
     const pkgDir = join(pluginsRoot, name);
     if (!fs.statSync(pkgDir).isDirectory()) continue;

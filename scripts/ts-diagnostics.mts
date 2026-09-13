@@ -35,7 +35,7 @@ export const FAIL_CODES = new Set([
 
 /** tsc 输出 → 诊断条目数组（纯函数；tsc 打印的路径相对其 cwd）。 */
 export function parseTsDiagnostics(stdout) {
-  const out = [];
+  const out: any[] = [];
   for (const raw of String(stdout || "").split(/\r?\n/)) {
     const line = raw.trim();
     if (!line) continue;
@@ -55,10 +55,10 @@ export function parseTsDiagnostics(stdout) {
 
 /** 诊断条目 + "这是不是我们的文件" → 四桶（纯函数）。 */
 export function classifyDiagnostics(entries, isOurs) {
-  const mine = [];
-  const other = [];
-  const upstream = [];
-  const config = [];
+  const mine: any[] = [];
+  const other: any[] = [];
+  const upstream: any[] = [];
+  const config: any[] = [];
   for (const e of entries) {
     if (isOurs(e.file)) (FAIL_CODES.has(e.code) ? mine : other).push(e);
     else if (TS_FILE.test(e.file)) upstream.push(e);

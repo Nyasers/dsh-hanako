@@ -108,7 +108,7 @@ export function createSseDecoder(): SseDecoder {
   return {
     push(chunk) {
       pending += normalize(chunk);
-      const out = [];
+      const out: SseEvent[] = [];
       for (;;) {
         const idx = pending.indexOf("\n\n");
         if (idx < 0) break;

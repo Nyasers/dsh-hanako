@@ -54,6 +54,15 @@ export function serviceBundle({ name, pkgDir, outDir, rules = [], optimization =
           use: [MINIFY_LOADER],
           type: "asset/source",
         },
+        {
+          // .ts 交给内置 swc 转译：本域源码是正式 TypeScript（interface / 类型注解），
+          // 构建期由 swc 剥掉类型只留 JS。本域无 JSX，parser 不开 tsx。
+          test: /\.ts$/,
+          use: {
+            loader: "builtin:swc-loader",
+            options: { jsc: { parser: { syntax: "typescript" }, target: "es2022" } },
+          },
+        },
         ...rules, // 包级覆盖/追加口（特殊包自定义 loader/规则）
       ],
     },
