@@ -30,6 +30,12 @@
 // 独立自动拒绝。
 import { readTaskMap, addApproval, settleApproval, isValidSessionId } from "#/lib/task-map.ts";
 import { approvalOutcomeOf, runWatchReconcile } from "#/lib/watch-sse.ts";
+// 宿主审批契约类型只进类型层（swc / Node 剥类型后不留运行时 import）
+import type {
+  AppTaskApprovalOutcome,
+  AppTaskApprovalRecordV2,
+  AppTaskApprovalRequestV2,
+} from "#/types/host.ts";
 
 // 审批超时：**30s 是我们自己的策略，不是宿主默认**。APPS.md（0.951.4，后台任务与审批节）明写
 // `requestApproval({…, timeoutMs})` 的 `timeoutMs: 0` 禁用超时，**默认也是 0**；父任务结束会拒绝剩余
@@ -39,14 +45,55 @@ export const TOOL_ARGS_PREVIEW_MAX = 4000; // args 预览上限（审批决策�
 const CACHE_SESSION_CAP = 32; // tool-call 缓存会话数上限（有界，防无界内存增长）
 const CACHE_CALL_CAP = 64; // 每会话 callId 上限
 
+/** 取错误的可读文本。catch 到的值类型未知，字段访问一律经这里。 */
+const errText = (e: unknown): string => ((e as any)?.message as string) || String(e);
+
+/** DSH approval/request 事件里本桥读取的字段（结构面：只声明我们真读到的键）。 */
+export interface DshApprovalRequestLike {
+  agent?: { session?: { id?: string | null } | null } | null;
+  callId?: string | null;
+  toolName?: string | null;
+  reason?: string | null;
+  signal?: AbortSignal | null;
+}
+
+/** 一条 tool-call 缓存帧（collectToolCallsFromEvent 的产物）。 */
+export interface ToolCallFrame {
+  sessionId: string;
+  callId: string;
+  name: string;
+  args: string | null;
+}
+
+/** 缓存条目：审批请求只带 callId，name/args 由 tool-call 块补齐。 */
+interface ToolCallEntry {
+  name: string;
+  args: string | null;
+}
+
+/** 未结算审批的句柄（stop / 结算时按 approvalId 定位）。 */
+interface PendingApproval {
+  sessionId: string;
+  approvalId: string;
+}
+
+/** DSH 等待者收到的裁决：宿主 outcome 原样 + 我侧取消（取消绝不当授权）。 */
+type DshApprovalVerdict = AppTaskApprovalOutcome | "cancelled";
+
+/** ctx 事件订阅选项（global 无视 context filter 收所有 agent 的瀑布事件）。 */
+interface BridgeEventOptions {
+  global?: boolean;
+  prepend?: boolean;
+}
+
 /** 纯函数：审批请求归一（供单测）。req = DSH ApprovalRequestEvent 的序列化形态。 */
-export function approvalSessionIdOf(req) {
+export function approvalSessionIdOf(req: DshApprovalRequestLike | null | undefined): string | null {
   const agent = req && req.agent;
   return agent && agent.session && typeof agent.session.id === "string" ? agent.session.id : null;
 }
 
 /** args 预览（纯函数）：JSON 字符串截断 + 拍平对象。 */
-export function previewArgs(value, max = TOOL_ARGS_PREVIEW_MAX) {
+export function previewArgs(value: unknown, max: number = TOOL_ARGS_PREVIEW_MAX): string | null {
   if (value === undefined || value === null) return null;
   let s = "";
   try {
@@ -64,7 +111,7 @@ export function previewArgs(value, max = TOOL_ARGS_PREVIEW_MAX) {
  *  契约上 `AppTaskApprovalRecordV2.parentTaskId` 必填；**缺失按不一致处理**（fail-closed）——
  *  宁可拒绝一次审批，也不拿一条来源不明的审批去等结果。
  */
-export function approvalOwnsTask(approval, expectedTaskId) {
+export function approvalOwnsTask(approval: Partial<AppTaskApprovalRecordV2> | null | undefined, expectedTaskId: unknown): boolean {
   const got = approval && typeof approval.parentTaskId === "string" ? approval.parentTaskId : "";
   const want = String(expectedTaskId || "");
   return Boolean(got) && got === want;
@@ -72,12 +119,12 @@ export function approvalOwnsTask(approval, expectedTaskId) {
 
 /** tool-call 缓存：callId → { name, args }（审批请求只带 callId，name/args 由模型
  *  assistant/message 的 tool-call 块补齐——v1 toolCache 同款信息源）。 */
-export function collectToolCallsFromEvent(sessionId, ev) {
+export function collectToolCallsFromEvent(sessionId: string | null, ev: any): ToolCallFrame[] {
   if (!sessionId || !ev || ev.type !== "assistant/message") return [];
   const data = ev.data && typeof ev.data === "object" ? ev.data : {};
   const message = data.message && typeof data.message === "object" ? data.message : {};
   const content = Array.isArray(message.content) ? message.content : [];
-  const out: any[] = [];
+  const out: ToolCallFrame[] = [];
   for (const block of content) {
     if (!block || typeof block !== "object" || block.type !== "tool-call") continue;
     const callId = typeof block.id === "string" && block.id ? block.id : typeof block.callId === "string" ? block.callId : "";
@@ -90,11 +137,13 @@ export function collectToolCallsFromEvent(sessionId, ev) {
 
 /** 有界 tool-call 缓存（sessionId → Map(callId → {name,args})）。 */
 export class ToolCallCache {
-  constructor({ log } = {}) {
+  sessions: Map<string, Map<string, ToolCallEntry>>;
+  log: ((msg: string) => void) | null;
+  constructor({ log }: { log?: (msg: string) => void } = {}) {
     this.sessions = new Map();
     this.log = log || null;
   }
-  push(frames) {
+  push(frames: ToolCallFrame[] | null | undefined): void {
     for (const f of frames || []) {
       if (!f || !f.sessionId || !f.callId) continue;
       let per = this.sessions.get(f.sessionId);
@@ -113,11 +162,11 @@ export class ToolCallCache {
       per.set(f.callId, { name: f.name || "tool", args: f.args || null });
     }
   }
-  get(sessionId, callId) {
+  get(sessionId: string, callId: string): ToolCallEntry | null {
     const per = this.sessions.get(sessionId);
     return per && callId ? per.get(callId) || null : null;
   }
-  clear() {
+  clear(): void {
     this.sessions.clear();
   }
 }
@@ -128,13 +177,13 @@ export class ToolCallCache {
  */
 export function startApprovalBridge({ ctx, hana, dataDir, log }: { ctx: any; hana: any; dataDir: string; log?: (msg: string) => void }): () => void {
   const offs: Array<() => void> = [];
-  const pendings = new Set(); // 未结算审批的取消器（stop 时统一中止）
+  const pendings = new Set<PendingApproval>(); // 未结算审批的取消器（stop 时统一中止）
   const cache = new ToolCallCache({ log });
-  const note = (msg) => {
+  const note = (msg: string) => {
     try { if (typeof log === "function") log("[approval-bridge] " + msg); } catch { /* 忽略 */ }
   };
 
-  const onEvent = (event, handler, opts = undefined) => {
+  const onEvent = (event: string, handler: (...args: any[]) => unknown, opts?: BridgeEventOptions) => {
     try {
       const off = ctx.on(event, handler, opts);
       if (typeof off === "function") offs.push(off);
@@ -152,7 +201,7 @@ export function startApprovalBridge({ ctx, hana, dataDir, log }: { ctx: any; han
   });
 
   // ---- ② approval/request global waterfall 认领 ----
-  async function answerer(req, next) {
+  async function answerer(req: DshApprovalRequestLike, next: () => unknown) {
     const sessionId = approvalSessionIdOf(req);
     if (!sessionId || !isValidSessionId(sessionId)) {
       // 未知/畸形会话：不认领（next 委托其他应答者；无应答者 DSH fail-closed）
@@ -174,13 +223,14 @@ export function startApprovalBridge({ ctx, hana, dataDir, log }: { ctx: any; han
     const timeoutMs = Number(map.approvalTimeoutMs) >= 0 ? Number(map.approvalTimeoutMs) : DEFAULT_APPROVAL_TIMEOUT_MS;
     note("审批请求收到（session=" + sessionId.slice(0, 12) + " tool=" + toolName + (callId ? " call=" + callId.slice(0, 12) : "") + "）");
 
-    const entry = { sessionId, approvalId: "" }; // pendings 条目（审批创建后填 approvalId）
-    let settleOutcome = null;
+    const entry: PendingApproval = { sessionId, approvalId: "" }; // pendings 条目（审批创建后填 approvalId）
+    // settleOutcome 在 Promise executor 内立即赋值；这里先给占位，声明处就把类型定死
+    let settleOutcome: (outcome: DshApprovalVerdict) => void = () => { /* 待 executor 赋值 */ };
     let settled = false;
-    let doRespond = null;
-    let cancelWatch = null;
+    let doRespond: ((outcome: AppTaskApprovalOutcome) => Promise<unknown>) | null = null;
+    let cancelWatch: (() => void) | null = null;
     let abortedCleanup = false;
-    const pending = new Promise((resolve) => {
+    const pending = new Promise<DshApprovalVerdict>((resolve) => {
       settleOutcome = (outcome) => {
         if (settled) return;
         settled = true;
@@ -205,9 +255,9 @@ export function startApprovalBridge({ ctx, hana, dataDir, log }: { ctx: any; han
       else signal.addEventListener("abort", onAbort, { once: true });
     }
     // 宿主审批创建
-    let approval = null;
+    let approval: AppTaskApprovalRecordV2 | null = null;
     try {
-      approval = await hana.tasks.requestApproval({
+      const request: AppTaskApprovalRequestV2 = {
         taskId: map.taskId,
         label: "DSH 请求执行越界/敏感操作（" + toolName + "）",
         details: {
@@ -220,9 +270,10 @@ export function startApprovalBridge({ ctx, hana, dataDir, log }: { ctx: any; han
           kind: "dsh-approval",
         },
         timeoutMs,
-      });
+      };
+      approval = await hana.tasks.requestApproval(request);
     } catch (e) {
-      note("requestApproval 失败（fail-closed）：" + ((e && e.message) || e));
+      note("requestApproval 失败（fail-closed）：" + errText(e));
       settleOutcome("rejected"); // 创建失败 = 无法等待 = fail closed（绝不放行）
       return pending;
     }
@@ -241,7 +292,7 @@ export function startApprovalBridge({ ctx, hana, dataDir, log }: { ctx: any; han
         "审批 parentTaskId 与映射不一致（宿主 " + String((approval && approval.parentTaskId) || "缺失") +
           " / 映射 " + String(map.taskId) + "）：fail-closed 拒绝",
       );
-      try { await doRespond("rejected"); } catch { /* 尽力：宿主侧拒绝失败也仍投 rejected */ }
+      try { await doRespond?.("rejected"); } catch { /* 尽力：宿主侧拒绝失败也仍投 rejected */ }
       settleOutcome("rejected");
       return pending;
     }
@@ -256,7 +307,7 @@ export function startApprovalBridge({ ctx, hana, dataDir, log }: { ctx: any; han
         at: Date.now(),
       });
     } catch (e) {
-      note("审批记录写映射失败：" + ((e && e.message) || e));
+      note("审批记录写映射失败：" + errText(e));
     }
     // 立即按请求创建结果结算一次（宿主可能已即时终态——如父任务刚结束）
     const immediate = approvalOutcomeOf(approval);
@@ -293,7 +344,7 @@ export function startApprovalBridge({ ctx, hana, dataDir, log }: { ctx: any; han
           log: (m) => note(m),
         });
       } catch (e) {
-        note("审批 watch 异常（fail-closed）：" + ((e && e.message) || e));
+        note("审批 watch 异常（fail-closed）：" + errText(e));
         if (!settled) settleOutcome("rejected");
       } finally {
         try { pendings.delete(entry); } catch { /* 忽略 */ }
