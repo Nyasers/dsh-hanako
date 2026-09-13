@@ -57,7 +57,7 @@ description: "dshana 工具手册（DSH 子代理：一个插件一个同名工�
 
 ## list（会话清单，冻结禁用）
 
-`actions/list.ts` 是官方 `session/list` 的只读封装（带 `title`/`cwd`/`updatedAt`/`lastPromptAt`/turns/usage 等字段），**冻结禁用**（2026-09-13）：任务绑定语义下会话靠句柄定位，不做 cursor / sourceId 那套“先 list 发现再操作”的配套（sourceId 还另有一层理由：它本来只为“防源漂移”，而数据源切换入口已暂撤回 503）。需要“列会话”时改走宿主内置的 `ctx.tasks.list` 通道，按任务记录的 `metadata.dsh` 反查本 App 发起的实例（`parentSessionPath` 天然带会话归属），不再向 DSH 问 `session/list`。
+`actions/list.ts` 是官方 `session/list` 的只读封装（带 `title`/`cwd`/`updatedAt`/`lastPromptAt`/turns/usage 等字段），**冻结禁用**（2026-09-13）：任务绑定语义下会话靠句柄定位，不做 cursor / sourceId 那套“先 list 发现再操作”的配套（sourceId 还另有一层理由：它本来只为“防源漂移”，而数据源切换入口已暂撤回 503）。需要“列会话”时改走宿主提供给 Agent 的内置任务查询工具（模型侧，本环境是 `check_pending_tasks`）——dshana 的 open/reply 建的就是本会话的后台任务，本来就出现在那份清单里，不需要本工具再开一扇只读门。
 
 要重新启用本模块：在 `src/tools/index.ts` 的 import、ACTIONS 与 description 里加回即可。
 
