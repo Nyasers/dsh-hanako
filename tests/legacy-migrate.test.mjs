@@ -24,7 +24,9 @@ import {
 
 function makeFixture() {
   // repo _tmp 下建样本（工作区可写；测试自清理）
-  const base = mkdtempSync(join(process.cwd(), "_tmp", "legacy-migrate-"));
+  const tmpRoot = join(process.cwd(), "_tmp");
+  mkdirSync(tmpRoot, { recursive: true });
+  const base = mkdtempSync(join(tmpRoot, "legacy-migrate-"));
   const legacyRoot = join(base, "plugin-data", "dsh-hanako");
   const dshHome = join(legacyRoot, "dsh-home");
   const mk = (...p) => mkdirSync(join(...p), { recursive: true });
