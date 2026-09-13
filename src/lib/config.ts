@@ -17,13 +17,13 @@ import { join } from "node:path";
 // 读 DSH_HOME/settings.yaml 的 agent-default-model（行级解析，零依赖）——
 // dsh 默认模型：dsh models 页设置后写回 settings.yaml（selectModel 同源）。
 // 返回 { provider, model } 或 null。
-export function readDshDefaultModel(dshHome) {
+export function readDshDefaultModel(dshHome: string): { provider: string; model?: string } | null {
   try {
     const f = join(dshHome, "settings.yaml");
     if (!existsSync(f)) return null;
     const lines = readFileSync(f, "utf8").split(/\r?\n/);
     let inBlock = false;
-    const out = {};
+    const out: Record<string, string> = {};
     for (const line of lines) {
       if (/^agent-default-model\s*:/.test(line)) {
         inBlock = true;
@@ -36,7 +36,7 @@ export function readDshDefaultModel(dshHome) {
       const v = m[3].trim();
       if (v) out[k] = v.replace(/^['"]|['"]$/g, "");
     }
-    return out.provider ? out : null;
+    return out.provider ? (out as { provider: string; model?: string }) : null;
   } catch {
     return null;
   }
