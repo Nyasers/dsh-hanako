@@ -47,6 +47,9 @@ export const DASHANA_ROUTE_PREFIX = "/dshana";
 // 写带 expectedRevision：不匹配回 409，不静默覆盖。
 const APP_SETTING_BROADCAST_KEY = "dshana:settings";
 
+/** 取错误的可读文本。catch 到的值类型未知（unknown / {}），字段访问一律经这里。 */
+const errText = (e: unknown): string => ((e as any)?.message as string) || String(e);
+
 /** 读 dataDir/config.json（缺失/坏 JSON 一律当空对象：设置面不该把诊断面拖下水）。 */
 function readConfigJson(dataDir) {
   try {
@@ -163,9 +166,7 @@ export function defaultDshanaRouteDeps(ctx) {
         const err = new Error(
           "设置已被别处改过（revision " + cur.revision + " ≠ " + expectedRevision + "），请刷新后重试",
         );
-        err.code = "SETTINGS_CONFLICT";
-        err.revision = cur.revision;
-        throw err;
+        throw Object.assign(err, { code: "SETTINGS_CONFLICT", revision: cur.revision });
       }
       const next = await store.write({ ...cur.settings, ...patch });
       // 变更广播：已开页面据此刷新。宿主 App 存储只有 get/set（没有订阅口），
@@ -175,7 +176,7 @@ export function defaultDshanaRouteDeps(ctx) {
           await ctx.storage.global.set(APP_SETTING_BROADCAST_KEY, { revision: next.revision, at: Date.now() });
         }
       } catch (e) {
-        log("warn", "设置变更广播写入失败（不影响本次写入）：" + ((e && e.message) || e));
+        log("warn", "设置变更广播写入失败（不影响本次写入）：" + errText(e));
       }
       const st = await store.read();
       return {
@@ -238,8 +239,8 @@ export function registerDshanaRoutes(app, deps) {
       try {
         return json(c, 200, { ok: true, app: { id: appId, version }, state: getSnapshot() });
       } catch (e) {
-        log("warn", "boot-state 读取失败：" + ((e && e.message) || e));
-        return json(c, 500, { ok: false, error: (e && e.message) || String(e) });
+        log("warn", "boot-state 读取失败：" + errText(e));
+        return json(c, 500, { ok: false, error: errText(e) });
       }
     });
 
@@ -251,7 +252,7 @@ export function registerDshanaRoutes(app, deps) {
           ts: new Date().toISOString(),
         });
       } catch (e) {
-        return json(c, 500, { ok: false, error: (e && e.message) || String(e) });
+        return json(c, 500, { ok: false, error: errText(e) });
       }
     });
 
@@ -263,8 +264,8 @@ export function registerDshanaRoutes(app, deps) {
         const view = await readSettings();
         return json(c, 200, { ok: true, ready: true, ...view });
       } catch (e) {
-        log("warn", "/dshana/settings 读取失败：" + ((e && e.message) || e));
-        return json(c, 500, { ok: false, error: (e && e.message) || String(e) });
+        log("warn", "/dshana/settings 读取失败：" + errText(e));
+        return json(c, 500, { ok: false, error: errText(e) });
       }
     });
 
@@ -278,8 +279,8 @@ export function registerDshanaRoutes(app, deps) {
       try {
         return json(c, 200, { ok: true, ready: true, model: await readModel() });
       } catch (e) {
-        log("warn", "/dshana/model 读取失败：" + ((e && e.message) || e));
-        return json(c, 200, { ok: false, ready: true, error: (e && e.message) || String(e) });
+        log("warn", "/dshana/model 读取失败：" + errText(e));
+        return json(c, 200, { ok: false, ready: true, error: errText(e) });
       }
     });
 
@@ -295,8 +296,8 @@ export function registerDshanaRoutes(app, deps) {
       try {
         return html(c, 200, cardStateHtml(await readCardState(sid)));
       } catch (e) {
-        log("warn", "/dshana/card-state 读取失败：" + ((e && e.message) || e));
-        return html(c, 500, cardStateHtml({ state: "unknown", label: "状态读取失败", detail: (e && e.message) || String(e) }));
+        log("warn", "/dshana/card-state 读取失败：" + errText(e));
+        return html(c, 500, cardStateHtml({ state: "unknown", label: "状态读取失败", detail: errText(e) }));
       }
     });
   }
@@ -314,12 +315,12 @@ export function registerDshanaRoutes(app, deps) {
         const p = Promise.resolve().then(() => start());
         p.then(
           () => log("info", "[dshana-routes] /dshana/start 完成（DSH 就绪）"),
-          (e) => log("warn", "[dshana-routes] /dshana/start 失败：" + ((e && e.message) || e)),
+          (e) => log("warn", "[dshana-routes] /dshana/start 失败：" + errText(e)),
         );
         return json(c, 202, { ok: true, accepted: true, state: getSnapshot() });
       } catch (e) {
-        log("warn", "/dshana/start 触发异常：" + ((e && e.message) || e));
-        return json(c, 500, { ok: false, error: (e && e.message) || String(e) });
+        log("warn", "/dshana/start 触发异常：" + errText(e));
+        return json(c, 500, { ok: false, error: errText(e) });
       }
     });
 
@@ -328,8 +329,8 @@ export function registerDshanaRoutes(app, deps) {
         await stop();
         return json(c, 200, { ok: true, state: getSnapshot() });
       } catch (e) {
-        log("warn", "/dshana/stop 失败：" + ((e && e.message) || e));
-        return json(c, 500, { ok: false, error: (e && e.message) || String(e) });
+        log("warn", "/dshana/stop 失败：" + errText(e));
+        return json(c, 500, { ok: false, error: errText(e) });
       }
     });
 
@@ -353,10 +354,10 @@ export function registerDshanaRoutes(app, deps) {
         const view = await writeSettings(patch, expectedRevision);
         return json(c, 200, { ok: true, ...view });
       } catch (e) {
-        if (e && e.code === "SETTINGS_CONFLICT") {
-          return json(c, 409, { ok: false, code: "SETTINGS_CONFLICT", error: (e && e.message) || String(e), revision: e.revision });
+        if ((e as any)?.code === "SETTINGS_CONFLICT") {
+          return json(c, 409, { ok: false, code: "SETTINGS_CONFLICT", error: errText(e), revision: (e as any)?.revision });
         }
-        const msg = (e && e.message) || String(e);
+        const msg = errText(e);
         if (/未知键|必须|只能是|绝对路径|NUL/.test(msg)) return json(c, 400, { ok: false, error: msg });
         log("warn", "/dshana/settings 写入失败：" + msg);
         return json(c, 500, { ok: false, error: msg });
@@ -370,7 +371,7 @@ export function registerDshanaRoutes(app, deps) {
       if (!snap.ready) {
         return json(c, 200, { ok: false, ready: false, error: "DSH 未运行：默认模型在 DSH 起来后才能改" });
       }
-      let body = null;
+      let body: any = null;
       try {
         body = c && c.req && typeof c.req.json === "function" ? await c.req.json() : null;
       } catch {
@@ -381,7 +382,7 @@ export function registerDshanaRoutes(app, deps) {
       if (!provider || !model) {
         return json(c, 400, { ok: false, error: "需要 provider 与 model（非空字符串）" });
       }
-      const patch = { provider, model };
+      const patch: Record<string, any> = { provider, model };
       if (typeof body.reasoningEffort === "string" && body.reasoningEffort.trim()) {
         patch.reasoningEffort = body.reasoningEffort.trim();
       }
@@ -391,11 +392,11 @@ export function registerDshanaRoutes(app, deps) {
       try {
         return json(c, 200, { ok: true, ready: true, model: await writeModel(patch) });
       } catch (e) {
-        if (e && e.code === "SETTINGS_CONFLICT") {
-          return json(c, 409, { ok: false, ready: true, code: "SETTINGS_CONFLICT", error: (e && e.message) || "默认模型已被别处改过" });
+        if ((e as any)?.code === "SETTINGS_CONFLICT") {
+          return json(c, 409, { ok: false, ready: true, code: "SETTINGS_CONFLICT", error: (e as any)?.message || "默认模型已被别处改过" });
         }
-        log("warn", "/dshana/model 写入失败：" + ((e && e.message) || e));
-        return json(c, 200, { ok: false, ready: true, error: (e && e.message) || String(e) });
+        log("warn", "/dshana/model 写入失败：" + errText(e));
+        return json(c, 200, { ok: false, ready: true, error: errText(e) });
       }
     });
     // ---- POST /dshana/settings/restart：数据源切换（入口暂撤）----

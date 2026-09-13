@@ -161,7 +161,7 @@ export function createDataSourceStore(ctx) {
   }
   const directory = join(ctx.dataDir, "integration");
   const filename = join(directory, "settings.json");
-  let cached = null;
+  let cached: SettingsSnapshot | null = null;
 
   const store = {
     async read() {
@@ -170,7 +170,7 @@ export function createDataSourceStore(ctx) {
       try {
         stored = JSON.parse(await readFile(filename, "utf8"));
       } catch (e) {
-        if (e && e.code === "ENOENT") {
+        if ((e as any)?.code === "ENOENT") {
           cached = {
             version: SETTINGS_VERSION,
             revision: 0,
@@ -208,7 +208,7 @@ export function createDataSourceStore(ctx) {
         try {
           info = await ctx.resources.stat({ kind: "local-file", path: settings.path });
         } catch (e) {
-          throw new Error("无法读取该目录（" + ((e && e.message) || e) + "）：" + settings.path);
+          throw new Error("无法读取该目录（" + errText(e) + "）：" + settings.path);
         }
         if (!info || !info.exists) throw new Error("目录不存在：" + settings.path);
         if (!info.isDirectory) throw new Error("不是目录：" + settings.path);
@@ -240,10 +240,28 @@ export function createDataSourceStore(ctx) {
   return store;
 }
 
-let storeRef = null;
+/** 设置快照（settings.json 的内存形态；settings/lastShared 的形状由 validateSettings 把关）。 */
+interface SettingsSnapshot {
+  version: number;
+  revision: number;
+  settings: any;
+  lastShared?: any;
+}
+
+/** 自持设置存储的接口面（createDataSourceStore 的产物）。 */
+export interface DataSourceStore {
+  read(): Promise<SettingsSnapshot>;
+  validate(input: unknown): Promise<any>;
+  write(input: unknown): Promise<SettingsSnapshot>;
+}
+
+/** 取错误的可读文本。catch 到的值类型未知，字段访问一律经这里。 */
+const errText = (e: unknown): string => ((e as any)?.message as string) || String(e);
+
+let storeRef: DataSourceStore | null = null;
 
 /** 单例存储（同一 App 进程一份）。测试可用 resetDataSourceStore 复位。 */
-export function dataSources(ctx = null) {
+export function dataSources(ctx = null): DataSourceStore {
   if (storeRef) return storeRef;
   const c = ctx || (getAppRuntime() || {}).ctx;
   storeRef = createDataSourceStore(c);
@@ -265,7 +283,7 @@ export function readSettingsSync(dataDir) {
   try {
     stored = JSON.parse(readFileSync(filename, "utf8"));
   } catch (e) {
-    if (e && e.code === "ENOENT") return validateSettings(withLegacyTimeouts({}, dataDir));
+    if ((e as any)?.code === "ENOENT") return validateSettings(withLegacyTimeouts({}, dataDir));
     if (e instanceof SyntaxError) throw new Error("DSH 数据来源设置文件不是合法 JSON：" + e.message);
     throw e;
   }
