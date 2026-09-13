@@ -106,7 +106,7 @@ export async function locateDsh({ depsRoot, log = (..._args) => {} }) {
  * 子进程入口所在 App 安装根（向上找 manifest.json；与 v1 state.js PLUGIN_ROOT 同规则）。
  * @param entryFile 本 bundle 所在文件绝对路径（import.meta.url 解析后传入）
  */
-export function resolveInstallRoot(entryFile) {
+export function resolveInstallRoot(entryFile: string): string {
   let dir = dirname(entryFile);
   for (;;) {
     if (existsSync(join(dir, "manifest.json"))) return dir;

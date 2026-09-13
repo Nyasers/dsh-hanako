@@ -46,9 +46,13 @@ export function matchesKey(actual, expected) {
 /**
  * 请求鉴权与路径归一（纯函数，便于单测）。
  * 接受两种凭据形态：header key，或路径 `/_hana/<key>/<rest>`（剥前缀）。
- * @returns {{ path: string, search: string } | null} 归一后的上游相对路径；null = 未通过
+ * @returns 归一后的上游相对路径；null = 未通过
  */
-export function authorizeBridgeRequest(requestUrl, headerKey, bridgeKey) {
+export function authorizeBridgeRequest(
+  requestUrl: string,
+  headerKey: any,
+  bridgeKey: string,
+): { path: string; search: string } | null {
   const requested = new URL(requestUrl || "/", "http://bridge.invalid");
   if (matchesKey(headerKey, bridgeKey)) return { path: requested.pathname, search: requested.search };
   const parts = requested.pathname.split("/");

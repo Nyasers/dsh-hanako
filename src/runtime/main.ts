@@ -231,7 +231,7 @@ async function runPreflight({ opts, dataDir, dshHome, runtimeDir, depsRoot, cord
  * 主流程（导出便于宿主/测试以不同 argv 调用；正常由 bundle 顶部执行）。
  * @returns 退出码（成功就绪后由信号/断连驱动退出，本函数返回 EXIT.OK）
  */
-export async function main(argv) {
+export async function main(argv: string[]): Promise<number> {
   let opts;
   try {
     opts = parseRuntimeConfig(argv, (p) => readFileSync(p, "utf8"));

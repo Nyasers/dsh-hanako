@@ -126,7 +126,7 @@ export class ToolCallCache {
  * 挂载审批桥。@returns stop 函数（幂等）：退订 ctx 事件、中止全部等待中的审批 watcher。
  * 挂载失败抛错由 main.js 决定（不阻断 ready——审批不可用时 DSH 等待者 fail-closed）。
  */
-export function startApprovalBridge({ ctx, hana, dataDir, log }) {
+export function startApprovalBridge({ ctx, hana, dataDir, log }: { ctx: any; hana: any; dataDir: string; log?: (msg: string) => void }): () => void {
   const offs = [];
   const pendings = new Set(); // 未结算审批的取消器（stop 时统一中止）
   const cache = new ToolCallCache({ log });

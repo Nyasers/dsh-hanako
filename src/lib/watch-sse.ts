@@ -54,7 +54,6 @@ export function extractWatchRecord(obj) {
 
 /**
  * SSE 事件块解释（纯函数）：把一条事件（event 名 + data 文本）归成 watch 帧。
- * @returns { kind: 'snapshot'|'app-task'|'reset'|'other', record: object|null }
  *   snapshot —— 首条/对账后快照（当前完整记录）
  *   app-task —— 后续增量/终态记录（snapshot 与 app-task 的记录形态相同，消费方自行合并）
  *   reset   —— 缓冲溢出：应 get() 重读快照后继续
@@ -87,7 +86,6 @@ export function interpretWatchFrame(eventName: string, dataText: string): WatchF
  *   const dec = createSseDecoder();
  *   for await chunk: const evs = dec.push(text); // evs = 本段内完整事件
  *   const tail = dec.end();                      // flush 残留块（容忍无尾空行）
- * @returns {{ push(chunk: string): Event[], end(): Event[] }}  Event = { event?: string, data: string }
  */
 export function createSseDecoder(): SseDecoder {
   let pending = "";
@@ -157,8 +155,7 @@ export async function* consumeWatchResponse(response, { signal } = {}) {
  * watch + get 对账循环（受管 runtime 消费侧驱动）：拉一次 watch Response 并逐帧回调；
  * 事件为终态/回调返回 false 时结束；流结束/reset 都先 get() 对账（snapshot 帧回调）
  * 再重连（指数退避）；isStopped() 为真时退出。所有注入（watch/get/onFrame/log）便于单测。
- * @param opts { watch, get, onFrame(rec, kind), shouldStop(), log?, retryBaseMs?, maxRetryMs? }
- * @returns 'stopped'|'terminal'|'failed'
+ * 注入面见 WatchReconcileOptions；返回 'stopped' | 'terminal' | 'failed'。
  */
 export async function runWatchReconcile(opts: WatchReconcileOptions): Promise<"stopped" | "terminal" | "failed"> {
   const { watch, get, onFrame, shouldStop, log } = opts || {};

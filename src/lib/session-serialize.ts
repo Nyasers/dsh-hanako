@@ -38,7 +38,7 @@ export async function withSessionTurn(sessionKey, run) {
  * 完全退出后释放），与 withSessionTurn 同尾链格式。
  * @returns 释放函数（幂等）
  */
-export function enterSessionTurn(sessionKey) {
+export function enterSessionTurn(sessionKey: string): () => void {
   if (sessionTurnQueues.has(sessionKey)) {
     throw new Error("dshana 内部错误：新会话 " + sessionKey + " 已有排队提交");
   }
