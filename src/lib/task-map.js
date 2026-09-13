@@ -142,7 +142,7 @@ export function pruneTaskMaps(dataDir, olderThanMs = TASK_MAP_TTL_MS) {
     if (!n.endsWith(".json")) continue;
     const sessionId = n.slice(0, -".json".length);
     const j = readTaskMap(dataDir, sessionId);
-    if (j && typeof j.at === "number" && now - j.at > olderThanMs) {
+    if (j && typeof j.at === "number" && now - j.at >= olderThanMs) {
       removeTaskMap(dataDir, sessionId);
       removed += 1;
     } else if (!j) {
