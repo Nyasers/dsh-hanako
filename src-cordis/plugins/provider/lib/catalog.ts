@@ -102,7 +102,7 @@ export function listModelsForProvider(provider, models) {
   return (models || [])
     .filter((m) => m && m.provider === provider && typeof m.id === "string" && m.id)
     .map((m) => {
-      const out = { provider, id: m.id, name: typeof m.name === "string" && m.name ? m.name : m.id };
+      const out: { provider: string; id: string; name: string; inputModalities?: string[] } = { provider, id: m.id, name: typeof m.name === "string" && m.name ? m.name : m.id };
       if (Array.isArray(m.input) && m.input.length) {
         out.inputModalities = m.input.filter((x) => x === "text" || x === "image");
       }
@@ -114,7 +114,14 @@ export function listModelsForProvider(provider, models) {
 export function resolveModelInfo(item) {
   if (!item || typeof item.provider !== "string" || typeof item.id !== "string") return null;
   const efforts = supportedEfforts(item);
-  const info = {
+  const info: {
+    provider: string;
+    id: string;
+    name: string;
+    context?: { contextWindow: number };
+    defaultMaxTokens?: number;
+    reasoning?: { efforts: { id: string; name: string }[]; defaultEffort?: string };
+  } = {
     provider: item.provider,
     id: item.id,
     name: typeof item.name === "string" && item.name ? item.name : item.id,
@@ -128,7 +135,7 @@ export function resolveModelInfo(item) {
     info.defaultMaxTokens = item.maxTokens;
   }
   if (efforts.length > 0) {
-    const reasoning = {
+    const reasoning: { efforts: { id: string; name: string }[]; defaultEffort?: string } = {
       efforts: efforts.map((id) => ({ id, name: id.charAt(0).toUpperCase() + id.slice(1) })),
     };
     const def = defaultEffortOf(item, efforts);

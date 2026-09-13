@@ -16,9 +16,10 @@ const sessionTurnQueues = new Map();
 
 export async function withSessionTurn(sessionKey, run) {
   const previous = sessionTurnQueues.get(sessionKey) || Promise.resolve();
-  let release = null;
-  const gate = new Promise((resolve) => {
-    release = resolve;
+  /** 闸门释放（executor 同步赋值；未赋值前是 noop，故非 null 型）。 */
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = () => resolve();
   });
   const next = previous.then(() => gate);
   sessionTurnQueues.set(sessionKey, next);
@@ -42,9 +43,9 @@ export function enterSessionTurn(sessionKey: string): () => void {
   if (sessionTurnQueues.has(sessionKey)) {
     throw new Error("dshana 内部错误：新会话 " + sessionKey + " 已有排队提交");
   }
-  let release = null;
-  const gate = new Promise((resolve) => {
-    release = resolve;
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = () => resolve();
   });
   const next = Promise.resolve().then(() => gate);
   sessionTurnQueues.set(sessionKey, next);

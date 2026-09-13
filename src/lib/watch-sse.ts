@@ -22,6 +22,8 @@
 // 按指南措辞 snapshot/app-task/reset + AppTaskRecordV2 字段实现），解析层对未知事件名/
 // 畸形 data 一律宽容降级（结构兜底）；断线重连指数退避；reset/断线都先 get() 对账；
 // 记录终态判定与审批 outcome 映射独立成纯函数（可单测）。
+import { errText } from "#/lib/err-text.ts";
+
 export const TERMINAL_STATUSES = ["completed", "failed", "canceled", "aborted"];
 
 /** 终态判定（纯函数）：宿主记录 status 是否已达终态。 */
@@ -58,11 +60,11 @@ export function extractWatchRecord(obj) {
  *   app-task —— 后续增量/终态记录（snapshot 与 app-task 的记录形态相同，消费方自行合并）
  *   reset   —— 缓冲溢出：应 get() 重读快照后继续
  */
-export function interpretWatchFrame(eventName: string, dataText: string): WatchFrame {
+export function interpretWatchFrame(eventName: string | undefined, dataText: string): WatchFrame {
   const name = String(eventName || "").toLowerCase();
   // reset 事件常不带 data：先按事件名判定
   if (name.includes("reset") || name.includes("resync")) return { kind: "reset", record: null };
-  let obj = null;
+  let obj: any = null;
   try {
     obj = JSON.parse(String(dataText == null ? "" : dataText).trim());
   } catch {
@@ -130,7 +132,7 @@ export function createSseDecoder(): SseDecoder {
 }
 
 /** 一次 watch Response 的消费（生成器）：把 Response body（ReadableStream bytes）解码成事件。 */
-export async function* consumeWatchResponse(response, { signal } = {}) {
+export async function* consumeWatchResponse(response, { signal }: { signal?: AbortSignal } = {}) {
   if (!response || !response.body || typeof response.body.getReader !== "function") {
     throw new Error("watch: Response 无 body（宿主流不可读）");
   }
@@ -172,19 +174,19 @@ export async function runWatchReconcile(opts: WatchReconcileOptions): Promise<"s
     try {
       snapshot = await get();
     } catch (e) {
-      note(log, "get() 对账失败：" + ((e && e.message) || e));
+      note(log, "get() 对账失败：" + errText(e));
     }
     if (snapshot) {
       let keep = true;
-      try { keep = (await onFrame(snapshot, "snapshot")) !== false; } catch (e) { note(log, "snapshot 帧处理异常：" + ((e && e.message) || e)); }
+      try { keep = (await onFrame(snapshot, "snapshot")) !== false; } catch (e) { note(log, "snapshot 帧处理异常：" + errText(e)); }
       if (!keep) return "terminal";
     }
     if (shouldStop && shouldStop()) return "stopped";
-    let res = null;
+    let res: unknown = null;
     try {
       res = await watch();
     } catch (e) {
-      note(log, "watch 连接失败（稍后重连）：" + ((e && e.message) || e));
+      note(log, "watch 连接失败（稍后重连）：" + errText(e));
       await backoff(() => shouldStop && shouldStop(), retry, retryBase, maxRetry, log);
       retry += 1;
       continue;
@@ -204,12 +206,12 @@ export async function runWatchReconcile(opts: WatchReconcileOptions): Promise<"s
         if (frame.kind === "snapshot" || frame.kind === "app-task") {
           if (!frame.record) continue;
           let keep = true;
-          try { keep = (await onFrame(frame.record, frame.kind)) !== false; } catch (e) { note(log, "记录帧处理异常：" + ((e && e.message) || e)); }
+          try { keep = (await onFrame(frame.record, frame.kind)) !== false; } catch (e) { note(log, "记录帧处理异常：" + errText(e)); }
           if (!keep) { settledByStream = true; break; }
         }
       }
     } catch (e) {
-      note(log, "watch 流中断：" + ((e && e.message) || e));
+      note(log, "watch 流中断：" + errText(e));
     }
     if (settledByStream) return "terminal";
     if (resetSeen) continue; // 外层 while：先 get() 对账（快照回调）再重连 watch

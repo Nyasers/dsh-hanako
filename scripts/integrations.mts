@@ -18,6 +18,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, cpSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { errText, codedError } from "./err-text.mts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = resolve(HERE, "..");
@@ -77,7 +78,7 @@ export function verifyIntegrations(integrations, readUpstream) {
       try {
         content = readUpstream(upstreamRel);
       } catch (e) {
-        problems.push(`integration ${name}: 读上游 ${upstreamRel} 失败：${(e && e.message) || e}`);
+        problems.push(`integration ${name}: 读上游 ${upstreamRel} 失败：${errText(e)}`);
         continue;
       }
       if (content === null || content === undefined) {
@@ -100,9 +101,10 @@ export function verifyIntegrations(integrations, readUpstream) {
     }
   }
   if (problems.length) {
-    const err = new Error("集成层漂移校验未通过：\n" + problems.map((p) => "  - " + p).join("\n"));
-    err.problems = problems;
-    throw err;
+    throw codedError(
+      "集成层漂移校验未通过：\n" + problems.map((p) => "  - " + p).join("\n"),
+      { problems },
+    );
   }
   return { packages: (integrations || []).length, files, empty };
 }
@@ -268,11 +270,23 @@ export function resolveInlineAliases(specifiers, repoRoot = REPO_ROOT) {
 }
 
 /**
+ * buildIntegrations 的选项。tag 必填（镜像 tag），其余有默认。
+ * 显式给出形状：不注解时 TS 从带默认值的解构参数推断，未带默认值的 tag 反而不进类型，
+ * 声明处与调用处都会报「'tag' 不存在」（TS2339/TS2353）。
+ */
+interface BuildIntegrationsOptions {
+  tag: string;
+  mirrorDir?: string;
+  repoRoot?: string;
+  log?: (msg: string) => void;
+}
+
+/**
  * 编译一个集成：把上游 src 摊到 _tmp/integrations-src/<短名>/，覆盖 overlay，
  * 用我们的 client preset 编译出 lib/client.js，再以原版包为模板组装成
  * _tmp/integrations-built/<短名>/（版本戳 <上游>+dshana-<干净版本>）。
  */
-export async function buildIntegrations(integrations, { tag, mirrorDir = MIRROR, repoRoot = REPO_ROOT, log = (_msg) => {} } = {}) {
+export async function buildIntegrations(integrations, { tag, mirrorDir = MIRROR, repoRoot = REPO_ROOT, log = (_msg) => {} }: BuildIntegrationsOptions) {
   const { buildClientBundle } = await import("../src-cordis/build/client-config.mts");
   const { patchVersion } = await import("./version-common.mts");
   const built: any[] = [];
@@ -428,7 +442,7 @@ async function main() {
   try {
     result = verifyIntegrations(integrations, (rel) => readUpstreamFromMirror(rel, tag));
   } catch (e) {
-    console.error("[integrations] " + ((e && e.message) || e));
+    console.error("[integrations] " + errText(e));
     process.exit(1);
   }
   console.log(`[integrations] 漂移闸通过：${result.packages} 个集成、${result.files} 个 overlay 文件`);
@@ -447,7 +461,7 @@ async function main() {
       const built = await buildIntegrations(integrations, { tag, log: (m) => console.log(m) });
       for (const b of built) console.log(`[integrations] 产物：${b.out}`);
     } catch (e) {
-      console.error("[integrations] 编译失败：" + ((e && e.message) || e));
+      console.error("[integrations] 编译失败：" + errText(e));
       process.exit(1);
     }
     return;
@@ -456,7 +470,7 @@ async function main() {
 
 if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
   main().catch((e) => {
-    console.error("[integrations] " + ((e && e.message) || e));
+    console.error("[integrations] " + errText(e));
     process.exit(1);
   });
 }

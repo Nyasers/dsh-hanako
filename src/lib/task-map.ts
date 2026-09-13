@@ -60,7 +60,15 @@ export function taskMapPath(dataDir, dshSessionId) {
  * 写失败抛错由调用方决定（映射是任务回投的必要前提，失败应视为提交失败）。
  */
 export function writeTaskMap(dataDir, entry) {
-  const rec = {
+  const rec: {
+    taskId: string;
+    dshSessionId: string;
+    action: "create" | "send";
+    rpcId: string;
+    at: number;
+    /** 任务文本片段（可选；只在显式传入时出现）。 */
+    task?: string;
+  } = {
     taskId: String((entry && entry.taskId) || ""),
     dshSessionId: String((entry && entry.dshSessionId) || ""),
     action: entry && entry.action === "send" ? "send" : "create",

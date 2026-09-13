@@ -10,9 +10,13 @@
 // 解析不出来一律显式失败：不猜、不降级。
 import { findTaskMapByTaskId, findTaskMapByApprovalId, isValidSessionId } from "#/lib/task-map.ts";
 import { taskOwnership, ownershipRefusalText } from "#/lib/task-ownership.ts";
+import { errText } from "#/lib/err-text.ts";
 import type { OwnershipReason } from "#/lib/task-ownership.ts";
 import type { ToolCtx } from "#/types/host.ts";
 import type { ToolInputBase } from "#/tools/shared/types.ts";
+
+/** 宿主任务记录（ctx.tasks.get 的返回值；从 ctx 下钻，勿手抄形状）。 */
+type HostTaskRecord = Awaited<ReturnType<NonNullable<ToolCtx["tasks"]>["get"]>>;
 
 /** 解析出的调用目标（reply/close/get/approve 共用）。 */
 export interface ResolvedTarget {
@@ -35,7 +39,7 @@ export async function resolveTarget(input: ToolInputBase, ctx: ToolCtx): Promise
   }
   const taskIdIn = String((input && input.taskId) || "").trim();
   const approvalIdIn = String((input && input.approvalId) || "").trim();
-  let entry = null;
+  let entry: ReturnType<typeof findTaskMapByTaskId> = null;
   if (taskIdIn) entry = dataDir ? findTaskMapByTaskId(dataDir, taskIdIn) : null;
   else if (approvalIdIn) entry = dataDir ? findTaskMapByApprovalId(dataDir, approvalIdIn) : null;
   if (!entry) {
@@ -49,12 +53,12 @@ export async function resolveTarget(input: ToolInputBase, ctx: ToolCtx): Promise
   }
   const taskId = String(entry.taskId || "");
   const sessionPath = input && input.context ? input.context.sessionPath : null;
-  let record = null;
+  let record: HostTaskRecord | null = null;
   try {
     record =
       taskId && ctx && ctx.tasks && typeof ctx.tasks.get === "function" ? await ctx.tasks.get(taskId) : null;
   } catch (e) {
-    throw new Error("宿主任务记录读取失败（归属无法校验，按 fail-closed 处理）：" + ((e && e.message) || e));
+    throw new Error("宿主任务记录读取失败（归属无法校验，按 fail-closed 处理）：" + errText(e));
   }
   const verdict = taskOwnership({ taskRecord: record, sessionPath, explicitSessionId: false });
   if (!verdict.ok) throw new Error(ownershipRefusalText(verdict.reason));

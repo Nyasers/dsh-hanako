@@ -33,6 +33,7 @@ import { providerRoutes, listModelsForProvider, resolveModelInfo, supportedEffor
 import { toHanaMessages } from "./lib/messages.ts";
 import { buildDoneChunks, createHanaStreamState } from "./lib/stream.ts";
 import { resolveModelIdentity } from "./lib/identity.ts";
+import { errText } from "./lib/err-text.ts";
 
 export const name = "@dshana/provider";
 export const inject = ["llm"];
@@ -190,8 +191,8 @@ async function prepareImages(store, messages, signal) {
       loaded.set(attId, { data: Buffer.from(data).toString("base64"), mimeType: mimeOf(ref.mediaType) });
     } catch (e) {
       const err = new Error(
-        "DSH 图片附件解析失败（attachmentId=" + attId + "）：" + ((e && e.message) || e),
-      );
+        "DSH 图片附件解析失败（attachmentId=" + attId + "）：" + errText(e),
+      ) as Error & { code: string };
       err.code = "UNSUPPORTED_CONTENT";
       throw err;
     }
@@ -226,7 +227,7 @@ export function buildHanaAdapter(LlmAdapter, LlmError, deps) {
         const err = new Error(
           "hana provider \"" + provider + "\" 无模型 \"" + model + "\"（宿主目录快照 " +
             (models.filter((m) => m && m.provider === provider).length || 0) + " 条）",
-        );
+        ) as Error & { code: string };
         err.code = "UNKNOWN_MODEL";
         throw err;
       }
@@ -250,8 +251,9 @@ export function buildHanaAdapter(LlmAdapter, LlmError, deps) {
         ({ identity, source } = resolveModelIdentity(dataDir, sessionId));
       } catch (e) {
         throw new LlmError(
-          "模型身份判定失败（会话绑定不可读）：" + ((e && e.message) || e),
-          (e && e.code) || "TASK_IDENTITY_UNRESOLVED",
+          "模型身份判定失败（会话绑定不可读）：" + errText(e),
+          // catch 到的是 unknown：code 仅作展示，经显式断言读出（src 域同款边界写法）
+          (((e as any)?.code) || "TASK_IDENTITY_UNRESOLVED"),
           { requestId },
         );
       }
@@ -271,7 +273,7 @@ export function buildHanaAdapter(LlmAdapter, LlmError, deps) {
         else signal.addEventListener("abort", onAbort, { once: true });
       }
       // 图片解析（store 缺失/失败 → UNSUPPORTED_CONTENT 明确报错）
-      let images = null;
+      let images: Map<string, { data: string; mimeType: string }> | null = null;
       try {
         const store = typeof deps.getImages === "function" ? deps.getImages() : null;
         images = store ? await prepareImages(store, options && options.messages, ac.signal) : null;
@@ -407,7 +409,7 @@ export async function apply(ctx, config) {
   try {
     // 1. hana client 句柄（dsh-host.mjs 在 connectAppRuntime 后、runProfile 前设置；
     // 插件加载晚于该点；仍给窗口兜底轮询）
-    let hana = null;
+    let hana: any = null;
     try {
       hana = globalThis.__dshanaHana || null;
     } catch {
@@ -418,7 +420,7 @@ export async function apply(ctx, config) {
       return;
     }
     // 2. 附件 store（图片 base64 解析；缺失时图片内容报 UNSUPPORTED_CONTENT）
-    let attachmentStore = null;
+    let attachmentStore: any = null;
     try {
       ctx.inject(["attachments"], (aCtx) => {
         try {
@@ -441,7 +443,7 @@ export async function apply(ctx, config) {
           break;
         }
       } catch (e) {
-        warn(ctx, "hana.models.list 暂不可用：" + ((e && e.message) || e));
+        warn(ctx, "hana.models.list 暂不可用：" + errText(e));
       }
       if (Date.now() >= deadline) break;
       await sleep(500);
@@ -451,7 +453,7 @@ export async function apply(ctx, config) {
       return;
     }
     // 4. dsh-llm 动态依赖 + adapter
-    let llmMod = null;
+    let llmMod: any = null;
     for (const href of resolveLlmEntry()) {
       try {
         // webpackIgnore：运行时原生 import（变量基座，cordis 子插件打包保留原生语义）
@@ -486,7 +488,7 @@ export async function apply(ctx, config) {
   } catch (e) {
     // 顶层兜底：apply 永不抛出
     try {
-      ctx.logger?.error?.("[" + name + "] 插件初始化失败，已降级为空操作：" + ((e && e.message) || e));
+      ctx.logger?.error?.("[" + name + "] 插件初始化失败，已降级为空操作：" + errText(e));
     } catch { /* 忽略 */ }
   }
 }

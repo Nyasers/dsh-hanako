@@ -22,13 +22,14 @@ import {
   rpcSettingsReplace,
   settingsViewOf,
 } from "#/lib/dsh-rpc.ts";
+import { errText } from "#/lib/err-text.ts";
 
 /** 归一化模型选择：provider/model 必填，reasoningEffort 可选。 */
 function normalizeSelection(input) {
   const provider = typeof input?.provider === "string" ? input.provider.trim() : "";
   const model = typeof input?.model === "string" ? input.model.trim() : "";
   if (!provider || !model) throw new Error("模型选择需要 provider 与 model（都是非空字符串）");
-  const out = { provider, model };
+  const out: { provider: string; model: string; reasoningEffort?: string } = { provider, model };
   const effort = typeof input?.reasoningEffort === "string" ? input.reasoningEffort.trim() : "";
   if (effort) out.reasoningEffort = effort;
   return out;
@@ -44,7 +45,10 @@ function trimCatalog(catalog) {
       id: String(g?.id ?? ""),
       name: String(g?.name ?? g?.id ?? ""),
       models: (Array.isArray(g?.models) ? g.models : []).map((m) => {
-        const entry = { id: String(m?.id ?? ""), name: String(m?.name ?? m?.id ?? "") };
+        const entry: { id: string; name: string; efforts?: { id: string; name: string }[]; defaultEffort?: string } = {
+          id: String(m?.id ?? ""),
+          name: String(m?.name ?? m?.id ?? ""),
+        };
         const efforts = m?.reasoning?.efforts;
         if (Array.isArray(efforts) && efforts.length) {
           entry.efforts = efforts
@@ -73,12 +77,12 @@ export async function readDefaultModel(fetchFn) {
   const described = await rpcSettingsDescribe(doFetch, base);
   const view = settingsViewOf(described, AGENT_DEFAULT_MODEL_NS);
   if (!view) throw new Error(`DSH 没有 ${AGENT_DEFAULT_MODEL_NS} 段（settings/describe 里找不到）`);
-  let catalog = null;
-  let catalogError = null;
+  let catalog: ReturnType<typeof trimCatalog> | null = null;
+  let catalogError: string | null = null;
   try {
     catalog = trimCatalog(await rpcModelCatalog(doFetch, base));
   } catch (e) {
-    catalogError = (e && e.message) || String(e);
+    catalogError = errText(e);
   }
   return {
     current: view.value && typeof view.value === "object" ? { ...view.value } : null,
@@ -123,7 +127,7 @@ export async function writeDefaultModel(fetchFn, patch) {
     };
   } catch (e) {
     if (isSettingsConflict(e)) {
-      const conflict = new Error("默认模型已被别处改过（段 revision 前进），请刷新后重试");
+      const conflict = new Error("默认模型已被别处改过（段 revision 前进），请刷新后重试") as Error & { code: string };
       conflict.code = "SETTINGS_CONFLICT";
       conflict.cause = e;
       throw conflict;

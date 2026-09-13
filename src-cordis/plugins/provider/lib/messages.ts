@@ -76,20 +76,20 @@ export function assistantToHanaContent(message) {
     if (!b) continue;
     const meta = metaBlocks && metaBlocks[i] && typeof metaBlocks[i] === "object" ? metaBlocks[i] : null;
     if (b.type === "text") {
-      const item = { type: "text", text: String(b.text ?? "") };
+      const item: { type: string; text: string; textSignature?: string } = { type: "text", text: String(b.text ?? "") };
       if (meta && typeof meta.textSignature === "string" && meta.textSignature) {
         item.textSignature = meta.textSignature;
       }
       out.push(item);
     } else if (b.type === "reasoning") {
-      const item = { type: "reasoning", reasoning: String(b.text ?? "") };
+      const item: { type: string; reasoning: string; signature?: string; redacted?: boolean } = { type: "reasoning", reasoning: String(b.text ?? "") };
       if (meta && typeof meta.signature === "string" && meta.signature) {
         item.signature = meta.signature;
       }
       if (b.redacted === true) item.redacted = true;
       out.push(item);
     } else if (b.type === "tool-call") {
-      const item = {
+      const item: { type: string; id: string; name: string; arguments: any; thoughtSignature?: string } = {
         type: "toolCall",
         id: String(b.id ?? ""),
         name: String(b.name ?? ""),
@@ -114,7 +114,7 @@ function normalizeImage(block, images) {
   if (!info || typeof info.data !== "string" || typeof info.mimeType !== "string") {
     const err = new Error(
       "消息含图片块但未解析到图片字节（attachmentId=" + String(attId || "?") + "）；DSH→Hana 图片需要 attachment 服务解析（base64+MIME），本部署暂不可用",
-    );
+    ) as Error & { code: string };
     err.code = "UNSUPPORTED_CONTENT";
     throw err;
   }
@@ -134,7 +134,7 @@ export function toHanaMessages({ messages, images }) {
   const list = Array.isArray(messages) ? messages : [];
   const toolNames = collectToolNames(list);
   const out: any[] = [];
-  let systemPrompt = undefined;
+  let systemPrompt: string | undefined = undefined;
   for (const m of list) {
     if (!m || typeof m.role !== "string") continue;
     if (m.role === "system") {

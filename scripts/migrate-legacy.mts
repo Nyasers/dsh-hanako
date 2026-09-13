@@ -28,6 +28,7 @@ import {
   targetDshHomeOf,
 } from "../src/lib/legacy-migrate.js";
 import fs from "node:fs";
+import { errText } from "./err-text.mts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -45,8 +46,19 @@ migrate-legacy — 把 v1 插件数据（dsh-home/config）迁入 App v2 数据�
 `);
 }
 
-function parseArgs(argv) {
-  const opts = { mode: "check", force: false };
+/** CLI 选项：mode/force 有默认，其余按参数出现与否可选——显式给出形状，避免"赋值后再读"
+ * 被推断成最初的 { mode, force } 而报 TS2339。 */
+interface MigrateOpts {
+  mode: string;
+  force: boolean;
+  hanakoHome?: string;
+  source?: string;
+  target?: string;
+  backupDir?: string;
+}
+
+function parseArgs(argv: string[]): MigrateOpts & { source: string; target: string } {
+  const opts: MigrateOpts = { mode: "check", force: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--hanako-home") opts.hanakoHome = argv[++i];
@@ -63,6 +75,7 @@ function parseArgs(argv) {
   const target = opts.target || process.env.DSHANA_DATA_DIR || null;
   if (!source) { console.error("[migrate-legacy] 缺数据源：--source / --hanako-home / DSHANA_LEGACY_HOME 至少其一"); process.exit(2); }
   if (!target) { console.error("[migrate-legacy] 缺目标：--target 或 DSHANA_DATA_DIR（App ctx.dataDir）"); process.exit(2); }
+  // process.exit 返回 never，上面两个分支至此不可达，source/target 在此收窄为 string
   return { ...opts, source, target };
 }
 
@@ -93,7 +106,7 @@ function main() {
   }
   const sourceInfo = plan.sourceInfo;
   console.log("[migrate-legacy] 源会话数：" + (sourceInfo && sourceInfo.sessions ? sourceInfo.sessions.sessionFiles : 0));
-  for (const st of plan.steps) console.log("[migrate-legacy]   - " + st.step + ": " + st.from + " -> " + st.to);
+  for (const st of plan.steps ?? []) console.log("[migrate-legacy]   - " + st.step + ": " + st.from + " -> " + st.to);
 
   // 设置建议（只读 config.json 映射——不代写宿主 preferences）
   const cfgPath = join(opts.source, "config.json");
@@ -106,7 +119,7 @@ function main() {
         for (const s of sug) console.log("    " + s.key + " = " + JSON.stringify(s.value) + "  ← " + s.source);
       }
     } catch (e) {
-      console.warn("[migrate-legacy] config.json 解析失败（跳过设置建议）：" + ((e && e.message) || e));
+      console.warn("[migrate-legacy] config.json 解析失败（跳过设置建议）：" + errText(e));
     }
   }
 
@@ -118,7 +131,7 @@ function main() {
   // ---- 执行 ----
   console.log("[migrate-legacy] 停机指引：请先停旧 DSH 写入（停止相关会话/任务）再执行；本脚本对源只读，不删除任何旧数据。");
   const backupDir = opts.backupDir || join(opts.target, "migration-backup");
-  for (const st of plan.steps) {
+  for (const st of plan.steps ?? []) {
     if (st.step === "backup") {
       if (fs.existsSync(backupDir)) {
         console.log("[migrate-legacy]    备份目录已存在，跳过复制（不覆盖唯一备份）：" + backupDir);
@@ -130,7 +143,7 @@ function main() {
     if (st.step === "copy") cp(st.from, st.to, st.note || "");
   }
   // 迁移标记（幂等）
-  const stats = { source: opts.source, copied: plan.steps.length, targetDshHome: targetDshHomeOf(opts.target) };
+  const stats = { source: opts.source, copied: (plan.steps ?? []).length, targetDshHome: targetDshHomeOf(opts.target) };
   writeMigrationMarker(opts.target, { schemaVersion: 1, source: opts.source, at: new Date().toISOString(), stats, backupDir });
   // 迁移后只读验证
   const v = verifyMigration({ dataDir: opts.target, sourceInfo });

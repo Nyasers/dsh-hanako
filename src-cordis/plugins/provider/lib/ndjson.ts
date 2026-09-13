@@ -12,6 +12,8 @@
 // 消费方：@dshana/provider v2 adapter（hana.models.stream 响应 → DSH llm 流）。
 // 零宿主/零 DSH import：可被 node --test 直接 import（交付物 4 单测面）。
 
+import { errText } from "./err-text.ts";
+
 /**
  * 同步按 \n 切分文本并保留尾余量：把 pending 追加 chunk 后逐行 yield，
  * 最后一行（无换行结尾 = 半行）留在 pending 返回。纯函数形态便于单测：
@@ -38,7 +40,7 @@ export function parseNdjsonEvent(line) {
     return JSON.parse(s);
   } catch (e) {
     const preview = s.length > 200 ? s.slice(0, 200) + "…" : s;
-    const err = new Error("NDJSON 行解析失败：" + ((e && e.message) || e) + "（行预览：" + preview + "）");
+    const err = new Error("NDJSON 行解析失败：" + errText(e) + "（行预览：" + preview + "）") as Error & { code: string };
     err.code = "HANA_NDJSON_PARSE";
     throw err;
   }
@@ -80,7 +82,7 @@ export function createNdjsonLineReader() {
  * STREAM_CLOSED）；body 缺失抛错；逐块 push 到 line reader，解析每行（空行跳过）；末尾 flush
  * 兜底。任一行解析失败抛错（调用方按模型失败处理）。@returns AsyncGenerator<object>
  */
-export async function* readNdjsonEvents(response, { onLineError } = {}) {
+export async function* readNdjsonEvents(response, { onLineError }: { onLineError?: (line: string, err: unknown) => void } = {}) {
   if (response && response.ok === false) {
     let detail = "";
     try {
@@ -89,7 +91,7 @@ export async function* readNdjsonEvents(response, { onLineError } = {}) {
     } catch {
       /* 错误体不可读时只报状态 */
     }
-    const err = new Error("模型请求失败：HTTP " + String(response.status || 0) + detail);
+    const err = new Error("模型请求失败：HTTP " + String(response.status || 0) + detail) as Error & { code: string; status?: number };
     err.code = "MODEL_HTTP_ERROR";
     err.status = response.status;
     throw err;

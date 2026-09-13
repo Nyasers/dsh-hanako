@@ -46,7 +46,7 @@ export function readTaskMap(dataDir, sessionId) {
 }
 
 function brokenMap(why, sessionId) {
-  const err = new Error("task-map: 映射损坏（" + why + "，session=" + String(sessionId) + "）");
+  const err = new Error("task-map: 映射损坏（" + why + "，session=" + String(sessionId) + "）") as Error & { code: string };
   err.code = "TASK_MAP_BROKEN";
   return err;
 }

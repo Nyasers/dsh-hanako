@@ -44,6 +44,7 @@ import {
   cpSync,
 } from "node:fs";
 import { join } from "node:path";
+import { errText } from "#/lib/err-text.ts";
 
 // 老整树拷贝残留判定用的内置 profile manifest 名（官方 initProfile 生成的 name 规则 =
 // dsh-profile-<profile 目录名>；这里锁定 dshana 的固定名用于 legacy 识别）。
@@ -71,7 +72,7 @@ const HISTORICAL_PROFILE_BUNDLES = new Set([...PROFILE_BUNDLES]);
 function normalizeProfileManifest(profileDir, log) {
   const manifestPath = join(profileDir, "package.json");
   if (!existsSync(manifestPath)) return; // initProfile 刚生成/缺失由 initProfile 兜底
-  let j = null;
+  let j: Record<string, any> | null = null;
   try {
     j = JSON.parse(readFileSync(manifestPath, "utf8"));
   } catch {
@@ -92,7 +93,7 @@ function normalizeProfileManifest(profileDir, log) {
     writeFileSync(manifestPath, JSON.stringify(j, null, 2) + "\n", "utf8");
     log(`[cordis] profile manifest 随包归一：bundles -> [${computed.join(", ")}]（期望随插件版本）`);
   } catch (e) {
-    log(`[cordis] profile manifest 随包归一写入失败：${(e && e.message) || e}`);
+    log(`[cordis] profile manifest 随包归一写入失败：${errText(e)}`);
   }
 }
 function sameList(a, b) {
@@ -188,13 +189,13 @@ function ensureScopeLink(profileDir, scopeSrc, createLink, log) {
     return "linked";
   } catch (e) {
     // 链接建立失败（跨盘/权限等）：回退整体拷贝 scope 目录（保证 profile 可用）
-    log(`[cordis] @dshana scope 链接失败（${(e && e.message) || e}），回退拷贝 scope 目录`);
+    log(`[cordis] @dshana scope 链接失败（${errText(e)}），回退拷贝 scope 目录`);
     try {
       cpSync(scopeSrc, link, { recursive: true, force: true });
       log(`[cordis] @dshana scope 落位（拷贝回退）-> ${link}`);
       return "scope-copied";
     } catch (e2) {
-      log(`[cordis] @dshana scope 落位失败：${(e2 && e2.message) || e2}`);
+      log(`[cordis] @dshana scope 落位失败：${errText(e2)}`);
       return "failed";
     }
   }
@@ -221,7 +222,7 @@ export function ensureProfileSeeded(opts) {
   }
   const doLink = createLink || defaultCreateScopeLink;
   // ---- 形态判定与迁移 ----
-  let destStat = null;
+  let destStat: ReturnType<typeof lstatSync> | null = null;
   try {
     destStat = lstatSync(profileDir);
   } catch {
@@ -234,7 +235,7 @@ export function ensureProfileSeeded(opts) {
       destStat = null;
       log("[cordis] 检测到老整树 junction（profiles/dshana），移除链接后按新形态初始化");
     } catch (e) {
-      log(`[cordis] 老整树 junction 移除失败：${(e && e.message) || e}（跳过，由诊断引导人工处理）`);
+      log(`[cordis] 老整树 junction 移除失败：${errText(e)}（跳过，由诊断引导人工处理）`);
       return "refused";
     }
   }
@@ -279,7 +280,7 @@ export function ensureProfileSeeded(opts) {
   try {
     initProfile(profileDir, PROFILE_BUNDLES, PROFILE_PATCH_RELOAD);
   } catch (e) {
-    log(`[cordis] profile 初始化失败（initProfile）：${(e && e.message) || e}`);
+    log(`[cordis] profile 初始化失败（initProfile）：${errText(e)}`);
     return "init-failed";
   }
   // ---- manifest 随包归一（profile 目录只有 cordis.patch.yml 归用户，其余随包更新）----
