@@ -1,9 +1,17 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/tools/session.js — dsh_session 会话工具（App v2 迁移步骤 1 形态）
+// src/tools/session.js — dsh_session 会话工具（App v2 迁移步骤 3 形态）
 //
-// v2 变化（相对 v1 tools/session.js，迁移指南 §13 步骤 1）：
+// 状态（迁移指南 §13 步骤 1-4a）：list/get 离线只读（query subtool）；create/send 已接线
+// （lib/session-run.js submitDshTask：ctx.tasks.create + ensureManagedRuntime + loopback
+// HTTP RPC + task-map 映射 + 同会话串行化；终态由受管 runtime task-bridge 回投）；
+// cancel/approve 步骤 4a 已接线（取消链 = cancel-chain.js：映射 cancel 标记 + DSH
+// session.cancel + 等 DSH 真中止后宿主任务 canceled；宿主任务 canceled/aborted 反向
+// 触发在受管 runtime task-bridge；审批链 = approval-bridge requestApproval + watch 对账，
+// approve 应答经 approve-respond.js ctx.tasks.respondApproval——决策只投给正确等待者）。
+//
+// v2 变化（相对 v1 tools/session.js，迁移指南 §13 步骤 1/3）：
 //  1. 工具名注册策略：保留原名 "dsh_session"（v1 宿主注册出的 "dsh-hanako_dsh_session"
 //     是宿主按插件 id 自动加前缀的工件，不是作者意图名；v2 ctx.tools.register 不自动
 //     加前缀、工具名全局唯一）。理由：全仓文档/SKILL/参数描述均以 dsh_session 为名，
@@ -25,6 +33,9 @@ import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execute as queryExecute } from "./subtool/query.js"; // list/get 只读查询（subtool）
+import { submitDshTask } from "../lib/session-run.js"; // create/send 提交链（步骤 3 接线）
+import { cancelSessionWork } from "../lib/cancel-chain.js"; // cancel 编排（步骤 4a）
+import { respondApprovalAction } from "../lib/approve-respond.js"; // approve 应答编排（步骤 4a）
 import { appDataDir } from "../lib/app-runtime.js";
 
 const __here = dirname(fileURLToPath(import.meta.url));
@@ -118,18 +129,12 @@ export const parameters = {
 // 迁移说明：v1 本模块导出的 sessionPermission（external_side_effect + describeSideEffect）
 // 是 v1 宿主权限模型的声明形态（函数型 describeSideEffect 无法跨 v2 App 进程序列化）。
 // v2 的权限面 = 能力授予（manifest capabilities，如 app/tools.expose-to-model）+ 宿主
-// 权限 ledger + 后续步骤的 hooks/tasks 审批链；步骤 1 注册时不再携带该字段，留待 create/
-// send 等外效 action 真正接线时按宿主 0.930.1 契约重新声明。见 src/index.js apply 注释。
+// 权限 ledger + 后续步骤的 tasks 审批链（迁移步骤 4 接线 requestApproval/respondApproval
+// 时按宿主 0.930.1 契约声明）。见 src/index.js apply 注释。
 
-// 步骤 1 未接线 action 的统一错误文案（让 Agent 明确知道阻塞在迁移步骤 2，而不是
-// 参数/权限问题；字段校验在错误之后不再执行，避免误导性提示）
-const NOT_WIRED = (action) =>
-  "action=" +
-  action +
-  " 依赖 DSH 受管运行时（App v2 迁移步骤 2 接线：ctx.runtime.start 启动 DSH + " +
-  "connectAppRuntime + Hana task 映射），当前骨架尚未启动 DSH——本阶段仅 list/get 可" +
-  "离线使用（读 App dataDir 的 dsh-home），create/send/cancel/approve 将在后续迁移步" +
-  "骤接通，届时参数与返回语义不变";
+// 步骤 4a 状态：cancel/approve 已接线（见文件头注释与 DESIGN「步骤 4a 架构决策」）。
+// 真机边界（宿主取消 UI 反向触发 / DSH 超窗未确认的取消升级 / 审批通知形态）写入
+// DESIGN「已测/未测边界」，装包后由主上下文验收。
 
 async function doExecute(input, ctx) {
   const action = String(input.action ?? "").trim();
@@ -141,17 +146,78 @@ async function doExecute(input, ctx) {
   }
 
   if (action === "create" || action === "send") {
-    // 迁移步骤 2+ 接线前，create/send 不落地（v1 的 run subtool 提交链路依赖进程内
-    // web host 与宿主总线，不能原样跨到 App 隔离进程）
-    throw new Error(NOT_WIRED(action));
+    // 步骤 3 接线（v1 run subtool 提交链路的 v2 等价，见 lib/session-run.js 头注释）：
+    // ctx.tasks.create(callToken) → ensureManagedRuntime → session.create/list/selectModel/
+    // prompt（loopback HTTP RPC，v1 信封复用）→ task-map 写映射 → fire-and-forget 返回。
+    // callToken 由宿主工具调用上下文提供（input.context.callToken，v2 契约），只在
+    // ctx.tasks.create 消费一次，不落盘不落日志（指南 §5）。
+    const callToken = (input && input.context && input.context.callToken) || "";
+    const loc = await submitDshTask({ action, input, callToken, log: ctx && ctx.log });
+    const actionName = loc.action === "send" ? "send（续会话）" : "create（新建会话）";
+    const sid = String(loc.sessionId || "");
+    const rpc = String(loc.rpcId || "");
+    const text =
+      "任务已提交给 DSH（" + actionName + "）：rpcId " + rpc + "，sessionId " + sid +
+      (loc.cwd ? "，cwd " + loc.cwd : "") +
+      "。任务将在后台执行（Hana task " + loc.taskId + "），完成/失败结果会作为后台结果投递到" +
+      "本会话；需要看执行过程或最终结论时用 dsh_session action=get（sessionId " + sid + "）。";
+    return {
+      content: [{ type: "text", text }],
+      details: {
+        dsh: {
+          action: loc.action,
+          sessionId: sid,
+          rpcId: rpc,
+          taskId: loc.taskId,
+          status: "running",
+          cwd: loc.cwd || undefined,
+        },
+      },
+    };
   }
 
   if (action === "cancel") {
-    throw new Error(NOT_WIRED(action));
+    // 步骤 4a 取消链（cancel-chain.js）：sessionId 必填；映射写 cancel 标记 → DSH
+    // session.cancel（loopback RPC）→ 确认窗口内等宿主任务 canceled（= DSH 真中止后，
+    // task-bridge 结算）→ 未确认则升级宿主 ctx.tasks.cancel 并如实告知。会话无活动任务
+    // 时发幂等 cancel（防「宿主清映射、DSH 仍在跑」），返回无副作用说明。
+    const sessionId = String((input && input.sessionId) || "").trim();
+    if (!sessionId) {
+      throw new Error("cancel 需要 sessionId（dsh_session 提交返回/回调/卡片 URL 里带；取消一律显式传 sessionId）");
+    }
+    const out = await cancelSessionWork({ sessionId, reason: "user", log: ctx && ctx.log });
+    const sid = String(out.sessionId || sessionId);
+    let text;
+    let status = "cancelling";
+    if (out.status === "canceled") {
+      status = "canceled";
+      text = out.escalated
+        ? "已取消任务（session " + sid.slice(0, 12) + "…）：DSH 未在确认窗口内确认中止，宿主任务已升级标记 canceled——若 DSH 仍显示运行中请重试取消或检查 runtime 日志"
+        : "任务已取消（session " + sid.slice(0, 12) + "…）：DSH 已确认中止，结果/终态通知将投递到发起会话";
+    } else if (out.status === "no-active-work") {
+      status = "idle";
+      text = "会话 " + sid.slice(0, 12) + "… 当前没有运行中的 DSH 任务（映射为空）；已发送幂等 session.cancel，无副作用";
+    } else if (out.status === "already-requested") {
+      text = "该会话已有取消请求在处理中（reason=" + String(out.reason || "user") + "），等待 DSH 中止确认；勿重复取消";
+    } else if (out.status === "dsh-rpc-failed") {
+      status = "dsh-unreachable";
+      text = "已请求取消（session " + sid.slice(0, 12) + "…），但 DSH 侧取消调用失败：" + String(out.dshError || "unknown") + "。宿主任务将以取消兜底终结；若 DSH 进程仍运行请检查 runtime 日志";
+    } else {
+      text = "已请求取消（session " + sid.slice(0, 12) + "…）：DSH 正在中止（模型/工具/终端），终态将随后台任务通知确认——canceled 只在 DSH 真中止后标记";
+    }
+    return {
+      content: [{ type: "text", text }],
+      details: { dsh: { action: "cancel", sessionId: sid, taskId: out.taskId || undefined, status, reason: out.reason || "user", dshAccepted: out.dshAccepted === true } },
+    };
   }
 
   if (action === "approve") {
-    throw new Error(NOT_WIRED(action));
+    // 步骤 4a 审批应答（approve-respond.js）：sessionId/approvalId 必填；校验审批归属
+    // （task-map approvals 表：属于该会话且 pending）→ ctx.tasks.respondApproval 结算宿主
+    // 审批 → 受管 runtime approval-bridge watch 把 outcome 只投给该 approvalId 对应的
+    // DSH 等待者（allowed-once/rejected 原样，绝不自动放行）。
+    const res = await respondApprovalAction({ input, log: ctx && ctx.log });
+    return res;
   }
 
   throw new Error(

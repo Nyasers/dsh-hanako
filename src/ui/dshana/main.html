@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DSHana</title>
+<!-- src/ui/dshana/main.html — dsh-hanako App v2 主壳页（contributes.cards dshana route）。
+     视觉沿袭 v1 webui-shell 纸张风（宿主主题变量 + fallback 纸张色，明暗随主题），
+     数据语义 v2（boot-state 快照 phase idle/starting/ready/error/stopped）。
+     三态：idle/stopped 引导 · starting 自举（时间线 + 实时日志滚动）· error 指引重试 ·
+     ready 顶栏 + iframe 直嵌 DSH Web UI。无 emoji、无渐变/阴影光效。
+     到本 App 后端路由一律 hana.api.fetch（surface session 凭据，见 app-shell.js）。 -->
+<style>
+  html, body { height: 100%; margin: 0; }
+  html { color-scheme: light dark; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    font-size: 14px;
+    color: var(--text, #2A2622);
+    background: var(--bg, #F5EFE4);
+  }
+  iframe#dsh-frame { width: 100%; height: 100%; border: 0; display: none; background: transparent; }
+  body[data-view="ready"] iframe#dsh-frame { display: block; }
+  body[data-view="ready"] #frame-wrap { display: flex; }
+  #frame-wrap { display: none; flex-direction: column; height: 100vh; }
+
+  /* 自举舞台（非 ready 全屏覆盖，booting / idle / action 共用） */
+  #dsh-stage {
+    position: fixed; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    padding: 24px; box-sizing: border-box; overflow: auto;
+  }
+  body[data-view="ready"] #dsh-stage { display: none; }
+  .boot-panel { max-width: 640px; width: 100%; }
+  .view-head { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+  .view-title { font-size: 19px; font-weight: 600; margin: 0; }
+  .view-sub { font-size: 13px; color: var(--text-muted, #6B6158); margin: 0 0 16px; }
+
+  .spin {
+    width: 15px; height: 15px; flex: none;
+    border: 2px solid var(--border, #D8CFBE);
+    border-top-color: var(--accent, #537D96);
+    border-radius: 50%;
+    animation: dsh-spin 0.9s linear infinite;
+  }
+  @keyframes dsh-spin { to { transform: rotate(360deg); } }
+
+  .card {
+    border: 1px solid var(--border, #D8CFBE);
+    border-radius: 8px;
+    background: var(--bg-card, #FBF7EE);
+    padding: 16px 18px;
+    margin: 0 0 10px;
+  }
+  .card-label { font-size: 13px; font-weight: 600; margin: 0 0 10px; }
+
+  /* 阶段时间线（预期流程：依赖准备 → DSH 启动 → 服务就绪） */
+  .timeline { list-style: none; margin: 0; padding: 0; }
+  .timeline li { position: relative; display: flex; gap: 10px; padding: 0 0 14px; }
+  .timeline li:last-child { padding-bottom: 0; }
+  .timeline li::before {
+    content: ""; position: absolute; left: 7px; top: 20px; bottom: 2px;
+    width: 1px; background: var(--border, #D8CFBE);
+  }
+  .timeline li:last-child::before { display: none; }
+  .tl-dot {
+    width: 14px; height: 14px; margin-top: 2px; flex: none;
+    border-radius: 50%; border: 2px solid var(--border, #D8CFBE);
+    background: var(--bg-card, #FBF7EE); box-sizing: border-box;
+  }
+  .timeline li.done .tl-dot { border-color: var(--green, #4A6B4A); background: var(--green, #4A6B4A); }
+  .timeline li.current .tl-dot { border-color: var(--accent, #537D96); background: var(--accent-light, rgba(83,125,150,.08)); }
+  .tl-body { min-width: 0; }
+  .tl-name { font-size: 13px; font-weight: 600; color: var(--text, #2A2622); }
+  .tl-desc { font-size: 12px; color: var(--text-light, #4A433C); }
+  .timeline li.done .tl-name, .timeline li.done .tl-desc { color: var(--text-muted, #6B6158); }
+  .timeline li.current .tl-name { color: var(--accent, #537D96); }
+
+  /* 实时日志滚动区（隐藏滚动条 + 内容置底跟随） */
+  .diag-progress {
+    white-space: pre-wrap; word-break: break-all;
+    font-family: ui-monospace, SFMono-Regular, Consolas, "Courier New", monospace;
+    font-size: 12px; line-height: 1.6;
+    color: var(--text-light, #4A433C);
+    background: var(--accent-light, rgba(83,125,150,0.08));
+    border-radius: 4px; padding: 8px 10px; margin: 10px 0 0;
+    max-height: 200px; overflow-y: auto;
+    scrollbar-width: none; -ms-overflow-style: none;
+  }
+  .diag-progress::-webkit-scrollbar { display: none; width: 0; height: 0; }
+
+  .muted { font-size: 12px; color: var(--text-muted, #6B6158); }
+  .meta-line { font-size: 12px; color: var(--text-muted, #6B6158); margin: 3px 0 0; font-variant-numeric: tabular-nums; }
+
+  /* 引导 / 说明行 */
+  .desc { font-size: 13.5px; color: var(--text-light, #4A433C); margin: 0 0 14px; line-height: 1.7; }
+
+  /* action-needed：人话指引 + 自动续跑/停等说明 + 原始错误折叠 */
+  .guide {
+    border: 1px solid var(--border, #D8CFBE);
+    border-left: 3px solid var(--accent, #537D96);
+    border-radius: 6px;
+    background: var(--bg-card, #FBF7EE);
+    padding: 10px 12px; font-size: 13px;
+    color: var(--text, #2A2622);
+    white-space: pre-wrap; word-break: break-word;
+    margin: 0 0 10px;
+  }
+  .guide-label { font-size: 12px; font-weight: 600; color: var(--accent, #537D96); margin: 0 0 6px; }
+  .note { border-radius: 6px; padding: 8px 10px; font-size: 12px; margin: 0 0 10px; }
+  .note.auto { background: var(--accent-light, rgba(83,125,150,0.08)); color: var(--text-light, #4A433C); }
+  .note.stop { background: rgba(139,44,31,0.08); color: var(--danger, #8B2C1F); }
+  details.raw-details { font-size: 12px; color: var(--text-muted, #6B6158); }
+  details.raw-details summary { cursor: pointer; color: var(--accent, #537D96); }
+  details.raw-details .diag-progress { margin-top: 8px; max-height: 220px; }
+
+  /* 动作区 */
+  .actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 4px; }
+  button {
+    font: inherit; font-size: 13.5px;
+    padding: 8px 20px; border-radius: 7px; cursor: pointer;
+    border: 1px solid var(--border, #D8CFBE);
+    background: var(--bg-card, #FBF7EE);
+    color: var(--text, #2A2622);
+  }
+  button.primary { background: var(--accent, #537D96); border-color: var(--accent, #537D96); color: #fff; }
+  button:hover { filter: brightness(0.97); }
+  button.ghost { background: transparent; }
+
+  /* ready 顶栏 */
+  #runtime-bar {
+    flex: 0 0 auto;
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--border, #D8CFBE);
+    background: var(--bg-card, #FBF7EE);
+    font-size: 12.5px;
+  }
+  .chip {
+    padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 500;
+    background: rgba(74,107,74,.14); color: var(--green, #4A6B4A);
+  }
+  .bar-id { font-variant-numeric: tabular-nums; color: var(--text-muted, #6B6158); }
+  #runtime-bar button { padding: 4px 14px; font-size: 12.5px; margin-left: auto; }
+</style>
+</head>
+<body data-view="idle">
+  <div id="dsh-stage">
+    <div class="boot-panel">
+      <div class="view-head">
+        <span class="spin" id="dsh-spin" hidden></span>
+        <h1 class="view-title">DSHana</h1>
+      </div>
+      <p class="view-sub">DeepSeek Harness 受管运行时 · App v2</p>
+      <div id="boot-panel"><div class="card"><p class="muted">正在读取状态……</p></div></div>
+    </div>
+  </div>
+  <div id="frame-wrap" hidden>
+    <div id="runtime-bar">
+      <span class="chip">就绪</span>
+      <span class="bar-id" data-dsh-runtime>runtime –</span>
+      <span class="bar-id" data-dsh-port>–</span>
+      <button data-dsh-stop>停止 DSH</button>
+    </div>
+    <iframe id="dsh-frame" title="DSH Web UI" hidden></iframe>
+  </div>
+  <script type="module" src="./app-shell.js"></script>
+</body>
+</html>

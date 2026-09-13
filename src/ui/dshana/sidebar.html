@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DSHana · 状态</title>
+<!-- src/ui/dshana/sidebar.html — dsh-hanako App v2 侧栏卡（contributes.cards dshana-sidebar，
+     pageOf dshana）。纸张风紧凑状态摘要 + 动作 + 就绪后迷你 DSH Web UI 视图。 -->
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; }
+  html { color-scheme: light dark; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    font-size: 13px;
+    color: var(--text, #2A2622);
+    background: var(--bg, #F5EFE4);
+  }
+  .panel { padding: 12px 14px; box-sizing: border-box; height: 100%; display: flex; flex-direction: column; }
+  .h { display: flex; align-items: center; gap: 8px; }
+  .h h1 { font-size: 13.5px; margin: 0; font-weight: 600; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--border, #8a93a3); flex: none; }
+  .panel[data-phase="ready"] .dot { background: var(--green, #2e9e5b); }
+  .panel[data-phase="starting"] .dot { background: #c98a10; }
+  .panel[data-phase="error"] .dot { background: var(--danger, #c0392b); }
+  .chip { margin-left: auto; font-size: 11px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border, #D8CFBE); color: var(--text-muted, #6B6158); }
+  .detail { margin-top: 8px; font-size: 12.5px; line-height: 1.6; color: var(--text-light, #4A433C); white-space: pre-wrap; word-break: break-word; }
+  .meta { margin-top: 6px; font-size: 11.5px; color: var(--text-muted, #6B6158); font-variant-numeric: tabular-nums; }
+  .err { color: var(--danger, #8B2C1F); }
+  .row { display: flex; gap: 8px; margin-top: 10px; align-items: center; flex-wrap: wrap; }
+  button {
+    font: inherit; font-size: 12.5px; padding: 5px 14px; border-radius: 6px; cursor: pointer;
+    border: 1px solid var(--border, #D8CFBE); background: var(--bg-card, #FBF7EE); color: var(--text, #2A2622);
+  }
+  button.primary { background: var(--accent, #537D96); border-color: var(--accent, #537D96); color: #fff; }
+  .log {
+    margin-top: 8px; padding: 6px 8px; border-radius: 4px;
+    background: var(--accent-light, rgba(83,125,150,.08));
+    font-family: ui-monospace, Consolas, monospace; font-size: 11px; line-height: 1.5;
+    color: var(--text-light, #4A433C); white-space: pre-wrap; word-break: break-all;
+    max-height: 96px; overflow-y: auto; scrollbar-width: none;
+  }
+  .log::-webkit-scrollbar { display: none; }
+  #frame-wrap { margin: 10px -14px -12px; flex: 1 1 auto; min-height: 0; border-top: 1px solid var(--border, #D8CFBE); }
+  iframe { width: 100%; height: 100%; border: 0; display: block; }
+</style>
+</head>
+<body>
+<div class="panel" data-dshana-shell data-dshana-view="sidebar" data-phase="idle">
+  <div class="h">
+    <span class="dot"></span><h1>DSHana</h1>
+    <span class="chip" data-dsh-phase>未启动</span>
+  </div>
+  <div class="detail" data-dsh-detail>加载中……</div>
+  <div class="meta" data-dsh-meta hidden></div>
+  <div class="row">
+    <button class="primary" data-dsh-start hidden>启动 DSH</button>
+    <button data-dsh-stop hidden>停止</button>
+  </div>
+  <div class="log" data-dsh-log hidden></div>
+  <div id="frame-wrap" data-dsh-frame-zone hidden>
+    <iframe data-dsh-frame title="DSH Web UI sidebar" hidden></iframe>
+  </div>
+</div>
+<script type="module" src="./app-shell.js"></script>
+</body>
+</html>

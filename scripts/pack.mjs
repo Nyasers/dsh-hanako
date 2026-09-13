@@ -36,6 +36,7 @@ if (version !== manifestVersion)
 //    app/（card.js/css 已 asset/source 内联进 bundle）与 routes/（壳由 build 生成）不再复制。
 const staticItems = [
   "NOTICE",
+  "THIRD_PARTY_NOTICES.md",
   "package.json",
   // manifest.json 与 skills 已随 src 域（src/manifest.json、src/skills/，build:src 产出
   // dist 副本），不再经根级静态复制
@@ -62,20 +63,22 @@ for (const item of staticItems) {
 }
 
 // 1.5) cordis 包 version 一致性校验（防回归，与 manifest 校验对称）：cordis 包（roster
-//   bundle dshana + 9 子插件）version 与 manifest 同批由 version-hook（pnpm version 发版
-//   流程）同步（单一事实源 = 主 package.json；源码 src-cordis 内随同步维护），pack 时读 dist 产物
-//   校验一致——手改/漏同步即出包版本漂移。
+//   bundle dshana + 10 子插件）version 与主 package.json 同批由 syncver/version-hook（pnpm
+//   version 发版流程）同步（v2 域：单一事实源 = 主 package.json 2.0.0-beta.x，cordis 包跟随
+//   等值，无独立版本线；build metadata +dsh-<dsh 依赖> 由 version-hook 在发版时统一拼回），
+//   pack 时读 dist 产物校验一致——手改/漏同步即出包版本漂移。
 function assertCordisDistVersions(outDir) {
   const cordisRoot = join(outDir, "cordis");
   // cordis 未组装 = 构建未跑/被清：fail-closed（校验放行空产物会让缺 bundle 的包过包）
   if (!fs.pathExistsSync(cordisRoot)) {
     throw new Error("cordis 产物缺失（dist/cordis 不存在）：先跑 pnpm run build 再打包");
   }
-  // 完整性：必需 10 包（roster bundle dshana + 9 子插件）全部存在且 package.json 版本一致——
-  // 缺失/部分产物（含 count=0）一律拒包，防 build 失败后残留部分 dist 被误打包
+  // 完整性：必需 11 包（roster bundle dshana + 10 子插件，含 acp-assist）全部存在且
+  // package.json 版本一致——缺失/部分产物（含 count=0）一律拒包，防 build 失败后残留部分
+  // dist 被误打包
   const required = [
     "dshana",
-    "app", "bridge", "bus", "clipboard", "logger", "provider", "settings", "theme", "view",
+    "acp-assist", "app", "bridge", "bus", "clipboard", "logger", "provider", "settings", "theme", "view",
   ];
   let count = 0;
   for (const name of required) {
@@ -96,6 +99,22 @@ function assertCordisDistVersions(outDir) {
   console.log(`[pack] cordis 包版本一致（${count} 个 = ${version}）`);
 }
 assertCordisDistVersions(distDir);
+
+// 1.6) App ui/ 静态树断言（v2 cards route 资源面；迁移指南 §10 相对资源契约）：缺失 = 卡片
+//   404 + 宿主 manifest 校验失败，fail-closed 拒包。
+function assertUiTree(outDir) {
+  const uiDir = join(outDir, "ui");
+  if (!fs.pathExistsSync(uiDir)) {
+    throw new Error("App ui/ 静态树缺失（dist/ui 不存在）：src/ui 未随 build 拷贝——先跑 pnpm run build 再打包");
+  }
+  for (const rel of ["dshana/main.html", "dshana/sidebar.html", "dshana/app-shell.js"]) {
+    if (!fs.pathExistsSync(join(uiDir, rel))) {
+      throw new Error("App ui/ 缺 cards route 资源：" + rel + "（src/ui/" + rel + " 缺失或构建未跑）");
+    }
+  }
+  console.log("[pack] ui/ 静态树完整（main/sidebar 壳页 + app-shell.js）");
+}
+assertUiTree(distDir);
 
 // 2. 静态资产压缩（terser JS 纯语法级 + clean-css CSS 压缩，覆盖写回 dist 副本）
 //     cordis 插件（dist/cordis/*/index.js，由 build 从

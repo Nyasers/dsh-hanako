@@ -1,522 +1,411 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// @dsh-hanako/provider — 让 dsh 直接复用 Hana 宿主的 provider 配置并完全跟随（v0.9.3）。
-// 0.1.2 重写（vX）：复用官方 @deepseek-ai/dsh-llm-pi-ai 的 PiAiAdapter（LlmAdapter 完整
-// 实现：stream/resolveModel/listModels/prepareCall 全包），本插件只做两件事：
-//   1. 消费宿主经 dshana.bus push 的 route 目录（provider.refresh，v0.22.1+ 总线版；
-//      组装在宿主：models.json + provider-catalog.json → routes）
-//   2. 把宿主 routes 组装成 0.1.2 的 providers dict（{ provider: { displayName, baseURL,
-//      api, models } }），构造官方 PiAiAdapter 并注册 ctx.llm.registerAdapter(routes, adapter)
+// @dsh-hanako/provider — DSH provider adapter（v2 重写：模型推理走受管 runtime 内 hana）
 //
-// 0.1.2 适配要点：
-//   · LlmAdapter 基类接口重构（prepareCall/resolveModel/listModels 形状变了）——旧自写
-//     adapter（消息转换/stream 委托 pi-ai 库）整体删除，官方 PiAiAdapter 全包
-//   · 凭据不走 apiKeyEnv/credentials 服务（宿主 catalog 明文 apiKey）：resolveApiKey 闭包
-//     直取宿主 route.apiKey，per-request override（options.apiKey 优先级最高）
-//   · compat（thinkingFormat/supportsDeveloperRole 等）暂不传递（0.1.2 resolveModelCompat
-//     走内置 catalog 校验，非 builtin route 直通有风险）——先跑通默认链路，sensenova 等
-//     的 developer-role 适配后续按需补
-//   · 依赖：llm（LlmAdapter/LlmError）+ piAiAdapter（PiAiAdapter）+ pi-ai（createProvider
-//     与 api 工厂）。dsh-pkg 依赖解析沿用 resolvePkgEntry（profiles 全量视图优先）
+// v1（0.1.2）形态：消费宿主 provider 路由（models.json + apiKey）注册官方 PiAiAdapter 直连
+// 各 provider 端点。v2（迁移指南 §8/决策 B）不再有 apiKey/baseURL/直连：**推理在受管
+// runtime 内经 connectAppRuntime().models 发起**（受管子进程与 DSH 同进程，hana client
+// 由 dsh-host.mjs 挂 globalThis.__dshanaHana，见 src/runtime/main.js 步骤 1 注释）：
+//   · 目录：hana.models.list() → 显式 provider/model 选择（id 原样透传，不二次映射）；
+//   · 推理：hana.models.stream({ requestId, taskId, provider, model, messages, systemPrompt,
+//     tools, reasoningEffort?, maxTokens?, temperature? })——requestId 由本 adapter 自管
+//     （cancel 按 requestId 定向）；taskId 从 task-map（会话→任务）解析（宿主 scope 校验）；
+//   · NDJSON 逐行解析（lib/ndjson.js），done.assistant 完整保存回放（含 text/reasoning/
+//     toolCall 续接签名，lib/stream.js buildDoneChunks + 回放信封）；error 事件=失败不算成功；
+//   · 图片：DSH 消息含 ImageBlock 时经 attachment store 读字节 → base64+MIME（不传路径），
+//     缺 store 时报 UNSUPPORTED_CONTENT（边界见 DESIGN）。
+// DSH 侧工具循环不变：Hana 不替 DSH 执行传入工具 schema（tools 仅声明）；DSH 执行工具后把
+// role:toolResult 消息放回 messages（lib/messages.js 转换）。
 //
-// 注册：ctx.llm.registerAdapter(routes, adapter)（routes = 宿主 route id 列表）。
-// 服务依赖（关键）：inject = ['llm', 'hanaLogger', 'dshanaBus']（cordis 服务注入经
-// inject 声明生效）。dshanaBus 用于：① dshPkgDir 经 getConfig() 获取 ② provider.refresh
-// 事件订阅。logger 为 @dsh-hanako/logger 统一日志服务。
-// 容错纪律：apply 全程 try/catch 不抛出——依赖缺失/配置缺失/解析失败只记日志，
-// 插件降级为空操作，不阻断 dsh 启动。
-
-export const name = "@dsh-hanako/provider";
-export const inject = ["llm", "hanaLogger", "dshanaBus"];
-
-import { readFileSync } from "node:fs";
+// 容错纪律（v1 同款）：apply 全程 try/catch 不抛——依赖缺失/目录空/错误只记日志，插件
+// 降级为空操作（DSH 无 provider 可用），不阻断 dsh 启动。
+import { readFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { pathToFileURL } from "node:url";
+import { randomUUID } from "node:crypto";
+import { readNdjsonEvents } from "./lib/ndjson.js";
+import { providerRoutes, listModelsForProvider, resolveModelInfo, supportedEfforts } from "./lib/catalog.js";
+import { toHanaMessages } from "./lib/messages.js";
+import { buildDoneChunks } from "./lib/stream.js";
+import { readTaskMap, taskMapDir } from "./lib/taskmap.js";
 
-const DEP_SPECS = {
-  llm: "@deepseek-ai/dsh-llm",
-  piAiAdapter: "@deepseek-ai/dsh-llm-pi-ai",
-  piAi: "@earendil-works/pi-ai",
-  piAiCompletions: "@earendil-works/pi-ai/api/openai-completions.lazy",
-  piAiResponses: "@earendil-works/pi-ai/api/openai-responses.lazy",
-  piAiAnthropic: "@earendil-works/pi-ai/api/anthropic-messages.lazy",
-};
+export const name = "@dsh-hanako/provider";
+export const inject = ["llm"];
 
-// 解析 dsh-pkg/node_modules 内的包入口：尊重 package.json 的 exports/main。
-// 不用 createRequire().resolve——pi-ai 的 exports 只有 "import" 条件，CJS resolve 会以
-// "No exports main defined" 拒绝；这里按 import 语义手工解析（含 "./api/*" 通配模式）。
-function resolvePkgEntry(nmDir, spec) {
-  const parts = spec.split("/");
-  const scoped = spec.startsWith("@");
-  const name = scoped ? parts.slice(0, 2).join("/") : parts[0];
-  const sub = scoped ? parts.slice(2).join("/") : parts.slice(1).join("/");
-  const pkgDir = join(nmDir, ...name.split("/"));
-  const pkg = JSON.parse(readFileSync(join(pkgDir, "package.json"), "utf8"));
-  const exportsMap = pkg.exports;
-  if (exportsMap && typeof exportsMap === "object") {
-    const key = sub ? `./${sub}` : ".";
-    let entry = resolveCondition(exportsMap[key], pkgDir);
-    if (!entry && sub) {
-      for (const [pattern, target] of Object.entries(exportsMap)) {
-        if (!pattern.includes("*")) continue;
-        const [prefix, suffix] = pattern.split("*");
-        if (key.startsWith(prefix) && key.endsWith(suffix)) {
-          const star = key.slice(prefix.length, key.length - suffix.length);
-          entry = resolveCondition(target, pkgDir, star);
-          if (entry) break;
-        }
-      }
-    }
-    if (entry) return pathToFileURL(entry).href;
-  }
-  return pathToFileURL(join(pkgDir, pkg.main || "index.js")).href;
-}
-
-function resolveCondition(cond, pkgDir, star) {
-  if (typeof cond === "string")
-    return join(pkgDir, cond.replaceAll("*", star ?? ""));
-  if (cond && typeof cond === "object") {
-    if (typeof cond.import === "string")
-      return join(pkgDir, cond.import.replaceAll("*", star ?? ""));
-    if (typeof cond.default === "string")
-      return join(pkgDir, cond.default.replaceAll("*", star ?? ""));
-    for (const value of Object.values(cond)) {
-      const resolved = resolveCondition(value, pkgDir, star);
-      if (resolved) return resolved;
-    }
-  }
-  return null;
-}
-
-async function loadDeps(config, getBusDshPkgDir) {
-  const bases = [];
+/** 动态依赖解析基座（profiles 全量视图优先——pnpm 严格结构下 dsh-pkg 顶层只有直接声明）。 */
+function resolveLlmEntry() {
   const home = process.env.DSH_HOME;
-  // profiles/node_modules 优先：dsh 的 junction farm 全量依赖视图（与 dsh 运行时
-  // 一致）。pnpm 严格结构下 dsh-pkg/node_modules 只链接直接声明的依赖，间接依赖
-  // （@earendil-works/pi-ai 等）不在顶层——pnpm 下必须走 profiles 全量视图。
-  if (home) bases.push(join(home, "profiles"));
+  const bases = [];
+  if (home) bases.push(join(home, "profiles", "node_modules"));
+  const candidates = [];
+  for (const base of bases) {
+    try {
+      const p = join(base, "@deepseek-ai", "dsh-llm", "package.json");
+      if (!existsSync(p)) continue;
+      const pkg = JSON.parse(readFileSync(p, "utf8"));
+      const entry = (pkg.exports && pkg.exports["."] && pkg.exports["."].default) || pkg.main || "index.js";
+      candidates.push(pathToFileURL(join(base, "@deepseek-ai", "dsh-llm", entry)).href);
+    } catch {
+      /* 该基座不可解析，试下一个 */
+    }
+  }
+  return candidates;
+}
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+// ---- 任务映射（stream scope）----
+function dataDirOf() {
+  const v = process.env.DSHANA_HOME;
+  return typeof v === "string" && v ? v : null;
+}
+function taskIdForSession(dataDir, sessionId) {
+  if (!dataDir || !sessionId) return null;
+  const m = readTaskMap(dataDir, sessionId);
+  return m ? m.taskId : null;
+}
+
+function log(ctx, msg) {
   try {
-    const busPkgDir =
-      typeof getBusDshPkgDir === "function" ? getBusDshPkgDir() : null;
-    if (typeof busPkgDir === "string" && busPkgDir) bases.push(busPkgDir);
+    ctx.logger?.info?.("[" + name + "] " + msg);
   } catch {
-    /* 总线配置读取失败：走 DSH_HOME 反推 */
+    /* 日志失败不阻断 */
   }
-  if (config && typeof config.dshPkgDir === "string" && config.dshPkgDir)
-    bases.push(config.dshPkgDir);
-  if (home) bases.push(join(dirname(home), "dsh-pkg"));
-  const out = {};
-  for (const [key, spec] of Object.entries(DEP_SPECS)) {
-    let mod = null;
-    for (const base of bases) {
-      try {
-        // webpackIgnore：运行时原生 import（spec 为运行时变量/表达式，基座解析后为
-        // 绝对路径 file:// URL——cordis 子插件打包（rspack）须保留原生 import 语义，
-        // 与主 bundle loadInprocDsh 同款注释）
-        mod = await import(/* webpackIgnore: true */ resolvePkgEntry(join(base, "node_modules"), spec));
-        break;
-      } catch {
-        /* 该基座不可解析，试下一个 */
-      }
-    }
-    if (mod === null) {
-      try {
-        mod = await import(/* webpackIgnore: true */ spec);
-      } catch {
-        /* 依赖不可用 */
-      }
-    }
-    if (mod === null)
-      return {
-        error: new Error(
-          `无法解析依赖 ${spec}（已尝试 config.dshPkgDir / DSH_HOME 基座与裸导入）`,
-        ),
-      };
-    out[key] = mod;
+}
+function warn(ctx, msg) {
+  try {
+    ctx.logger?.warn?.("[" + name + "] " + msg);
+  } catch {
+    /* 日志失败不阻断 */
   }
-  return out;
 }
 
-// ---- 0.1.2 providers dict 组装（照 dsh-llm-pi-ai resolveProfiles 的输入形状）----
-// 宿主 route：{ id, displayName, baseURL, apiKey, api, models, compat }
-// 0.1.2 dict：{ [route.id]: { displayName?, baseURL?, api?, models? } }
-//   · models 直通（0.1.2 entry：id/name/contextWindow/maxTokens/input...）
-//   · compat 暂不传（0.1.2 resolveModelCompat 校验风险，见头部注释）
-const DEFAULT_CONTEXT_WINDOW = 262144;
-const DEFAULT_MAX_TOKENS = 32768;
-const DEFAULT_INPUT = ["text"];
-const NO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-
-// pi-ai 的 auth.apiKey 方法（copy 官方 harnessApiKeyAuth）：provider 必须声明
-// apiKey 方法，请求级 apiKey override 才会被 honor（resolveProviderAuth 先查
-// provider.auth.apiKey 再处理 override——缺失即 "Provider is not configured"）。
-// 凭据不走 credentials 服务（宿主 catalog 明文 apiKey），resolve 返回空 auth，
-// 真正的 key 经 PiAiAdapter 的 resolveApiKey → options.apiKey override 生效。
-function harnessApiKeyAuth(name) {
-  return {
-    name,
-    resolve: ({ credential }) =>
-      Promise.resolve({
-        auth: credential?.key === void 0 ? {} : { apiKey: credential.key },
-        source: name,
-      }),
-  };
+// ---- 步骤 4a：活动模型 requestId 注册表（globalThis 与 dsh-host bundle 共享）----
+// 键名与 src/lib/model-requests.js MODEL_REQUEST_GLOBAL_KEY 字面一致（本插件与 task-bridge
+// 分属 cordis 插件 bundle / dsh-host bundle，不能互相 import——同进程 globalThis 约定，
+// 与 __dshanaHana 同款）。结构：Map<dshSessionId, Set<requestId>>；取消消费侧只读。
+const ACTIVE_MODEL_KEY = "__dshanaActiveModelRequests";
+function registerActiveModelRequest(sessionId, requestId) {
+  try {
+    if (!sessionId || !requestId) return;
+    const g = globalThis;
+    let m = g[ACTIVE_MODEL_KEY];
+    if (!(m instanceof Map)) {
+      m = new Map();
+      try { g[ACTIVE_MODEL_KEY] = m; } catch { /* globalThis 只读兜底 */ }
+    }
+    let set = m.get(sessionId);
+    if (!set) {
+      set = new Set();
+      m.set(sessionId, set);
+    }
+    set.add(requestId);
+  } catch {
+    /* 注册失败不影响推理（取消仅尽力而为） */
+  }
+}
+function unregisterActiveModelRequest(sessionId, requestId) {
+  try {
+    if (!sessionId) return;
+    const g = globalThis;
+    const m = g && g[ACTIVE_MODEL_KEY];
+    if (!(m instanceof Map)) return;
+    const set = m.get(sessionId);
+    if (!set) return;
+    set.delete(requestId);
+    if (set.size === 0) m.delete(sessionId);
+  } catch {
+    /* 注销失败忽略 */
+  }
 }
 
-function buildProviderSimplified(spec, apiFactories) {
-  // 去 catalog：宿主 routes 必带 api（openai-completions 等）+ baseURL + models。
-  const factory = apiFactories[spec.api];
-  if (factory === void 0)
-    throw new Error(
-      `[@dsh-hanako/provider] route "${spec.provider}" names api "${spec.api}", which this build cannot serve`,
-    );
-  const { createProvider } = spec.piAi;
-  return createProvider({
-    id: spec.provider,
-    name: spec.displayName,
-    ...(spec.baseURL === void 0 ? {} : { baseUrl: spec.baseURL }),
-    auth: { apiKey: harnessApiKeyAuth(spec.displayName) },
-    models: spec.models,
-    api: factory(),
-  });
+function toLlmError(LlmError, e, requestId) {
+  const message = (e && e.message) || String(e || "模型调用失败");
+  const code = (e && e.code) || "MODEL_ERROR";
+  const opts = requestId ? { requestId } : undefined;
+  try {
+    return new LlmError(message, code, opts);
+  } catch {
+    return new Error(message);
+  }
 }
 
-function resolveRouteModelsSimplified(request, deps) {
-  const { provider } = request;
-  const configured = Array.isArray(request.models) ? request.models : [];
-  if (configured.length === 0)
-    throw new Error(
-      `[@dsh-hanako/provider] route "${provider}" resolves no models; host push 未提供模型列表`,
-    );
+/** 归一 attachment mediaType → MIME（ref.mediaType 可能不带 image/ 前缀）。 */
+function mimeOf(mediaType) {
+  const s = String(mediaType || "").toLowerCase();
+  if (!s) return "image/png";
+  return /^image\//.test(s) ? s : "image/" + s;
+}
+
+/**
+ * 预解析消息里的全部图片块（DSH ImageBlock.attachment → base64 + mime）。
+ * @returns Promise<Map<string,{data:string,mimeType:string}>>（attId → 编码）
+ */
+async function prepareImages(store, messages, signal) {
+  const out = new Map();
+  if (!store) return out;
   const seen = new Set();
-  const configuredMaxTokens = new Map();
-  const models = configured.map((entry) => {
-    if (typeof entry.id !== "string" || entry.id.length === 0)
-      throw new Error(`[@dsh-hanako/provider] route "${provider}" has a model with an empty id`);
-    if (seen.has(entry.id))
-      throw new Error(`[@dsh-hanako/provider] route "${provider}" lists model "${entry.id}" more than once`);
-    seen.add(entry.id);
-    const contextWindow =
-      entry.contextWindow ?? request.defaultContextWindow ?? DEFAULT_CONTEXT_WINDOW;
-    if (!Number.isInteger(contextWindow) || contextWindow <= 0)
-      throw new Error(`[@dsh-hanako/provider] model "${entry.id}" contextWindow must be a positive integer`);
-    const maxTokens = entry.maxTokens ?? request.defaultMaxTokens ?? DEFAULT_MAX_TOKENS;
-    if (!Number.isInteger(maxTokens) || maxTokens <= 0)
-      throw new Error(`[@dsh-hanako/provider] model "${entry.id}" maxTokens must be a positive integer`);
-    if (entry.maxTokens !== void 0) configuredMaxTokens.set(entry.id, entry.maxTokens);
-    // 推理元数据（模拟官方 resolveModelReasoning 的输出形状）：
-    // reasoningEfforts（输入）→ reasoning: true + thinkingLevelMap（pi-ai 形状，
-    // getSupportedThinkingLevels 消费；mapped === null 的级别被排除）。
-    // 宿主 m.reasoning === true → 推理模型：声明 off/medium/high（agent loop 默认
-    // reasoningEffort high 必被接受），xhigh（thinkingLevelMap.max==='max'）追加 max；
-    // minimal/low/xhigh（无 max 时）→ null（列表裁剪，与宿主词汇口径一致）。
-    const reasoningMeta =
-      entry.reasoning === true
-        ? {
-          reasoning: true,
-          thinkingLevelMap: {
-            off: "off",
-            minimal: null,
-            low: null,
-            medium: "medium",
-            high: "high",
-            xhigh: null,
-            ...(entry.thinkingLevelMap && entry.thinkingLevelMap.max === "max"
-              ? { max: "max" }
-              : {}),
-          },
+  const walk = (blocks) => {
+    for (const b of blocks || []) {
+      if (!b) continue;
+      if (b.type === "image") {
+        const ref = b.attachment;
+        if (ref && typeof ref.attachmentId === "string" && !seen.has(ref.attachmentId)) {
+          seen.add(ref.attachmentId);
+          out.set(ref.attachmentId, ref);
         }
-        : null;
-    return {
-      id: entry.id,
-      name: entry.name ?? entry.id,
-      api: request.api,
-      provider,
-      baseUrl: request.baseURL,
-      input: [...(Array.isArray(entry.input) && entry.input.length ? entry.input : DEFAULT_INPUT)],
-      cost: NO_COST,
-      contextWindow,
-      maxTokens,
-      ...(reasoningMeta ? reasoningMeta : {}),
-    };
-  });
-  return { models, configuredMaxTokens };
+      } else if (b.type === "tool-result" && Array.isArray(b.content)) {
+        walk(b.content);
+      }
+    }
+  };
+  for (const m of messages || []) walk(m && m.content);
+  const loaded = new Map();
+  for (const [attId, ref] of out) {
+    try {
+      const img = await store.readImageRequest(ref, { maxPixels: 4194304, maxBytes: 4000000 }, signal);
+      const data = img && img.data ? img.data : null;
+      if (!data) throw new Error("readImageRequest 未返回字节");
+      loaded.set(attId, { data: Buffer.from(data).toString("base64"), mimeType: mimeOf(ref.mediaType) });
+    } catch (e) {
+      const err = new Error(
+        "DSH 图片附件解析失败（attachmentId=" + attId + "）：" + ((e && e.message) || e),
+      );
+      err.code = "UNSUPPORTED_CONTENT";
+      throw err;
+    }
+  }
+  return loaded;
 }
 
-function resolveProfilesSimplified(providersDict, deps, apiFactories) {
-  const resolved = new Map();
-  for (const [provider, source] of Object.entries(providersDict ?? {})) {
-    if (provider.length === 0)
-      throw new Error(`[@dsh-hanako/provider] provider names must be non-empty`);
-    const displayName = source.displayName ?? provider;
-    const catalog = resolveRouteModelsSimplified(
-      {
-        provider,
-        ...(source.api === void 0 ? {} : { api: source.api }),
-        ...(source.baseURL === void 0 ? {} : { baseURL: source.baseURL }),
-        ...(source.models === void 0 ? {} : { models: source.models }),
-      },
-      deps,
-    );
-    resolved.set(provider, {
-      provider,
-      displayName,
-      // 官方默认：idleWatchdog 的 stream 空闲超时（PiAiAdapter.stream 必消费，缺失会拒）
-      streamIdleTimeoutMs: 3e5,
-      maxRequestImageBytes: 20971520,
-      requestImagePixelBudget: 4194304,
-      requestImageMaxBytes: 1048576,
-      configuredMaxTokens: catalog.configuredMaxTokens,
-      piProvider: buildProviderSimplified(
-        {
-          provider,
-          displayName,
-          api: source.api,
-          baseURL: source.baseURL,
-          models: catalog.models,
-          piAi: deps.piAi,
-        },
-        apiFactories,
-      ),
-    });
-  }
-  return resolved;
+/**
+ * 运行时构建 HanaAdapter（extends 需要运行时 import 的 LlmAdapter）。
+ * @param {Function} LlmAdapter LlmAdapter 基类（dsh-llm）
+ * @param {Function} LlmError LlmError（dsh-llm）
+ * @param {object} deps { models: 目录投影数组, hana: AppRuntimeClient, getImages: () => store|null }
+ */
+function buildHanaAdapter(LlmAdapter, LlmError, deps) {
+  const models = Array.isArray(deps.models) ? deps.models : [];
+  const adapter = new (class HanaAdapter extends LlmAdapter {
+    providerInfo(provider) {
+      return { id: provider, name: provider };
+    }
+
+    listModels(provider) {
+      return Promise.resolve(listModelsForProvider(provider, models));
+    }
+
+    resolveModel(provider, model, _signal) {
+      const item = models.find((m) => m && m.provider === provider && m.id === model) || null;
+      const info = resolveModelInfo(item);
+      if (!info) {
+        const err = new Error(
+          "hana provider \"" + provider + "\" 无模型 \"" + model + "\"（宿主目录快照 " +
+            (models.filter((m) => m && m.provider === provider).length || 0) + " 条）",
+        );
+        err.code = "UNKNOWN_MODEL";
+        throw err;
+      }
+      return Promise.resolve(info);
+    }
+
+    async *stream(options) {
+      const dataDir = dataDirOf();
+      const sessionId = options && options.sessionId;
+      const taskId = taskIdForSession(dataDir, sessionId);
+      if (!taskId) {
+        throw new LlmError(
+          "DSH 会话 " + String((options && options.sessionId) || "?") +
+            " 没有 Hana task 绑定（task-map 缺失）：模型推理需要宿主 task scope（app/models.infer）；" +
+            "非 dsh_session 发起的会话（如 Web UI 直开）暂不可推理。",
+          "NO_TASK_SCOPE",
+        );
+      }
+      const requestId = randomUUID();
+      const ac = new AbortController();
+      const onAbort = () => {
+        ac.abort();
+        try {
+          deps.hana && deps.hana.models && deps.hana.models.cancel(requestId).catch(() => {});
+        } catch {
+          /* 忽略 */
+        }
+      };
+      const signal = options && options.signal;
+      if (signal) {
+        if (signal.aborted) onAbort();
+        else signal.addEventListener("abort", onAbort, { once: true });
+      }
+      // 图片解析（store 缺失/失败 → UNSUPPORTED_CONTENT 明确报错）
+      let images = null;
+      try {
+        const store = typeof deps.getImages === "function" ? deps.getImages() : null;
+        images = store ? await prepareImages(store, options && options.messages, ac.signal) : null;
+      } catch (e) {
+        if (signal) signal.removeEventListener("abort", onAbort);
+        throw toLlmError(LlmError, e, requestId);
+      }
+      // 消息转换（assistant 历史回放签名/tool-result 拆分/图片编码）
+      let hanaMessages;
+      let systemPrompt;
+      try {
+        const conv = toHanaMessages({ messages: options && options.messages, images });
+        hanaMessages = conv.messages;
+        systemPrompt = conv.systemPrompt;
+      } catch (e) {
+        if (signal) signal.removeEventListener("abort", onAbort);
+        throw toLlmError(LlmError, e, requestId);
+      }
+      if (hanaMessages.length === 0) {
+        if (signal) signal.removeEventListener("abort", onAbort);
+        throw new LlmError("请求消息为空（无 user/assistant/toolResult 消息）", "EMPTY_MESSAGES", { requestId });
+      }
+      const request = {
+        requestId,
+        taskId,
+        provider: options.provider,
+        model: options.model,
+        messages: hanaMessages,
+      };
+      if (systemPrompt) request.systemPrompt = systemPrompt;
+      if (Array.isArray(options.tools) && options.tools.length) request.tools = options.tools;
+      if (options.reasoningEffort) request.reasoningEffort = String(options.reasoningEffort);
+      if (Number.isInteger(options.maxTokens) && options.maxTokens > 0) request.maxTokens = options.maxTokens;
+      if (typeof options.temperature === "number" && Number.isFinite(options.temperature)) {
+        request.temperature = options.temperature;
+      }
+      // 步骤 4a：活动模型流注册（task-bridge 宿主取消/审批链按会话定向 models.cancel，
+      // 只停本工作不误停他人会话；键契约见 src/lib/model-requests.js MODEL_REQUEST_GLOBAL_KEY）
+      registerActiveModelRequest(sessionId, requestId);
+      try {
+        const response = await deps.hana.models.stream(request);
+        let done = false;
+        try {
+          for await (const ev of readNdjsonEvents(response)) {
+            if (!ev || typeof ev.type !== "string") continue;
+            if (ev.type === "done") {
+              const chunks = buildDoneChunks({ doneEvent: ev, provider: options.provider, model: options.model, requestId });
+              for (const c of chunks) yield c;
+              done = true;
+              break;
+            }
+            if (ev.type === "error") {
+              throw new LlmError(
+                String(ev.message || "模型错误"),
+                String(ev.code || "MODEL_ERROR"),
+                { requestId },
+              );
+            }
+            // start/text-delta/reasoning-delta/tool-call：done.assistant 为权威内容（见 lib/stream.js 头注释）
+          }
+        } finally {
+          if (signal) signal.removeEventListener("abort", onAbort);
+          try {
+            ac.abort();
+          } catch { /* 忽略 */ }
+        }
+        if (!done) {
+          if (options && options.signal && options.signal.aborted) {
+            throw new LlmError("模型流已中止", "ABORTED", { requestId });
+          }
+          throw new LlmError("模型流未以 done 事件结束（宿主连接中断）", "STREAM_CLOSED", { requestId });
+        }
+      } catch (e) {
+        if (e instanceof LlmError) throw e;
+        throw toLlmError(LlmError, e, requestId);
+      } finally {
+        unregisterActiveModelRequest(sessionId, requestId);
+      }
+    }
+  })();
+  return adapter;
 }
 
 export async function apply(ctx, config) {
   try {
-    let busConfigHolder = null;
+    // 1. hana client 句柄（dsh-host.mjs 在 connectAppRuntime 后、runProfile 前设置；
+    // 插件加载晚于该点；仍给窗口兜底轮询）
+    let hana = null;
     try {
-      ctx.inject(["dshanaBus"], (busCtx) => {
+      hana = globalThis.__dshanaHana || null;
+    } catch {
+      hana = null;
+    }
+    if (!hana || !hana.models || typeof hana.models.list !== "function") {
+      warn(ctx, "hana client（globalThis.__dshanaHana）不可用——provider 停用（受管 runtime 未正确注入宿主 IPC）");
+      return;
+    }
+    // 2. 附件 store（图片 base64 解析；缺失时图片内容报 UNSUPPORTED_CONTENT）
+    let attachmentStore = null;
+    try {
+      ctx.inject(["attachments"], (aCtx) => {
         try {
-          busConfigHolder = busCtx.dshanaBus?.getConfig?.() ?? null;
-        } catch {
-          /* 配置读取失败按未下发处理 */
-        }
+          const s = aCtx && aCtx.attachments;
+          if (s && typeof s.readImageRequest === "function") attachmentStore = s;
+        } catch { /* 忽略 */ }
       });
     } catch {
-      /* 注入失败降级：loadDeps 走 DSH_HOME 反推 */
+      /* attachments 服务不可用：图片内容报 UNSUPPORTED_CONTENT */
     }
-    const getBusDshPkgDir = () => {
+    // 3. 目录快照（models.list；引擎未就绪窗口内重试 ≤20s）
+    let models = [];
+    const deadline = Date.now() + 20000;
+    for (;;) {
       try {
-        const bc = busConfigHolder;
-        return bc && typeof bc.dshPkgDir === "string" && bc.dshPkgDir
-          ? bc.dshPkgDir
-          : null;
-      } catch {
-        return null;
+        const res = await (hana.models.list());
+        const list = res && Array.isArray(res.models) ? res.models : [];
+        if (list.length > 0) {
+          models = list;
+          break;
+        }
+      } catch (e) {
+        warn(ctx, "hana.models.list 暂不可用：" + ((e && e.message) || e));
       }
-    };
-    const deps = await loadDeps(config, getBusDshPkgDir);
-    if (!deps || deps.error) {
-      ctx.logger.error(
-        `[@dsh-hanako/provider] 依赖加载失败，插件停用：${deps?.error?.message || deps?.error || "未知错误"}`,
-      );
+      if (Date.now() >= deadline) break;
+      await sleep(500);
+    }
+    if (models.length === 0) {
+      warn(ctx, "hana 模型目录为空——provider 无路由可注册（宿主无可用模型/目录未就绪）");
       return;
     }
-    const { PiAiAdapter } = deps.piAiAdapter;
-    if (typeof PiAiAdapter !== "function") {
-      ctx.logger.error(
-        "[@dsh-hanako/provider] dsh-llm-pi-ai 未导出 PiAiAdapter，插件停用",
-      );
+    // 4. dsh-llm 动态依赖 + adapter
+    let llmMod = null;
+    for (const href of resolveLlmEntry()) {
+      try {
+        // webpackIgnore：运行时原生 import（变量基座，cordis 子插件打包保留原生语义）
+        llmMod = await import(/* webpackIgnore: true */ href);
+        break;
+      } catch { /* 试下一个基座 */ }
+    }
+    if (!llmMod) {
+      try {
+        llmMod = await import(/* webpackIgnore: true */ "@deepseek-ai/dsh-llm");
+      } catch { /* 不可用 */ }
+    }
+    const LlmAdapter = llmMod && llmMod.LlmAdapter;
+    const LlmError = llmMod && llmMod.LlmError;
+    if (typeof LlmAdapter !== "function" || typeof LlmError !== "function") {
+      warn(ctx, "dsh-llm 未导出 LlmAdapter/LlmError——provider 停用");
       return;
     }
-    const apiFactories = {
-      "openai-completions": () => deps.piAiCompletions.openAICompletionsApi(),
-      "openai-responses": () => deps.piAiResponses.openAIResponsesApi(),
-      "anthropic-messages": () => deps.piAiAnthropic.anthropicMessagesApi(),
-    };
-    let loggerSvc = null;
-    ctx.inject(["hanaLogger"], (logCtx) => {
-      loggerSvc = logCtx.hanaLogger;
+    const routes = providerRoutes(models);
+    const adapter = buildHanaAdapter(LlmAdapter, LlmError, {
+      models,
+      hana,
+      getImages: () => attachmentStore,
     });
-    const providerLog = (msg) => {
-      try {
-        loggerSvc?.log("provider", msg);
-      } catch {
-        /* 日志失败不阻断 */
-      }
-    };
-
-    // ---- 宿主 routes 快照 + 0.1.2 profiles（PiAiAdapter 消费形状）----
-    let hostRoutes = new Map(); // route.id → route（宿主 push 的 route 目录）
-    let adapter = null;
-    let registration = null;
-    let snapshotFacts = null; // 注册事实（route id 排序串），路由集变化才重建
-    let profilesCache = null;
-
-    const buildProfilesMap = () => {
-      const providersDict = {};
-      for (const route of hostRoutes.values()) {
-        providersDict[route.id] = {
-          ...(route.displayName ? { displayName: route.displayName } : {}),
-          ...(route.baseURL ? { baseURL: route.baseURL } : {}),
-          ...(route.api ? { api: route.api } : {}),
-          ...(Array.isArray(route.models) && route.models.length
-            ? { models: route.models }
-            : {}),
-        };
-      }
-      return providersDict;
-    };
-    const profiles = () => {
-      const dict = buildProfilesMap();
-      profilesCache = resolveProfilesSimplified(dict, deps, apiFactories);
-      return profilesCache;
-    };
-    const resolveApiKey = async (provider, _profile) => {
-      const route = hostRoutes.get(provider);
-      return route && typeof route.apiKey === "string" && route.apiKey
-        ? route.apiKey
-        : void 0;
-    };
-    const ensureRegistration = () => {
-      const routes = [...hostRoutes.keys()];
-      const facts = routes.sort().join(",");
-      if (facts === snapshotFacts && registration !== null) return;
-      if (adapter === null)
-        adapter = new PiAiAdapter({
-          profiles,
-          resolveApiKey,
-          auth: {},
-          onReplayDegrade: () => { },
-        });
-      if (registration === null) {
-        // 首次注册：空 routes（初始无 provider）不注册 adapter（无 provider 可注册），
-        // 只推进 snapshotFacts——后续 refresh 填入 routes 时再注册。
-        if (routes.length === 0) {
-          snapshotFacts = facts;
-          return;
-        }
-        registration = ctx.llm.registerAdapter(routes, adapter);
-      } else {
-        // 已注册：一律 replace（空数组也是有效快照——provider 全移除时清空注册表，
-        // resolveApiKey 经 hostRoutes.get 返回 undefined，凭据不再对外暴露）
-        registration.replace(routes);
-      }
-      snapshotFacts = facts;
-    };
-
-    const applySnapshot = () => {
-      ensureRegistration();
-    };
-
-    const refresh = (source, providerData) => {
-      const t0 = Date.now();
-      const routes =
-        providerData && Array.isArray(providerData.routes)
-          ? providerData.routes
-          : null;
-      if (!routes) {
-        // routes 缺失（null/undefined，非空数组）：数据不可用，保留旧 snapshot
-        ctx.logger.warn(
-          "[@dsh-hanako/provider] 收到空 routes（宿主持有 provider 缺失或未 push），保留旧 snapshot",
-        );
-        providerLog(`refresh 收到空 routes（${source}），保留旧 snapshot`);
-        return;
-      }
-      // 先构建候选快照再提交：不预先 mutate 活跃 hostRoutes——applySnapshot 失败时
-      // 恢复旧值（hostRoutes/profilesCache/snapshotFacts），日志与行为一致。
-      let candidate;
-      try {
-        candidate = new Map(routes.map((r) => [r.id, r]));
-      } catch (e) {
-        ctx.logger.error(
-          `[@dsh-hanako/provider] routes 快照构建失败：${e?.message || e}`,
-        );
-        providerLog(`refresh 快照构建失败（${source}）：${e?.message || e}`);
-        return;
-      }
-      const prevHostRoutes = hostRoutes;
-      const prevProfilesCache = profilesCache;
-      const prevSnapshotFacts = snapshotFacts;
-      hostRoutes = candidate;
-      profilesCache = null; // 强制重建 profiles
-      snapshotFacts = null;
-      try {
-        applySnapshot();
-        const modelCount = [...hostRoutes.values()].reduce(
-          (n, r) => n + (Array.isArray(r.models) ? r.models.length : 0),
-          0,
-        );
-        ctx.logger.info(
-          `[@dsh-hanako/provider] 已同步 ${hostRoutes.size} 个 provider（routes ${routes.length} 条）`,
-        );
-        providerLog(
-          `refresh 完成（${source}）：${hostRoutes.size} 个 provider / ${modelCount} 个模型，耗时 ${Date.now() - t0}ms`,
-        );
-      } catch (e) {
-        // 应用失败：恢复旧 snapshot（hostRoutes/profilesCache/snapshotFacts 回到提交前值）
-        hostRoutes = prevHostRoutes;
-        profilesCache = prevProfilesCache;
-        snapshotFacts = prevSnapshotFacts;
-        ctx.logger.error(
-          `[@dsh-hanako/provider] 应用配置失败，已恢复旧 snapshot：${e?.message || e}`,
-        );
-        providerLog(
-          `refresh 应用失败（${source}），已恢复旧 snapshot：${e?.message || e}`,
-        );
-      }
-    };
-
-    // ---- 宿主 push 通知（总线退役后 ctx 事件：cordis ctx.on 直收，宿主经
-    // g.web.ctx.emit('dshana/provider-push') 广播——见 src/lib/lifecycle.js
-    // pushProviderRoutes）----
-    ctx.on("dshana/provider-push", (payload) => {
-      try {
-        const p = payload && typeof payload === "object" ? payload : {};
-        const routes = Array.isArray(p.routes) ? p.routes : null;
-        refresh("宿主 push（ctx）", { routes });
-        providerLog(
-          "收到 provider-push 事件（宿主 push（ctx）" +
-            (Array.isArray(p.routes)
-              ? "，" + p.routes.length + " 条 routes"
-              : "，路由缺失") +
-            "）",
-        );
-      } catch (e) {
-        try {
-          ctx.logger?.warn?.(
-            "[@dsh-hanako/provider] provider-push 处理失败：" + (e?.message || e),
-          );
-        } catch {
-          /* 日志失败不阻断 */
-        }
-      }
-    });
-    // 启动 snapshot（旧版 config.routesJSON 兼容）先于 replay 请求执行（CodeRabbit：
-    // Data Integrity）。理由：provider 插件在宿主 ctx 传输已就绪时重载（bus/插件 effect
-    // reload），下方 ctx.emit('dshana/provider-refresh-request') 的重放是**同步**回推宿主已
-    // 组装的最新 routes（宿主 ctx.on 收后立即 provider-push 再同步 feed 回本插件的
-    // ctx.on('dshana/provider-push') → refresh）。若 legacy routesJSON 刷新排在 replay 之后，
-    // 会用 stale 快照覆盖刚重放的最新 routes。故先落旧版初始快照，再发 replay——宿主最新
-    // routes 后到胜出。
-    if (config && Array.isArray(config.routesJSON)) {
-      ctx.logger.info(
-        `[@dsh-hanako/provider] 检测到旧版 config.routesJSON（${config.routesJSON.length} 条），用作初始 route 目录`,
-      );
-      // 首次激活（宿主 ctx 订阅未就绪，emit 无响应）时此处即最终初始值；重载场景退让给
-      // 下方 replay（若 ctx 传输可用，后续最新 push 覆盖此旧快照）。
-      refresh("旧版 routesJSON", { routes: config.routesJSON });
-    } else {
-      ctx.logger.info(
-        "[@dsh-hanako/provider] 启动 snapshot 为空，等待宿主 push 首批 route 目录",
-      );
-      providerLog("启动 snapshot 为空，等待宿主 push 首批 route 目录");
-    }
-    // 订阅建立后请求重放（覆盖宿主首批 push 早于本订阅的窗口）：ctx.emit 请求，宿主
-    // ctx.on('dshana/provider-refresh-request') 收后重推。调用点排在 legacy 初始快照之后——
-    // replay 加载的是宿主最新组装（ctx 传输可用时同步生效），不会被下方 stale snapshot 覆盖。
-    try {
-      ctx.emit("dshana/provider-refresh-request", {});
-    } catch {
-      /* 请求失败不阻断（宿主就绪点已主动推） */
-    }
+    // 5. 注册（空 routes 不注册——llm 注册表要求非空；目录空已在上方 return）。
+    // 宿主目录是启动快照：受管进程存活期不变化（改宿主模型配置需 runtime 重启生效——
+    // 与受管 runtime 生命周期一致的取舍，见 DESIGN「已测/未测边界」）。
+    ctx.llm.registerAdapter(routes, adapter);
+    log(ctx, "已注册 " + routes.length + " 个 provider 路由（" + models.length + " 个模型，源=hana.models.list）");
   } catch (e) {
-    // 顶层兜底：apply 永不抛出（边界要求——不阻断 dsh 启动）
-    ctx.logger.error(
-      `[@dsh-hanako/provider] 插件初始化失败，已降级为空操作：${e?.message || e}`,
-    );
+    // 顶层兜底：apply 永不抛出
+    try {
+      ctx.logger?.error?.("[" + name + "] 插件初始化失败，已降级为空操作：" + ((e && e.message) || e));
+    } catch { /* 忽略 */ }
   }
 }

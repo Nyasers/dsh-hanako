@@ -10,6 +10,14 @@
 // 用法：
 //   node scripts/syncver.mjs            # 同步（manifest + cordis 源 = 主，幂等）
 //   node scripts/syncver.mjs --check    # 只校验不一致即 exit 1（CI/门禁用）
+//
+// v2 版本域（迁移步骤 4b/5 收口定案）：
+//   · 主 package.json / src/manifest.json 使用 App 版本域 2.0.0-beta.x（迁移起即 2.0.0-beta.1）；
+//   · cordis 子包（roster dshana + plugins/* 共 11 个 package.json）**联动跟随主版本等值**
+//     （无独立版本线；单一事实源 = 主）。理由：cordis 产物随 App 安装目录整体发版、不独立
+//     发布，任何独立版本只会引入漂移面——pack.mjs 的 assertCordisDistVersions 同样断言等值；
+//   · build metadata（+dsh-<@deepseek-ai/dsh 依赖>）由 version-hook 在发版时统一拼回主版本，
+//     同步随之传播（本命令只同步字符串等值，不关心裸号/完整号）。
 // 派生同步目标（manifest + cordis 包）与版本读写为根级共享（scripts/version-common.mjs，
 // version-hook/syncver/changelog 复用——通用构件放根级，领域特有随源码）
 import { derivedVersionTargets, readPkg, writePkg } from "./version-common.mjs";

@@ -1,0 +1,306 @@
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2026 Nyasers
+//
+// src/runtime/approval-bridge.js — 受管 runtime 内 DSH 审批 → Hana 审批桥（App v2 步骤 4a）
+//
+// 位置与角色：本模块随 dist/runtime/dsh-host.mjs 打进受管 runtime（与 DSH 同进程），
+// main.js 在 DSH boot 就绪后挂载（先于 readyMarker）。它把 DSH 的审批等待者接到 Hana：
+//
+//   DSH 工具越界/敏感操作（sandbox 升级 approval/policy=ask）
+//     → ApprovalService.request → ctx.waterfall(scopeTarget(agent), 'approval/request', …)
+//     → 本桥以 ctx.on('approval/request', …, { global: true, prepend: true }) 认领
+//       （v1 实证：无 scope 的 ctx.on 因 context filter 收不到 agent-scope 瀑布事件，
+//       EventOptions.global = true 无视 context filter 收所有 agent——见 v1 acp-mount）
+//     → 按 task-map 定位宿主 task（details 含 dshSessionId/rpcId/toolName/args/reason）
+//     → hana.tasks.requestApproval({ taskId, label, details, timeoutMs })
+//     → 记 approval 到映射文件（App approve 凭它校验归属/去重）
+//     → 挂起 ApprovalOutcome 承诺，经 watch(approvalId) SSE（snapshot 首条 + app-task；
+//       断线 get() 对账；reset 重读快照——lib/watch-sse.js）等宿主终态：
+//          outcome=allowed-once → 'allowed-once'（仅本次放行）
+//          outcome=rejected     → 'rejected'
+//          终态无 outcome（父任务结束/撤销）→ 'rejected'（fail closed，绝不隐式放行）
+//          审批超时（timeoutMs 宿主自动拒绝）→ 'rejected'
+//     → 只投给该 approvalId 对应的 DSH 等待者（承诺闭包天然定向，不广播）
+//
+//   DSH 请求侧取消（req.signal abort / 回合中止）：宿主审批若仍 pending → 应答 rejected
+//   收尾（不留孤儿审批；父任务终态兜底），DSH 侧 resolve 'cancelled'——不把取消当授权。
+//
+// 审批等待不计入执行超时：任务执行超时走 cancel 链（session-run 看门狗 → session.cancel
+// → 本桥 answerer 的 req.signal 中止 → 上面收尾路径），宿主审批由 approval 的 timeoutMs
+// 独立自动拒绝。
+import { readTaskMap, addApproval, settleApproval, isValidSessionId } from "../lib/task-map.js";
+import { approvalOutcomeOf, runWatchReconcile } from "../lib/watch-sse.js";
+
+export const DEFAULT_APPROVAL_TIMEOUT_MS = 30000; // 宿主 approval 自动拒绝兜底（manifest approvalTimeoutSec 默认 30s）
+export const TOOL_ARGS_PREVIEW_MAX = 4000; // args 预览上限（审批决策证据，防超大载荷）
+const CACHE_SESSION_CAP = 32; // tool-call 缓存会话数上限（有界，防无界内存增长）
+const CACHE_CALL_CAP = 64; // 每会话 callId 上限
+
+/** 纯函数：审批请求归一（供单测）。req = DSH ApprovalRequestEvent 的序列化形态。 */
+export function approvalSessionIdOf(req) {
+  const agent = req && req.agent;
+  return agent && agent.session && typeof agent.session.id === "string" ? agent.session.id : null;
+}
+
+/** args 预览（纯函数）：JSON 字符串截断 + 拍平对象。 */
+export function previewArgs(value, max = TOOL_ARGS_PREVIEW_MAX) {
+  if (value === undefined || value === null) return null;
+  let s = "";
+  try {
+    s = typeof value === "string" ? value : JSON.stringify(value);
+  } catch {
+    s = String(value);
+  }
+  s = s.trim();
+  if (!s) return null;
+  return s.length > max ? s.slice(0, max) + "…" : s;
+}
+
+/** tool-call 缓存：callId → { name, args }（审批请求只带 callId，name/args 由模型
+ *  assistant/message 的 tool-call 块补齐——v1 toolCache 同款信息源）。 */
+export function collectToolCallsFromEvent(sessionId, ev) {
+  if (!sessionId || !ev || ev.type !== "assistant/message") return [];
+  const data = ev.data && typeof ev.data === "object" ? ev.data : {};
+  const message = data.message && typeof data.message === "object" ? data.message : {};
+  const content = Array.isArray(message.content) ? message.content : [];
+  const out = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object" || block.type !== "tool-call") continue;
+    const callId = typeof block.id === "string" && block.id ? block.id : typeof block.callId === "string" ? block.callId : "";
+    const name = typeof block.name === "string" ? block.name : "";
+    if (!callId) continue;
+    out.push({ sessionId, callId, name, args: previewArgs(block.arguments) });
+  }
+  return out;
+}
+
+/** 有界 tool-call 缓存（sessionId → Map(callId → {name,args})）。 */
+export class ToolCallCache {
+  constructor({ log } = {}) {
+    this.sessions = new Map();
+    this.log = log || null;
+  }
+  push(frames) {
+    for (const f of frames || []) {
+      if (!f || !f.sessionId || !f.callId) continue;
+      let per = this.sessions.get(f.sessionId);
+      if (!per) {
+        if (this.sessions.size >= CACHE_SESSION_CAP) {
+          const oldest = this.sessions.keys().next().value;
+          if (oldest !== undefined) this.sessions.delete(oldest);
+        }
+        per = new Map();
+        this.sessions.set(f.sessionId, per);
+      }
+      if (per.size >= CACHE_CALL_CAP) {
+        const oldestKey = per.keys().next().value;
+        if (oldestKey !== undefined) per.delete(oldestKey);
+      }
+      per.set(f.callId, { name: f.name || "tool", args: f.args || null });
+    }
+  }
+  get(sessionId, callId) {
+    const per = this.sessions.get(sessionId);
+    return per && callId ? per.get(callId) || null : null;
+  }
+  clear() {
+    this.sessions.clear();
+  }
+}
+
+/**
+ * 挂载审批桥。@returns stop 函数（幂等）：退订 ctx 事件、中止全部等待中的审批 watcher。
+ * 挂载失败抛错由 main.js 决定（不阻断 ready——审批不可用时 DSH 等待者 fail-closed）。
+ */
+export function startApprovalBridge({ ctx, hana, dataDir, log }) {
+  const offs = [];
+  const pendings = new Set(); // 未结算审批的取消器（stop 时统一中止）
+  const cache = new ToolCallCache({ log });
+  const note = (msg) => {
+    try { if (typeof log === "function") log("[approval-bridge] " + msg); } catch { /* 忽略 */ }
+  };
+
+  const onEvent = (event, handler) => {
+    try {
+      const off = ctx.on(event, handler);
+      if (typeof off === "function") offs.push(off);
+    } catch {
+      /* 单事件订阅失败跳过 */
+    }
+  };
+
+  // ---- ① tool-call 缓存订阅（审批决策的 args 证据来源）----
+  onEvent("session/event", (session, ev) => {
+    const sid = session && typeof session.id === "string" ? session.id : null;
+    try {
+      cache.push(collectToolCallsFromEvent(sid, ev));
+    } catch { /* 缓存失败忽略 */ }
+  });
+
+  // ---- ② approval/request global waterfall 认领 ----
+  async function answerer(req, next) {
+    const sessionId = approvalSessionIdOf(req);
+    if (!sessionId || !isValidSessionId(sessionId)) {
+      // 未知/畸形会话：不认领（next 委托其他应答者；无应答者 DSH fail-closed）
+      return next();
+    }
+    const map = readTaskMap(dataDir, sessionId);
+    if (!map || !map.taskId) {
+      // 非 dsh_session 发起的会话（如 DSH Web UI 直开）：没有宿主 task scope，
+      // 无法 requestApproval——委托（DSH 无应答者时 fail-closed，不隐式放行）
+      note("审批无 task-map（session=" + sessionId.slice(0, 12) + "）——委托，不认领");
+      return next();
+    }
+    const callId = (req && req.callId) || null;
+    const cached = callId ? cache.get(sessionId, callId) : null;
+    const toolName = (req && req.toolName) || (cached && cached.name) || "tool";
+    const args = previewArgs((cached && cached.args) || null);
+    const reason = (req && req.reason) || null;
+    const rpcId = map.rpcId || "";
+    const timeoutMs = Number(map.approvalTimeoutMs) >= 0 ? Number(map.approvalTimeoutMs) : DEFAULT_APPROVAL_TIMEOUT_MS;
+    note("审批请求收到（session=" + sessionId.slice(0, 12) + " tool=" + toolName + (callId ? " call=" + callId.slice(0, 12) : "") + "）");
+
+    const entry = { sessionId, approvalId: "" }; // pendings 条目（审批创建后填 approvalId）
+    let settleOutcome = null;
+    let settled = false;
+    let doRespond = null;
+    let cancelWatch = null;
+    let abortedCleanup = false;
+    const pending = new Promise((resolve) => {
+      settleOutcome = (outcome) => {
+        if (settled) return;
+        settled = true;
+        if (cancelWatch) { try { cancelWatch(); } catch { /* 忽略 */ } cancelWatch = null; }
+        if (entry.approvalId) { try { pendings.delete(entry); } catch { /* 忽略 */ } }
+        resolve(outcome);
+      };
+    });
+    // req.signal 中止 = DSH 回合取消/中止：宿主审批收尾为 rejected（不留孤儿），
+    // DSH 等待者 resolve 'cancelled'（不是 allowed-once——取消绝不当授权，v1 教训）
+    const signal = req && req.signal;
+    const onAbort = () => {
+      if (settled) return;
+      abortedCleanup = true;
+      if (doRespond) {
+        try { doRespond("rejected").catch(() => {}); } catch { /* 忽略 */ }
+      }
+      settleOutcome("cancelled");
+    };
+    if (signal) {
+      if (signal.aborted) onAbort();
+      else signal.addEventListener("abort", onAbort, { once: true });
+    }
+    // 宿主审批创建
+    let approval = null;
+    try {
+      approval = await hana.tasks.requestApproval({
+        taskId: map.taskId,
+        label: "DSH 请求执行越界/敏感操作（" + toolName + "）",
+        details: {
+          dshSessionId: sessionId,
+          rpcId,
+          toolName,
+          ...(callId ? { callId } : {}),
+          ...(reason ? { reason } : {}),
+          ...(args ? { args } : {}),
+          kind: "dsh-approval",
+        },
+        timeoutMs,
+      });
+    } catch (e) {
+      note("requestApproval 失败（fail-closed）：" + ((e && e.message) || e));
+      settleOutcome("rejected"); // 创建失败 = 无法等待 = fail closed（绝不放行）
+      return pending;
+    }
+    const approvalId = approval && approval.approvalId;
+    if (!approvalId) {
+      note("requestApproval 未返回 approvalId（fail-closed）");
+      settleOutcome("rejected");
+      return pending;
+    }
+    doRespond = (outcome) => hana.tasks.respondApproval({ approvalId, outcome });
+    // 记录到映射文件（App approve 校验/去重 + 应答上下文）；写失败不阻断（watch 为准）
+    try {
+      addApproval(dataDir, sessionId, {
+        approvalId,
+        toolName,
+        ...(callId ? { callId } : {}),
+        ...(reason ? { reason } : {}),
+        ...(args ? { args } : {}),
+        at: Date.now(),
+      });
+    } catch (e) {
+      note("审批记录写映射失败：" + ((e && e.message) || e));
+    }
+    // 立即按请求创建结果结算一次（宿主可能已即时终态——如父任务刚结束）
+    const immediate = approvalOutcomeOf(approval);
+    if (immediate) {
+      note("审批 " + approvalId.slice(0, 12) + " 已即时终态：" + immediate);
+      settleOutcome(immediate);
+      return pending;
+    }
+    entry.approvalId = approvalId;
+    pendings.add(entry);
+    // watch(approvalId) 等宿主终态（SSE snapshot + app-task；断线 get() 对账）
+    const stopFlag = { value: false };
+    const watcher = (async () => {
+      try {
+        await runWatchReconcile({
+          watch: () => hana.tasks.watch(approvalId),
+          get: () => hana.tasks.get(approvalId),
+          onFrame: async (rec, kind) => {
+            if (settled || stopFlag.value) return false;
+            if (kind === "snapshot" || kind === "app-task") {
+              const outcome = approvalOutcomeOf(rec);
+              if (outcome) {
+                try { settleApproval(dataDir, sessionId, approvalId, outcome); } catch { /* 尽力 */ }
+                note("审批 " + approvalId.slice(0, 12) + " 终态 outcome=" + outcome + " → 投递 DSH 等待者");
+                settleOutcome(outcome);
+                return false; // 结算完成，结束 watch
+              }
+            }
+            return true;
+          },
+          shouldStop: () => settled || stopFlag.value,
+          retryBaseMs: 1000,
+          maxRetryMs: 15000,
+          log: (m) => note(m),
+        });
+      } catch (e) {
+        note("审批 watch 异常（fail-closed）：" + ((e && e.message) || e));
+        if (!settled) settleOutcome("rejected");
+      } finally {
+        try { pendings.delete(entry); } catch { /* 忽略 */ }
+      }
+    })();
+    cancelWatch = () => { stopFlag.value = true; };
+    void watcher;
+    return pending;
+  }
+  onEvent("approval/request", (req, next) => answerer(req, next), { global: true, prepend: true });
+
+  let stopped = false;
+  const stop = () => {
+    if (stopped) return;
+    stopped = true;
+    for (const off of offs) {
+      try { off(); } catch { /* 忽略 */ }
+    }
+    offs.length = 0;
+    cache.clear();
+    // 中止未结算 watcher（等待者由 DSH 信号/宿主终态自然收尾；stop 只是释放流）
+    for (const p of [...pendings]) {
+      try {
+        if (p && p.sessionId && p.approvalId) {
+          hana.tasks.respondApproval({ approvalId: p.approvalId, outcome: "rejected" }).catch(() => {});
+        }
+      } catch { /* 忽略 */ }
+    }
+    pendings.clear();
+    note("审批桥已停止（订阅退订 + 未结算审批收尾 rejected）");
+  };
+  try {
+    note("已挂载（approval/request global waterfall 应答 + tool-call 缓存 + watch 对账）");
+  } catch { /* 忽略 */ }
+  return stop;
+}

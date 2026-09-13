@@ -6,3 +6,6 @@ Source code for this distribution is available at:
 https://github.com/Nyasers/dsh-hanako
 
 This Source Code Form is "Incompatible With Secondary Licenses", as defined by the Mozilla Public License, v. 2.0.
+
+Vendored / bundled third-party components and their license texts:
+see THIRD_PARTY_NOTICES.md (currently: @hana/app-sdk, Apache-2.0).
