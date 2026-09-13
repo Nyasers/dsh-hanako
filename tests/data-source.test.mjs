@@ -96,7 +96,10 @@ test("sourceOf: private 恒为内置目录 + 常量 sourceId；shared 由 home+p
   assert.equal(a.shared, true);
   assert.equal(a.profileName, "web");
   assert.equal(idOf("/ds h"), idOf("/ds h/"), "尾斜杠不产生伪 source 变更");
-  assert.equal(idOf("/ds h"), idOf("\\ds h\\"), "反斜杠与正斜杠同义");
+  // 反斜杠同义只在 Windows 路径语义下成立：Linux 上 "\ds h\" 不是绝对路径，会被校验拒掉。
+  if (process.platform === "win32") {
+    assert.equal(idOf("/ds h"), idOf("\\ds h\\"), "反斜杠与正斜杠同义");
+  }
   assert.notEqual(idOf("/ds h"), idOf("/ds h", "other"), "profile 不同即不同源");
   assert.match(a.sourceId, /^[0-9a-f]{24}$/);
 });
