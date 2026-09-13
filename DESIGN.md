@@ -24,7 +24,7 @@
 ```text
 Hana 宿主进程（App 隔离进程内加载 dist/index.js）
   ├─ App 侧：apply(ctx)
-  │    ├─ ctx.tools.register(dshana_session)         工具（六 action）
+  │    ├─ ctx.tools.register(dshana)                 工具（单工具 + subcommand，六动作）
   │    ├─ ctx.routes.register(/dshana/*)             壳页/诊断面（boot-state|health|start|stop）
   │    └─ ctx.runtime.start({ runtime:"node", entry:"runtime/dsh-host.mjs",
   │           cwd:ctx.dataDir, service:{ port:<随机>, readyMarker:"..." } })
@@ -46,14 +46,16 @@ Hana 宿主进程（App 隔离进程内加载 dist/index.js）
 
 ## 工具
 
-宿主 Agent 工具面为**单工具 `dshana_session`**（源码 `tools/session.js` 分派壳 + `tools/subtool/query.js` 只读查询 + `lib/session-run.js` 提交链 + `lib/cancel-chain.js` / `lib/approve-respond.js` 编排）。**完整调用手册见 [dsh-session](src/skills/dsh-session/SKILL.md)**：
+宿主 Agent 工具面为**单工具 `dshana`**（一个插件一个同名工具 + CLI subcommand：装配 `tools/index.ts`，各动作 `tools/<action>.ts`，只读查询 `tools/subtool/query.ts`，提交链 `lib/session-run.js`，取消/审批编排 `lib/cancel-chain.js` / `lib/approve-respond.js`）。语义对齐 subagent（open/reply/close），另有 get/list/approve 三个特色动作。**完整调用手册见 [dsh-session](src/skills/dsh-session/SKILL.md)**：
 
 | action | 用途 | 实现 |
 | --- | --- | --- |
-| `create` / `send` | 新建会话+提交 / 续已有会话（task+cwd 必填，resume 语义） | `lib/session-run.js` |
-| `list` / `get` | 会话清单 / 凭 sessionId 取内容（projcache + jsonl zstd 本地读） | `tools/subtool/query.js` |
-| `cancel` | 取消任务（sessionId 必填） | `lib/cancel-chain.js` |
-| `approve` | 应答会话挂起审批（allowed-once/rejected，决策看 args） | `lib/approve-respond.js` |
+| `open` / `reply` | 开子代理+交首件活 / 续已有子代理（task 必填；open 另需 cwd） | `tools/open.ts` / `tools/reply.ts` → `lib/session-run.js` |
+| `list` / `get` | 会话清单 / 回看某一轮最终结论（官方 `session/list` + `session/page`） | `tools/list.ts` / `tools/get.ts` → `tools/subtool/query.ts` |
+| `close` | 取消正在跑的任务（taskId 句柄或 sessionId 凭证） | `tools/close.ts` → `lib/cancel-chain.js` |
+| `approve` | 应答挂起审批（allowed-once/rejected，决策看 args） | `tools/approve.ts` → `lib/approve-respond.js` |
+
+调用模型：句柄默认（taskId/approvalId，按宿主记录的来源会话校验归属）、凭证显式（sessionId = 我要跨对话）。每个子命令的参数在 `parameters.oneOf` 里单独成支（`additionalProperties:false`）。
 
 提交链路：`ctx.tasks.create` → 受管 runtime 就绪 → `session.create` →（显式传 provider/model/effort 时才 `selectModel`）→ 会话↔任务认领（控制面 `bind-task`，落点是会话日志的投影槽位 `dshanaTaskBinding`，见 src/lib/binding-slot.js 与 src-cordis/plugins/provider/lib/binding.js）→ `session.prompt`（queue）→ runtime task-bridge 把任务状态与终态回投。
 
@@ -78,7 +80,7 @@ DSHana 以**单卡 + 自带功能面板**注册（manifest `contributes.cards[0]
 
 ## 启动与状态
 
-- **启动触发**：App `apply` 完成后经微任务触发一次 `ensureManagedRuntime`（single-flight，不占 apply 同步栈——宿主对 apply 有 60s bootstrap 超时）；`dshana_session` 首调与 `POST /dshana/start` 是可重入的兜底入口。
+- **启动触发**：App `apply` 完成后经微任务触发一次 `ensureManagedRuntime`（single-flight，不占 apply 同步栈——宿主对 apply 有 60s bootstrap 超时）；`dshana` 首调与 `POST /dshana/start` 是可重入的兜底入口。
 - **就绪判定**：宿主 `ctx.runtime.get(runtimeId).state === "ready"`，配合子进程末行 `readyMarker`。
 - **失败面**：`managed-runtime.js` 的 `START_ERROR_HINTS` 按 code（port-busy / port-unreachable / boot-failed / deps / seed / not-authorized）给中文指引，壳页 action 态展示。
 
@@ -87,7 +89,7 @@ DSHana 以**单卡 + 自带功能面板**注册（manifest `contributes.cards[0]
 - **升级 DSH = 装新 App 包 + 重启宿主**：宿主进程内的模块缓存无法从插件侧豁免。
 - **bash 工具在 Windows 上可能 `E_ACCESSDENIED`**（dsh-bash-sandbox 的环境限制）。文件系统工具正常，Windows 上优先用文件系统工具。
 - **主题仅在 DSH 偏好为 system 时跟随宿主**（见上，有意为之）。
-- 越界权限请求默认走审批：deferred 通知 → `dshana_session(action="approve")` 应答；无人应答按 `approvalTimeoutSec` 自动拒绝。
+- 越界权限请求默认走审批：deferred 通知 → `dshana(action="approve")` 应答；无人应答按 `approvalTimeoutSec` 自动拒绝。
 
 ## App v2 迁移状态（feat/app-v2-migration，接口基线 Hana 0.930.1）
 
@@ -146,7 +148,7 @@ DSHana 以**单卡 + 自带功能面板**注册（manifest `contributes.cards[0]
 决策是「当前实现按宿主 0.930.1 d.ts 契约写、真实宿主形态待装包对账」的依据。
 
 - **决策 E（取消链分侧与顺序 = App 发起 RPC、DSH 真中止后宿主才 canceled）**：
-  App 主进程（tools/session.js cancel / session-run 超时看门狗）经 loopback HTTP RPC 直调
+  App 主进程（tools/close.ts / session-run 超时看门狗）经 loopback HTTP RPC 直调
   DSH web /api/session/cancel（lib/dsh-rpc.js rpcSessionCancel + rpc-envelope 复用——与
   create/send 同一条指令面），并先写映射 cancel 标记（markCancelRequested）。受管 runtime
   task-bridge 在 DSH turn/end(aborted)（或自然终态但已有 cancel 标记，v1 cancelledRequested
@@ -169,13 +171,13 @@ DSHana 以**单卡 + 自带功能面板**注册（manifest `contributes.cards[0]
   approval/policy=ask）→ ApprovalService 走 ctx.waterfall(scopeTarget(agent),
   'approval/request')——approval-bridge 以 ctx.on('approval/request', …, { global: true,
   prepend: true }) 认领（v1 实证：无 scope ctx.on 因 context filter 收不到 agent-scope
-  瀑布事件）。有 task-map（dshana_session 发起的会话）→ hana.tasks.requestApproval({taskId,
+  瀑布事件）。有 task-map（dshana 发起的会话）→ hana.tasks.requestApproval({taskId,
   label, details:{dshSessionId,rpcId,toolName,callId,reason,args}, timeoutMs})（以父 taskId
   为范围，不需 callToken；timeoutMs 快照经映射下传，0=宿主不自动拒绝）→ 映射文件记
   approvals 条目（App approve 校验归属/去重）→ 挂起 ApprovalOutcome 承诺 watch(approvalId)
   等终态：allowed-once/rejected 原样投给该 approvalId 的 DSH 等待者（承诺闭包天然定向，
   不广播）；终态无 outcome（父任务结束/撤销/审批超时）→ rejected（fail closed，绝不隐式
-  放行；指南 §9）。App 侧 dshana_session(action=approve) = approve-respond.js 校验 task-map
+  放行；指南 §9）。App 侧 dshana(action=approve) = approve-respond.js 校验 task-map
   approvals 表（属于该会话且 pending）→ ctx.tasks.respondApproval({approvalId,outcome}) →
   runtime watch 观察 outcome 投递给 DSH。DSH 请求侧 abort（回合取消）→ 宿主审批收尾应答
   rejected（不留孤儿）+ resolve 'cancelled'（取消绝不当授权）。审批等待不计入执行超时：
@@ -206,7 +208,7 @@ DSHana 以**单卡 + 自带功能面板**注册（manifest `contributes.cards[0]
 - src/lib/cancel-chain.js：cancel 编排（planCancel/executeCancel/awaitCancelTerminal/
   cancelSessionWork）、任务/审批超时解析（App settings 注入）；session-run 的 rpcCall 收敛
   到 dsh-rpc，serviceBase 拆叶子模块（防环）。
-- src/lib/approve-respond.js：dshana_session approve 应答（归属校验 + respondApproval + 回填）。
+- src/lib/approve-respond.js：dshana approve 应答（归属校验 + respondApproval + 回填）。
 - src/lib/model-requests.js：活动 requestId 注册表消费侧（运行时 bundle）。
 - src/runtime/approval-bridge.js：DSH approval/request global+prepend 认领 → requestApproval
   → 映射记录 → watch(approvalId) 对账 → outcome 只投正确等待者；tool-call 缓存供 args
@@ -224,7 +226,7 @@ DSHana 以**单卡 + 自带功能面板**注册（manifest `contributes.cards[0]
 **真机/后续验收边界（本刀代码侧未跑通宿主，装包后由主上下文验收）：**
 
 1. 宿主审批通知形态：requestApproval 创建后来源会话如何收到「待审批」通知（文案/审批 UI/
-   卡片），dshana_session(action=approve) 是否被模型正确选用——approve 分支无本地依赖，纯
+   卡片），dshana(action=approve) 是否被模型正确选用——approve 分支无本地依赖，纯
    应答宿主；通知形态属宿主侧。
 2. watch SSE 实测对账：host watch(taskId/approvalId) 的事件名/载荷是否确为 snapshot/
    app-task/reset（按指南措辞实现 + 结构兜底）；get(approvalId) 与 get(taskId) 是否都受理。
@@ -283,7 +285,7 @@ DSHana 以**单卡 + 自带功能面板**注册（manifest `contributes.cards[0]
   note,updatedAt}` 与 runtimeProxyPrefix()（前缀宿主契约单点）。**ready 门**：service.state
   === ready 才给 proxyPrefix（绝不因 runtimeId 存在就展示端点——宿主在 readyMarker 后才发布
   服务）。阶段文案覆盖 idle/starting/ready/error/stopped。
-- index.js：ctx.routes.register 缺失（宿主过旧）→ warn 降级（DSH 仅 dshana_session 可用）；
+- index.js：ctx.routes.register 缺失（宿主过旧）→ warn 降级（DSH 仅 dshana 可用）；
   registrar 抛错 → 抬高中止 App 加载（显式失败优于静默残缺）；disposer 注销。
 
 ### 交付 2：contributes.cards 回归（v2 schema）

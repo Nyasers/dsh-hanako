@@ -40,7 +40,7 @@ export async function withSessionTurn(sessionKey, run) {
  */
 export function enterSessionTurn(sessionKey) {
   if (sessionTurnQueues.has(sessionKey)) {
-    throw new Error("dshana_session 内部错误：新会话 " + sessionKey + " 已有排队提交");
+    throw new Error("dshana 内部错误：新会话 " + sessionKey + " 已有排队提交");
   }
   let release = null;
   const gate = new Promise((resolve) => {

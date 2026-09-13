@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/lib/session-run.ts — dshana_session create/send 提交链
+// src/lib/session-run.ts — dshana open/reply 提交链（内部 action 词汇沿用 create/send）
 //
 // 职责：execute（工具执行，App 主进程）内完成：
 //   ① ctx.tasks.create({ callToken, label, metadata }) —— callToken 只在这里消费，
@@ -18,7 +18,11 @@
 // 提交是 fire-and-forget：submitDshTask 返回 { promise, ready }——ready 在 prompt 被 DSH
 // 接受（{ accepted:true }）后 resolve 定位键，execute 随即返回；promise 在后台继续等到
 // Hana task 终态（child task-bridge complete/fail 后，宿主投递到来源会话）并释放串行化锁。
-// 本模块不把 DSH turn 的最终文本带回 execute——内容读取统一走 dshana_session action=get。
+// 本模块不把 DSH turn 的最终文本带回 execute——内容读取统一走 dshana action=get。
+//
+// 词汇映射：工具面动作是 open/reply（见 tools/open.ts、tools/reply.ts），本模块内部沿用
+// create/send 描述「新建会话 / 续已有会话」这两个动作，映射在 tools/open.ts 与 tools/reply.ts
+// 的 submit 调用处完成。
 import { join } from "node:path";
 import { appCtx, appDataDir } from "./app-runtime.ts";
 import { currentDshHome } from "./data-source.ts";
@@ -37,15 +41,16 @@ export function normalizeCreateSend({ action, input } = {}) {
   if (!act) throw new Error("session-run: action 必须是 create / send");
   const taskText = String((input && input.task) || "").trim();
   if (!taskText) {
-    throw new Error((act === "create" ? "create" : "send") + " 必须传 task（任务描述/消息文本）");
+    throw new Error((act === "create" ? "open" : "reply") + " 必须传 task（任务描述/消息文本）");
   }
   const cwd = String((input && input.cwd) || "").trim();
   const sessionId = String((input && input.sessionId) || "").trim();
+  const label = String((input && input.label) || "").trim() || null;
   if (act === "create") {
-    if (sessionId) throw new Error("create 不允许传 sessionId（新建会话；续会话用 send）");
-    if (!cwd) throw new Error("create 必须传 cwd（沙箱工作目录，无 defaultCwd 回退）");
+    if (sessionId) throw new Error("open 不允许传 sessionId（新建；续会话用 reply）");
+    if (!cwd) throw new Error("open 必须传 cwd（沙箱工作目录，无 defaultCwd 回退）");
   } else {
-    if (!sessionId) throw new Error("send 必须传 sessionId（续已有会话；形如 session-<uuid>）");
+    if (!sessionId) throw new Error("reply 缺少目标会话（应给 taskId 句柄或 sessionId 凭证）");
     if (!isValidSessionId(sessionId)) throw new Error("sessionId 格式非法（应为 session-<UUID>）：" + sessionId);
   }
   // agent 预设：code → ptc；空值不传（DSH 默认）
@@ -60,6 +65,7 @@ export function normalizeCreateSend({ action, input } = {}) {
     taskText,
     cwd,
     sessionId,
+    label,
     agentPreset: preset,
     reasoningEffort: effort,
     provider,
@@ -209,7 +215,7 @@ function logLine(log, msg) {
 }
 
 /**
- * create/send 提交入口（tools/session.js 调用）。返回 { promise, ready }：
+ * create/send 提交入口（tools/open.ts / tools/reply.ts 调用）。返回 { promise, ready }：
  *   ready  —— prompt 被 DSH 接受后 resolve loc { action, sessionId, rpcId, taskId, cwd }；
  *             提交阶段失败（runtime 起不来/会话建立失败/selectModel 失败/prompt 拒绝）
  *             时 reject（任务已 fail 标记，错误直接抛给 execute）。
@@ -240,7 +246,9 @@ export function submitDshTask({ action, input, callToken, log }) {
     rejectReady = rej;
   });
   let releaseNewSessionTurn = null; // create：会话槽位（占用到终态）
-  const taskLabel = (parsed.action === "send" ? "DSH 续会话" : "DSH 新任务") + "：" + parsed.taskText.slice(0, 30);
+  // 显示名：显式 label 优先，否则按动作给默认前缀（宿主任务列表与结果通知里可见）
+  const taskLabel =
+    parsed.label || ((parsed.action === "send" ? "DSH 续会话" : "DSH 新任务") + "：" + parsed.taskText.slice(0, 30));
 
   const runTask = async () => {
     let taskId = null;

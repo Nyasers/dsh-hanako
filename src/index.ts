@@ -26,7 +26,7 @@ import { initAppRuntime, toolCtxFrom } from "./lib/app-runtime.ts";
 // 受管 DSH runtime：启动封装 + 释放（disposer 负责收尾）
 import { disposeManagedRuntime, ensureManagedRuntime } from "./lib/managed-runtime.ts";
 // 工具模块（导出 name/description/parameters/execute；v2 工具名即注册名，无自动前缀）
-import * as dshSession from "./tools/session.ts";
+import * as dshanaTool from "./tools/index.ts";
 // 壳页/诊断面单 registrar（ctx.routes.register 只挂本 App 后端面；到受管 runtime 的服务
 // 由宿主按 /api/apps/<id>/routes/_runtime/<runtimeId>/ 自动代理，本文件不转发）
 import { registerDshanaRoutes, defaultDshanaRouteDeps } from "./routes/dshana-routes.ts";
@@ -35,7 +35,7 @@ import { registerDshanaRoutes, defaultDshanaRouteDeps } from "./routes/dshana-ro
 // App 侧不写自己的文件日志；ctx.logger 缺失（旧 host）或宿主抛错时回落 stderr。
 
 /**
- * App v2 主入口：注册 dshana_session 工具 + 设置/路由就位后返回（不等待 DSH 服务）。
+ * App v2 主入口：注册 dshana 工具（单工具 + subcommand）+ 设置/路由就位后返回（不等待 DSH 服务）。
  * 返回 disposer：宿主卸载/重载本 App 时调用，用于收尾（关闭受管 DSH
  * runtime、任务与流）。
  */
@@ -66,8 +66,9 @@ export function apply(ctx) {
   initAppRuntime(app);
 
   // ---- 工具注册（v2 ctx.tools.register；execute 由宿主在 App 进程内经 RPC 回调执行）----
-  // 工具名 = dshSession.name（"dshana_session"，全局唯一；v2 不自动加前缀，重名会被宿主
-  // 当场拒掉）。action 参数与返回语义见 tools/session.js。
+  // 工具名 = dshanaTool.name（"dshana"，全局唯一；v2 不自动加前缀，重名会被宿主当场拒掉）。
+  // 形态：一个插件一个同名工具 + CLI subcommand（action）；装配见 tools/index.js，
+  // 各动作见 tools/<action>.js。
   // 每个 execute 收到的工具上下文由 toolCtxFrom 构造：宿主 ctx 的浅拷贝 + 统一日志出口。
   // 必须是整份宿主 ctx——工具业务要用 ctx.runtime（控制面请求）、ctx.tasks（宿主任务句柄）、
   // ctx.storage 等宿主能力；只挑几项手抄进来就会漏，而漏一项就是静默降级（控制面直接报
@@ -80,12 +81,12 @@ export function apply(ctx) {
   };
 
   const unregisterTool = ctx.tools.register({
-    name: dshSession.name,
-    description: dshSession.description,
-    parameters: dshSession.parameters,
-    execute: (input, callCtx) => dshSession.execute(input, toolCtxFrom(ctx, toolLog)),
+    name: dshanaTool.name,
+    description: dshanaTool.description,
+    parameters: dshanaTool.parameters,
+    execute: (input, callCtx) => dshanaTool.execute(input, toolCtxFrom(ctx, toolLog)),
   });
-  log("info", `工具注册:${dshSession.name}（ctx.tools.register，v2 全局唯一名，无自动前缀）`);
+  log("info", `工具注册:${dshanaTool.name}（ctx.tools.register，v2 全局唯一名，无自动前缀）`);
 
   // ---- ctx.routes.register：壳页/诊断面 ----
   // 契约（@hana/app-sdk）：单 bundle App 只能 register 一次，
@@ -108,7 +109,7 @@ export function apply(ctx) {
       throw e;
     }
   } else {
-    log("warn", "ctx.routes.register 缺失（宿主低于 0.930.1？）：壳页诊断面不可用，DSH Web UI 仅经 dshana_session 使用");
+    log("warn", "ctx.routes.register 缺失（宿主低于 0.930.1？）：壳页诊断面不可用，DSH Web UI 仅经 dshana 工具使用");
   }
 
   // ---- apply 级自动链：注册完成即后台拉起受管 DSH runtime（不 await，不阻塞 apply 返回）----
@@ -116,7 +117,7 @@ export function apply(ctx) {
   // ensureManagedRuntime（single-flight 幂等：已 starting/ready 时 no-op 共享同一启动）。
   // 依赖随包物化（安装目录 node_modules），启动只做 runtime boot（秒级）——fire-and-forget，
   // 状态经 boot-state 由壳页轮询展示（starting 日志滚动）；失败不 crash apply，落在 runtime
-  // 状态机（phase=error + userText），壳页展示重试指引，dshana_session 首调仍可再触发。
+  // 状态机（phase=error + userText），壳页展示重试指引，dshana 首调仍可再触发。
   {
     // 宿主 bootstrap 窗口实证（0.930.1 plugin-loader-v2）：App 加载对 apply 有 60s RPC
     // bootstrap 超时（beta.3 在 apply 同步栈内 fire ensure 两次均 60s 整被杀）。规避 =

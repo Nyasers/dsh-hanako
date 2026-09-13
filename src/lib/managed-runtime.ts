@@ -13,7 +13,7 @@
 //     端口不再暴露给用户：区间随机 + 占用自动换端口重试；就绪缓存每次经
 //     runtime.get 探活，子进程崩溃可被父侧识别并重起（对齐样例 controller 边界）。
 //   单例语义：一个 App runtime 服务多个 DSH 会话（每会话的 taskId 经任务桥各自携带，
-//     不把单次启动任务绑成全局焦点）；首次 create 时启动（tools/session.js 接线点），
+//     不把单次启动任务绑成全局焦点）；首次 create 时启动（tools/open.ts 接线点），
 //     ready 后所有 action 复用。runtime 终止后清除单例，下次调用重启。App 卸载/重载经
 //     disposeManagedRuntime 收尾（apply disposer）。
 //   日志：一律走宿主 ctx.logger（`logApp`），App 侧不写文件日志；受管子进程的
@@ -252,7 +252,7 @@ async function reapFailedRuntime(ctx) {
 // 首次安装时“能力/权限尚未授予”是常态：apply 自动链的第一次 ensure 必然失败。既然页面不再提供
 // 手动「启动 / 重启」按钮（无交互设计），这条链就得自己回来——失败即按退避重试，直到成功、
 // 被手动停止（stopManagedRuntime 冻结）或 App 卸载（dispose 走 stop）。任何显式启动请求
-// （apply 自动链 / dshana_session 首调 / /dshana/start）都会重新武装。
+// （apply 自动链 / dshana 首调 / /dshana/start）都会重新武装。
 const AUTO_RETRY_SCHEDULE_MS = [5000, 15000, 30000, 60000, 120000, 300000]; // 5s → 5min，之后停在 5min
 let autoRetryTimer = null;
 let autoRetryAttempt = 0;

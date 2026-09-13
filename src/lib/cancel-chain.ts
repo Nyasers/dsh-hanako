@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Nyasers
 //
-// src/lib/cancel-chain.ts — dshana_session cancel / 执行超时取消编排（App 主进程侧）
+// src/lib/cancel-chain.ts — dshana close / 执行超时取消编排（App 主进程侧）
 //
 // 职责：
-//   ① 触发：dshana_session(action=cancel)（本模块 cancelDshTask）或执行超时看门狗
+//   ① 触发：dshana(action=close)（本模块 cancelDshTask）或执行超时看门狗
 //      （session-run 定时器，同一函数）；
 //   ② DSH 侧中止：经 loopback HTTP RPC session/cancel（DSH 中止 agent 回合 → provider
 //      adapter 流 signal abort → hana.models.cancel(requestId)，工具/终端由 DSH 回合

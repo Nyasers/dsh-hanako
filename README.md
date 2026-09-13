@@ -8,9 +8,9 @@
 
 2. **打开 DSHana 卡**：App 加载后自动拉起受管 runtime，卡上按三态渲染——**未启动 / 启动中（阶段时间线 + 日志尾滚动）/ 就绪（装载 DSH Web UI）**。失败会进入「需要处理」态，卡上给出原因与原始错误；点「启动 DSH」可重试，端口占用会自动换端口。
 
-3. **验证**：让 Agent 跑一次 `dshana_session(action="create", task="…", cwd="<工作目录>")`，任务正常回投即安装成功。
+3. **验证**：让 Agent 跑一次 `dshana(action="open", task="…", cwd="<工作目录>")`，任务正常回投即安装成功。
 
-**无需配置 API Key / 模型**：推理经受管 runtime 内宿主 `ctx.models` 发起，provider 凭据不进 DSH 进程。默认模型读 DSH 自身配置（`DSH_HOME/settings.yaml` 的 `agent-default-model`），也可在 DSH 内直接改；`dshana_session` 的 `provider` / `model` / `reasoningEffort` 参数可显式覆盖单次任务。
+**无需配置 API Key / 模型**：推理经受管 runtime 内宿主 `ctx.models` 发起，provider 凭据不进 DSH 进程。默认模型读 DSH 自身配置（`DSH_HOME/settings.yaml` 的 `agent-default-model`），也可在 DSH 内直接改；`dshana` 的 `provider` / `model` / `reasoningEffort` 参数可显式覆盖单次任务。
 
 ## 设置
 
