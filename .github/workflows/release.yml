@@ -20,7 +20,7 @@
 #     另有 universal 兜底包（os × cpu 全叉乘）。宿主矩阵外的平台（linux-arm64 / win32-arm64）
 #     不进矩阵，需要时本地点名 `pnpm run package --target=<名字>`（见 package.json 的 package:* 别名）。
 #
-# 产物命名与单一事实源：`dsh-hanako-v<version>[-<target>].zip`；version 取自 package.json，
+# 产物命名与单一事实源：`dshana-v<version>[-<target>].zip`；version 取自 package.json，
 # pack.mts 会断言 manifest 与 cordis 包版本一致，不一致直接拒包（fail-closed）。
 name: Release
 
@@ -144,9 +144,9 @@ jobs:
 
           REQUIRED=""
           for t in linux-x64 darwin-arm64 darwin-x64 win32-x64; do
-            REQUIRED="$REQUIRED dsh-hanako-v${VER}-${t}.zip dsh-hanako-v${VER}-${t}.zip.sha256"
+            REQUIRED="$REQUIRED dshana-v${VER}-${t}.zip dshana-v${VER}-${t}.zip.sha256"
           done
-          REQUIRED="$REQUIRED dsh-hanako-v${VER}.zip dsh-hanako-v${VER}.zip.sha256"
+          REQUIRED="$REQUIRED dshana-v${VER}.zip dshana-v${VER}.zip.sha256"
 
           MISSING=()
           for f in $REQUIRED; do
