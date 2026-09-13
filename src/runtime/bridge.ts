@@ -61,7 +61,7 @@ export function authorizeBridgeRequest(requestUrl, headerKey, bridgeKey) {
 
 /** 上游请求头构造：剥跳头/凭据/宿主头，补上游 host/origin 与 DSH cookie。 */
 export function upstreamRequestHeaders(headers, upstream, cookie) {
-  const result = {};
+  const result: Record<string, string> = {};
   for (const [name, value] of Object.entries(headers)) {
     if (value === undefined) continue;
     const lower = name.toLowerCase();
@@ -83,7 +83,7 @@ export function upstreamRequestHeaders(headers, upstream, cookie) {
  * 浏览器侧事件流必连不上）。只换掉凭据与宿主头，并注入上游 host/origin 与 DSH cookie。
  */
 export function upgradeRequestHeaders(headers, upstream, cookie) {
-  const result = {};
+  const result: Record<string, string> = {};
   for (const [name, value] of Object.entries(headers)) {
     if (value === undefined) continue;
     const lower = name.toLowerCase();
@@ -151,14 +151,25 @@ function waitForDrain(response, signal) {
   });
 }
 
-/**
- * 起中继（监听 127.0.0.1:port）。
- * @param {{port:number, bridgeKey:string, controlKey?:string, upstreamOrigin:string,
- *   upstreamCookie?:string, onControl?:(action:string, args:any)=>Promise<any>,
- *   log?:(s:string)=>void}} opts
- * @returns {Promise<{port:number, close:()=>Promise<void>}>}
- */
-export async function startDshBridge(opts) {
+/** startDshBridge 的选项。 */
+export interface DshBridgeOptions {
+  port: number;
+  bridgeKey: string;
+  controlKey?: string;
+  upstreamOrigin: string;
+  upstreamCookie?: string;
+  onControl?: (action: string, args: any) => Promise<any>;
+  log?: (s: string) => void;
+}
+
+/** startDshBridge 的返回：实际监听端口 + 幂等关闭。 */
+export interface DshBridgeHandle {
+  port: number;
+  close: () => Promise<void>;
+}
+
+/** 起中继（监听 127.0.0.1:port）。 */
+export async function startDshBridge(opts: DshBridgeOptions): Promise<DshBridgeHandle> {
   const {
     port, bridgeKey, controlKey, upstreamOrigin, upstreamCookie = "", onControl, log = () => {},
   } = opts || {};
@@ -168,8 +179,8 @@ export async function startDshBridge(opts) {
   }
   if (!bridgeKey) throw new Error("dshana bridge：bridgeKey 必填");
 
-  const activeRequests = new Set();
-  const upstreamSockets = new Set();
+  const activeRequests = new Set<string>();
+  const upstreamSockets = new Set<string>();
   const clientSockets = new Set(); // 已升级的浏览器 WS 客户端（冻结时发 1013 关闭帧）
   let frozen = false; // 数据源切换冻结态（prepare-switch 置位，resume/守门失败解除）
   let activeCalls = 0; // 在途普通调用数（冻结前须归零；控制面调用不计）

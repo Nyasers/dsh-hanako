@@ -222,7 +222,30 @@ function logLine(log, msg) {
  *   promise —— 后台继续等到 Hana task 终态并释放同会话串行化锁（fire-and-forget；
  *             终态结果由宿主投递到来源会话）。调用方 catch 记录即可，不 await。
  */
-export function submitDshTask({ action, input, callToken, log }) {
+/** 提交定位键：prompt 被 DSH 接受后可得的坐标。 */
+export interface DshSubmitLoc {
+  action: string;
+  sessionId: string;
+  rpcId: string;
+  taskId: string;
+  cwd?: string | null;
+}
+
+/** 提交句柄：ready 在 prompt 被接受后 resolve 定位键；promise 是后台生命周期（等终态、释放锁）。 */
+export interface DshSubmitHandle {
+  ready: Promise<DshSubmitLoc>;
+  promise: Promise<unknown>;
+}
+
+/** submitDshTask 的入参。 */
+export interface DshSubmitInput {
+  /** 内部动作词汇（工具面 open/reply 映射为 create/send）。 */
+  action: "create" | "send";
+  input: any;
+  callToken?: string;
+  log?: { info?: (msg: string) => void; error?: (msg: string) => void };
+}
+export function submitDshTask({ action, input, callToken, log }: DshSubmitInput): DshSubmitHandle {
   const parsed = normalizeCreateSend({ action, input });
   const ctx = appCtx();
   const dataDir = appDataDir();
@@ -239,9 +262,9 @@ export function submitDshTask({ action, input, callToken, log }) {
     );
   }
 
-  let resolveReady = null;
-  let rejectReady = null;
-  const ready = new Promise((res, rej) => {
+  let resolveReady!: (loc: DshSubmitLoc) => void;
+  let rejectReady!: (e: unknown) => void;
+  const ready = new Promise<DshSubmitLoc>((res, rej) => {
     resolveReady = res;
     rejectReady = rej;
   });

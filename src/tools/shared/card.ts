@@ -16,14 +16,31 @@ import { APP_ID } from "../../lib/boot-state.ts";
 /** 卡页文件名（App ui/ 静态树内）。 */
 export const SESSION_CARD_ROUTE = "/card.html";
 
-/** 动作 → 卡面文案（与 ui/card.html 的 WHAT 表保持一致）。 */
-const WHAT = { open: "子代理已开启", reply: "续发消息已提交" };
+/** 会话流卡的动作面（与 ui/card.html 的 WHAT 表一致）。 */
+export type SessionCardAction = "open" | "reply";
 
-/**
- * 会话流卡字面量。
- * @param {{ action: "open"|"reply", sessionId: string, taskId: string, cwd?: string|null }} o
- */
-export function sessionCard({ action, sessionId, taskId, cwd }) {
+/** 动作 → 卡面文案（与 ui/card.html 的 WHAT 表保持一致）。 */
+const WHAT: Record<SessionCardAction, string> = { open: "子代理已开启", reply: "续发消息已提交" };
+
+/** sessionCard 的入参：提交成功后拿到的定位信息。 */
+export interface SessionCardInput {
+  action: SessionCardAction;
+  sessionId: string;
+  taskId: string;
+  cwd?: string | null;
+}
+
+/** 宿主流内 plugin_card 块的字面量（三条硬要求见文件头）。 */
+export interface SessionCard {
+  pluginId: string;
+  route: string;
+  title: string;
+  description: string;
+  aspectRatio: number;
+}
+
+/** 会话流卡字面量。 */
+export function sessionCard({ action, sessionId, taskId, cwd }: SessionCardInput): SessionCard {
   const now = Date.now();
   const params = [
     "ts=" + now,

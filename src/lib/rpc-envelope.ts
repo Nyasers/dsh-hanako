@@ -20,37 +20,54 @@
 const RPC_TIMEOUT_MS = 60000;
 
 /** rpcId 生成（与 v1 nextRpcId 同形：时间基 + 随机尾巴，跨调用唯一）。 */
-export function nextRpcId() {
+export function nextRpcId(): string {
   return `r_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
 /** 方法名 → /api 端点路径（点号 → 斜杠；session.create → session/create）。 */
-export function endpointOf(method) {
+export function endpointOf(method: string): string {
   const m = String(method ?? "");
   if (!m) throw new Error("rpc-envelope: method 不能为空");
   return m.includes(".") ? m.replace(/\./g, "/") : m;
 }
 
 /** session.* 方法判定（gateway 信封包装适用）。 */
-export function isSessionMethod(method) {
+export function isSessionMethod(method: string): boolean {
   const m = String(method ?? "");
   return m.startsWith("session.") || m.startsWith("session/");
 }
 
+/** Unary RPC client-request 信封（可直接 JSON 序列化 POST）。 */
+export interface ClientRequestEnvelope {
+  body: {
+    type: "client-request";
+    rpcId: string;
+    method: string;
+    payload: { args: unknown };
+  };
+  rpcId: string;
+}
+
+/** buildClientRequest 的入参。 */
+export interface BuildClientRequestInput {
+  method: string;
+  payload?: unknown;
+  rpcId?: string;
+  /** true：即使方法名在 session 命名空间下也裸传 payload。 */
+  bare?: boolean;
+}
+
 /**
- * 构造 client-request 信封（v1 形态；结果可直接 JSON 序列化 POST）。
- * @returns {{ body: object, rpcId: string }} body = 待 POST 的 JSON 体。
- */
-/**
- * 构造 client-request 信封（v1 形态；结果可直接 JSON 序列化 POST）。
+ * 构造 client-request 信封。
  * DSH web /api 网关校验 body.method === 端点路径段（斜杠形态，official rpc-host 与
  * @dshana/bridge 同款，见迁移后核对记录）——method 传 'session.create' 或
  * 'session/create' 均可，信封内统一写斜杠形态。
  * bare=true：即使方法名在 session 命名空间下也裸传 payload（session/modelCatalog 这类无参
  * 方法没有 request 信封，网关按声明的参数名逐个解析 args，多包一层会被判参数不符）。
- * @returns {{ body: object, rpcId: string }} body = 待 POST 的 JSON 体。
  */
-export function buildClientRequest({ method, payload, rpcId, bare = false } = {}) {
+export function buildClientRequest(
+  { method, payload, rpcId, bare = false }: BuildClientRequestInput,
+): ClientRequestEnvelope {
   const m = String(method ?? "");
   if (!m) throw new Error("rpc-envelope: method 不能为空");
   const id = String(rpcId || "") || nextRpcId();
@@ -74,7 +91,7 @@ export function buildClientRequest({ method, payload, rpcId, bare = false } = {}
  * 解析 server response（响应体 JSON）：校验 rpcId 回显与 result.ok；
  * 成功返回 result.value，失败抛 Error（含 dsh 侧 code/message）。
  */
-export function parseServerResponse(full, rpcId) {
+export function parseServerResponse(full: any, rpcId?: string): any {
   if (!full || typeof full !== "object") {
     throw new Error("rpc-envelope: DSH 响应非对象");
   }
@@ -84,7 +101,7 @@ export function parseServerResponse(full, rpcId) {
   const res = full.result;
   if (!res || res.ok !== true) {
     const e = (res && res.error) || {};
-    const err = new Error(`DSH ${full.method || "rpc"} 失败：${e.code || "unknown"} ${e.message || ""}`);
+    const err = new Error(`DSH ${full.method || "rpc"} 失败：${e.code || "unknown"} ${e.message || ""}`) as Error & { code?: string };
     err.code = e.code || "DSH_RPC_ERROR";
     throw err;
   }
@@ -92,6 +109,6 @@ export function parseServerResponse(full, rpcId) {
 }
 
 /** 默认 RPC 超时（毫秒；调用方可按任务类型覆盖）。 */
-export function defaultRpcTimeoutMs() {
+export function defaultRpcTimeoutMs(): number {
   return RPC_TIMEOUT_MS;
 }

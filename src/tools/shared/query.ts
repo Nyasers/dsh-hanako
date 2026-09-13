@@ -30,6 +30,7 @@
 // 权限模型：sessionId 即访问凭证——拿得到 id 就能读，拿不到天然无所有权，无需注册表。
 import { ensureManagedRuntime } from "../../lib/managed-runtime.ts";
 import { rpcViaControl } from "../../lib/controller.ts";
+import type { ToolResult } from "../../types/tool.ts";
 
 const DEFAULT_LIMIT = 10;
 const MAX_LIMIT = 100;
@@ -358,7 +359,7 @@ async function doGet(input, ctx) {
 }
 
 // query 操作入口（session.js 按 action=list/get 路由到本模块）：只读查询，经控制面走官方面
-export async function execute(input, ctx) {
+export async function execute(input, ctx): Promise<ToolResult> {
   const action = String(input.action ?? "").trim();
   if (action === "list") return doList(input, ctx);
   if (action === "get") return doGet(input, ctx);

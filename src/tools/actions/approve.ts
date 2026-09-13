@@ -9,6 +9,14 @@
 // 该 approvalId 对应的 DSH 等待者）。
 import { respondApprovalAction } from "../../lib/approve-respond.ts";
 import { resolveTarget } from "../shared/target.ts";
+import type { ToolCtx } from "../../types/host.ts";
+import type { ToolInputBase, ToolResult } from "../shared/types.ts";
+
+/** approve 入参：approvalId 是唯一句柄（必填），outcome 缺省按 DSH 侧语义处理。 */
+export interface ApproveInput extends ToolInputBase {
+  approvalId: string;
+  outcome?: "allowed-once" | "rejected";
+}
 
 export const command = "approve";
 export const summary = "应答子代理挂起的审批（approvalId 必填；决策看 args 不听 reason）";
@@ -29,7 +37,7 @@ export const fields = {
 };
 export const required = ["approvalId"];
 
-export async function run(input, ctx) {
+export async function run(input: ApproveInput, ctx: ToolCtx): Promise<ToolResult> {
   const aid = String((input && input.approvalId) || "").trim();
   if (!aid) {
     throw new Error("approve 需要 approvalId（审批通知里带；同一任务可挂起多个审批，逐个应答）");

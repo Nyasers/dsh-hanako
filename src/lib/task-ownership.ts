@@ -16,14 +16,35 @@
 // 判据来自**宿主字段**（AppTaskRecordV2.parentSessionId / parentSessionPath），不是我们
 // 自己推断的归属；这也正是"用宿主能力"的直接体现。
 
-/**
- * @param {object} o
- * @param {object|null} o.taskRecord 宿主任务记录（ctx.tasks.get 的返回）
- * @param {string|null} o.sessionPath 本次工具调用的 context.sessionPath
- * @param {boolean} o.explicitSessionId 调用方是否显式给了 sessionId
- * @returns {{ ok: boolean, reason: "explicit-session-id"|"no-session-context"|"session-match"|"session-mismatch"|"record-missing-parent-session" }}
- */
-export function taskOwnership({ taskRecord, sessionPath, explicitSessionId } = {}) {
+import type { AppTaskRecordV2 } from "../types/host.ts";
+
+/** 归属校验的判定结果码（工具面直接把 reason 给用户/模型看）。 */
+export type OwnershipReason =
+  | "explicit-session-id"
+  | "no-session-context"
+  | "session-match"
+  | "session-mismatch"
+  | "record-missing-parent-session";
+
+/** 归属校验结论。 */
+export interface OwnershipVerdict {
+  ok: boolean;
+  reason: OwnershipReason;
+}
+
+/** 归属校验入参。 */
+export interface OwnershipInput {
+  /** 宿主任务记录（ctx.tasks.get 的返回）。 */
+  taskRecord?: AppTaskRecordV2 | null;
+  /** 本次工具调用的 context.sessionPath。 */
+  sessionPath?: string | null;
+  /** 调用方是否显式给了 sessionId。 */
+  explicitSessionId?: boolean;
+}
+
+export function taskOwnership(
+  { taskRecord, sessionPath, explicitSessionId }: OwnershipInput = {},
+): OwnershipVerdict {
   if (explicitSessionId) return { ok: true, reason: "explicit-session-id" };
   const path = typeof sessionPath === "string" && sessionPath ? sessionPath : "";
   if (!path) return { ok: true, reason: "no-session-context" };

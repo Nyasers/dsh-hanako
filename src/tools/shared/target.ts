@@ -10,13 +10,21 @@
 // 解析不出来一律显式失败：不猜、不降级。
 import { findTaskMapByTaskId, findTaskMapByApprovalId, isValidSessionId } from "../../lib/task-map.ts";
 import { taskOwnership, ownershipRefusalText } from "../../lib/task-ownership.ts";
+import type { OwnershipReason } from "../../lib/task-ownership.ts";
+import type { ToolCtx } from "../../types/host.ts";
+import type { ToolInputBase } from "./types.ts";
 
-/**
- * 解析调用目标，返回 { sessionId, explicit, taskId, ownership }。
- * @param {any} input 工具入参（sessionId / taskId / approvalId 任给其一）+ context.sessionPath
- * @param {any} ctx 工具执行上下文（需 dataDir 与 tasks.get）
- */
-export async function resolveTarget(input, ctx) {
+/** 解析出的调用目标（reply/close/get/approve 共用）。 */
+export interface ResolvedTarget {
+  sessionId: string;
+  /** true = 显式 sessionId 的凭证路径（未做归属校验）。 */
+  explicit: boolean;
+  /** 句柄路径下解析出的宿主任务 id；凭证路径为 null。 */
+  taskId: string | null;
+  ownership: OwnershipReason;
+}
+
+export async function resolveTarget(input: ToolInputBase, ctx: ToolCtx): Promise<ResolvedTarget> {
   const explicit = String((input && input.sessionId) || "").trim();
   const dataDir = ctx && typeof ctx.dataDir === "string" ? ctx.dataDir : null;
   if (explicit) {
