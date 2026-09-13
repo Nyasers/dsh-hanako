@@ -7,6 +7,8 @@
 // 取尾部一窗）；本项目特色——subagent 只能等结果回投，回看不到过程与结论。
 import { execute as queryExecute } from "../shared/query.ts";
 import { resolveTarget } from "../shared/target.ts";
+import type { ToolCtx } from "../../types/host.ts";
+import type { ToolInputBase, ToolResult } from "../shared/types.ts";
 
 export const command = "get";
 export const summary = "回看某个 DSH 子代理最近一轮的最终结论（taskId 句柄或 sessionId 凭证）";
@@ -21,7 +23,7 @@ export const fields = {
 };
 export const required = [];
 
-export async function run(input, ctx) {
+export async function run(input: ToolInputBase, ctx: ToolCtx): Promise<ToolResult> {
   // 句柄优先（taskId）→ 解析出 DSH 会话并校验归属；sessionId 为显式凭证路径
   const target = await resolveTarget(input, ctx);
   return queryExecute({ ...input, action: "get", sessionId: target.sessionId }, ctx);

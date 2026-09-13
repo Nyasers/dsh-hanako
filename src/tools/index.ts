@@ -28,6 +28,8 @@ import * as replyAction from "./actions/reply.ts";
 import * as closeAction from "./actions/close.ts";
 import * as getAction from "./actions/get.ts";
 import * as approveAction from "./actions/approve.ts";
+import type { ToolCtx } from "../types/host.ts";
+import type { ToolInputBase } from "./shared/types.ts";
 // actions/list.ts（会话清单）：**冻结禁用**（2026-09-13）——不注册到工具面；任务绑定语义下
 // 会话靠句柄定位，“查任务”由宿主提供给 Agent 的内置任务查询工具（模型侧，本环境是
 // check_pending_tasks）承担。理由见该文件头注释与 specs/current/sample-align 裁决 2c。
@@ -59,11 +61,16 @@ export const parameters = {
   })),
 };
 
+/** 工具入参：公共部分 + 顶层 subcommand 名。 */
+export interface DshanaToolInput extends ToolInputBase {
+  action?: string;
+}
+
 /**
  * action 实现体。deps 只给单测注入提交链（open/reply；缺省用真实 submitDshTask）；
  * 线上路径经 execute 调用时 deps 为 undefined，行为不变。
  */
-export async function doExecute(input, ctx, deps) {
+export async function doExecute(input: DshanaToolInput, ctx: ToolCtx, deps?: unknown): Promise<unknown> {
   const action = String((input && input.action) || "").trim();
   const mod = ACTIONS.find((m) => m.command === action);
   if (!mod) {
@@ -71,15 +78,22 @@ export async function doExecute(input, ctx, deps) {
       "action 必须是 " + ACTIONS.map((m) => m.command).join(" / ") + "（收到 " + action + "）",
     );
   }
-  return mod.run(input, ctx, deps);
+  // 每个 action 的 run 参数面各不相同（各自 fields），统一成一个可调用的宽签名再分发。
+  const run = mod.run as (
+    input: DshanaToolInput,
+    ctx: ToolCtx,
+    deps?: unknown,
+  ) => Promise<unknown>;
+  return run(input, ctx, deps);
 }
 
-export async function execute(input, ctx) {
+export async function execute(input: unknown, ctx: ToolCtx): Promise<unknown> {
   try {
-    return await doExecute(input, ctx, null);
+    return await doExecute(input as DshanaToolInput, ctx, null);
   } catch (e) {
     // ctx 为 App apply 注入的工具上下文（见 index.ts makeToolCtx：统一日志出口）；缺失时静默（防御）
-    ctx?.log?.error?.("[dshana] dshana failed:", e?.stack || e?.message || String(e));
+    const err = e as { stack?: string; message?: string } | null;
+    ctx?.log?.error?.("[dshana] dshana failed:", err?.stack || err?.message || String(e));
     throw e;
   }
 }

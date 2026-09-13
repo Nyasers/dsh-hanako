@@ -45,11 +45,18 @@ export const BRIDGE_EVENTS = [
 
 /**
  * 事件归类（纯函数，便于单测）：把 ctx.on 回调参数归一成任务桥可消费的帧。
- * @param {string} event ctx 事件名（BRIDGE_EVENTS 子集）
- * @param {any[]} args ctx.on 回调收到的参数
+ * @param event ctx 事件名（BRIDGE_EVENTS 子集）
+ * @param args ctx.on 回调收到的参数
  * @returns 归一帧或 null（忽略）
  */
-export function classifyDshEvent(event, args) {
+/** 归一化后的会话事件帧：kind 定类型，其余字段随 kind（消费方按 kind 分支读）。 */
+export interface DshEventFrame {
+  kind: string;
+  sessionId: string;
+  [key: string]: unknown;
+}
+
+export function classifyDshEvent(event: string, args: unknown[]): DshEventFrame | null {
   const list = Array.isArray(args) ? args : [];
   if (event === "api-session/status") {
     const sid = list[0];
@@ -338,7 +345,31 @@ class SessionBridge {
  */
 const BRIDGE_PRUNE_AT = 128; // bridges 有界（已终态条目在超限时清理）
 
-export function startTaskBridge({ ctx, hana, dataDir, log, serviceBaseUrl, bridgeKey, cancelModelRequests }) {
+/** startTaskBridge 的选项。 */
+export interface TaskBridgeOptions {
+  /** 宿主/受管 runtime 的 ctx（事件订阅面）。 */
+  ctx: any;
+  /** DSH hana 句柄（模型取消等反向调用）。 */
+  hana: any;
+  /** App dataDir（task-map 位置）。 */
+  dataDir: string;
+  log?: (msg: string) => void;
+  /** 受管 DSH web 回环基址（缺省 = 不做反向 watch）。 */
+  serviceBaseUrl?: string;
+  bridgeKey?: string;
+  /** 定向模型取消（缺省回落 lib/model-requests.ts 实现）。 */
+  cancelModelRequests?: (sessionId: string) => unknown;
+}
+
+export function startTaskBridge({
+  ctx,
+  hana,
+  dataDir,
+  log,
+  serviceBaseUrl,
+  bridgeKey,
+  cancelModelRequests,
+}: TaskBridgeOptions): () => void {
   const offs = [];
   const bridges = new Map(); // sessionId → SessionBridge（终态后惰性清理）
   const doCancelModels = typeof cancelModelRequests === "function"

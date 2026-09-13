@@ -9,6 +9,8 @@
 // → 等 DSH 真中止后宿主任务 canceled；未确认则升级宿主 cancel 并如实告知）。
 import { cancelSessionWork } from "../../lib/cancel-chain.ts";
 import { resolveTarget } from "../shared/target.ts";
+import type { ToolCtx } from "../../types/host.ts";
+import type { ToolInputBase, ToolResult } from "../shared/types.ts";
 
 export const command = "close";
 export const summary = "取消这个 DSH 子代理正在跑的任务（只停本工作，不影响共享 runtime 上的其他会话）";
@@ -23,7 +25,7 @@ export const fields = {
 };
 export const required = [];
 
-export async function run(input, ctx) {
+export async function run(input: ToolInputBase, ctx: ToolCtx): Promise<ToolResult> {
   const target = await resolveTarget(input, ctx);
   const sessionId = target.sessionId;
   const out = await cancelSessionWork({ sessionId, reason: "user", log: ctx && ctx.log });

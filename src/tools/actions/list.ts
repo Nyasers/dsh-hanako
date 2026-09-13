@@ -14,6 +14,13 @@
 //
 // 要重新启用本模块：在 src/tools/index.ts 的 import、ACTIONS 与 description 里加回即可。
 import { execute as queryExecute } from "../shared/query.ts";
+import type { ToolCtx } from "../../types/host.ts";
+import type { ToolInputBase, ToolResult } from "../shared/types.ts";
+
+/** list 入参（冻结期保留形状，重新启用时直接可用）。 */
+export interface ListInput extends ToolInputBase {
+  limit?: number;
+}
 
 export const command = "list";
 export const summary = "列出 DSH 子代理会话清单（需 DSH 运行时在线；按最近提交倒序）";
@@ -27,6 +34,6 @@ export const fields = {
 };
 export const required = [];
 
-export async function run(input, ctx) {
+export async function run(input: ListInput, ctx: ToolCtx): Promise<ToolResult> {
   return queryExecute({ ...input, action: "list" }, ctx);
 }

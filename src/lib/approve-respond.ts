@@ -16,9 +16,10 @@
 //   确定终态，绝不隐式放行。本模块不设本地定时器（不重复宿主语义）。
 import { appCtx, appDataDir } from "./app-runtime.ts";
 import { readTaskMap, findPendingApproval, settleApproval } from "./task-map.ts";
+import type { ToolResult } from "../types/tool.ts";
 
 /** 校验并应答一个挂起审批；返回 { content:[...], details }（与 v1 approve.js 同形态）。 */
-export async function respondApprovalAction({ input, log }) {
+export async function respondApprovalAction({ input, log }): Promise<ToolResult> {
   const sessionId = String((input && input.sessionId) || "").trim();
   const approvalId = String((input && input.approvalId) || "").trim();
   const outcome = input && input.outcome === "rejected" ? "rejected" : "allowed-once";

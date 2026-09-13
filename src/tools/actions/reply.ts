@@ -9,6 +9,23 @@
 import { submitDshTask } from "../../lib/session-run.ts";
 import { resolveTarget } from "../shared/target.ts";
 import { sessionCard } from "../shared/card.ts";
+import type { ToolCtx } from "../../types/host.ts";
+import type { ToolInputBase, ToolResult } from "../shared/types.ts";
+
+/** reply 入参：task 必填；目标二选一（taskId 句柄 / sessionId 凭证，均在 ToolInputBase）。 */
+export interface ReplyInput extends ToolInputBase {
+  task: string;
+  timeout?: number;
+  agentPreset?: string;
+  reasoningEffort?: string;
+  provider?: string;
+  model?: string;
+}
+
+/** 提交链注入面（仅单测用；线上为 undefined）。 */
+export interface SubmitDeps {
+  submitDshTask?: typeof submitDshTask;
+}
 
 export const command = "reply";
 export const summary = "往同一个 DSH 子代理续发消息（task 必填；taskId 句柄或 sessionId 凭证二选一）";
@@ -32,7 +49,7 @@ export const fields = {
 };
 export const required = ["task"];
 
-export async function run(input, ctx, deps) {
+export async function run(input: ReplyInput, ctx: ToolCtx, deps?: SubmitDeps): Promise<ToolResult> {
   // 目标解析：taskId 走句柄路径（反查 + 归属校验），sessionId 走凭证路径（原样使用）
   const target = await resolveTarget(input, ctx);
   const callToken = (input && input.context && input.context.callToken) || "";

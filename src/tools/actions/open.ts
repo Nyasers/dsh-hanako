@@ -11,6 +11,25 @@
 // required / readOnly / run；run(input, ctx, deps) 中 deps 仅单测注入提交链。
 import { submitDshTask } from "../../lib/session-run.ts";
 import { sessionCard } from "../shared/card.ts";
+import type { ToolCtx } from "../../types/host.ts";
+import type { ToolInputBase, ToolResult } from "../shared/types.ts";
+
+/** open 入参：task/cwd 必填（语义对齐 subagent 的“创建即带任务”）。 */
+export interface OpenInput extends ToolInputBase {
+  task: string;
+  cwd: string;
+  label?: string;
+  timeout?: number;
+  agentPreset?: string;
+  reasoningEffort?: string;
+  provider?: string;
+  model?: string;
+}
+
+/** 提交链注入面（仅单测用；线上为 undefined）。 */
+export interface SubmitDeps {
+  submitDshTask?: typeof submitDshTask;
+}
 
 export const command = "open";
 export const summary = "开一个 DSH 子代理并交首件活（task/cwd 必填；后台执行，结果回到本会话）";
@@ -32,7 +51,7 @@ export const fields = {
 };
 export const required = ["task", "cwd"];
 
-export async function run(input, ctx, deps) {
+export async function run(input: OpenInput, ctx: ToolCtx, deps?: SubmitDeps): Promise<ToolResult> {
   const callToken = (input && input.context && input.context.callToken) || "";
   // 提交面（deps 可注入以单测 open 分支；缺省用真实 submitDshTask）返回 { promise, ready }：
   // ready 在 prompt 被 DSH 接受后 resolve 定位键（sessionId/rpcId/taskId），提交阶段失败则

@@ -51,7 +51,23 @@ function logWarn(log, msg) {
  *          | 'already-requested'（取消标记已存在——幂等，不再重复发）
  *          | 'dsh-rpc-failed'（DSH 侧不可达：已尽力，任务仍会由宿主侧终结兜底）
  */
-export async function executeCancel({ dataDir, sessionId, reason, log }) {
+/** 取消编排的结果：status 定分支，其余字段按 status 出现。 */
+export interface CancelWorkResult {
+  status: "canceled" | "no-active-work" | "already-requested" | "dsh-rpc-failed" | "cancelling";
+  sessionId: string;
+  taskId?: string | null;
+  reason?: string;
+  /** DSH 侧是否接受了取消（null = 未确认）。 */
+  dshAccepted?: boolean | null;
+  /** DSH 侧取消调用失败时的错误文本。 */
+  dshError?: string;
+  /** true = 等不到 DSH 确认，已升级为宿主 ctx.tasks.cancel。 */
+  escalated?: boolean;
+  /** 确认窗口内等到的宿主任务终态记录（有则带出）。 */
+  terminal?: unknown;
+}
+
+export async function executeCancel({ dataDir, sessionId, reason, log }): Promise<CancelWorkResult> {
   const ctx = appCtx();
   if (!ctx || !dataDir) throw new Error("App 运行包未初始化（apply 未注入宿主 ctx/dataDir）");
   const sid = String(sessionId || "").trim();
@@ -119,7 +135,7 @@ export async function awaitCancelTerminal({ taskId, timeoutMs = CANCEL_CONFIRM_M
  * cancel 工具主流程：executeCancel + 确认窗口内等终态；DSH 超窗未确认时升级宿主
  * ctx.tasks.cancel（如实告知——见 DESIGN 边界）。返回 { status, terminal?, escalated?, ... }。
  */
-export async function cancelSessionWork({ sessionId, reason, log, confirmMs = CANCEL_CONFIRM_MS }) {
+export async function cancelSessionWork({ sessionId, reason, log, confirmMs = CANCEL_CONFIRM_MS }): Promise<CancelWorkResult> {
   const dataDir = appDataDir();
   const ctx = appCtx();
   const res = await executeCancel({ dataDir, sessionId, reason, log });
