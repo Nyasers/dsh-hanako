@@ -8,7 +8,7 @@
 //   manifest.json       App v2 manifest（entry "index.js" / icon "assets/icon.png"）
 //   index.js            rspack 单 bundle（入口具名导出 apply + default.apply）
 //   assets/icon.png     App 身份图标（manifest.icon 指向的包内真实图片）
-//   skills/             App skills（dshana / dsh-session，SKILL.md 随包分发）
+//   skills/             App skills（dshana，SKILL.md 随包分发）
 //   runtime/dsh-host.mjs  受管 Node runtime 入口（见 src/runtime/；
 //                         cordis/ 产物由 build:cordis 另产出 dist/cordis，随包分发）
 //   ui/                   App ui/ 静态树（migration step 4b/5；cards route 指向壳页，
