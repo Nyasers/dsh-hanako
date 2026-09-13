@@ -30,10 +30,10 @@
 //
 // 容错纪律：订阅/回投失败只记日志不阻断 runtime；映射不存在（非 dshana 发起的
 // 会话，如 DSH Web UI 直开）的事件直接忽略。
-import { readTaskMap, markTaskMapEnded, markCancelRequested } from "../lib/task-map.ts";
-import { runWatchReconcile } from "../lib/watch-sse.ts";
-import { rpcSessionCancel } from "../lib/dsh-rpc.ts";
-import { cancelSessionModelRequests } from "../lib/model-requests.ts";
+import { readTaskMap, markTaskMapEnded, markCancelRequested } from "#/lib/task-map.ts";
+import { runWatchReconcile } from "#/lib/watch-sse.ts";
+import { rpcSessionCancel } from "#/lib/dsh-rpc.ts";
+import { cancelSessionModelRequests } from "#/lib/model-requests.ts";
 
 // 事件白名单（与 v1 dsh-events 的会话事件子集一致；其余事件不订阅）
 export const BRIDGE_EVENTS = [

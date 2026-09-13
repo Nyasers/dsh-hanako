@@ -15,7 +15,7 @@
 //
 // 依赖：全部走浏览器原生 API（DOMParser / fetch / WebSocket / <script> 注入），无第三方包。
 
-import { installClipboardShadow } from "./clipboard-shadow.ts";
+import { installClipboardShadow } from "#/ui/clipboard-shadow.ts";
 
 const DSH_INTERNAL_ORIGIN = "http://dsh.internal";
 

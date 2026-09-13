@@ -11,7 +11,7 @@
 //   · aspectRatio 要有限正数（渲染期算成 "n / 1" 的比例占位）。
 // 卡页需要的数据全压在查询串里（提交时快照，卡页不做轮询），?ts= 防缓存；
 // 卡页只向 App 后端做一次 card-state 取数，换个更准的状态行。
-import { APP_ID } from "../../lib/boot-state.ts";
+import { APP_ID } from "#/lib/boot-state.ts";
 
 /** 卡页文件名（App ui/ 静态树内）。 */
 export const SESSION_CARD_ROUTE = "/card.html";

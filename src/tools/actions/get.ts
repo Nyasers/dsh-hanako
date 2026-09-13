@@ -5,10 +5,10 @@
 //
 // 只读查询，取数走官方查询面（shared/query.ts：session/list 定 asOfSeq → session/page
 // 取尾部一窗）；本项目特色——subagent 只能等结果回投，回看不到过程与结论。
-import { execute as queryExecute } from "../shared/query.ts";
-import { resolveTarget } from "../shared/target.ts";
-import type { ToolCtx } from "../../types/host.ts";
-import type { ToolInputBase, ToolResult } from "../shared/types.ts";
+import { execute as queryExecute } from "#/tools/shared/query.ts";
+import { resolveTarget } from "#/tools/shared/target.ts";
+import type { ToolCtx } from "#/types/host.ts";
+import type { ToolInputBase, ToolResult } from "#/tools/shared/types.ts";
 
 export const command = "get";
 export const summary = "回看某个 DSH 子代理最近一轮的最终结论（taskId 句柄或 sessionId 凭证）";

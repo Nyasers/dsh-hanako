@@ -15,10 +15,10 @@
 //
 // 依赖全部注入：编排只讲顺序与回滚，具体怎么起停、怎么读写、怎么冻结由调用方给。
 import { randomBytes } from "node:crypto";
-import { appDataDir, appLogger, getAppRuntime } from "./app-runtime.ts";
-import { dataSources, sourceOf } from "./data-source.ts";
-import { ensureManagedRuntime, preflightSource, stopManagedRuntime } from "./managed-runtime.ts";
-import { invokeControl } from "./controller.ts";
+import { appDataDir, appLogger, getAppRuntime } from "#/lib/app-runtime.ts";
+import { dataSources, sourceOf } from "#/lib/data-source.ts";
+import { ensureManagedRuntime, preflightSource, stopManagedRuntime } from "#/lib/managed-runtime.ts";
+import { invokeControl } from "#/lib/controller.ts";
 
 /** 步骤名（页面可直接显示；rolling-back 只在失败时出现）。 */
 export const SWITCH_STEPS = ["preflight", "freeze", "stopping", "starting", "saving", "rolling-back"];

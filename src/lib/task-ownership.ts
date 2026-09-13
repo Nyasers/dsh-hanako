@@ -16,7 +16,7 @@
 // 判据来自**宿主字段**（AppTaskRecordV2.parentSessionId / parentSessionPath），不是我们
 // 自己推断的归属；这也正是"用宿主能力"的直接体现。
 
-import type { AppTaskRecordV2 } from "../types/host.ts";
+import type { AppTaskRecordV2 } from "#/types/host.ts";
 
 /** 归属校验的判定结果码（工具面直接把 reason 给用户/模型看）。 */
 export type OwnershipReason =

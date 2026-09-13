@@ -22,8 +22,8 @@ import { homedir } from "node:os";
 import { readFileSync } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { isAbsolute, join, normalize } from "node:path";
-import { appDataDir, getAppRuntime } from "./app-runtime.ts";
-import { APP_SETTING_DEFAULTS, resolveApprovalTimeoutSec, resolveDefaultTimeoutSec } from "./config.ts";
+import { appDataDir, getAppRuntime } from "#/lib/app-runtime.ts";
+import { APP_SETTING_DEFAULTS, resolveApprovalTimeoutSec, resolveDefaultTimeoutSec } from "#/lib/config.ts";
 
 export const SETTINGS_VERSION = 1;
 export const SOURCE_MODES = Object.freeze(["private", "shared"]);

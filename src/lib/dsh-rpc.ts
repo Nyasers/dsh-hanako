@@ -12,7 +12,7 @@
 //     Node 全局 fetch（127.0.0.1 回环，dshana profile 无 BrowserAuth → 免鉴权）。
 // 信封/网关契约与 session-run.js 完全一致（lib/rpc-envelope.js：client-request +
 // session.* 的 request/_request 包装 + requestId 注入；响应 rpcId 回显 + result.ok）。
-import { buildClientRequest, parseServerResponse, defaultRpcTimeoutMs } from "./rpc-envelope.ts";
+import { buildClientRequest, parseServerResponse, defaultRpcTimeoutMs } from "#/lib/rpc-envelope.ts";
 
 /** 注入式 RPC 调用：fetchFn(url, init) => Promise<Response>；超时/中止经 AbortSignal。 */
 export async function rpcCallWithFetch(fetchFn, base, { method, payload, rpcId, signal, timeoutMs, bare }) {

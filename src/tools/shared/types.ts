@@ -17,7 +17,7 @@ export interface ToolCallContext {
 }
 
 /** 工具返回（契约在 src/types/tool.ts；这里转出去，让 tools/ 只认一个 shared 入口）。 */
-export type { ToolResult } from "../../types/tool.ts";
+export type { ToolResult } from "#/types/tool.ts";
 
 /** 所有 action 入参的公共部分：句柄三选一，或显式凭证。 */
 export interface ToolInputBase {

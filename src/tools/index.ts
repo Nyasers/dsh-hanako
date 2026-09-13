@@ -23,13 +23,13 @@
 //
 // 数据目录取 ctx.dataDir（宿主 app-data/<id>/）；工具名以本文件 name 为单一事实源
 // （v2 注册不自动加前缀，重名会被宿主当场拒掉）。
-import * as openAction from "./actions/open.ts";
-import * as replyAction from "./actions/reply.ts";
-import * as closeAction from "./actions/close.ts";
-import * as getAction from "./actions/get.ts";
-import * as approveAction from "./actions/approve.ts";
-import type { ToolCtx } from "../types/host.ts";
-import type { ToolInputBase } from "./shared/types.ts";
+import * as openAction from "#/tools/actions/open.ts";
+import * as replyAction from "#/tools/actions/reply.ts";
+import * as closeAction from "#/tools/actions/close.ts";
+import * as getAction from "#/tools/actions/get.ts";
+import * as approveAction from "#/tools/actions/approve.ts";
+import type { ToolCtx } from "#/types/host.ts";
+import type { ToolInputBase } from "#/tools/shared/types.ts";
 // actions/list.ts（会话清单）：**冻结禁用**（2026-09-13）——不注册到工具面；任务绑定语义下
 // 会话靠句柄定位，“查任务”由宿主提供给 Agent 的内置任务查询工具（模型侧，本环境是
 // check_pending_tasks）承担。理由见该文件头注释与 specs/current/sample-align 裁决 2c。

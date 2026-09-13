@@ -13,7 +13,7 @@
 // session 家族的 request 层（见 rpc-envelope 的 bare）。三条都在真 DSH 上探测过：
 // describe 的段视图带 value+revision，写回带当前 revision 成功且 revision 前进，
 // 带过期 revision 被拒并且错误码是 settings/conflict（对应 App 层的 409）。
-import { serviceBase, serviceFetch } from "./service-base.ts";
+import { serviceBase, serviceFetch } from "#/lib/service-base.ts";
 import {
   AGENT_DEFAULT_MODEL_NS,
   isSettingsConflict,
@@ -21,7 +21,7 @@ import {
   rpcSettingsDescribe,
   rpcSettingsReplace,
   settingsViewOf,
-} from "./dsh-rpc.ts";
+} from "#/lib/dsh-rpc.ts";
 
 /** 归一化模型选择：provider/model 必填，reasoningEffort 可选。 */
 function normalizeSelection(input) {
