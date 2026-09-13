@@ -29,8 +29,8 @@ import * as closeAction from "./actions/close.ts";
 import * as getAction from "./actions/get.ts";
 import * as approveAction from "./actions/approve.ts";
 // actions/list.ts（会话清单）：**冻结禁用**（2026-09-13）——不注册到工具面；任务绑定语义下
-// 会话靠句柄定位，需要“列会话”时改走宿主内置的 `ctx.tasks.list`（读任务记录的 metadata.dsh，
-// parentSessionPath 天然带会话归属）。理由见该文件头注释与 specs/current/sample-align 裁决 2c。
+// 会话靠句柄定位，“查任务”由宿主提供给 Agent 的内置任务查询工具（模型侧，本环境是
+// check_pending_tasks）承担。理由见该文件头注释与 specs/current/sample-align 裁决 2c。
 // 要重新启用：把 list 的 import、ACTIONS 里的条目、description 的列举一并加回。
 
 /** subcommand 注册表（顺序即 description 的列举顺序）。 */

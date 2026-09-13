@@ -7,10 +7,12 @@
 //
 // 状态：**冻结禁用（2026-09-13）**。源码保留，但不注册到工具面，也不做 cursor / sourceId
 // 那套“先 list 发现再操作”的配套语义（见 specs/current/sample-align 裁决 2c）。
-// 任务绑定语义下会话靠句柄定位；即便需要“列会话”，也改走**宿主内置的 `ctx.tasks.list` 通道**：
-// 按任务记录的 `metadata.dsh` 反查本 App 发起的实例（`parentSessionPath` 天然带会话归属），
-// 不再向 DSH 问 session/list。要重新启用本模块：在 src/tools/index.ts 的 import、ACTIONS
-// 与 description 里加回即可。
+//
+// 理由：任务绑定语义下会话靠句柄（宿主 taskId）定位；“查任务”这件事由**宿主提供给 Agent 的
+// 内置任务查询工具**承担（模型侧，本环境是 check_pending_tasks）——dshana 的 open/reply 建的
+// 就是本会话的后台任务，本来就出现在那份清单里，不需要本工具再开一扇只读门。
+//
+// 要重新启用本模块：在 src/tools/index.ts 的 import、ACTIONS 与 description 里加回即可。
 import { execute as queryExecute } from "../shared/query.ts";
 
 export const command = "list";
