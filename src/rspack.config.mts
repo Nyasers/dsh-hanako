@@ -30,6 +30,20 @@ export default {
   },
   experiments: { outputModule: true },
   externalsPresets: { node: true },
+  // .ts 交给内置 swc 转译：src 域是正式 TypeScript（interface / 类型注解 / import type），
+  // 构建期由 swc 剥掉类型只留 JS。本域无 JSX，test 只收 .ts、parser 不开 tsx（否则 .ts 里的
+  // `<` 会被当 JSX 起头）；jsc.target 与 tsconfig.src.json 的 ES2022 对齐，不做无谓降级。
+  module: {
+    rules: [
+      {
+        test: /\.ts$/,
+        use: {
+          loader: "builtin:swc-loader",
+          options: { jsc: { parser: { syntax: "typescript" }, target: "es2022" } },
+        },
+      },
+    ],
+  },
   // v1 的 assets 前端资源（jinja2 模板 + card.js/css）已随 W6 清理删除，无需 asset/source 与
   // template-loader 规则（src/assets 只剩 icon.png，由 build.ts 原样 copy，不进 bundle）。
   // usedExports: false + sideEffects: false —— 关闭导出级 tree-shaking（入口导出无外部
