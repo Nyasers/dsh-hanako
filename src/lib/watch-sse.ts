@@ -59,7 +59,7 @@ export function extractWatchRecord(obj) {
  *   app-task —— 后续增量/终态记录（snapshot 与 app-task 的记录形态相同，消费方自行合并）
  *   reset   —— 缓冲溢出：应 get() 重读快照后继续
  */
-export function interpretWatchFrame(eventName, dataText) {
+export function interpretWatchFrame(eventName: string, dataText: string): WatchFrame {
   const name = String(eventName || "").toLowerCase();
   // reset 事件常不带 data：先按事件名判定
   if (name.includes("reset") || name.includes("resync")) return { kind: "reset", record: null };
@@ -72,7 +72,7 @@ export function interpretWatchFrame(eventName, dataText) {
   const record = extractWatchRecord(obj);
   const rawType = String((obj && obj.type) || (record && record.type) || "");
   const type = rawType.toLowerCase();
-  const kinds = { snapshot: "snapshot", "app-task": "app-task", apptask: "app-task", task: "app-task", approval: "app-task", reset: "reset", resync: "reset" };
+  const kinds: Record<string, string> = { snapshot: "snapshot", "app-task": "app-task", apptask: "app-task", task: "app-task", approval: "app-task", reset: "reset", resync: "reset" };
   if (kinds[type] === "reset") return { kind: "reset", record: null };
   if (name.includes("snapshot") || kinds[type] === "snapshot") return { kind: "snapshot", record };
   if (name.includes("task") || name.includes("approval") || kinds[type] === "app-task") {
@@ -89,11 +89,11 @@ export function interpretWatchFrame(eventName, dataText) {
  *   const tail = dec.end();                      // flush 残留块（容忍无尾空行）
  * @returns {{ push(chunk: string): Event[], end(): Event[] }}  Event = { event?: string, data: string }
  */
-export function createSseDecoder() {
+export function createSseDecoder(): SseDecoder {
   let pending = "";
   const normalize = (s) => String(s).replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   const parseBlock = (block) => {
-    const ev = { data: "" };
+    const ev: SseEvent = { data: "" };
     for (const rawLine of block.split("\n")) {
       const line = rawLine.trimEnd();
       if (line.startsWith(":")) continue; // 注释/心跳
@@ -160,7 +160,7 @@ export async function* consumeWatchResponse(response, { signal } = {}) {
  * @param opts { watch, get, onFrame(rec, kind), shouldStop(), log?, retryBaseMs?, maxRetryMs? }
  * @returns 'stopped'|'terminal'|'failed'
  */
-export async function runWatchReconcile(opts) {
+export async function runWatchReconcile(opts: WatchReconcileOptions): Promise<"stopped" | "terminal" | "failed"> {
   const { watch, get, onFrame, shouldStop, log } = opts || {};
   if (typeof watch !== "function" || typeof get !== "function" || typeof onFrame !== "function") {
     throw new Error("watch-sse: runWatchReconcile 需要 watch/get/onFrame 注入");
@@ -171,7 +171,7 @@ export async function runWatchReconcile(opts) {
   for (;;) {
     if (shouldStop && shouldStop()) return "stopped";
     // 对账：先 get 快照（首连与每次重连/断线）
-    let snapshot = null;
+    let snapshot: Record<string, unknown> | null = null;
     try {
       snapshot = await get();
     } catch (e) {
@@ -231,4 +231,36 @@ function sleep(ms) {
 }
 function note(log, msg) {
   try { if (typeof log === "function") log("[watch-sse] " + msg); } catch { /* 忽略 */ }
+}
+
+// ---- 类型面（声明提升，供上方函数引用） ----
+
+/** watch 帧：kind 定类型，record 是宿主任务/审批记录（解析不出则 null）。 */
+export interface WatchFrame {
+  /** snapshot = 首条/对账后快照；app-task = 增量或终态；reset = 缓冲溢出应重读；other = 忽略。 */
+  kind: "snapshot" | "app-task" | "reset" | "other";
+  record: Record<string, unknown> | null;
+}
+
+/** SSE 事件（event 名 + data 文本）。 */
+export interface SseEvent {
+  event?: string;
+  data: string;
+}
+
+/** SSE 增量解码器（跨 chunk 保留余量）。 */
+export interface SseDecoder {
+  push(chunk: string): SseEvent[];
+  end(): SseEvent[];
+}
+
+/** runWatchReconcile 的注入面（全为函数，便于单测）。 */
+export interface WatchReconcileOptions {
+  watch: () => Promise<unknown>;
+  get: () => Promise<Record<string, unknown> | null>;
+  onFrame: (rec: unknown, kind: "snapshot" | "app-task") => unknown;
+  shouldStop?: () => boolean;
+  log?: (msg: string) => void;
+  retryBaseMs?: number;
+  maxRetryMs?: number;
 }

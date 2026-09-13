@@ -92,7 +92,11 @@ export const HOST_PATH_PREFIXES = ["/api/apps/"];
  * @param {{pageOrigin?: string, hostPrefixes?: string[]}} [opts]
  * @returns {URL|null}
  */
-export function resolveRelayUrl(input, privateBase, opts = {}) {
+export function resolveRelayUrl(
+  input: string | URL,
+  privateBase: URL,
+  opts: { pageOrigin?: string; hostPrefixes?: string[] } = {},
+): URL | null {
   const pageOrigin = opts.pageOrigin || window.location.origin;
   const hostPrefixes = opts.hostPrefixes || HOST_PATH_PREFIXES;
   let url;
@@ -106,7 +110,11 @@ export function resolveRelayUrl(input, privateBase, opts = {}) {
 }
 
 /** WebSocket 专用映射：http(s) → ws(s)，判定同 resolveRelayUrl。 */
-export function resolveRelaySocketUrl(input, privateBase, opts = {}) {
+export function resolveRelaySocketUrl(
+  input: string | URL,
+  privateBase: URL,
+  opts: { pageOrigin?: string; hostPrefixes?: string[] } = {},
+): URL | null {
   const mapped = resolveRelayUrl(input, privateBase, opts);
   if (!mapped) return null;
   mapped.protocol = mapped.protocol === "https:" ? "wss:" : "ws:";
@@ -130,7 +138,10 @@ function inheritStatics(Wrapped, Native) {
  * @param {{target?: any, navigator?: any, pageOrigin?: string, hostPrefixes?: string[]}} [opts]
  * @returns {() => void} disposer（逐个还原原生接口）
  */
-export function installRequestTakeover(privateBase, opts = {}) {
+export function installRequestTakeover(
+  privateBase: URL,
+  opts: { target?: any; navigator?: any; pageOrigin?: string; hostPrefixes?: string[] } = {},
+): () => void {
   const target = opts.target || window;
   const pageOrigin = opts.pageOrigin || (target.location && target.location.origin) || window.location.origin;
   const nav = opts.navigator || target.navigator || (typeof navigator === "undefined" ? null : navigator);
@@ -337,7 +348,11 @@ function appendScript(source, module = false) {
  * @param {URL} privateBase 中继前缀绝对 URL（尾带 /）
  * @param {{containerId?: string}} [opts]
  */
-export async function injectDshIndex(indexHtml, privateBase, opts = {}) {
+export async function injectDshIndex(
+  indexHtml: string,
+  privateBase: URL,
+  opts: { containerId?: string } = {},
+): Promise<void> {
   const containerId = (opts && opts.containerId) || "root";
   const parsed = new DOMParser().parseFromString(indexHtml, "text/html");
   // 清掉壳页自举 UI，准备 DSH 挂载容器
