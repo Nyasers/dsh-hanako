@@ -385,7 +385,7 @@ export function startTaskBridge({
   bridgeKey,
   cancelModelRequests,
 }: TaskBridgeOptions): () => void {
-  const offs = [];
+  const offs: Array<() => void> = [];
   const bridges = new Map(); // sessionId → SessionBridge（终态后惰性清理）
   const doCancelModels = typeof cancelModelRequests === "function"
     ? cancelModelRequests

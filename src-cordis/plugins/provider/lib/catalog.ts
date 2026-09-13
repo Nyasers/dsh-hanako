@@ -85,7 +85,7 @@ export function defaultEffortOf(item, efforts) {
 
 /** 按 provider 分组（provider 路由集合；DSH registerAdapter 第一参数）。 */
 export function providerRoutes(models) {
-  const out = [];
+  const out: any[] = [];
   const seen = new Set();
   for (const m of models || []) {
     const p = m && typeof m.provider === "string" ? m.provider : "";

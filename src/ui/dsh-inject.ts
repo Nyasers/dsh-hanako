@@ -147,7 +147,7 @@ export function installRequestTakeover(
   const nav = opts.navigator || target.navigator || (typeof navigator === "undefined" ? null : navigator);
   const conf = { pageOrigin, hostPrefixes: opts.hostPrefixes || HOST_PATH_PREFIXES };
   const relay = (input) => resolveRelayUrl(input, privateBase, conf);
-  const undo = [];
+  const undo: Array<() => void> = [];
 
   const originalFetch = target.fetch;
   const nativeFetch = typeof originalFetch === "function" ? originalFetch.bind(target) : null;
@@ -256,7 +256,7 @@ export function createStreamMux(privateBase, WebSocketCtor = window.WebSocket) {
   const wsUrl = new URL("api/remote.mux", privateBase);
   wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
   let socket = null;
-  const streams = new Map();
+  const streams = new Map<string, any>();
   let nextId = 0;
 
   const failAll = (error) => {

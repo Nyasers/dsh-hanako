@@ -19,7 +19,7 @@
  * 若 chunk 以 \n 结束则 rest 为空串。
  */
 export function consumeTextChunk(text) {
-  const lines = [];
+  const lines: string[] = [];
   let start = 0;
   for (let i = 0; i < text.length; i += 1) {
     if (text.charCodeAt(i) === 10 /* \n */) {

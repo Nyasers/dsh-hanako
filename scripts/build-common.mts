@@ -58,7 +58,7 @@ export function makeUrlRewriter(staticUrlToMeta) {
 // URL 回写（makeUrlRewriter）之后——先压会改写引号导致回写锚点失配。跳过
 // node_modules（npm 自带产物）与 dsh-plugin（归 pack 静态压缩步）。
 export async function extraMinify(root) {
-  const files = [];
+  const files: string[] = [];
   const collect = (dir) => {
     for (const name of readdirSync(dir)) {
       const p = join(dir, name);
@@ -88,7 +88,7 @@ export async function extraMinify(root) {
 
 // 产物强制校验：不得残留带引号的 file:// 字面量（构建机路径泄漏即失败，CI 兜底）
 export function assertNoStaticFileUrl(root) {
-  const offenders = [];
+  const offenders: string[] = [];
   const scan = (dir) => {
     for (const name of readdirSync(dir)) {
       const p = join(dir, name);

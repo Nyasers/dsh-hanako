@@ -39,7 +39,7 @@ function main() {
     process.exit(1);
   }
   const targets = derivedVersionTargets();
-  const stale = [];
+  const stale: any[] = [];
   for (const rel of targets) {
     const j = readPkg(rel);
     if (j.version !== version) stale.push({ rel, old: j.version });

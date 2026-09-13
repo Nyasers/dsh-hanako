@@ -202,7 +202,7 @@ function integrationDecls(integrationsDir) {
   if (!fs.pathExistsSync(integrationsDir)) {
     throw new Error(`集成目录不存在：${integrationsDir}（预期 src-integrations/；拒绍产出未打补丁的包）`);
   }
-  const out = [];
+  const out: any[] = [];
   for (const e of fs.readdirSync(integrationsDir, { withFileTypes: true })) {
     if (!e.isDirectory()) continue;
     const p = join(integrationsDir, e.name, "integration.json");
@@ -439,7 +439,7 @@ function resolveTool(pkgName) {
 }
 
 function collectStaticFiles(dir, recursive = true, ext = ".js") {
-  const files = [];
+  const files: string[] = [];
   if (!fs.pathExistsSync(dir)) return files;
   for (const name of fs.readdirSync(dir)) {
     const p = join(dir, name);
@@ -509,7 +509,7 @@ function applyIntegrations(nodeModulesDir) {
     throw new Error(`集成目录不存在：${integrationsDir}（预期 src-integrations/；拒绝产出未打补丁的包）`);
   }
   const builtRoot = join(ROOT, "_tmp", "integrations-built");
-  const pending = [];
+  const pending: any[] = [];
   let applied = 0;
   for (const ent of fs.readdirSync(integrationsDir, { withFileTypes: true })) {
     if (!ent.isDirectory()) continue;

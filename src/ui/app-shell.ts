@@ -153,7 +153,7 @@ import { injectDshIndex, installTransport } from "#/ui/dsh-inject.ts";
     return ""; // 启动中台面只有 loader + 状态行
   }
   function actionViewHtml(s) {
-    var raw = [];
+    var raw: string[] = [];
     if (s && s.error && s.error.code) raw.push("code: " + s.error.code);
     if (s && s.error && s.error.userText) raw.push("message: " + s.error.userText);
     if (s && s.note) raw.push("note: " + s.note);
@@ -431,7 +431,7 @@ import { injectDshIndex, installTransport } from "#/ui/dsh-inject.ts";
       if (detail) { detail.textContent = note; detail.classList.remove("err"); }
     }
     if (meta) {
-      var bits = [];
+      var bits: string[] = [];
       if (s && s.runtimeId) bits.push("runtime " + s.runtimeId);
       if (s && s.service && s.service.port) bits.push("port " + s.service.port);
       meta.hidden = bits.length === 0;
@@ -731,7 +731,7 @@ import { injectDshIndex, installTransport } from "#/ui/dsh-inject.ts";
   var irFrame = 0;
   var irStarted = false;
   function interactiveRegionRects() {
-    var out = [];
+    var out: Array<{ x: number; y: number; width: number; height: number }> = [];
     var nodes;
     try { nodes = document.querySelectorAll(IR_SELECTOR); } catch (e) { return out; }
     var seen = {};

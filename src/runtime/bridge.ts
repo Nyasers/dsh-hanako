@@ -120,7 +120,7 @@ export function sameOriginTarget(requestUrl, upstream) {
 }
 
 /** 序列化头（WS 升级请求用；值为数组时逐行写出）。 */
-function serializeHeaders(headers) {  const lines = [];
+function serializeHeaders(headers) {  const lines: string[] = [];
   for (const [name, value] of Object.entries(headers)) {
     if (value === undefined) continue;
     if (Array.isArray(value)) for (const v of value) lines.push(`${name}: ${v}`);
@@ -185,7 +185,7 @@ export async function startDshBridge(opts: DshBridgeOptions): Promise<DshBridgeH
 
   const activeRequests = new Set<string>();
   const upstreamSockets = new Set<string>();
-  const clientSockets = new Set(); // 已升级的浏览器 WS 客户端（冻结时发 1013 关闭帧）
+  const clientSockets = new Set<any>(); // 已升级的浏览器 WS 客户端（冻结时发 1013 关闭帧）
   let frozen = false; // 数据源切换冻结态（prepare-switch 置位，resume/守门失败解除）
   let activeCalls = 0; // 在途普通调用数（冻结前须归零；控制面调用不计）
 
@@ -218,7 +218,7 @@ export async function startDshBridge(opts: DshBridgeOptions): Promise<DshBridgeH
       }
       let counted = false;
       try {
-        const chunks = [];
+        const chunks: any[] = [];
         let bytes = 0;
         for await (const chunk of req) {
           bytes += chunk.length;

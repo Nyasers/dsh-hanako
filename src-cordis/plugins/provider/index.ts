@@ -40,9 +40,9 @@ export const inject = ["llm"];
 /** 动态依赖解析基座（profiles 全量视图优先——pnpm 严格结构下 dsh-pkg 顶层只有直接声明）。 */
 function resolveLlmEntry() {
   const home = process.env.DSH_HOME;
-  const bases = [];
+  const bases: string[] = [];
   if (home) bases.push(join(home, "profiles", "node_modules"));
-  const candidates = [];
+  const candidates: string[] = [];
   for (const base of bases) {
     try {
       const p = join(base, "@deepseek-ai", "dsh-llm", "package.json");
@@ -430,7 +430,7 @@ export async function apply(ctx, config) {
       /* attachments 服务不可用：图片内容报 UNSUPPORTED_CONTENT */
     }
     // 3. 目录快照（models.list；引擎未就绪窗口内重试 ≤20s）
-    let models = [];
+    let models: any[] = [];
     const deadline = Date.now() + 20000;
     for (;;) {
       try {

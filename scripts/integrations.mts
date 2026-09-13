@@ -50,8 +50,8 @@ export function dshVersionOf(pkgJson) {
  * @returns {{packages:number, files:number, empty:string[]}}
  */
 export function verifyIntegrations(integrations, readUpstream) {
-  const problems = [];
-  const empty = [];
+  const problems: string[] = [];
+  const empty: string[] = [];
   let files = 0;
   for (const it of Array.isArray(integrations) ? integrations : []) {
     const name = it && (it.dir || it.package) ? String(it.dir || it.package) : "(未命名)";
@@ -113,7 +113,7 @@ export function verifyIntegrations(integrations, readUpstream) {
 export function loadIntegrations(rootDir = REPO_ROOT) {
   const dir = join(rootDir, "src-integrations");
   if (!existsSync(dir)) return [];
-  const out = [];
+  const out: any[] = [];
   for (const ent of readdirSync(dir, { withFileTypes: true })) {
     if (!ent.isDirectory()) continue;
     const manifest = join(dir, ent.name, "integration.json");
@@ -151,7 +151,7 @@ export function readUpstreamFromMirror(repoRelPath, tag, mirrorDir = MIRROR) {
 
 /** 把 overlay 落进 _tmp/integrations/<短名>/（供后续编译步骤消费）。 */
 export function stageIntegrations(integrations, rootDir = REPO_ROOT) {
-  const staged = [];
+  const staged: string[] = [];
   for (const it of integrations) {
     for (const f of Array.isArray(it.files) ? it.files : []) {
       const src = join(it.root, "files", f.path);
@@ -174,7 +174,7 @@ export function stageIntegrations(integrations, rootDir = REPO_ROOT) {
  * @returns {Set<string>} specifier 集合
  */
 function sourceSpecifiers(rootDir) {
-  const seen = new Set();
+  const seen = new Set<string>();
   const declRe = /(?:from|import)\s*\(?\s*["']([^"'.][^"']*)["']/g;
   const walk = (dir) => {
     let entries;
@@ -206,7 +206,7 @@ function sourceSpecifiers(rootDir) {
  */
 export function extractRequires(bundleText) {
   const text = String(bundleText ?? "");
-  const out = [];
+  const out: string[] = [];
   const push = (s) => { if (s && !out.includes(s)) out.push(s); };
   const banner = /factory\s*:\s*([A-Za-z_$][\w$]*)\s*=>/.exec(text);
   if (banner) {
@@ -275,7 +275,7 @@ export function resolveInlineAliases(specifiers, repoRoot = REPO_ROOT) {
 export async function buildIntegrations(integrations, { tag, mirrorDir = MIRROR, repoRoot = REPO_ROOT, log = (_msg) => {} } = {}) {
   const { buildClientBundle } = await import("../src-cordis/build/client-config.mts");
   const { patchVersion } = await import("./version-common.mts");
-  const built = [];
+  const built: any[] = [];
   for (const it of integrations) {
     const short = it.dir;
     const pkg = String(it.package || "");

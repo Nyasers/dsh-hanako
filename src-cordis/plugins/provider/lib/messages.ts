@@ -31,7 +31,7 @@ export function isToolResultMessage(message) {
 
 /** 预扫描 assistant 消息的 tool-call 块：callId → toolName（toolResult 反查用）。 */
 export function collectToolNames(messages) {
-  const map = new Map();
+  const map = new Map<string, string>();
   for (const m of messages || []) {
     if (!m || m.role !== "assistant" || !Array.isArray(m.content)) continue;
     for (const b of m.content) {
@@ -70,7 +70,7 @@ export function assistantToHanaContent(message) {
       ? message.source.replayState
       : null;
   const metaBlocks = replay && Array.isArray(replay.blocks) ? replay.blocks : null;
-  const out = [];
+  const out: any[] = [];
   for (let i = 0; i < blocks.length; i += 1) {
     const b = blocks[i];
     if (!b) continue;
@@ -133,7 +133,7 @@ function textBlockToHana(b) {
 export function toHanaMessages({ messages, images }) {
   const list = Array.isArray(messages) ? messages : [];
   const toolNames = collectToolNames(list);
-  const out = [];
+  const out: any[] = [];
   let systemPrompt = undefined;
   for (const m of list) {
     if (!m || typeof m.role !== "string") continue;
@@ -150,8 +150,8 @@ export function toHanaMessages({ messages, images }) {
     // user（可能携带 tool-result / 文本 / 图片）
     if (m.role === "user") {
       const contentBlocks = Array.isArray(m.content) ? m.content : [];
-      const textItems = [];
-      const imageItems = [];
+      const textItems: any[] = [];
+      const imageItems: any[] = [];
       for (const b of contentBlocks) {
         if (!b) continue;
         if (b.type === "tool-result") {
@@ -162,7 +162,7 @@ export function toHanaMessages({ messages, images }) {
             imageItems.length = 0;
           }
           const inner = Array.isArray(b.content) ? b.content : [];
-          const resultContent = [];
+          const resultContent: any[] = [];
           for (const ib of inner) {
             if (!ib) continue;
             if (ib.type === "image") resultContent.push(normalizeImage(ib, images));
