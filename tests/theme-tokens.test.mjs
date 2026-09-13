@@ -83,13 +83,17 @@ test("TOKEN_MAP：alias 语义层的补漏条目在位", () => {
 
 test("TOKEN_MAP：字体/静态调色板/阴影/几何/结构性深浅不参与映射（不随主题走）", () => {
   for (const [token] of TOKEN_MAP) {
-    // alias-border-l* 是 elevation 的描边色来源（结构性：浅色主题黑、深色主题白，随明暗翻转），
-    // tooltip/toast-bg 是"深底 + 硬编码反白字"的功能性配对——都不该由 Hana 的主题色接管。
+    // tooltip/toast-bg 是"深底 + 硬编码反白字"的功能性配对，不该由 Hana 的主题色接管。
     assert.equal(
-      /^--dsw-(font|static|elevation|shadow|corner|mask-blur|linear|alias-tooltip-bg|alias-toast-bg|alias-border-l)/.test(token),
+      /^--dsw-(font|static|elevation|shadow|corner|mask-blur|linear|alias-tooltip-bg|alias-toast-bg)/.test(token),
       false,
       token + " 不该在映射表里",
     );
+    // alias-border-l* 里只放行 l3：它兼作“占用环”的轨道色（ContextMeter 的 .track）；
+    // 其余档是 elevation 的描边色来源（结构性：浅色主题黑、深色主题白，随明暗翻转），保持原生。
+    if (/^--dsw-alias-border-l/.test(token)) {
+      assert.equal(token, "--dsw-alias-border-l3", token + " 只有 l3 允许映射");
+    }
   }
 });
 
