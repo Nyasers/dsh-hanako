@@ -49,7 +49,7 @@ async function ensureReady() {
   try {
     return await ensureManagedRuntime({});
   } catch (e) {
-    throw new Error("DSH 受管运行时未就绪（会话查询需要它在线）：" + ((e && e.message) || e));
+    throw new Error("DSH 受管运行时未就绪（会话查询需要它在线）：" + ((e as any)?.message || e));
   }
 }
 
@@ -163,14 +163,36 @@ export function titleFromProjections(summary) {
   return typeof values.title === "string" ? values.title : "";
 }
 
+/** 会话清单条目（mapSummary 产物；字段存在才带，缺省即未知）。 */
+export interface SessionSummaryItem {
+  sessionId: string;
+  title: string;
+  cwd: string;
+  running: boolean;
+  blank: boolean;
+  updatedAt?: number;
+  asOfSeq?: number;
+  lastPromptAt?: number;
+  turns?: number;
+  steps?: number;
+  llmMs?: number;
+  usage?: unknown;
+}
+
+/** session/page 回执里本文件用到的字段。 */
+interface SessionPage {
+  records?: unknown[];
+  hasMore?: boolean;
+}
+
 const num = (v) => (typeof v === "number" && Number.isFinite(v) ? v : null);
 
 /** 官方列表摘要 → 我们的清单条目（字段存在才带）。 */
-export function mapSummary(s) {
+export function mapSummary(s: Record<string, any>): SessionSummaryItem {
   const src = s && typeof s === "object" ? s : {};
   const proj = src.projections && typeof src.projections === "object" ? src.projections : null;
   const values = proj && proj.values && typeof proj.values === "object" ? proj.values : null;
-  const item = {
+  const item: SessionSummaryItem = {
     sessionId: String(src.sessionId ?? ""),
     title: titleFromProjections(src),
     cwd: typeof src.cwd === "string" ? src.cwd : "",
@@ -208,14 +230,14 @@ function truncateSummary(text) {
 // ---------- 官方读面 ----------
 
 /** session/list → 全部清单条目。 */
-async function listSummaries(ctx) {
+async function listSummaries(ctx): Promise<SessionSummaryItem[]> {
   const value = await rpcViaControl(ctx, { method: "session/list", payload: {}, timeoutMs: 30000 });
   const raw = value && Array.isArray(value.items) ? value.items : [];
   return raw.map(mapSummary).filter((s) => s.sessionId);
 }
 
 /** 目标会话的清单条目（含 asOfSeq 与投影元数据）。找不到返回 null。 */
-async function findSummary(ctx, sessionId) {
+async function findSummary(ctx, sessionId): Promise<SessionSummaryItem | null> {
   for (let attempt = 0; attempt < 2; attempt++) {
     const found = (await listSummaries(ctx)).find((s) => s.sessionId === sessionId) || null;
     if (found) return found;
@@ -225,7 +247,7 @@ async function findSummary(ctx, sessionId) {
 
 // ---------- 操作实现 ----------
 
-async function doList(input, ctx) {
+async function doList(input, ctx): Promise<ToolResult> {
   const limit = clampLimit(input.limit);
   await ensureReady();
   const items = await listSummaries(ctx);
@@ -255,7 +277,7 @@ async function doList(input, ctx) {
   };
 }
 
-async function doGet(input, ctx) {
+async function doGet(input, ctx): Promise<ToolResult> {
   const sessionId = String(input.sessionId ?? "").trim();
   if (!sessionId) throw new Error("get 模式必须传 sessionId");
   // sessionId 格式锁死（session-<UUID>，与 dsh 生成格式一致）：畸形值直接拒，
@@ -266,7 +288,7 @@ async function doGet(input, ctx) {
 
   await ensureReady();
 
-  const notFound = (extra) => ({
+  const notFound = (extra): ToolResult => ({
     ok: false,
     error: "找不到会话 " + sessionId + "（" + extra + "）",
     content: [
@@ -278,8 +300,8 @@ async function doGet(input, ctx) {
     details: { dsh: { action: "get", sessionId, ok: false } },
   });
 
-  let item = null;
-  let page = null;
+  let item: SessionSummaryItem | null = null;
+  let page: SessionPage | null = null;
   try {
     item = await findSummary(ctx, sessionId);
     if (!item) return notFound("会话列表中无此 id");
@@ -292,7 +314,7 @@ async function doGet(input, ctx) {
       timeoutMs: 30000,
     });
   } catch (e) {
-    const msg = (e && e.message) || String(e);
+    const msg = (e as any)?.message || String(e);
     return {
       ok: false,
       error: "会话 " + sessionId + " 查询失败：" + msg,
@@ -307,7 +329,7 @@ async function doGet(input, ctx) {
   }
 
   const records = page && Array.isArray(page.records) ? page.records : [];
-  const meta = { sessionId };
+  const meta: Record<string, unknown> = { sessionId };
   if (item.cwd) meta.cwd = item.cwd;
   if (typeof item.updatedAt === "number") meta.updatedAt = item.updatedAt;
   if (typeof item.lastPromptAt === "number") meta.lastPromptAt = item.lastPromptAt;
@@ -323,7 +345,7 @@ async function doGet(input, ctx) {
   meta.scope = scope;
   meta.asOfSeq = item.asOfSeq;
   meta.recordCount = records.length;
-  if (page.hasMore === true) meta.hasMore = true;
+  if (page?.hasMore === true) meta.hasMore = true;
   if (error) meta.error = error;
 
   // 口径提示：不让"更早的结论"冒充本轮结果；被中断的轮次、以错误结束的轮次都标出来。
@@ -332,7 +354,7 @@ async function doGet(input, ctx) {
   if (scope === "window") notes.push("窗口内未出现 user 消息，以下为窗口内最后的 assistant 输出");
   if (interrupted) notes.push("该轮被中断，以上是中断前已产出的文本");
   if (error) notes.push("本轮以错误结束" + (error.code ? "（" + error.code + "）" : "") + "：" + error.message);
-  if (page.hasMore === true) notes.push("该会话还有更早的轮次未读取（需要时走 session/page 向前翻）");
+  if (page?.hasMore === true) notes.push("该会话还有更早的轮次未读取（需要时走 session/page 向前翻）");
 
   const textOut =
     "会话 " + sessionId + "（" + String(meta.title ?? "") + " · " + String(meta.cwd ?? "") + "）：\n" +
