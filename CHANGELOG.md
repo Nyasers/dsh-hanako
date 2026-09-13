@@ -1,5 +1,148 @@
 # Changelog
 
+## [1.0.0-rc.1+dsh-0.1.5-rc.2](https://github.com/Nyasers/dshana/compare/v1.0.0-beta.5%2Bdsh-0.1.2-rc.1...v1.0.0-rc.1%2Bdsh-0.1.5-rc.2) (2026-09-13)
+
+### ⚠ BREAKING CHANGES
+
+* 全面改名 dsh-hanako → dshana（App 身份、包作用域、技能目录）
+
+### Features
+
+* **app-v2:** 壳页 UI 升级——复刻 v1 webui-shell 纸张风三态壳（时间线 + 实时日志 + 错误折叠 + 主题桥） ([997ea50](https://github.com/Nyasers/dshana/commit/997ea504506d722614e17aa94869911c78b5a227)), references [#dsh-stage](https://github.com/Nyasers/dshana/issues/dsh-stage)
+* **app-v2:** 迁移步骤 1 骨架——v2 manifest / apply 入口 / 设置 / 工具注册（dsh_session list/get 离线可读） ([011abe0](https://github.com/Nyasers/dshana/commit/011abe0722b5979d6f81897ea92f54885bc4405e))
+* **app-v2:** 迁移步骤 2 受管运行时——DSH 迁入 App 受管 Node 子进程 ([a69bd35](https://github.com/Nyasers/dshana/commit/a69bd350e46b16e00d2139a9b94dcff20a024deb))
+* **app-v2:** 迁移步骤 3 provider adapter 与 create/send 业务链——DSH 推理改走受管 hana.models（NDJSON+done.assistant 签名回放），create/send 经 ctx.tasks.create + task-map 映射 + task-bridge 回投（决策 A-D 见 DESIGN） ([7c1d583](https://github.com/Nyasers/dshana/commit/7c1d583c1adcdac26515f72766dc3b749e47556c))
+* **app-v2:** 迁移步骤 4a 审批/取消/超时链——approval-bridge 经 hana.tasks.requestApproval + watch(approvalId) SSE 对账把 outcome 只投给正确 DSH 等待者（rejected/allowed-once 原样，超时/父任务结束/撤销 fail-closed）；cancel 经映射 cancel 标记 + DSH session.cancel、DSH 真中止后宿主才 canceled，宿主 task canceled/aborted 反向触发（task-bridge watch 反向 session.cancel + 定向 models.cancel）；执行超时走 cancel 链；watch SSE 解析/对账（snapshot/app-task/reset、断线 get 对账）与 NDJSON 分侧；task-map 扩展 approvals/cancel 协调字段（决策 E-J 见 DESIGN）；单测 21 例新增（watch-sse/task-map-ext/cancel-chain/approval-bridge），既有 104 例保持全绿 ([1469105](https://github.com/Nyasers/dshana/commit/146910536a543a7ae1484c61030824d004a7463f))
+* **app-v2:** 迁移步骤 4b/5 代码收口——ctx.routes 壳页诊断 registrar + contributes.cards/ui 回归 + 旧数据迁移 + pack/syncver v2 版本域 ([4f12c52](https://github.com/Nyasers/dshana/commit/4f12c52e13e943ae334c48a78ef2df915e7acd43))
+* **approval:** 审批归属以宿主 parentTaskId 交叉校验，漂移即 fail-closed ([cdfdbff](https://github.com/Nyasers/dshana/commit/cdfdbff108c11b449d8ed49d79db7f6bed428f41))
+* **binding:** 会话↔任务绑定搬进宿主会话投影，身份判定改本地读 ([e52ad98](https://github.com/Nyasers/dshana/commit/e52ad98841a313435afdabb8d35214441959acb1))
+* **binding:** 投影 v2 加“取消标记”格（写侧双写，读侧暂不动） ([488adbe](https://github.com/Nyasers/dshana/commit/488adbe808d816a27a357e624e4ccb394a3a7d1f))
+* **binding:** 投影补 action（v4）；task-bridge 也切到投影读绑定 ([f50e0e7](https://github.com/Nyasers/dshana/commit/f50e0e7e5cd675fa9b1576549cdad227fe05b31c))
+* **binding:** 投影补 rpcId 并升 v3；approval-bridge 改“投影优先”读绑定 ([a289b20](https://github.com/Nyasers/dshana/commit/a289b20d3d1e3f78ab2c66cded52ef7ce401116a))
+* **card:** 补 detached 拆窗面（standalone.html + 第四个面接线） ([42f84d2](https://github.com/Nyasers/dshana/commit/42f84d2491f5987f6dcc470e2b0f9fe963e3f195)), references [#root](https://github.com/Nyasers/dshana/issues/root)
+* **card:** 卡片封面接上 face.image（宿主契约：路径相对 ui/） ([219e688](https://github.com/Nyasers/dshana/commit/219e688d751aff925127a41bef6b0fe055d86c6c))
+* **card:** create/send 在会话流里出卡（流内卡字面量 + ui/card.html） ([491a592](https://github.com/Nyasers/dshana/commit/491a592d7e08058e1b9352f588148f36d3149f54))
+* **data-source:** 两个超时并入自持设置（与数据模式同栈同 revision） ([c994dd8](https://github.com/Nyasers/dshana/commit/c994dd863152a9afd60197fb53d2fd1361121ebf))
+* **data-source:** 数据来源设置与身份解析 + DSH_HOME 不再硬编码（T3.1） ([d5bec5a](https://github.com/Nyasers/dshana/commit/d5bec5aed8550807153cb8768767b96b841901bb))
+* **integrations:** 编译进包管线跑通 —— 官方 client 包可由我们自行重建 ([8c14354](https://github.com/Nyasers/dshana/commit/8c143548d45e1b3c0f080d7635e3882e3208c1d4))
+* **integrations:** 第一枚 overlay 落地 —— ui-layout 认「面」，FP 回到纯侧栏 ([b9c27b3](https://github.com/Nyasers/dshana/commit/b9c27b309ed19b2e72ec5e6fdf673bb4e256ad34))
+* **integrations:** 集成层脚手架与漂移闸（先立闸，后写集成） ([167fb9b](https://github.com/Nyasers/dshana/commit/167fb9b60c8147d3a2b74dedf4b5dc706f5b44a2))
+* **integrations:** 跨面会话选中同步（FP 点会话、主卡跟随）——ui-session 补丁 + 桥加选中面 ([4c459de](https://github.com/Nyasers/dshana/commit/4c459deae6819e6ba4121c1ff3a0e38c89cfa973))
+* **integrations:** 设置跨面（FP 点、主卡开）——ui-settings-general 补丁 + settingsShell 归位 + 桥的视图状态 ([3d45d95](https://github.com/Nyasers/dshana/commit/3d45d95475438a61427a84a6e33d78499dfa0f99))
+* **integrations:** 收掉 /plugins/events 403（client-hmr overlay）+ 发布 __DSHANA__.runtimeUrl ([c7a9bdc](https://github.com/Nyasers/dshana/commit/c7a9bdccefba0fa987613c9c6ea60ae80cf95325))
+* **integrations:** 照样例逐字补回 layout 三文件 + ui-sidebar 两文件（批次①后半） ([0dda9c1](https://github.com/Nyasers/dshana/commit/0dda9c1e53d9629644972106bedd9a0f407f7f27))
+* **integrations:** ui-open-in-app 转正（图标也过桥）+ 待内联库的解析别名 ([e764f7e](https://github.com/Nyasers/dshana/commit/e764f7e0868cbeda9932a39b53a5eb4ad029ddf6))
+* **pack:** 逐目标出包（4 平台包 + 通用兜底）+ 暂存树即用即清 ([4ec9f85](https://github.com/Nyasers/dshana/commit/4ec9f853e5f94cfb974ecb316c38d1eacf395e62))
+* **provider:** 按来源取模型请求身份，DSH Web UI 独立会话可直接推理 ([2fb2e25](https://github.com/Nyasers/dshana/commit/2fb2e25fc7acd15df0b7adaee7998420a405e352))
+* **provider:** 真流式——增量 emit，done 出权威块 ([ad713b0](https://github.com/Nyasers/dshana/commit/ad713b050b706eb0e0bfd72591cb53d9f181a943))
+* **query:** list/get 改走官方查询面（session/list + session/page） ([db4ca9b](https://github.com/Nyasers/dshana/commit/db4ca9ba9e4dad11ec1b3c30eb7c726f4a178184))
+* **routes:** 数据源切换入口暂撤（未跑通，先回 503） ([6ec71ee](https://github.com/Nyasers/dshana/commit/6ec71ee92a2e590926193bf1b9945bc3d22b54d2))
+* **runtime:** 端口随机化与启动契约对齐（T5.1） ([5969585](https://github.com/Nyasers/dshana/commit/59695856057f6c9e46ebbd9f42afda121e211a4f))
+* **runtime:** 中继支持「取流首帧」——读路径只取开场快照，不把流读到底 ([4206ee2](https://github.com/Nyasers/dshana/commit/4206ee29a276503f9915a4a384097a038e6f6cd5))
+* **runtime:** preflight 预检模式（数据源切换探针）+ e2e 冒烟回到配置契约（T3.2a） ([c8c635a](https://github.com/Nyasers/dshana/commit/c8c635a13896515b139214e1d5aa13332d22cfea))
+* **settings:** 设置页改为 App 自己的页（settings.ui.route 取代 schema）+ DESIGN 过时描述清理 ([56444d0](https://github.com/Nyasers/dshana/commit/56444d0fc8a20259695478daa59795c676173e0b))
+* **settings:** 设置页改用宿主的设置组件 ([643c854](https://github.com/Nyasers/dshana/commit/643c854a8a7470445cb34895ac95af9b2167a30a))
+* **settings:** 设置栈统一——两个超时走自持存储，读写面带 revision 与 409 ([baf409a](https://github.com/Nyasers/dshana/commit/baf409a41a1774c04253ec6b2806f4cb73396cdb))
+* **settings:** 数据来源三档 UI（选目录 + 应用并重启 + operation 轮询） ([63e3f09](https://github.com/Nyasers/dshana/commit/63e3f09c6d62402c41d46116f34e9b0a1f646679))
+* **settings:** 宿主设置页的默认模型选择（读写走 DSH 自己的 settings 服务） ([c64b56d](https://github.com/Nyasers/dshana/commit/c64b56dad68b34a4903557e9b9e27b8e28f39c79))
+* **settings:** 页面重新可见时重读设置 ([704ddd9](https://github.com/Nyasers/dshana/commit/704ddd9ecc1a57e738f9c0ce5f043c44d63d511a))
+* **shell:** 标题栏交互区域（0.950.0+ setInteractiveRegions）；补 open-external 能力；拆窗自举台不再下移 ([bdee56c](https://github.com/Nyasers/dshana/commit/bdee56cf2231cbe8b9d6305a9d5778d556d77511)), references [#dsh-stage](https://github.com/Nyasers/dshana/issues/dsh-stage) [#root](https://github.com/Nyasers/dshana/issues/root)
+* **shell:** 删掉死壳 [#frame](https://github.com/Nyasers/dshana/issues/frame)-wrap/[#dsh](https://github.com/Nyasers/dshana/issues/dsh)-frame；自举台收成官方 loading 形态；壳页 tag 选择器不再泼到 DSH 上 ([9873e4a](https://github.com/Nyasers/dshana/commit/9873e4a75d85af7b48c4cf2791b3b6e595db8e1a)), references [#dsh-stage](https://github.com/Nyasers/dshana/issues/dsh-stage) [#runtime-bar](https://github.com/Nyasers/dshana/issues/runtime-bar) [#frame-wrap](https://github.com/Nyasers/dshana/issues/frame-wrap) [#runtime-bar](https://github.com/Nyasers/dshana/issues/runtime-bar) [#dsh-stage](https://github.com/Nyasers/dshana/issues/dsh-stage) [#runtime-bar](https://github.com/Nyasers/dshana/issues/runtime-bar)
+* **shell:** boot-state 轮询去重（主卡 owner + FP 订阅）；siteNavEntry 加回；主题跟随提前到插件之前 ([6350765](https://github.com/Nyasers/dshana/commit/63507657758aec66293794a71bc60a36ac81cd7f))
+* **source-switch:** 数据源切换链（preflight→冻结→停旧起新→成功才落盘）+ 切换端点 ([5c1d6d0](https://github.com/Nyasers/dshana/commit/5c1d6d08c722c759167f2cdf0cfeaeb0551a8a87))
+* **tasks:** 档位显式声明；宿主任务元数据成为 task↔会话的持久记录 ([d2cac2e](https://github.com/Nyasers/dshana/commit/d2cac2e37eab5048c11be54046f3dc36dd317379))
+* **theme:** --dsw-alias-border-l3 映射到 --border（占用环的轨道色） ([28607bc](https://github.com/Nyasers/dshana/commit/28607bcfc53096b176b8fc03e3cbd8310175d3b0))
+* **theme:** 按三层分工落地——壳只维持宿主变量，偏好由 presenter 投影、DSH 内桥自观察 ([76f8ed3](https://github.com/Nyasers/dshana/commit/76f8ed316987648da9e14bb53d62246df1def1c1))
+* **theme:** 偏好变成活值（boot-state 轮询下发）+ 切主题不再等 2s 兜底推送 ([4125f83](https://github.com/Nyasers/dshana/commit/4125f835ce30f3913684ae672824fa3880de094f))
+* **tool:** 句柄默认、凭证显式——cancel/approve/get 收 taskId/approvalId，归属由宿主记录校验 ([487691a](https://github.com/Nyasers/dshana/commit/487691af4ee55b1bdaae1ea0761ea5453e9ff7ea))
+* **transport:** 一处接管本页请求原语，替掉逐调用点打补丁 ([7b8d43e](https://github.com/Nyasers/dshana/commit/7b8d43ea3ef65fc4b2af8f52ce0e542ccc73212a))
+* **ui-session:** 跨面会话选中改为双向同步（+ 回声闸刀） ([5df900f](https://github.com/Nyasers/dshana/commit/5df900fb1b56cf068e3a7d4c28eb93da39c8b95e))
+* **ui:** 壳页改同文档注入 DSH 前端 + __DSH_TRANSPORT__（bootstrap 向样例看齐） ([cee4e66](https://github.com/Nyasers/dshana/commit/cee4e667673ef23e70cbe56af3a93feaa918a67e)), references [#root](https://github.com/Nyasers/dshana/issues/root)
+* **v2:** IPC 向官方样例对齐——connection 交回官方 + runtime 中继补 cookie ([ab23e16](https://github.com/Nyasers/dshana/commit/ab23e169227128dac21b2c7b609a9222564e5ac1))
+
+### Bug Fixes
+
+* **app-v2:** 恢复 app/ui.clipboard-write 并接上宿主剪贴板能力 ([cc41f88](https://github.com/Nyasers/dshana/commit/cc41f882599bccd839668ef4726a99745f791b40))
+* **app-v2:** 壳页 iframe 预种 hana_app_runtime cookie（warm）+ ready 清残留 error（beta.6） ([083d417](https://github.com/Nyasers/dshana/commit/083d417480710b18403ef31dccaf988bc0f65704))
+* **app-v2:** 受管运行时权限档切 local-machine（刀 1/3） ([bc10d66](https://github.com/Nyasers/dshana/commit/bc10d66b469321e64de1478261c60265f0e92fe4))
+* **app-v2:** 依赖 ensure 移到 App 进程（runtime 沙箱 spawn 硬限制）+ 自动链 Promise 化（beta.5） ([e4f1e74](https://github.com/Nyasers/dshana/commit/e4f1e74b1bd1d9563245fee577e36fda9df53476))
+* **app-v2:** 依赖安装 spawn 授权 + apply 级自动链 + sidebar functionPanel 声明（beta.3） ([33e8c25](https://github.com/Nyasers/dshana/commit/33e8c25affc17abe82e35e053382ea4b84ced94b))
+* **app-v2:** apply 自动链避让宿主 bootstrap 60s 窗口（延迟 5s 触发，beta.4） ([4f25310](https://github.com/Nyasers/dshana/commit/4f25310cdec891e0ce0ff557231ecafcec78bfec))
+* **app-v2:** DSHana 卡片 403 missing_credential——壳页后端路由改走浏览器 SDK hana.api.fetch + vendor @hana/plugin-sdk + bump 2.0.0-beta.2 ([753c429](https://github.com/Nyasers/dshana/commit/753c42970cd8cf38c8102591de8f489b69c96f9e))
+* **binding:** 取消标记落进投影只能在 runtime 做（App 侧没有 sessions 句柄） ([fdd6150](https://github.com/Nyasers/dshana/commit/fdd61501c5953d720ae97d91b048ee880073ebb1))
+* **ci:** 发布校验的产物名与 pack.mts 对齐（dsh-hanako-v → dshana-v） ([5dd5973](https://github.com/Nyasers/dshana/commit/5dd5973f8e245e9e9f4171992ab1f59b2093be83))
+* **ci:** checkout 递归 submodule 并取全量历史（镜像校验读 submodule 的 tag） ([5cb2c21](https://github.com/Nyasers/dshana/commit/5cb2c21c804069a3d3ef557b8e89fff437a5f938))
+* **ci:** overlayTsconfig 的 typeRoots/paths 补顶层（干净环境下 @types/node 找不到） ([e040a74](https://github.com/Nyasers/dshana/commit/e040a74cf4fdbd6809725f621bbdd27969ed2a54))
+* **clipboard:** 壳级全局影子 + 宿主通道优先；修 written/ok 字段名 ([56560a9](https://github.com/Nyasers/dshana/commit/56560a90142007d0cc510fc4be14155568a411df))
+* **cordis:** 装配者交回官方 ui-layout —— 修真机黑屏（自接管是 0.1.2 的冻结副本） ([0a88417](https://github.com/Nyasers/dshana/commit/0a88417152d8e99762a54cfebf98c0915a2f0307))
+* **deps:** 补 [@types](https://github.com/types) 声明（@types/node 从幽灵转正，另补四个缺类型的包） ([073c0ca](https://github.com/Nyasers/dshana/commit/073c0cab1c70319cb828f3c7c4c0990191390fcb))
+* **integrations:** 设置面板可交互（补回 pointer-events:auto）+ FP 只发射不渲染面板 ([89f69e5](https://github.com/Nyasers/dshana/commit/89f69e55d772f3253b6eedb8fcc8c21ca86f9132))
+* **integrations:** 暂不渲染 workspace 的 settingsShell（修设置入口漂到主卡顶部） ([52a0cda](https://github.com/Nyasers/dshana/commit/52a0cda1a41e155cb83919ac61047ffa1a647a6f))
+* **integrations:** navigation 面回到「侧栏就是整张面」——修 FP 空白 ([2fcebf9](https://github.com/Nyasers/dshana/commit/2fcebf987854d39a42d7df5a1613486b0a30c7bc))
+* **integrations:** ui-layout 网格与渲染同源 —— 修 workspace 下 centerCol 被挤成 56px ([a75a88b](https://github.com/Nyasers/dshana/commit/a75a88b13189800073c6de815e39418e1aed6f4f))
+* **lifecycle:** 修复自动重试根本没生效（声明被插进了文档注释）+ 打开页面补一次启动 ([ea0543d](https://github.com/Nyasers/dshana/commit/ea0543d4afce33ceba60fcb37f49b6824deadce1))
+* **lifecycle:** 自启失败改为自动重试；siteNavEntry 声明 false；titlebar 改 solid 并去掉拆窗留白 ([a3736a7](https://github.com/Nyasers/dshana/commit/a3736a7b4e055562a8b3d99103947cfa705e516a)), references [#root](https://github.com/Nyasers/dshana/issues/root)
+* **pack:** --target 单数取值、必须显式给出；三种失败路径打印支持目标列表 ([da38fdf](https://github.com/Nyasers/dshana/commit/da38fdf57fb18638ee724faa448af4bc9ba6b405))
+* **pack:** 裁剪不再动 doc；加“被同包代码引用就保留”闸门；.md 进候选 ([a365990](https://github.com/Nyasers/dshana/commit/a365990fe5fb623bc300ad06dd2856f1c6b957f4))
+* **pack:** 裁剪退回保守口径——只按平台筛与四类扩展名，不再按目录名删 ([b747b09](https://github.com/Nyasers/dshana/commit/b747b09e949f2bbd39c8fb4c475477512be83c4f))
+* **pack:** 覆盖步骤改指 src-integrations 并 fail-closed——最近几个包里的官方包其实是上游原版 ([2d4dbce](https://github.com/Nyasers/dshana/commit/2d4dbcedd41f782e0d92ce076ffbd15649ad5158))
+* **pack:** zip 根 = 包根，不再套一层目录（装不上的根因） ([3151308](https://github.com/Nyasers/dshana/commit/3151308f16a0262337ba97c106753823604a0b83))
+* **provider:** 身份三态判定——损坏映射显式失败，不再静默降级成 App 身份 ([670d82a](https://github.com/Nyasers/dshana/commit/670d82a975b919224652a66602b9d54ed991cbe9))
+* **provider:** ctx is not defined——身份日志改走 deps 注入；补 adapter 级单测 ([ca0cbf1](https://github.com/Nyasers/dshana/commit/ca0cbf179d8a82c2fe515de75281f2d4f079132d))
+* **provider:** maxTokens 超宿主请求闸时不传字段，不再收敛到 65536 ([4e80be0](https://github.com/Nyasers/dshana/commit/4e80be073e9be214a6f48bd66d8880bf0b3e45f8))
+* **relay:** WS 升级握手头被剥离致浏览器事件流连不上 + 补齐数据源切换冻结（T5.2） ([d6cb43f](https://github.com/Nyasers/dshana/commit/d6cb43f81af9c0bfc818a4ad49fe0bc11c724bb3))
+* **routes:** 数据目录改取宿主顶层 ctx.dataDir ([eaf2b99](https://github.com/Nyasers/dshana/commit/eaf2b99d6fbd9f5ffdfeeeda194e058621448b6a))
+* **settings:** 保存默认模型后不再清空候选列表 ([144cb9c](https://github.com/Nyasers/dshana/commit/144cb9caa57134b5aafe1e8fd5947923a3b3e112))
+* **settings:** 补回设置页自己的底色与文字色 ([60ed9b1](https://github.com/Nyasers/dshana/commit/60ed9b1749426da7d8d58e92b15be3842c149351)), references [#F5EFE4](https://github.com/Nyasers/dshana/issues/F5EFE4) [#2A2622](https://github.com/Nyasers/dshana/issues/2A2622)
+* **settings:** 模型选择改成宿主那个分组形状（一个下拉、provider 当组标题） ([94b4b94](https://github.com/Nyasers/dshana/commit/94b4b94734aa15d30073c2c2fbe8e536471dfd75))
+* **settings:** 默认模型改回三段式选择，长候选可滚 ([2ee55ed](https://github.com/Nyasers/dshana/commit/2ee55ed75c5015638e22889468b522401ce83c03))
+* **test:** 反斜杠同义断言加平台守卫（Linux 上 "\ds h\" 不是绝对路径） ([78a3686](https://github.com/Nyasers/dshana/commit/78a36865d93e4b4e2c17888b1c4609582fef813d))
+* **theme:** 补 warn/success 语义色的主题映射——连接状态指示灯不再穿 DSH 内置色 ([813972f](https://github.com/Nyasers/dshana/commit/813972ffcbc8dc302e6f719a25d2244f885a56df))
+* **theme:** 补齐 alias 语义层 token 覆盖；映射表拆成可单测模块 ([0030c86](https://github.com/Nyasers/dshana/commit/0030c86279f13f293969640ca85f87bba6843dca))
+* **theme:** 层次位改叠色、结构性深浅还给原生（修 tooltip 白底白字 / 按钮与输入框融为一体 / elevation 失效） ([7bd1fa2](https://github.com/Nyasers/dshana/commit/7bd1fa243b7fd1d26dbd2247ea4e2b6fcaf29cae)), references [#FCFAF5](https://github.com/Nyasers/dshana/issues/FCFAF5)
+* **theme:** 偏好改由壳页下发（取自 DSH index 的 boot-theme 行），退役 RPC 与总线事件链 ([c04a552](https://github.com/Nyasers/dshana/commit/c04a552cf0754e8d78b36460fb7d7f5abcbeecd6))
+* **theme:** 统一到宿主变量名，空值不再出手——修「整个 UI 背景变 transparent」 ([3c605f6](https://github.com/Nyasers/dshana/commit/3c605f6b523526ff87cb1919e4350f99a9428bd5))
+* **theme:** 主题桥适配同文档拓扑——来源校验改双拓扑 + 直读文档根；注入器补 <style> 搬运 ([e97e452](https://github.com/Nyasers/dshana/commit/e97e45237bf87b091aa47edcd0763a106d9302df))
+* **theme:** settings/describe 改走 __DSH_TRANSPORT__（私有运行时基址）——修 403 missing_credential ([38b2409](https://github.com/Nyasers/dshana/commit/38b240921162bc64c4bb59c77aa474b302a9b825))
+* **tool:** 工具上下文继承宿主 ctx（真机：list/get 报“宿主不支持受管服务请求”） ([b613ab2](https://github.com/Nyasers/dshana/commit/b613ab2bbe57c3cb01b0d7b233a6df1f322c5674))
+* **tools:** 修 create/send 定位键丢失与 App 进程崩溃；DSH 访问收进 runtime 控制面 ([624886e](https://github.com/Nyasers/dshana/commit/624886e611211f7765ca05848a48f1364bb97f50))
+* **tsconfig:** typeRoots 同时列顶层与 hoist（编辑器找不到 @types/node） ([242f1a8](https://github.com/Nyasers/dshana/commit/242f1a8b65aa72d0108602eb4c5d5635761f328c))
+* **typecheck:** 失败清单纳入重声明类错误（TS2451 / TS2393） ([9641cb5](https://github.com/Nyasers/dshana/commit/9641cb5a5a74db7fb150aa22336f93fcb9d423a8))
+* **types:** 覆盖层口径修复与 vendor 同步（8 条归零） ([9e7b4b4](https://github.com/Nyasers/dshana/commit/9e7b4b4fd1f1e4b2e0520129e398dcd821beefae))
+* **types:** 全仓清掉 never[] 推断，并为 cordis service 半补 swc ([10891f8](https://github.com/Nyasers/dshana/commit/10891f8429e73736a47396f5411033d5aa3ec4f3))
+* **types:** app-runtime 运行包补类型，并修 #/types/host 漏扩展名 ([6513b41](https://github.com/Nyasers/dshana/commit/6513b41d3ece5601a6cf7e047239ea3bc88b2389))
+* **types:** app-shell 的初始值推断（= null / {} / 空集合） ([a1b888f](https://github.com/Nyasers/dshana/commit/a1b888f2276ff0793426f83f911c98d8ca77ba62))
+* **types:** dsh-inject / build / index 的编辑器报错 ([def633b](https://github.com/Nyasers/dshana/commit/def633b044d76d6ba438e14e5c48ccbbc650fbcd))
+* **types:** lib/session-run 与 lib/config 补类型（38 条归零） ([e4aeab5](https://github.com/Nyasers/dshana/commit/e4aeab55ec33b092ff2e875dc50b16ee976b9919))
+* **types:** routes/dshana-routes 与 lib/data-source 补类型（52 条归零） ([f88d8af](https://github.com/Nyasers/dshana/commit/f88d8afbb586b61b55ab09e749e6007d2a846cca))
+* **types:** runtime/approval-bridge 补类型（34 条归零） ([f1efb1c](https://github.com/Nyasers/dshana/commit/f1efb1cd850fca1936d9c0dd4b26a67a365c18ba))
+* **types:** runtime/main 补类型（21 条归零） ([1b50173](https://github.com/Nyasers/dshana/commit/1b50173bd605b06d1156d80481797ce95c925588))
+* **types:** src / src-cordis / scripts 三域补类型（182 条归零） ([dd95be8](https://github.com/Nyasers/dshana/commit/dd95be83a2b1db9efb99a4f3bcc7e29727ae1ba9))
+* **types:** tools/shared/query 补类型（48 条归零） ([ca79fdf](https://github.com/Nyasers/dshana/commit/ca79fdf078147769715a99bf9c35f57c39dc5b01))
+* **ui-layout:** 补回取「面」的那行代码（清注释时被连带删掉） ([3e43ca3](https://github.com/Nyasers/dshana/commit/3e43ca330a7cd114c9f1f85c1d530c08fed7ddda))
+* **ui-layout:** 拆窗面去掉「收起」机制——侧栏不再被 0 宽吞掉 ([86af008](https://github.com/Nyasers/dshana/commit/86af0085137eeec72d5b3912261348c4cecfcac2))
+* **ui-layout:** workspace 是合法角色不是未知——修正主卡被判成拆窗面 ([60ac120](https://github.com/Nyasers/dshana/commit/60ac120612c0af0e9e07ba73f3f0c451dd761afe))
+* **ui-session:** 主卡不再被 FP 的陈旧选中压回去（共享值带写入时刻） ([ef89743](https://github.com/Nyasers/dshana/commit/ef89743403f7fe0e2109fb755b9fb1cf730c0c52))
+* **ui:** 补上 __DSH_FILE_UPLOAD__ —— 不设它时 DSH 附件上传会落到宿主源被 403 ([5347d44](https://github.com/Nyasers/dshana/commit/5347d44e552a25080087b37b1147bd88fba6477d))
+* **ui:** 接上宿主主题能力——壳页以前从没加载过 hana-css，主题一直是兜底色 ([2fe26b0](https://github.com/Nyasers/dshana/commit/2fe26b07eb68b10dfc4989a9a83926d308abc8aa)), references [#F5EFE4](https://github.com/Nyasers/dshana/issues/F5EFE4)
+* **ui:** 认面的事实源改回「页面自己的静态声明」（meta），宿主 slot 降为兜底；退役 ?dshana-view= ([2adfe87](https://github.com/Nyasers/dshana/commit/2adfe875822bf8d313ca502e3e8637c381792e6b))
+* **ui:** 页面启动协议改成 context 驱动（认面问宿主，不再用自家查询参数）+ 认路径票据 ([59152b7](https://github.com/Nyasers/dshana/commit/59152b7f131e32e818d9cd4c8c80940d5aeba80e))
+* **ui:** 主题投递改壳页主动推（同文档注入后桥的 parent 是宿主，请求到不了壳） ([a93d998](https://github.com/Nyasers/dshana/commit/a93d998f8d1edb1edeabd544ed5b1880398a9ff5))
+* **ui:** ready 态顶上白占一整屏——遗留壳容器盖过了 [hidden]（真机反馈） ([af8655d](https://github.com/Nyasers/dshana/commit/af8655dcddfce9e73ff38360c7f79f971cce4afa)), references [#frame-wrap](https://github.com/Nyasers/dshana/issues/frame-wrap) [#frame-wrap](https://github.com/Nyasers/dshana/issues/frame-wrap)
+
+### Performance Improvements
+
+* **pack:** 源码层精简体积——64.9MB → 39.6MB（已低于市场 50MB 闸） ([dca9b7b](https://github.com/Nyasers/dshana/commit/dca9b7ba972219af30e9827328db4b83449cbc86))
+
+### Reverts
+
+* **clipboard:** 撤回日志静音，退回每次失败即时上报 ([1cb9b6b](https://github.com/Nyasers/dshana/commit/1cb9b6b5d961294f5882a3678c7fa8c6883d45e1))
+* **theme:** 收回「嵌入式一律跟随」——跟随门回到仅 preference=system ([7616028](https://github.com/Nyasers/dshana/commit/7616028de75467887706c018fe01a7644353c90e))
+
+### Code Refactoring
+
+* 全面改名 dsh-hanako → dshana（App 身份、包作用域、技能目录） ([e31c42e](https://github.com/Nyasers/dshana/commit/e31c42ebbd197281ee3bc6e1898c5b02bc3851da))
+
 ## [1.0.0-beta.5+dsh-0.1.5-rc.2](https://github.com/Nyasers/dsh-hanako/compare/v1.0.0-beta.5%2Bdsh-0.1.2-rc.1...v1.0.0-beta.5%2Bdsh-0.1.5-rc.2) (2026-09-11)
 
 ### Features
@@ -250,5 +393,6 @@
 ### Bug Fixes
 
 * CodeRabbit review 修复——install/update 互斥、spec 注入校验、SemVer prerelease 比较、version.mjs 严格化与毕业逻辑、文档同步 ([7eba3be](https://github.com/Nyasers/dsh-hanako/commit/7eba3bee448748c1959922092abcb49fee1e0d7b))
+
 
 

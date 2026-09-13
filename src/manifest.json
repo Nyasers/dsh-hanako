@@ -2,7 +2,7 @@
   "manifestVersion": 2,
   "id": "dshana",
   "name": "DSHana",
-  "version": "1.0.0-beta.5+dsh-0.1.5-rc.2",
+  "version": "1.0.0-rc.1+dsh-0.1.5-rc.2",
   "description": "把 DeepSeek Harness 变成 HanaAgent 的子代理",
   "entry": "index.js",
   "icon": "assets/icon.png",
