@@ -23,8 +23,8 @@ import { injectDshIndex, installTransport } from "#/ui/dsh-inject.ts";
   var POLL_FAST_MS = 1500;   // 非就绪：较快轮询（starting 日志滚动）
   var POLL_MID_MS = 3000;    // idle/error：中速
   var POLL_SLOW_MS = 6000;   // 就绪：慢轮询（发现运行态漂移）
-  var pollTimer = null;
-  var shell = null;          // 根元素（data-dshana-shell）
+  var pollTimer: ReturnType<typeof setTimeout> | null = null;
+  var shell: any = null;          // 根元素（data-dshana-shell）
   var isSidebar = false;
 
   // ---- 小工具 ----
@@ -230,7 +230,7 @@ import { injectDshIndex, installTransport } from "#/ui/dsh-inject.ts";
   // storage.global 在 SDK 里即可调用对象、也可能是工厂（两边兼容地取）。
   function sharedStore() {
     try {
-      var g = hana && hana.storage ? hana.storage.global : null;
+      var g: any = hana && hana.storage ? hana.storage.global : null;
       if (typeof g === "function") { var s = g(); if (s && typeof s.get === "function") return s; }
       if (g && typeof g.get === "function") return g;
     } catch (e) { /* 忽略 */ }
@@ -309,7 +309,7 @@ import { injectDshIndex, installTransport } from "#/ui/dsh-inject.ts";
   // 一次装配：标记视图参数（DSH 侧 view 插件读 ?dshana-view=）→ 装 transport → 取回 DSH
   // index 注入本页。私有前缀 = 中继前缀 + surface 路径票据（DSH 前端经原生 fetch 发出的
   // 请求带不了 header，票据必须在路径里）。
-  var injected = { started: false, dispose: null };
+  var injected = { started: false, dispose: null as (() => void) | null };
   function startInjection(prefix) {
     if (injected.started) return;
     injected.started = true;
@@ -349,7 +349,7 @@ import { injectDshIndex, installTransport } from "#/ui/dsh-inject.ts";
   // （那是插件，加载晚）。权威归属不变：桥的 readPreference() 优先 client 半投影的属性，
   // 本值只在属性出现前充数。
   // 注：壳页读的只是**启动那一段**——DSH 自己写在 index 里的字面量，不是壳页的意见。
-  var dshPreference = null;
+  var dshPreference: string | null = null;
   function readIndexThemePreference(html) {
     var m = /const\s+preference\s*=\s*"([^"]+)"/.exec(String(html || ""));
     return m && /^(system|light|dark)$/.test(m[1]) ? m[1] : null;
@@ -489,8 +489,8 @@ import { injectDshIndex, installTransport } from "#/ui/dsh-inject.ts";
   // FP 才自己取。通道复用设置视图与会话选中那条（hana.storage.global + onChanged），不新开协议。
   // 代价如实记：owner 非正常消失（没跑到 pagehide）时，FP 最多陈旧 STALE_MS。
   var BOOT_STATE_STALE_MS = 5 * 60 * 1000;
-  var lastPublishedSig = null;
-  var lastSnapshot = null;
+  var lastPublishedSig: string | null = null;
+  var lastSnapshot: any = null;
   function bootSig(s) {
     if (!s) return "";
     var e = s.error || {};
@@ -536,7 +536,7 @@ import { injectDshIndex, installTransport } from "#/ui/dsh-inject.ts";
   ];
   function readThemeVars() {
     var cs = getComputedStyle(document.documentElement);
-    var out = {};
+    var out: any = {};
     for (var i = 0; i < THEME_VARS.length; i++) {
       var name = THEME_VARS[i];
       out[name] = cs.getPropertyValue(name).trim();
@@ -620,7 +620,7 @@ import { injectDshIndex, installTransport } from "#/ui/dsh-inject.ts";
   //   不跟随。修完这条，壳页、注入的 DSH UI、以及主题桥读到的变量
   //   才会是真实的 Hana 配色。
   var THEME_STYLE_ATTR = "data-hana-theme-style";
-  var themeCssUrl = null;
+  var themeCssUrl: string | null = null;
   // 注：dsh 自己的主题偏好（system/light/dark）**不由壳页判断**——它是 DSH 侧的事实
   // （宿主主题 API 里也没有它）。现由 ui-layout 的 presenter 投影到
   // html[data-dsh-theme-preference]，DSH 内的主题桥直接观察该属性决定是否跟随。
@@ -705,7 +705,7 @@ import { injectDshIndex, installTransport } from "#/ui/dsh-inject.ts";
     try {
       var m = document.querySelector('meta[name="hana-dshana-role"]');
       var v = m && m.getAttribute("content");
-      if (VIEWS.indexOf(v) >= 0) return v;
+      if (v && VIEWS.indexOf(v) >= 0) return v;
     } catch (e) { /* 忽略 */ }
     var a = root && root.getAttribute("data-dshana-view");
     return a && VIEWS.indexOf(a) >= 0 ? a : null;
@@ -727,7 +727,7 @@ import { injectDshIndex, installTransport } from "#/ui/dsh-inject.ts";
   var CHROME_BAND_PX = 44; // 与拆窗页/设置面留白同一个常量（样例 bootstrap.css）
   var IR_LIMIT = 64;
   var IR_SELECTOR = "button, [role='button'], a[href], input, select, textarea, summary";
-  var irLastSig = null;
+  var irLastSig: string | null = null;
   var irFrame = 0;
   var irStarted = false;
   function interactiveRegionRects() {
