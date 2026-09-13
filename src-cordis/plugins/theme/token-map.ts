@@ -62,7 +62,7 @@ export const TOKEN_MAP = [
   ["--dsw-alias-label-tertiary", "--text-muted"],
   ["--dsw-alias-label-caption", "--text-muted"],
   ["--dsw-alias-label-dimmed", "--text-muted"],
-  // border：**整族不映射**（保持 dsh 原生）。
+  // border：**整族不映射**（保持 dsh 原生），只有 l3 单列在下面。
   // 这五档不只是"画线"，还是 elevation 的描边色来源——宿主在 gradient-shadow-text.css 里把
   // --dsw-elevation-stroke-color 默认绑到 l4，Menu / InputBar / ChatView / AttachmentRail 又
   // 各自重绑 l1 / l2 / l2-darkmode-thin / l3。而 l* 是**结构性深浅线**（浅色主题黑 4–16%、
@@ -71,6 +71,10 @@ export const TOKEN_MAP = [
   // panel/prominent/soft 三层投影）一起拖没。
   // 注：不映射的只有 border-l*；--dsw-alias-separator-primary / border-inverted2 /
   // button-ghost-active-border 这些**语义明确的分隔线**仍走 --border。
+  // l3 单列：它兼作“占用环”的轨道色（ContextMeter 的 .track），那里要的是宿主的分割线。
+  // 代价明确：l3 同时也用于二十余处边框，且 ChatView 把 elevation 的描边重绑到它——
+  // 那处浮层会跟着变暖调（elevation 默认的 l4 不受影响）。
+  ["--dsw-alias-border-l3", "--border"],
   // interactive
   ["--dsw-alias-interactive-bg-hover", "--accent-light"],
   ["--dsw-alias-interactive-bg-active", "--accent-light"],
