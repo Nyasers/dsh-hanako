@@ -97,7 +97,7 @@ export function apply(ctx) {
   // 不需要转发受管服务，只提供壳页消费的 boot 状态与启动/停止面。
   // ui/ 壳页（dist/ui/*.html）以相对同源 fetch 本组端点轮询（页面经 App surface
   // 授权加载）。
-  let unregisterRoutes = null;
+  let unregisterRoutes: (() => void) | null = null;
   if (ctx.routes && typeof ctx.routes.register === "function") {
     try {
       unregisterRoutes = ctx.routes.register((app) => registerDshanaRoutes(app, defaultDshanaRouteDeps(ctx)));
@@ -105,7 +105,7 @@ export function apply(ctx) {
     } catch (e) {
       // registrar 抛错 = 路由发布失败 → 抬高让宿主拒绝本 App（路由是壳页/诊断面的
       // 交付面，缺了只剩纯工具；显式失败比静默残缺好诊断）
-      log("error", "ctx.routes.register 失败（App 加载中止）：" + ((e && e.message) || e));
+      log("error", "ctx.routes.register 失败（App 加载中止）：" + ((e as any)?.message || e));
       throw e;
     }
   } else {
@@ -127,11 +127,11 @@ export function apply(ctx) {
       Promise.resolve()
         .then(() => ensureManagedRuntime({}))
         .catch((e) => {
-          log("warn", "apply 自动链启动 DSH runtime 失败（状态经 boot-state 展示，可手动重试）：" + ((e && e.message) || e));
+          log("warn", "apply 自动链启动 DSH runtime 失败（状态经 boot-state 展示，可手动重试）：" + ((e as any)?.message || e));
         });
       log("info", "apply 自动链：Promise 微任务触发 ensureManagedRuntime（不占 apply 同步栈，single-flight）");
     } catch (e) {
-      log("warn", "apply 自动链触发异常（忽略，继续返回 disposer）：" + ((e && e.message) || e));
+      log("warn", "apply 自动链触发异常（忽略，继续返回 disposer）：" + ((e as any)?.message || e));
     }
   }
 
@@ -146,10 +146,10 @@ export function apply(ctx) {
     // managed-runtime.js 与依赖部署纪律）。disposer 可异步不等待宿主。
     try {
       disposeManagedRuntime().catch((e) => {
-        log("warn", "disposer 停止 DSH runtime 失败：" + ((e && e.message) || e));
+        log("warn", "disposer 停止 DSH runtime 失败：" + ((e as any)?.message || e));
       });
     } catch (e) {
-      log("warn", "disposer 停止 DSH runtime 异常：" + ((e && e.message) || e));
+      log("warn", "disposer 停止 DSH runtime 异常：" + ((e as any)?.message || e));
     }
     log("info", "app apply disposer：工具注销 + 路由注销 + DSH 受管 runtime 收尾完成");
   };

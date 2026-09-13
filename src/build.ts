@@ -39,11 +39,11 @@ const DIST_DIR = join(ROOT, "dist");
 function resolveRspackEntry(coreDir) {
   const pkg = JSON.parse(fs.readFileSync(join(coreDir, "package.json"), "utf8"));
   const dot = pkg.exports?.["."];
-  let entry = null;
+  let entry: string | null = null;
   if (typeof dot === "string") entry = dot;
   else if (dot && typeof dot === "object") entry = dot.default ?? dot.import ?? dot.require;
   if (!entry) entry = pkg.main ?? "dist/index.js";
-  return join(coreDir, entry);
+  return join(coreDir, entry as string);
 }
 let rspackPkg;
 const envDir = process.env.RSPACK_ENV;
@@ -62,7 +62,7 @@ const rewriter = makeUrlRewriter(collectSource(join(ROOT, "src")));
 // 单 compiler 编译封装（rspack 一次 run/close；stats 报错即 reject）
 async function compile(cfg, label) {
   const compiler = rspack(cfg);
-  await new Promise((resolvePromise, reject) => {
+  await new Promise<void>((resolvePromise, reject) => {
     compiler.run((err, stats) => {
       compiler.close(() => { });
       if (err) return reject(err);

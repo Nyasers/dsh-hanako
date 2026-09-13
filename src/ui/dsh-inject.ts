@@ -52,7 +52,7 @@ export function createRuntimeFetch(privateBase, pageOrigin = window.location.ori
 
 /** bundle 传输：DSH 客户端插件 chunk 以 <script> 形式按中继前缀加载（保持执行顺序）。 */
 export function loadRuntimeBundle(privateBase, pageOrigin = window.location.origin) {
-  return (url) => new Promise((resolve, reject) => {
+  return (url) => new Promise<void>((resolve, reject) => {
     const script = document.createElement("script");
     script.src = mapRuntimeUrl(url, privateBase, pageOrigin).toString();
     script.async = false;
@@ -226,6 +226,10 @@ const MAX_STREAMS = 128;
 
 /** 一条远端流的收件箱（push/finish/next）。 */
 class Inbox {
+  values: any[];
+  done: boolean;
+  failure: any;
+  wake: (() => void) | null;
   constructor() {
     this.values = [];
     this.done = false;
@@ -243,7 +247,7 @@ class Inbox {
   }
   async next() {
     while (!this.values.length && !this.done) {
-      await new Promise((resolve) => { this.wake = resolve; });
+      await new Promise<void>((resolve) => { this.wake = resolve; });
     }
     if (this.values.length) return { value: this.values.shift(), done: false };
     if (this.failure) throw this.failure;
@@ -255,7 +259,7 @@ class Inbox {
 export function createStreamMux(privateBase, WebSocketCtor = window.WebSocket) {
   const wsUrl = new URL("api/remote.mux", privateBase);
   wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
-  let socket = null;
+  let socket: WebSocket | null = null;
   const streams = new Map<string, any>();
   let nextId = 0;
 
@@ -329,8 +333,8 @@ export function createStreamMux(privateBase, WebSocketCtor = window.WebSocket) {
 }
 
 /** 追加一个 script（module 或 classic），按顺序执行。 */
-function appendScript(source, module = false) {
-  return new Promise((resolve, reject) => {
+function appendScript(source: string, module = false): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
     const script = document.createElement("script");
     if (module) script.type = "module";
     script.src = source;
@@ -374,7 +378,7 @@ export async function injectDshIndex(
   // 对比旧实现的两处差异：① 多搬 <style>（旧实现漏搬，主题插件的静态 fallback
   // 就是这样丢的）；② 内联/外部脚本与样式混在同一趟有序遍历里，不再分块。
   // module entry 最后加载（它依赖前面的东西）。
-  let moduleEntry = null;
+  let moduleEntry: string | null = null;
   for (const node of parsed.head.children) {
     const tag = node.tagName.toLowerCase();
     if (tag === "link") {
@@ -383,9 +387,9 @@ export async function injectDshIndex(
       const href = node.getAttribute("href");
       if (!href) continue;
       const next = document.createElement("link");
-      next.rel = node.rel;
+      next.rel = (node as HTMLLinkElement).rel;
       next.href = resolveIndexAssetUrl(href, privateBase).toString();
-      if (node.crossOrigin) next.crossOrigin = node.crossOrigin;
+      if ((node as HTMLLinkElement).crossOrigin) next.crossOrigin = (node as HTMLLinkElement).crossOrigin;
       document.head.append(next);
       continue;
     }
@@ -440,7 +444,10 @@ export async function injectDshIndex(
  * 上面两处逐包补丁保留（同一目标、互为兼容，不再新增第三处）；__DSH_TRANSPORT__ 仍是内核 connection
  * 客户端的 opt-in 通道，语义不变（它对外部 origin 抛错，接管层则原样放行）。
  */
-export function installTransport(privateBase, { role, bridge } = {}) {
+export function installTransport(
+  privateBase: URL,
+  { role, bridge }: { role?: string; bridge?: Record<string, unknown> } = {},
+) {
   // 请求接管先装：它必须早于任何 DSH 侧代码执行（注入 index 前调用本函数）。
   const restoreTakeover = installRequestTakeover(privateBase);
   const mux = createStreamMux(privateBase);

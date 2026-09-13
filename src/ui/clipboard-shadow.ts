@@ -50,10 +50,14 @@ export interface ClipboardShadowDeps {
 export interface ClipboardShadow {
   /** 安装/卸载影子对象。 */
   shadow: any;
-  writeShadow: (text: string) => unknown;
+  /** 影子写（navigator.clipboard.write 的替代）：items 可能是图/富文本，走桥时需先取文本。 */
+  writeShadow: (items: any) => Promise<any>;
+  /** 原生 writeText（被替掉的）；未接管时为 null。 */
   original: any;
+  /** 原生 write（被替掉的）；未接管时为 null。 */
   originalWrite: any;
-  extractText: (data: unknown) => string;
+  /** 把 ClipboardItem[] 抽成纯文本（不支持则 null）。 */
+  extractText: (items: any) => Promise<string | null>;
 }
 
 /**
